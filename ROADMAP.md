@@ -68,6 +68,20 @@ Tying delegate-to-ollama into the rest of your portfolio compounds its value.
 - Re-run the baseline whenever `pick-model.sh` preferences change so the tier ordering is empirical, not just llmfit-predicted. A model that scores in the top tier on llmfit but invents findings on the open-ended fixture should be demoted regardless of its predicted score.
 - Future fixtures worth adding: structured field extraction from free-form text (resumes, PR descriptions), commit-message drafting against a known-good reference, JSON shape validation, regex generation with concrete acceptance tests.
 
+### Phase 7 follow-ups (from PR #1 review)
+
+The first baseline shipped at N=1 per cell. The findings are directionally useful but several rigour gaps should be closed before the next baseline.
+
+- **Repeat each cell 3–5×** and report mean ± stdev. Local model output is non-deterministic and a single sample is not enough to make routing decisions confidently. With 4 models × 3 tasks that is 36 runs total; affordable.
+- **Mechanical T3 scoring.** Replace the human "real / plausible / hallucinated" judgement with a deterministic check: for each concern raised, run the suggested grep/path-existence check and count whether the claim is supported by evidence. Removes the author-bias that the current 0.56 vs 0.06 numbers depend on.
+- **Single regime per baseline.** The 2026-04-28 run mixed parallel-with-memory-contention and sequential timings. Future baselines should run all cells under the same regime (sequential, identical FS cache state) so timing comparisons are trustworthy.
+- **Ordering test in tests/run-tests.sh.** Add an explicit case that asserts `prose` picks `qwen3.6` ahead of `qwen3-next` when both are installed, so a future preference edit cannot silently re-promote without updating the test.
+- **Skill description (frontmatter) update.** The trigger description still lists the same fits and not-fits. Add a not-fit line for open-ended "find anything interesting / suggest improvements / what should we worry about" prompts so Claude reads the warning at trigger time, not just buried in the body.
+- **Decouple T3 fixture from a specific repo.** Currently a snapshot of votescot's commit log on 28 April. Re-running the baseline three months later tests "what do these models do on this stale log" instead of "what do they do on a current log". Either snapshot per baseline (with a date in the filename) or generate the T3 fixture dynamically from any local repo at runner time.
+- **Suppress raw-output diffs.** Each baseline adds ~2,500 lines of model output. Either `.gitattributes` with `linguist-generated` to suppress diff display, or move raw outputs out of git and keep only the scored markdown.
+- **Better runner failure handling.** `body=$(ollama run … || echo "<RUN FAILED>")` swallows real errors silently. Surface a non-zero exit alongside the marker so a downstream scoring step can detect it.
+- **Cosmetic output cleanup.** After the perl ANSI strip, raw outputs still have a leading whitespace block from where the spinner sat. Add `sed -E 's/^[[:space:]]+//' | grep -v '^$'` after the perl filter so checked-in outputs are cleanly readable.
+
 ## Out of scope
 
 - Code edits, refactors, or feature implementation. Local models are weak agents and the skill description explicitly rejects these. The local-brain finding stands: "they didn't need Smolagents, they needed `git status | ollama run model`".
