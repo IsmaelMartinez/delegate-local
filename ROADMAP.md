@@ -58,6 +58,16 @@ Tying delegate-to-ollama into the rest of your portfolio compounds its value.
 - Quarterly trigger-eval re-run to catch description drift if the skill set changes around it.
 - llmfit database refresh tracked: `llmfit update` should run before any audit pass so the catalogue reflects the latest HuggingFace state.
 
+## Phase 7 — Empirical accuracy benchmarking
+
+`llmfit` predicts what *should* fit your hardware. It does not measure what each model is actually good at on your real tasks. The experiments framework closes that gap.
+
+- `experiments/runner.sh` runs a fixed set of fixture tasks against any installed Ollama model and writes raw outputs plus timing to `experiments/results/raw/<model-slug>.txt`. Reproducible across model upgrades.
+- `experiments/fixtures/` holds the task inputs (currently three: structured doc-drift compare, party-config structural variance, open-ended merge-pattern review). Add more fixtures as new task patterns emerge in real use.
+- `experiments/results/<date>-baseline.md` records human-scored accuracy and timing per (model, task) pair against ground truth. The first baseline (2026-04-28) tested phi4-reasoning:plus, qwen3.6:35b-a3b-q8_0, qwen3-next:80b-a3b-instruct-q8_0, and gemma4:31b-it-q8_0.
+- Re-run the baseline whenever `pick-model.sh` preferences change so the tier ordering is empirical, not just llmfit-predicted. A model that scores in the top tier on llmfit but invents findings on the open-ended fixture should be demoted regardless of its predicted score.
+- Future fixtures worth adding: structured field extraction from free-form text (resumes, PR descriptions), commit-message drafting against a known-good reference, JSON shape validation, regex generation with concrete acceptance tests.
+
 ## Out of scope
 
 - Code edits, refactors, or feature implementation. Local models are weak agents and the skill description explicitly rejects these. The local-brain finding stands: "they didn't need Smolagents, they needed `git status | ollama run model`".

@@ -1,0 +1,243 @@
+MODEL: gemma4:31b-it-q8_0
+DATE: 2026-04-28T21:29:05Z
+
+===== T1-doc-drift =====
+DURATION_SEC: 323
+OUTPUT:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                Thinking...
+*   Claim A: Publish "How we did" retrospective page.
+    *   Claim B: Retire `defaultProjection` in `scripts/populate-projection
+`scripts/populate-projections.ts`.
+    *   Claim C: Use `yaml.stringify({ lineWidth: 0 })` in `apply-party-pos
+`apply-party-positions.ts`.
+    *   Claim D: Deep-freeze data caches in `src/lib/data.ts` (or keep shal
+shallow).
+
+    *   Claim A: Evidence says "There is no 'How we did' retrospective page
+page or related code anywhere in the repo." -> Status: still-open.
+    *   Claim B: Evidence says `grep` for `defaultProjection` or `DEFAULT_P
+`DEFAULT_PROJECTION` returned "(no matches)". The claim says `scripts/popul
+`scripts/populate-projections.ts` still carries it. If it's not found, it's
+it's gone/retired. -> Status: already-done. (Wait, if the claim is "Retire 
+the dead projection default", and the grep shows no matches, it has been re
+retired).
+    *   Claim C: Evidence says `scripts/apply-party-positions.ts:60` uses `
+`yaml.stringify(data, { lineWidth: 0 })`. -> Status: already-done.
+    *   Claim D: Evidence says "Six cached loaders all use the same shallow
+shallow Object.freeze... No deep-freeze applied anywhere. Pattern is consis
+consistent." The claim says "Deep-freeze... (or don't — current shallow fre
+freeze matches the existing pattern...)". Since the pattern is consistent a
+and the user is asking if the task (deep-freeze or decide not to) is resolv
+resolved, and the evidence confirms the shallow freeze is maintained as per
+per the "or don't" clause. Actually, usually, if it says "Deep-freeze... (o
+(or don't)", it's a decision point. The evidence says the pattern is consis
+consistent. This implies the "don't" path was taken/maintained. -> Status: 
+already-done.
+
+    *   Claim A: still-open — no retrospective page or related code exists 
+in the repo.
+    *   Claim B: already-done — grep for defaultProjection returned no matc
+matches.
+    *   Claim C: already-done — scripts/apply-party-positions.ts:60 uses li
+lineWidth: 0.
+    *   Claim D: already-done — src/lib/data.ts consistently uses shallow O
+Object.freeze.
+
+    *   Format: `CLAIM_X: <already-done|still-open> — <one-line evidence re
+reference>`
+    *   No preamble, commentary, etc.
+
+    *   CLAIM_A: still-open — no "How we did" retrospective page or related
+related code exists in the repo.
+    *   CLAIM_B: already-done — grep for defaultProjection/DEFAULT_PROJECTI
+defaultProjection/DEFAULT_PROJECTION returned no matches.
+    *   CLAIM_C: already-done — scripts/apply-party-positions.ts:60 impleme
+implements yaml.stringify with lineWidth: 0.
+    *   CLAIM_D: already-done — src/lib/data.ts maintains a consistent shal
+shallow freeze pattern.
+...done thinking.
+
+CLAIM_A: still-open — no "How we did" retrospective page or related code ex
+exists in the repo.
+CLAIM_B: already-done — grep for defaultProjection/DEFAULT_PROJECTION retur
+returned no matches.
+CLAIM_C: already-done — scripts/apply-party-positions.ts:60 uses yaml.strin
+yaml.stringify with lineWidth: 0.
+CLAIM_D: already-done — src/lib/data.ts consistently uses shallow Object.fr
+Object.freeze.
+
+
+
+===== T2-party-config =====
+DURATION_SEC: 247
+OUTPUT:
+                                                                                                                                                                                                                                                                                                                                                                                                Thinking...
+*   Input: 6 YAML files for political parties (Reform UK, Scottish Conserva
+Conservatives, Scottish Green Party, Scottish Labour, Scottish Liberal Demo
+Democrats, Scottish National Party).
+    *   Expected Shape:
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`.
+        *   `positions`: 8 numeric keys (`independence`, `nhs`, `h
+`housing`, `climate`, `tax`, `economy`, `education`, `equality`), values 0-
+0-2.
+        *   `stances`: 8 keys (same as above), text values.
+        *   `quotes`: 8 keys (same as above), text values.
+    *   Output: "CLEAN" or "INCONSISTENT" (with bulleted deviations). No pr
+preamble.
+
+    *   `id`: reform-uk (OK)
+    *   `name`: Reform UK (OK)
+    *   `positions`: independence(0), nhs(1), housing(0), climate(0), tax(0
+tax(0), economy(0), education(0), equality(0) (OK - all 0-2)
+    *   `stances`: 8 keys, all text (OK)
+    *   `quotes`: 8 keys, all text (OK)
+
+    *   `id`: scottish-conservatives (OK)
+    *   `name`: Scottish Conservative and Unionist Party (OK)
+    *   `positions`: independence(0), nhs(1), housing(0), climate(0), tax(0
+tax(0), economy(0), education(1), equality(0) (OK - all 0-2)
+    *   `stances`: 8 keys, all text (OK)
+    *   `quotes`: 8 keys, all text (OK)
+
+    *   `id`: scottish-green-party (OK)
+    *   `name`: Scottish Green Party (OK)
+    *   `positions`: independence(2), nhs(2), housing(2), climate(2), tax(2
+tax(2), economy(2), education(2), equality(2) (OK - all 0-2)
+    *   `stances`: 8 keys, all text (OK)
+    *   `quotes`: 8 keys, all text (OK)
+
+    *   `id`: scottish-labour (OK)
+    *   `name`: Scottish Labour Party (OK)
+    *   `positions`: independence(0), nhs(2), housing(1), climate(1), tax(1
+tax(1), economy(1), education(1), equality(1) (OK - all 0-2)
+    *   `stances`: 8 keys, all text (OK)
+    *   `quotes`: 8 keys, all text (OK)
+
+    *   `id`: scottish-liberal-democrats (OK)
+    *   `name`: Scottish Liberal Democrats (OK)
+    *   `positions`: independence(0), nhs(2), housing(1), climate(1), tax(1
+tax(1), economy(1), education(1), equality(2) (OK - all 0-2)
+    *   `stances`: 8 keys, all text (OK)
+    *   `quotes`: 8 keys, all text (OK)
+
+    *   `id`: scottish-national-party (OK)
+    *   `name`: Scottish National Party (SNP) (OK)
+    *   `positions`: independence(2), nhs(2), housing(2), climate(1), tax(2
+tax(2), economy(1), education(2), equality(2) (OK - all 0-2)
+    *   `stances`: 8 keys, all text (OK)
+    *   `quotes`: 8 keys, all text (OK)
+
+    *   All files have `id`, `name`, `positions`, `stances`, `quotes`.
+    *   `positions` contains exactly 8 keys: independence, nhs, housing, cl
+climate, tax, economy, education, equality. All values are 0, 1, or 2.
+    *   `stances` contains exactly 8 keys matching `positions`. All are str
+strings.
+    *   `quotes` contains exactly 8 keys matching `positions`. All are stri
+strings.
+
+    Everything is consistent.
+...done thinking.
+
+CLEAN
+
+
+
+===== T3-merge-patterns =====
+DURATION_SEC: 171
+OUTPUT:
+                                                                                                                                                        Thinking...
+*   Input: A git log of the last 10 commits including diff stats.
+    *   Output: Up to 4 specific concerns or loose ends tied to a checkable
+checkable file/path/grep pattern.
+    *   Format: `CONCERN | FILE_OR_PATTERN_TO_VERIFY`.
+    *   Constraint: No speculation beyond commit subjects. If nothing check
+checkable, output `NONE`.
+
+    *   `463068c docs: refresh roadmap after 28 April candidate audit` -> `
+`docs/ROADMAP.md`
+    *   `6d23c5e fix: align region card counts with destination page (#71)`
+(#71)` -> `src/pages/index.astro`
+    *   `2a54127 data: normalise IGV branding and listPosition outliers (#7
+(#70)` -> `data/regional-candidates/*.yaml`
+    *   `8a8ace1 quiz: tie handling, podium, and compact regional cards (#6
+(#69)` -> `src/components/QuizEngine.tsx`, `src/components/QuizPodium.tsx`,
+`src/components/QuizPodium.tsx`, `src/lib/quiz-helpers.ts`, etc.
+    *   `41f548a news: refresh from RSS feeds` -> `data/news.json`
+    *   `572198a news: refresh from RSS feeds` -> `data/news.json`
+    *   `b056cde simplify: phase 3a — lift candidate-display constants to l
+lib (#68)` -> `src/lib/candidate-display.ts`
+    *   `3f495f8 simplify: phase 2a — central party-config for chart colour
+colours (#67)` -> `src/lib/party-config.ts`
+    *   `18cd8f5 simplify: phase 1 — drop one-off scripts and tighten lib (
+(#66)` -> Removed several scripts.
+    *   `3743b69 polls: update polling data from Wikipedia` -> `data/polls.
+`data/polls.json`
+
+    *   *Concern 1: "Simplify" project phases.* The commits mention "phase 
+1", "phase 2a", and "phase 3a". This strongly suggests there are other phas
+phases (e.g., 2b, 3b, phase 4) that are not yet completed.
+        *   Pattern: `docs/superpowers/plans/2026-04-28-simplify.md` (This 
+file was created in commit `18cd8f5` and likely contains the plan).
+
+    *   *Concern 2: "Candidate audit" mentioned in roadmap.* The roadmap wa
+was refreshed *after* a candidate audit.
+        *   Pattern: `docs/ROADMAP.md` (Check if there are remaining audit 
+tasks).
+
+    *   *Concern 3: Normalisation of outliers.* Commit `2a54127` normalises
+normalises "IGV branding and listPosition outliers".
+        *   Pattern: `data/regional-candidates/*.yaml` (Are there still non
+non-normalized branding/positions?).
+
+    *   *Concern 4: RSS Feed updates.* Commits `41f548a` and `572198a` are 
+both "refresh from RSS feeds" occurring very close together.
+        *   Pattern: `data/news.json`.
+
+    *   Wait, are these "concerns" or just "recent changes"? The prompt ask
+asks for "concerns or loose ends".
+    *   Phases 1, 2a, 3a implies a multi-part plan. If 2a and 3a exist, 2b 
+and 3b (or subsequent phases) are likely loose ends.
+    *   The "candidate audit" implies a process. The roadmap was updated, b
+but were all audit findings resolved?
+    *   The "simplify" phase 1 dropped one-off scripts. Are there other scr
+scripts that should have been dropped? (Maybe too speculative).
+
+    *   *Loose end 1:* The "simplify" project has phases 1, 2a, and 3a. Che
+Check for remaining phases (2b, 3b, etc.).
+        *   File: `docs/superpowers/plans/2026-04-28-simplify.md`
+    *   *Loose end 2:* The roadmap was refreshed after a candidate audit. C
+Check for pending audit items.
+        *   File: `docs/ROADMAP.md`
+    *   *Loose end 3:* Only a subset of regional candidates were updated fo
+for IGV branding/position outliers. Check for remaining outliers.
+        *   Pattern: `data/regional-candidates/*.yaml`
+    *   *Loose end 4:* The quiz tie-handling and podium features were added
+added. Check if the preview page is still present in production or if it wa
+was a dev-only tool.
+        *   File: `src/pages/dev/quiz-podium-preview.astro`
+
+    *   Concern 1: Incomplete "simplify" project phases (only 1, 2a, 3a com
+completed). | `docs/superpowers/plans/2026-04-28-simplify.md`
+    *   Concern 2: Pending items from the 28 April candidate audit. | `docs
+`docs/ROADMAP.md`
+    *   Concern 3: Potential remaining branding/position outliers in region
+regional candidate data. | `data/regional-candidates/*.yaml`
+    *   Concern 4: Presence of development preview page for quiz podium. | 
+`src/pages/dev/quiz-podium-preview.astro`
+
+    *   Does it use "CONCERN | FILE_OR_PATTERN_TO_VERIFY"? Yes.
+    *   Is it limited to 4? Yes.
+    *   Is it based only on commit subjects? Yes.
+...done thinking.
+
+Incomplete "simplify" project phases (only phases 1, 2a, and 3a mentioned) 
+| docs/superpowers/plans/2026-04-28-simplify.md
+Pending items from the 28 April candidate audit | docs/ROADMAP.md
+Remaining IGV branding or listPosition outliers in regional candidate files
+files | data/regional-candidates/*.yaml
+Presence of development preview page for quiz podium | src/pages/dev/quiz-p
+src/pages/dev/quiz-podium-preview.astro
+
+
+

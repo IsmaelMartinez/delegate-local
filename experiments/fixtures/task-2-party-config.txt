@@ -1,0 +1,192 @@
+==========================
+FILE: data/parties/reform-uk.yaml
+==========================
+id: reform-uk
+name: Reform UK
+positions:
+  independence: 0
+  nhs: 1
+  housing: 0
+  climate: 0
+  tax: 0
+  economy: 0
+  education: 0
+  equality: 0
+stances:
+  independence: Oppose independence. Strong unionist position rejecting another referendum as a distraction from Scotland's day-to-day problems.
+  nhs: NHS Scotland stays free at the point of need and funded by general taxation, but needs major reform. A workforce plan to train more doctors and nurses and a shift to prevention.
+  housing: Repeal SNP tenancy regulations and introduce a Rent-To-Buy model for young people, first-time buyers and working families. Restore a local connection requirement for social housing.
+  climate: Scrap all SNP Net Zero related targets, subsidies and quangos. End the ban on new nuclear in Scotland and rehabilitate North Sea gas as the primary energy system.
+  tax: Cut income tax. Scrap Scotland's six income tax bands, mirror the rUK three bands at 1p below each, and aim for a 3p variation below rUK within the first five years.
+  economy: Cut £7.5bn of spending — £1bn from ideological Net Zero projects and £6.5bn from 132 quangos — to fund a new deal for Scotland that rewards work and aspiration.
+  education: Direct school-leavers into trades via technical colleges rather than universities. Ban mobile phones in classrooms and give headteachers discretion over budgets and recruitment.
+  equality: Socially conservative. Criticises existing gender policies as "woke" and argues the SNP has not protected women and girls in Scotland.
+quotes:
+  independence: "Which is why Reform UK says ENOUGH to the distraction of another referendum."
+  nhs: "Under Reform UK, the NHS in Scotland will remain free at the point of need and will be fully funded by general taxation."
+  housing: "Reform UK will repeal the SNP's regulations for all new tenancies, while keeping the terms of existing tenancies unchanged, making homes both plentiful and more affordable for the Scots who need them most."
+  climate: "Scrap all SNP Net Zero related targets, subsidies and quangos."
+  tax: "First, Reform will immediately scrap Scotland's six income tax bands and mirror rUK's three bands which will be set at 1p below each rUK band."
+  economy: "Which can be easily afforded by re-allocation of the £1bn currently spent on ideological Net Zero projects and the bloated £6.5bn spent on 132 unaccountable quangos."
+  education: "Rather than sending half of school-leavers to universities, instead we will direct them into trades via technical colleges with multi-year funding thereby building meaningful career pathways that will be relatively AI-proof."
+  equality: "The SNP have not protected local communities and women and girls in Scotland in preference to pursuing woke policies on immigration and gender."
+==========================
+FILE: data/parties/scottish-conservatives.yaml
+==========================
+id: scottish-conservatives
+name: Scottish Conservative and Unionist Party
+positions:
+  independence: 0
+  nhs: 1
+  housing: 0
+  climate: 0
+  tax: 0
+  economy: 0
+  education: 1
+  equality: 0
+stances:
+  independence: Strong opposition to independence. Stand up for Scotland's place in the Union and stop another independence referendum.
+  nhs: Focus on faster GP appointments and reducing waiting lists by increasing NHS capacity for procedures. Efficiency-led NHS reform rather than new spending commitments.
+  housing: Market-led housing policy. Scrap SNP rent controls, stop costly housebuilding regulations, and abolish tax on buying a primary home (Land and Buildings Transaction Tax reform).
+  climate: Scrap the SNP's 2045 net zero target and drop policies that impose costs on households to meet it. Back the oil and gas industry and scrap carbon pricing schemes.
+  tax: Cut income tax — raise the point at which you start paying in line with inflation, uprate the Higher Rate threshold, and lower income tax to 19p in the £1 for low- and middle-income households.
+  economy: Make economic growth the number one policy objective. Cut regulation, introduce Scottish Business Zones, and oppose tax rises and new taxes.
+  education: Raise school standards. Empower headteachers and reduce bureaucracy to lift Scotland back up international rankings.
+  equality: Socially conservative. Guarantee every woman has access to single-sex wards, affirm biological sex under the Equality Act, and oppose the Non-Binary Equality Action Plan.
+quotes:
+  independence: "In 2014, two million Scots voted to stay in the United Kingdom. It was a divisive time for our country, but the result of the independence referendum was clear."
+  nhs: "Reduce NHS waiting lists by increasing the NHS's capacity for carrying out procedures."
+  housing: "Scrap SNP rent controls as they result in reduced house-building and increased rents."
+  climate: "Abolish the SNP's unaffordable target for reaching net zero by 2045."
+  tax: "Firstly, we will raise the point at which you start paying income tax in Scotland in line with inflation."
+  economy: "Make economic growth the number one policy objective across all areas of the Scottish Government."
+  education: "Raising school standards."
+  equality: "Following the Supreme Court's ruling that sex means biological sex under the Equality Act, we would guarantee that every woman has access to single-sex wards."
+==========================
+FILE: data/parties/scottish-green-party.yaml
+==========================
+id: scottish-green-party
+name: Scottish Green Party
+positions:
+  independence: 2
+  nhs: 2
+  housing: 2
+  climate: 2
+  tax: 2
+  economy: 2
+  education: 2
+  equality: 2
+stances:
+  independence: Support independence and full powers of a sovereign nation, while pressing ahead with change using devolved powers now.
+  nhs: Introduce a £15 per hour minimum wage for social care, a network of free walk-in mental health support hubs, and invest in the NHS workforce.
+  housing: Permanent rent controls, a higher tax rate on landlords' rental income, and stronger renters' rights to tackle the housing emergency.
+  climate: Get Scotland back on track to deliver net zero by 2045 with a coordinated climate action delivery programme across transport, energy, farming and buildings.
+  tax: Tax wealth rather than work. More progressive income tax, higher taxes on second and empty homes, and new taxes on private jets and mansions.
+  economy: Jobs in a green economy — clean industries, care, childcare and community wealth. Move away from expensive and volatile oil and gas.
+  education: Universal free childcare guarantee from 6 months until children start school, with significant investment in the childcare workforce.
+  equality: Strong LGBT+ rights advocacy. Revisit NHS policy changes made as a result of the Cass Review and publish a gender-affirming care action plan to bring down waiting times.
+quotes:
+  independence: "To realise our country's full potential, we must have the full powers of a normal, sovereign nation. But we can't wait until independence to start making a difference."
+  nhs: "Introduce a £15 per hour minimum wage for social care, and ensure this increases annually with inflation at minimum."
+  housing: "An emergency rent freeze and eviction ban during the peak of the cost of living crisis, and a new system of permanent rent controls."
+  climate: "Get Scotland back on track to deliver net zero by 2045, launching a coordinated climate action delivery programme to drive down emissions from transport, energy, farming and buildings."
+  tax: "Taxed the rich to pay for public services through a more progressive income tax system, higher taxes on second and empty homes, and securing new taxes on private jets and mansions."
+  economy: "Investing in our future means creating more jobs in clean, green industries like renewable energy, whilst weaning our economy off of expensive and volatile oil and gas."
+  education: "A universal free childcare guarantee, where all children in Scotland have access to funded childcare hours from 6 months until they start school."
+  equality: "Revisit all NHS policy changes made as a result of the Cass Review to ensure they are aligned with international evidence-based best practice."
+==========================
+FILE: data/parties/scottish-labour.yaml
+==========================
+id: scottish-labour
+name: Scottish Labour Party
+positions:
+  independence: 0
+  nhs: 2
+  housing: 1
+  climate: 1
+  tax: 1
+  economy: 1
+  education: 1
+  equality: 1
+stances:
+  independence: Oppose independence. Focus on delivery within the UK and Scotland's strengths in the UK growth sectors. Frame the election as a choice between delivery and SNP-led constitutional distraction.
+  nhs: End the 8am GP rush, bring back the family doctor, cut waiting times with funding following the patient, introduce an NHS app and AI scanners, and deliver £15/hr for social care workers.
+  housing: Deliver 125,000 new homes by 2031 across all tenures. Build 20,000 mid-market rent homes to save tenants an average of £2,700 a year off market rents. Establish a Housing Bank and a private-rented-sector strategy (no new rent controls).
+  climate: Achieve net zero by 2045 ambitions. Double home retrofits, back GB Energy and the Scottish National Investment Bank, end the block on clean nuclear energy, and deliver a fair energy transition for oil and gas workers.
+  tax: Commit to no income tax rate rises for five years, with the ambition to lower taxes as the economy grows.
+  economy: Sustained economic growth as the route to improving living standards. Establish a Scottish Board of Trade, partner with GB Energy and the UK National Wealth Fund, and cut a third of quangos to end government waste.
+  education: Breakfast clubs in every primary school, 2,000 Education Recovery teachers and 1,500 more classroom assistants, ban mobile phones in classrooms, and top up tax-free childcare to £3,000 per child.
+  equality: Recommit the NHS to single-sex wards on the basis of biological sex. Deliver a four-nation conversion practices ban to protect LGBT+ people. Tackle long waits for gynaecological procedures as part of a women's health plan.
+quotes:
+  independence: "A Scottish Labour government will be relentless in the service of the hard-working majority. It will focus on delivery, not distraction. It will put country before party and the interests of the people of Scotland first."
+  nhs: "End the 8am rush for a GP appointment. Bring back the family doctor. New technology in our NHS with an NHS app and AI scanners."
+  housing: "Delivering 125,000 new homes by the end of the Parliament in 2031, across all tenures."
+  climate: "Scottish Labour will take the action needed to achieve our net zero by 2045 ambitions and protect Scotland's natural environment for future generations."
+  tax: "Committing to no income tax rate rises for five years, with the ambition to lower taxes as we get the economy growing."
+  economy: "Sustained economic growth is the key route to improving living standards, reducing poverty and the bringing prosperity to all parts of our country."
+  education: "Breakfast clubs in every school. Ban mobile phones in classrooms. 2,000 Education Recovery teachers and 1,500 more classroom assistants."
+  equality: "Recommit the NHS to delivering single sex wards on the basis of biological sex, and ensuring patients can request same sex provision wherever possible."
+==========================
+FILE: data/parties/scottish-liberal-democrats.yaml
+==========================
+id: scottish-liberal-democrats
+name: Scottish Liberal Democrats
+positions:
+  independence: 0
+  nhs: 2
+  housing: 1
+  climate: 1
+  tax: 1
+  economy: 1
+  education: 1
+  equality: 2
+stances:
+  independence: Oppose independence. Back a written constitution for a federal United Kingdom and a new bespoke UK-EU customs union.
+  nhs: A 10-year NHS and care workforce plan, new neighbourhood health teams giving every GP practice the equivalent of an extra clinical staff member, walk-in mental health services and a Fair Deal for Rural Healthcare.
+  housing: Return housebuilding to 25,000 new homes annually, create key worker housing, and replace the SNP's housing strategy with a new holistic data-driven approach.
+  climate: Support net zero by 2045 with a programme for net zero new towns featuring rail links, district heating and 20-minute neighbourhoods.
+  tax: Where funds allow, lift tax thresholds in line with inflation and begin to close the tax differential with England in a balanced way that protects public services.
+  economy: Reform business rates to stop sudden tax hikes on successful employers and help people upskill through new Job Transition Loans worth up to £5,000.
+  education: Hire 2,000 more pupil support assistants, roll out speech and language therapy and make every school a smartphone-free environment.
+  equality: Strong defence of LGBT+ and trans rights. Ban all forms of conversion therapies and practices, working in partnership with the UK Government.
+quotes:
+  independence: "Back a written constitution for a federal United Kingdom."
+  nhs: "This will be the equivalent of giving every GP practice an additional member of clinical staff, including nurses, physiotherapists, pharmacists, dieticians, phlebotomists, mental health professionals and counsellors."
+  housing: "We will tackle the chronic housing shortage by returning housebuilding to a level that gets 25,000 new homes built annually, and create new key worker housing so that finding a home isn't a barrier to taking up a job when somewhere is crying out for your skills."
+  climate: "Developing a programme for a new generation of net zero new towns, prioritising from the outset features such as rail links, biodiversity, district heating, and the 20-minute neighbourhood."
+  tax: "Where funds are available, our priorities will be to lift tax thresholds in line with inflation and begin to close the tax differential with England in a balanced way that protects public services."
+  economy: "We will make it easier to do business and stop sudden tax hikes threatening successful employers by reforming business rates."
+  education: "Enshrine the right of children to learn, and teachers to teach, by making every school a smartphone-free environment."
+  equality: "Banning all forms of conversion therapies and practices, working in partnership with the UK Government to achieve this."
+==========================
+FILE: data/parties/scottish-national-party.yaml
+==========================
+id: scottish-national-party
+name: Scottish National Party (SNP)
+positions:
+  independence: 2
+  nhs: 2
+  housing: 2
+  climate: 1
+  tax: 2
+  economy: 1
+  education: 2
+  equality: 2
+stances:
+  independence: Support independence. An SNP majority at this election is framed as a mandate for a referendum. Independence cited as essential to Scotland's future prosperity.
+  nhs: Significant NHS investment. Expand GP walk-in clinics, shorten waiting times, deliver more operations and community diagnostics. NHS described as Scotland's most precious public service.
+  housing: Build 110,000 affordable homes by 2032 (70% social rent), create a new housing agency, retain the rent control framework, and provide deposit support of up to £10,000 for first-time buyers.
+  climate: Continue the transition to net zero by 2045 with a focus on Scotland's renewable energy wealth. Interim 2030 climate targets were dropped in 2024; emphasis is on energy costs and a just transition.
+  tax: Keep Scotland's progressive income tax, the fairest and most progressive in the UK. Introduce a mansion tax on properties valued above £1m from 2028.
+  economy: Grow the economy while protecting public services. Unlock £20 billion of pension fund investment, back a just transition, and use Scotland's renewable energy wealth to cut costs for households and businesses.
+  education: A transformational national expansion of childcare from 9 months to the end of primary school, 52 weeks a year. Protect free university tuition and free school lunches.
+  equality: Uphold and protect the human rights of trans people within devolved powers. Scotland is the first country in the world to incorporate LGBTQI+ education in schools. Strong commitment to equality across all groups.
+quotes:
+  independence: "A vote for the SNP is a vote for a referendum on independence. Based on the 2011 precedent, an SNP majority at this election is a mandate for the transfer of powers to the Scottish Parliament to enable an independence referendum to be held."
+  nhs: "Scotland's NHS is our most precious public service."
+  housing: "This funding boost will support the delivery of 110,000 affordable homes by 2032, with at least 10% of these in rural areas and islands, and 70% of these for social rent."
+  climate: "Scotland must play a full part in tackling the climate and nature emergencies."
+  tax: "From 2028, we will levy a mansion tax, raising additional funds for local services by adding two bands to the top of the council tax system for properties valued at over £1 million and £2 million."
+  economy: "I want to grow our economy, eradicate child poverty, improve our public services, and protect our environment."
+  education: "A transformational national expansion of childcare, from 9 months to the end of primary school, 52 weeks a year, making life easier for families."
+  equality: "We are committed to upholding and protecting the human rights of trans people as far as possible within our powers and we will do all we can to ensure that trans people's identities are recognised and respected."

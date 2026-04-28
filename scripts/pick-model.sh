@@ -18,9 +18,9 @@ fi
 
 case "$tier" in
   code)         prefs=("qwen3-coder-next" "qwen3-coder" "deepseek-r1" "qwen3.5") ;;
-  prose)        prefs=("qwen3-next" "qwen3.6" "gemma4:latest" "gemma4" "llama4" "qwen3.5") ;;
+  prose)        prefs=("qwen3.6" "qwen3-next" "gemma4:latest" "gemma4" "llama4" "qwen3.5") ;;
   reasoning)    prefs=("phi4-reasoning" "qwq" "deepseek-r1" "glm-4") ;;
-  long-context) prefs=("qwen3-next" "qwen3.6" "llama4:scout" "qwen3-coder-next" "llama4" "glm-4") ;;
+  long-context) prefs=("qwen3.6" "qwen3-next" "llama4:scout" "qwen3-coder-next" "llama4" "glm-4") ;;
   *) echo "unknown tier: $tier" >&2; exit 2 ;;
 esac
 
