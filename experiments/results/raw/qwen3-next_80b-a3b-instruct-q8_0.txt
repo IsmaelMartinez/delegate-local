@@ -1,0 +1,175 @@
+MODEL: qwen3-next:80b-a3b-instruct-q8_0
+DATE: 2026-04-28T21:29:02Z
+
+===== T1-doc-drift =====
+DURATION_SEC: 154
+OUTPUT:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     CLAIM_A: still-open — No "How we did" retrospective page or related code fo
+found in repo.
+CLAIM_B: already-done — No matches for defaultProjection or DEFAULT_PROJECT
+DEFAULT_PROJECTION in scripts/ or src/.
+CLAIM_C: already-done — yaml.stringify({ lineWidth: 0 }) used in both apply
+apply-party-positions.ts and sync-regional-candidates.ts.
+CLAIM_D: already-done — All six cached loaders in src/lib/data.ts use shall
+shallow Object.freeze, consistent with existing pattern.
+
+
+
+===== T2-party-config =====
+===== T2-party-config =====
+DURATION_SEC: 97
+OUTPUT:
+                                                                                                                                                                                                                                      INCONSISTENT
+- scottish-national-party: climate position is 1, but stance and quote emph
+emphasize net zero by 2045 and climate emergency action, which aligns with 
+position 2 (strong support); position should be 2 to match stance/quote
+- scottish-labour: equality stance mentions "recommit the NHS to single-sex
+single-sex wards on the basis of biological sex" and "deliver a four-nation
+four-nation conversion practices ban" — this is a mixed position, but the o
+overall stance is not clearly 2 (strong support); position 1 (moderate) may
+may be accurate, but the quote and stance contradict the position label's i
+implied clarity — however, no clear deviation from position 1 as assigned
+- scottish-liberal-democrats: equality position is 2 (strong support), stan
+stance and quote support banning conversion therapies and defending LGBT+ a
+and trans rights — consistent
+- reform-uk: equality stance says "Socially conservative. Criticises existi
+existing gender policies as 'woke' and argues the SNP has not protected wom
+women and girls in Scotland." — this is a clear opposition to progressive g
+gender policies, which aligns with position 0 (oppose); consistent
+- scottish-conservatives: equality stance says "Guarantee every woman has a
+access to single-sex wards, affirm biological sex under the Equality Act, a
+and oppose the Non-Binary Equality Action Plan." — this is a clear socially
+socially conservative position, aligning with position 0; consistent
+- scottish-green-party: all positions 2, stances and quotes show strong sup
+support across all areas; consistent
+- scottish-national-party: climate position is 1, but stance says "Continue
+"Continue the transition to net zero by 2045" and quote says "Scotland must
+must play a full part in tackling the climate and nature emergencies" — thi
+this is strong support, so position should be 2
+- scottish-labour: climate position is 1, but stance says "Achieve net zero
+zero by 2045 ambitions", "double home retrofits", "end the block on clean n
+nuclear energy", and "deliver a fair energy transition" — this is strong su
+support, so position should be 2
+- scottish-labour: housing position is 1, stance says "Deliver 125,000 new 
+homes... build 20,000 mid-market rent homes... establish a Housing Bank" — 
+no rent controls, but proactive housing policy; this is moderate, so positi
+position 1 is acceptable
+- scottish-liberal-democrats: housing position is 1, stance says "return ho
+housebuilding to 25,000... create key worker housing... replace SNP's strat
+strategy with data-driven approach" — proactive but not radical; position 1
+1 is acceptable
+- scottish-liberal-democrats: tax position is 1, stance says "lift tax thre
+thresholds in line with inflation and begin to close the tax differential w
+with England" — no tax cuts or increases, moderate; position 1 is acceptabl
+acceptable
+- scottish-liberal-democrats: economy position is 1, stance says "reform bu
+business rates... Job Transition Loans" — moderate reform; position 1 is ac
+acceptable
+- scottish-liberal-democrats: education position is 1, stance says "hire 2,
+2,000 more pupil support assistants... roll out speech and language therapy
+therapy... smartphone-free environment" — moderate investment; position 1 i
+is acceptable
+- scottish-labour: tax position is 1, stance says "commit to no income tax 
+rate rises for five years, with the ambition to lower taxes as the economy 
+grows" — moderate, no increase, potential for reduction; position 1 is acce
+acceptable
+- scottish-labour: economy position is 1, stance says "sustained economic g
+growth... cut a third of quangos" — moderate growth focus; position 1 is ac
+acceptable
+- scottish-labour: education position is 1, stance says "breakfast clubs...
+clubs... 2,000 Education Recovery teachers... ban mobile phones... top up t
+tax-free childcare" — moderate investment; position 1 is acceptable
+- scottish-conservatives: tax position is 0, stance says "cut income tax — 
+raise the point at which you start paying in line with inflation, uprate th
+the Higher Rate threshold, and lower income tax to 19p in the £1" — this is
+is a clear tax cut policy; position should be 0 (oppose tax increases) — co
+consistent
+- scottish-conservatives: economy position is 0, stance says "make economic
+economic growth the number one policy objective... cut regulation... oppose
+oppose tax rises" — this is pro-growth, low-regulation; position 0 (oppose 
+interventionist economy) is correct
+- scottish-conservatives: education position is 1, stance says "raise schoo
+school standards... empower headteachers and reduce bureaucracy" — moderate
+moderate reform, not radical; position 1 is acceptable
+- reform-uk: tax position is 0, stance says "cut income tax... scrap Scotla
+Scotland's six income tax bands... mirror rUK three bands at 1p below each"
+each" — clear tax cut; position 0 is correct
+- reform-uk: economy position is 0, stance says "cut £7.5bn of spending... 
+reallocate from Net Zero and quangos" — austerity, not investment; position
+position 0 (oppose interventionist economy) is correct
+- reform-uk: education position is 0, stance says "direct school-leavers in
+into trades via technical colleges... ban mobile phones... give headteacher
+headteachers discretion" — opposes university expansion and central control
+control; position 0 is acceptable
+- reform-uk: equality position is 0, stance says "socially conservative... 
+criticises existing gender policies as 'woke'" — opposes progressive equali
+equality policies; position 0 is correct
+- scottish-green-party: independence position is 2, stance and quote strong
+strongly support independence; consistent
+- scottish-green-party: nhs position is 2, stance says "£15/hr minimum wage
+wage for social care... free walk-in mental health hubs... invest in workfo
+workforce" — strong support; consistent
+- scottish-green-party: housing position is 2, stance says "permanent rent 
+controls... higher tax on landlords' rental income... stronger renters' rig
+rights" — strong intervention; consistent
+- scottish-green-party: climate position is 2, stance and quote strongly su
+support net zero by 2045; consistent
+- scottish-green-party: tax position is 2, stance says "tax wealth rather t
+than work... more progressive income tax... higher taxes on second/empty ho
+homes... new taxes on private jets and mansions" — strong progressive taxat
+taxation; consistent
+- scottish-green-party: economy position is 2, stance says "jobs in a green
+green economy... move away from oil and gas" — strong interventionist green
+green economy; consistent
+- scottish-green-party: education position is 2, stance says "universal fre
+free childcare from 6 months until school" — strong investment; consistent
+- scottish-green-party: equality position is 2, stance says "strong LGBT+ r
+rights advocacy... revisit Cass Review... gender-affirming care action plan
+plan" — strong support; consistent
+- scottish-labour: nhs position is 2, stance says "end 8am GP rush... bring
+bring back family doctor... cut waiting times... £15/hr for social care" — 
+strong investment; consistent
+- scottish-liberal-democrats: nhs position is 2, stance says "10-year workf
+workforce plan... extra clinical staff per GP practice... walk-in mental he
+health services... Fair Deal for Rural Healthcare" — strong investment; con
+consistent
+- scottish-liberal-democrats: education position is 1, stance says "hire 2,
+2,000 more pupil support assistants... roll out speech and language therapy
+therapy... smartphone-free environment" — moderate investment; position 1 i
+is correct
+- scottish-national-party: nhs position is 2, stance says "significant NHS 
+investment... expand walk-in clinics... shorten waiting times" — strong sup
+support; consistent
+- scottish-national-party: housing position is 2, stance says "build 110,00
+110,000 affordable homes... rent control framework... deposit support" — st
+strong intervention; consistent
+- scottish-national-party: tax position is 2, stance says "keep progressive
+progressive income tax... introduce mansion tax" — strong progressive taxat
+taxation; consistent
+- scottish-national-party: economy position is 1, stance says "grow economy
+economy while protecting public services... unlock £20bn pension investment
+investment... just transition" — moderate growth with protection; position 
+1 is acceptable
+- scottish-national-party: education position is 2, stance says "transforma
+"transformational national expansion of childcare... protect free universit
+university tuition... free school lunches" — strong investment; consistent
+- scottish-national-party: equality position is 2, stance says "uphold and 
+protect human rights of trans people... first country to incorporate LGBTQI
+LGBTQI+ education" — strong support; consistent
+
+The only clear inconsistency is:
+
+- scottish-national-party: climate position is 1, but stance and quote show
+show strong support for net zero by 2045 and climate emergency action — sho
+should be 2
+- scottish-labour: climate position is 1, but stance shows strong support f
+for net zero by 2045 and related investments — should be 2
+
+===== T3-merge-patterns =====
+DURATION_SEC: 5
+OUTPUT:
+                                 CONCERN | docs/ROADMAP.md  
+CONCERN | src/pages/index.astro  
+CONCERN | data/regional-candidates/*.yaml  
+CONCERN | src/lib/candidate-display.ts
+

@@ -1,0 +1,1394 @@
+MODEL: phi4-reasoning:plus
+DATE: 2026-04-28T21:28:55Z
+
+===== T1-doc-drift =====
+DURATION_SEC: 128
+OUTPUT:
+                                      <think>We are given a problem statement with a roadmap claims from a Scotti
+Scottish election website's docs/ROADMAP.md, post-election cleanup section,
+section, and then list "Claim A", "Claim B", "Claim C", "Claim D". Then we 
+have evidence from the codebase: it lists file listing in scripts directory
+directory. It shows two occurrences of yaml.stringify usage with { lineWidt
+lineWidth: 0 } parameter in apply-party-positions.ts and sync-regional-cand
+sync-regional-candidates.ts, which seems to support claim C? Let's re-read 
+carefully:
+
+"ROADMAP CLAIMS (from a Scottish election website's docs/ROADMAP.md, post-e
+post-election cleanup section):
+
+Claim A: Publish a "How we did" projection retrospective page comparing eac
+each constituency's projected top-3 shares against the actual result.
+Claim B: Retire the dead projection default. scripts/populate-projections.t
+scripts/populate-projections.ts still carries a defaultProjection template 
+but every constituency has an explicit override.
+Claim C: yaml.stringify({ lineWidth: 0 }) in apply-party-positions.ts to ma
+match populate-projections.ts and stop YAML line-rewrap churn on manifesto 
+updates.
+Claim D: Deep-freeze the data caches (or don't — current shallow freeze mat
+matches the existing pattern across all six cached loaders in src/lib/data.
+src/lib/data.ts).
+
+EVIDENCE FROM THE CODEBASE:
+
+scripts/ directory listing:
+  apply-party-positions.ts
+  fix-incumbents-regional.ts
+  fix-incumbents.ts
+  lib
+  project-from-polls.ts
+  replace-dc-source-urls.ts
+  sync-news.ts
+  sync-polls.ts
+  sync-regional-candidates.ts
+  validate-data.ts
+
+yaml.stringify usage across scripts/:
+  scripts/apply-party-positions.ts:60:    fs.writeFileSync(filePath, yaml.s
+yaml.stringify(data, { lineWidth: 0 }));
+  scripts/sync-regional-candidates.ts:112:  const content = yaml.stringify(
+yaml.stringify(data, { lineWidth: 0 });
+
+grep for defaultProjection or DEFAULT_PROJECTION across scripts/ and src/:
+  (no matches)
+
+src/lib/data.ts cache pattern:
+  Six cached loaders all use the same shallow Object.freeze on the returned
+returned value. No deep-freeze applied anywhere. Pattern is consistent.
+
+There is no "How we did" retrospective page or related code anywhere in the
+the repo.
+ You are auditing a roadmap against codebase evidence. The fixture lists 4 
+claims (A/B/C/D) and the actual file evidence. For each claim output one li
+line in this exact format: CLAIM_X: <already-done|still-open> — <one-line e
+evidence reference>. No preamble, no commentary, no chain of thought, just 
+four lines."
+
+We need to produce output exactly like:
+"CLAIM_A: ..." etc.
+
+Now we examine the details:
+
+Claim A says "Publish a 'How we did' projection retrospective page comparin
+comparing each constituency's projected top-3 shares against the actual res
+result." However, evidence states that "There is no 'How we did' retrospect
+retrospective page or related code anywhere in the repo." So claim A is sti
+still open. Should output: CLAIM_A: still-open — reference: "no code exists
+exists for retrospective page".
+
+The wording says exactly: "For each claim output one line in this exact for
+format: CLAIM_X: <already-done|still-open> — <one-line evidence reference>"
+reference>" and we have to produce 4 lines.
+
+Now Claim B: "Retire the dead projection default. scripts/populate-projecti
+scripts/populate-projections.ts still carries a defaultProjection template 
+but every constituency has an explicit override." There is no grep result f
+for defaultProjection or DEFAULT_PROJECTION across scripts/ and src/ (the c
+codebase evidence says there are no matches). That means that the actual co
+code does not contain any such references? However, the roadmap claim said:
+said: "scripts/populate-projections.ts still carries a defaultProjection te
+template", but then it's being retired because every constituency has an ex
+explicit override. But in our evidence, grep for defaultProjection or DEFAU
+DEFAULT_PROJECTION returns no matches, meaning that that file might have be
+been removed or is not present? The roadmap claim "dead projection default"
+default" likely means that there is an old reference to a default projectio
+projection template which should be removed. However the evidence says "gre
+"grep for defaultProjection/DEFAULT_PROJECTION across scripts/ and src/: (n
+(no matches)" so if there are no code references, then presumably the claim
+claim was done? But wait careful: The roadmap claim B claims that the dead 
+projection default is still in populate-projections.ts; but our grep did no
+not find it. However, maybe it's a false positive or might be already remov
+removed because every constituency has an explicit override and so the defa
+defaultProjection template is now redundant. But if we look at the wording 
+"Retire the dead projection default" implies that you want to remove the co
+code. The evidence from the grep says there are no matches for 'defaultProj
+'defaultProjection' or 'DEFAULT_PROJECTION'. So, what does that mean? Possi
+Possibly it means that this cleanup has already been done (i.e., that the f
+file now doesn't contain a defaultProjection). But wait, check: "scripts/po
+"scripts/populate-projections.ts still carries a defaultProjection template
+template but every constituency has an explicit override" in Claim B. But t
+then evidence: "grep for defaultProjection or DEFAULT_PROJECTION across scr
+scripts/ and src/:
+  (no matches)". That suggests that the codebase no longer contains any usa
+usage of these references. Therefore, claim B is already done.
+
+Therefore output line: CLAIM_B: already-done — evidence reference: "grep re
+returns no matches for defaultProjection/DEFAULT_PROJECTION".
+
+Claim C: "yaml.stringify({ lineWidth: 0 }) in apply-party-positions.ts to m
+match populate-projections.ts and stop YAML line-rewrap churn on manifesto 
+updates." The evidence shows that indeed in scripts/apply-party-positions.t
+scripts/apply-party-positions.ts (line 60) the code calls fs.writeFileSync 
+with yaml.stringify(data, { lineWidth: 0 }). Also in scripts/sync-regional-
+scripts/sync-regional-candidates.ts at line 112 uses the same. So this has 
+been done already.
+
+So claim C is already-done — reference: "scripts apply party positions and 
+sync regional candidates use yaml.stringify with.lineWidth: 0"
+
+Thus output line: CLAIM_C: already-done — evidence reference: "yaml.stringi
+"yaml.stringify usage in apply-party-positions.ts and sync-regional-candida
+sync-regional-candidates.ts".
+
+Claim D: "Deep-freeze the data caches (or don't — current shallow freeze ma
+matches the existing pattern across all six cached loaders in src/lib/data.
+src/lib/data.ts)." The evidence shows that in src/lib/data.ts, the cache pa
+pattern uses a shallow Object.freeze on each returned value. And no deep-fr
+deep-freeze is applied anywhere. So, if we follow the roadmap claim D: "Dee
+"Deep-freeze the data caches (or don't — current shallow freeze matches the
+the existing pattern across all six cached loaders in src/lib/data.ts)". So
+So apparently this change may be considered done? Because they mention that
+that there's no need to change from shallow to deep because the current sha
+shallow freeze is consistent. But the claim says "Deep-freeze" but then a p
+parenthesis: "(or don't — current shallow freeze matches the existing patte
+pattern across all six cached loaders in src/lib/data.ts)" means if you che
+check evidence, it already uses shallow freeze consistently, so no change n
+needed? In other words, it's already done since the codebase is consistent.
+consistent. But wait, claim D: "Deep-freeze" is ambiguous; I think we need 
+to interpret "still-open" or "already-done". The roadmap says "or don't — c
+current shallow freeze matches the existing pattern across all six cached l
+loaders." That suggests that no change was necessary so it might be conside
+considered as already-done because there's nothing to fix. But possibly cla
+claim D is still open if they expected a deep-freeze but haven't done anyth
+anything? Let’s check wording: "Claim D: Deep-freeze the data caches (or do
+don't — current shallow freeze matches the existing pattern across all six 
+cached loaders in src/lib/data.ts)." That might mean that if you compare wi
+with the rest of codebase, there is no need for deep-freezing because shall
+shallow freezing has been consistently applied. So I'd consider that claim 
+as already-done, because it's consistent and not needing change.
+
+Wait maybe: The roadmap item "Claim D" suggests a possibility to either upd
+update caches or leave them as they are if the shallow freeze is consistent
+consistent with current pattern. And evidence says: "Six cached loaders all
+all use the same shallow Object.freeze on the returned value. No deep-freez
+deep-freeze applied anywhere. Pattern is consistent." So that means this cl
+claim is already satisfied with the existing codebase because there's no ne
+need to do a deep freeze since it's consistent. But also note: The roadmap 
+might be considered as "still open" if someone wanted to consider doing som
+something else? But evidence says pattern is consistent, so I'd mark that a
+as already-done.
+
+I check instructions: "CLAIM_X: <already-done|still-open> — <one-line evide
+evidence reference>" And it says "No preamble, no commentary, just four lin
+lines." So I need exactly one line for each claim in order: CLAIM_A, CLAIM_
+CLAIM_B, CLAIM_C, CLAIM_D. The evidence is:
+- Claim A: There's no retrospective page or code anywhere. That means it's 
+not done yet so it's still open.
+- Claim B: grep search didn't find any defaultProjection references. So the
+the template might have been removed. But careful: It says "still carries a
+a dead projection default" but then code doesn't show defaultProjection, wh
+which implies that maybe it's already removed? Let me re-read: "Claim B: Re
+Retire the dead projection default. scripts/populate-projections.ts still c
+carries a defaultProjection template but every constituency has an explicit
+explicit override." This might be interpreted as: Even though there is no c
+code in grep for 'defaultProjection', the roadmap claim is that it should b
+be retired, meaning that we need to remove that piece of code. But if there
+there are no matches, does it mean that code removal happened? Let's re-rea
+re-read: "grep for defaultProjection or DEFAULT_PROJECTION across scripts/ 
+and src/: (no matches)" So the code now does not contain these references b
+because every constituency has an explicit override. Wait, but then why is 
+this claim in the roadmap if there are no matches? Possibly the roadmap mea
+means that a cleanup was planned to remove the dead projection default from
+from populate-projections.ts, and apparently it's been removed, since grep 
+doesn't find any matches. So I'd say Claim B is already done.
+- Claim C: The evidence clearly shows usage of yaml.stringify with lineWidt
+lineWidth 0 in two files, so that claim is satisfied; it's already done.
+- Claim D: The shallow freeze is consistent across all cached loaders. That
+That means there's no need for a deep freeze. So I can mark that as already
+already-done.
+
+Wait maybe check the wording carefully: "Deep-freeze the data caches (or do
+don't — current shallow freeze matches the existing pattern across all six 
+cached loaders in src/lib/data.ts)." It might be interpreted as "if you wan
+want to, then do it" but the evidence says it's not necessary because every
+everything is already frozen using a shallow freeze consistently. So that c
+claim can be considered done because there's no discrepancy.
+
+I'll produce lines:
+
+For Claim A: "CLAIM_A: still-open — No retrospective page implemented in co
+code."
+But I must include "one-line evidence reference". I need to use the exact e
+evidence references given by the codebase evidence? The instructions say "o
+"one-line evidence reference" so likely something like "No 'How we did' ret
+retrospective page exists." So I'll output: CLAIM_A: still-open — No retros
+retrospective page or related code.
+
+For Claim B, evidence: "grep returns no matches for defaultProjection/DEFAU
+defaultProjection/DEFAULT_PROJECTION." But maybe also mention that in popul
+populate-projections.ts the defaultProjection template is not found. So the
+then answer: CLAIM_B: already-done — grep finds no references to defaultPro
+defaultProjection DEFAULT_PROJECTION.
+But wait check roadmap claim B: It says: "Retire dead projection default" a
+and evidence: grep returns nothing. That means it's been retired, so I mark
+mark it as already done.
+
+For Claim C: Evidence: yaml.stringify is used with { lineWidth: 0 } in appl
+apply-party-positions.ts and sync-regional-candidates.ts.
+So output: CLAIM_C: already-done — yaml.stringify called with lineWidth: 0 
+in apply-party-positions.ts and sync-regional-candidates.ts.
+
+For Claim D: evidence: "Six cached loaders use shallow Object.freeze consis
+consistently." So I'll say: CLAIM_D: already-done — data caches use shallow
+shallow freeze consistently across all six cached loaders.
+Wait but claim D might be ambiguous. The claim says "Deep-freeze the data c
+caches (or don't — current shallow freeze matches the existing pattern)". T
+That means if you want to perform a deep freeze, you have to check consiste
+consistency with the rest of codebase. And evidence: They are already using
+using shallow freeze consistently, so no change is needed. So I'll mark it 
+as already done.
+
+I must produce exactly four lines in this format:
+
+CLAIM_A: <already-done|still-open> — <one-line evidence reference>
+Claim B: ...
+Claim C: ...
+Claim D: ...
+
+We have to use "CLAIM_X:" where X equals A, B, C, or D. Use hyphen as separ
+separator.
+
+I need to produce exactly four lines and no extra commentary.
+
+Let's check the exact format required: "CLAIM_X: <already-done|still-open> 
+— <one-line evidence reference>" So I'll produce them one by one:
+
+Line 1: CLAIM_A: still-open — No retrospective page code found in repo.
+But perhaps I should mention something like: "No 'How we did' retrospective
+retrospective page or related code anywhere."
+
+I need to be careful with punctuation. They want exactly one line each, no 
+commentary. So I can say:
+"CLAIM_A: still-open — 'How we did' retrospective page missing from codebas
+codebase"
+
+Or similar.
+
+Line 2 for Claim B: "Claim_B: already-done — grep finds no defaultProjectio
+defaultProjection references"
+I can produce: CLAIM_B: already-done — grep returns no matches for defaultP
+defaultProjection/DEFAULT_PROJECTION
+
+But the instructions said "grep returns no matches", so I'll just say that.
+that.
+
+Line 3 for Claim C: "CLAIM_C: already-done — yaml.stringify used with lineW
+lineWidth:0 in apply-party-positions.ts and sync-regional-candidates.ts"
+I can produce something like: CLAIM_C: already-done — yaml.stringify calls 
+include { lineWidth: 0 } in both files.
+
+Line 4 for Claim D: "CLAIM_D: already-done — data caches use shallow freeze
+freeze consistently across all cached loaders"
+I can produce that as one line.
+
+Double-check: The instructions state: "For each claim output one line in th
+this exact format:" so exactly four lines, one for each claim. And no chain
+chain-of-thought commentary.
+
+I must check that I'm using the names CLAIM_A, CLAIM_B, etc.
+
+I will now produce my answer with exactly 4 lines.
+
+I'll produce:
+CLAIM_A: still-open — No retrospective page or related code in repo.
+CLAIM_B: already-done — grep finds no defaultProjection/DEFAULT_PROJECTION 
+references.
+CLAIM_C: already-done — yaml.stringify is used with lineWidth: 0 in apply-p
+apply-party-positions.ts and sync-regional-candidates.ts.
+CLAIM_D: already-done — six cached loaders all use shallow Object.freeze co
+consistently.
+
+But I need to check if maybe for Claim D, the fact that it's "or don't" mig
+might require a different evaluation? The evidence is that there's no deep 
+freeze applied anywhere because current shallow freeze matches pattern. So 
+yes it's done.
+
+I must also recall: "No preamble, no commentary, just four lines." I'll pro
+produce exactly four lines in plain text.
+
+I think I have to produce exactly:
+
+Claim A: still-open — No retrospective page code found.
+But maybe I need to mention something like "no 'How we did' retrospective p
+page or related code anywhere."
+
+I can simply output:
+CLAIM_A: still-open — No retrospective page or related code exists in repo.
+repo.
+Or similar.
+
+For claim B, I'll produce:
+CLAIM_B: already-done — grep for defaultProjection/DEFAULT_PROJECTION retur
+returns no matches.
+I must include the evidence reference from our grep. The evidence says "gre
+"grep for defaultProjection or DEFAULT_PROJECTION across scripts and src: (
+(no matches)". So I can say that.
+Thus: CLAIM_B: already-done — grep for defaultProjection/DEFAULT_PROJECTION
+defaultProjection/DEFAULT_PROJECTION shows no references.
+
+For claim C, evidence in code:
+"scripts/apply-party-positions.ts:60" etc. So I'll produce:
+CLAIM_C: already-done — yaml.stringify used with lineWidth: 0 in apply-part
+apply-party-positions.ts and sync-regional-candidates.ts.
+That is enough.
+
+For claim D:
+The evidence states "Six cached loaders all use shallow Object.freeze, no d
+deep-freeze applied." So I'll produce:
+CLAIM_D: already-done — data caches consistently use shallow freeze as per 
+src/lib/data.ts.
+I can produce that line.
+
+Now let me check the instructions: "For each claim output one line in this 
+exact format:" so I must produce exactly four lines with the required patte
+pattern. It's important to not add any extra text beyond these lines, i.e.,
+i.e., no extra explanation or commentary.
+
+I'll now produce my answer as plain text.
+
+I'll produce:
+
+CLAIM_A: still-open — No retrospective page or related code exists.
+CLAIM_B: already-done — grep for defaultProjection/DEFAULT_PROJECTION yield
+yields no matches.
+CLAIM_C: already-done — yaml.stringify is used with { lineWidth: 0 } in app
+apply-party-positions.ts and sync-regional-candidates.ts.
+CLAIM_D: already-done — data caches use shallow Object.freeze consistently 
+across all six cached loaders.
+
+I must check if any punctuation is needed? The instructions said exactly "o
+"one line in this exact format" so I'll output each on a new line with no e
+extra commentary. Let me produce exactly the four lines in plain text.
+
+I'll now produce my answer as the final result.</think>CLAIM_A: still-open 
+— No retrospective page or related code exists.
+CLAIM_B: already-done — grep finds no defaultProjection/DEFAULT_PROJECTION 
+references.
+CLAIM_C: already-done — yaml.stringify is used with { lineWidth: 0 } in app
+apply-party-positions.ts and sync-regional-candidates.ts.
+CLAIM_D: already-done — data caches consistently use shallow Object.freeze 
+across all cached loaders.
+
+
+
+===== T2-party-config =====
+DURATION_SEC: 436
+OUTPUT:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    <think>We are given a YAML config for 6 political parties (files: reform-uk
+reform-uk.yaml, scottish-conservatives.yaml, scottish-green-party.yaml, sco
+scottish-labour.yaml, scottish-liberal-democrats.yaml, scottish-national-pa
+scottish-national-party.yaml). The expected shape is: top-level keys: id, n
+name, positions, stances, quotes; positions has 8 numeric keys (independenc
+(independence, nhs, housing, climate, tax, economy, education, equality) ea
+each value in {0-2}. stances and quotes each have the same 8 keys with text
+text values. Output exactly one of: CLEAN or INCONSISTENT followed by one b
+bullet per actual deviation.
+
+We must check if these YAML files follow the expected shape and then output
+output "CLEAN" if they are consistent, otherwise "INCONSISTENT" plus a bull
+bullet for each deviation (one bullet per actual deviation). The problem st
+states "do not invent issues" so only note deviations from expected shape t
+that are present in any file.
+
+We must examine each file. Let's check:
+
+File: data/parties/reform-uk.yaml:
+- Top-level keys: id, name, positions, stances, quotes.
+Check positions: It has 8 numeric keys: independence (0), nhs (1), housing 
+(0), climate (0), tax (0), economy (0), education (0), equality (0). All va
+values appear to be numeric, and all within allowed range {0,1,2}. So that'
+that's good.
+
+Check stances: They have 8 keys:
+   independence: "Oppose independence. Strong unionist position rejecting a
+another referendum as a distraction from Scotland's day-to-day problems."
+   nhs: "NHS Scotland stays free at the point of need and funded by general
+general taxation, but needs major reform. A workforce plan to train more do
+doctors and nurses and a shift to prevention."
+   housing: "Repeal SNP tenancy regulations and introduce a Rent-To-Buy mod
+model for young people, first-time buyers and working families. Restore a l
+local connection requirement for social housing."
+   climate: "Scrap all SNP Net Zero related targets, subsidies and quangos.
+quangos. End the ban on new nuclear in Scotland and rehabilitate North Sea 
+gas as the primary energy system."
+   tax: "Cut income tax. Scrap Scotland's six income tax bands, mirror the 
+rUK three bands at 1p below each, and aim for a 3p variation below rUK with
+within the first five years."
+   economy: "Cut £7.5bn of spending — £1bn from ideological Net Zero projec
+projects and £6.5bn from 132 quangos — to fund a new deal for Scotland that
+that rewards work and aspiration."
+   education: "Direct school-leavers into trades via technical colleges rat
+rather than universities. Ban mobile phones in classrooms and give headteac
+headteachers discretion over budgets and recruitment."
+   equality: "Socially conservative. Criticises existing gender policies as
+as 'woke' and argues the SNP has not protected women and girls in Scotland.
+Scotland."
+Yes.
+
+Check quotes:
+Keys same 8 keys, with text values.
+ independence: "Which is why Reform UK says ENOUGH to the distraction of an
+another referendum." -> valid string
+ nhs: "Under Reform UK, the NHS in Scotland will remain free at the point o
+of need and will be fully funded by general taxation."
+ housing: "Reform UK will repeal the SNP's regulations for all new tenancie
+tenancies, while keeping the terms of existing tenancies unchanged, making 
+homes both plentiful and more affordable for the Scots who need them most."
+most."
+ climate: "Scrap all SNP Net Zero related targets, subsidies and quan
+quangos."
+ tax: "First, Reform will immediately scrap Scotland's six income tax bands
+bands and mirror rUK's three bands which will be set at 1p below each rUK b
+band."
+ economy: "Which can be easily afforded by re-allocation of the £1bn curren
+currently spent on ideological Net Zero projects and the bloated £6.5bn spe
+spent on 132 unaccountable quangos."
+ education: "Rather than sending half of school-leavers to universities, in
+instead we will direct them into trades via technical colleges with multi-y
+multi-year funding thereby building meaningful career pathways that will be
+be relatively AI-proof."
+ equality: "The SNP have not protected local communities and women and girl
+girls in Scotland in preference to pursuing woke policies on immigration an
+and gender."
+
+So file seems consistent with expected shape.
+
+Next file: data/parties/scottish-conservatives.yaml:
+- Top-level keys: id, name, positions, stances, quotes.
+Check positions: Independence: 0, nhs:1, housing:0, climate:0, tax:0, econo
+economy:0, education:1, equality:0. All numeric and in allowed range (0 to 
+2). That is valid.
+
+stances keys:
+ independence: "Strong opposition to independence. Stand up for Scotland's 
+place in the Union and stop another independence referendum."
+ nhs: "Focus on faster GP appointments and reducing waiting lists by increa
+increasing NHS capacity for procedures. Efficiency-led NHS reform rather th
+than new spending commitments."
+ housing: "Market-led housing policy. Scrap SNP rent controls, stop costly 
+housebuilding regulations, and abolish tax on buying a primary home (Land a
+and Buildings Transaction Tax reform)."
+ climate: "Scrap the SNP's 2045 net zero target and drop policies that impo
+impose costs on households to meet it. Back the oil and gas industry and sc
+scrap carbon pricing schemes."
+ tax: "Cut income tax — raise the point at which you start paying in line w
+with inflation, uprate the Higher Rate threshold, and lower income tax to 1
+19p in the £1 for low- and middle-income households."
+ economy: "Make economic growth the number one policy objective. Cut regula
+regulation, introduce Scottish Business Zones, and oppose tax rises and new
+new taxes."
+ education: "Raise school standards. Empower headteachers and reduce bureau
+bureaucracy to lift Scotland back up international rankings."
+ equality: "Socially conservative. Guarantee every woman has access to sing
+single-sex wards, affirm biological sex under the Equality Act, and oppose 
+the Non-Binary Equality Action Plan."
+
+Quotes keys:
+ independence: "In 2014, two million Scots voted to stay in the United King
+Kingdom. It was a divisive time for our country, but the result of the inde
+independence referendum was clear."
+ nhs: "Reduce NHS waiting lists by increasing the NHS's capacity for carryi
+carrying out procedures."
+ housing: "Scrap SNP rent controls as they result in reduced house-building
+house-building and increased rents."
+ climate: "Abolish the SNP's unaffordable target for reaching net zero by 2
+2045."
+ tax: "Firstly, we will raise the point at which you start paying income ta
+tax in Scotland in line with inflation."
+ economy: "Make economic growth the number one policy objective across all 
+areas of the Scottish Government."
+ education: "Raising school standards."
+ equality: "Following the Supreme Court's ruling that sex means biological 
+sex under the Equality Act, we would guarantee that every woman has access 
+to single-sex wards."
+
+So file seems consistent.
+
+Next file: data/parties/scottish-green-party.yaml:
+Check positions: independence:2, nhs:2, housing:2, climate:2, tax:2, econom
+economy:2, education:2, equality:2. All values 2 which is allowed (0-2). So
+So valid.
+
+stances keys:
+ independence: "Support independence and full powers of a sovereign nation,
+nation, while pressing ahead with change using devolved powers now." Valid.
+Valid.
+ nhs: "Introduce a £15 per hour minimum wage for social care, a netwo
+network of free walk-in mental health support hubs, and invest in the NHS w
+workforce."
+ housing: "Permanent rent controls, a higher tax rate on landlords' rental 
+income, and stronger renters' rights to tackle the housing emergency."
+ climate: "Get Scotland back on track to deliver net zero by 2045 with a co
+coordinated climate action delivery programme across transport, energy, far
+farming and buildings."
+ tax: "Tax wealth rather than work. More progressive income tax, higher tax
+taxes on second and empty homes, and new taxes on private jets and mansions
+mansions."
+ economy: "Jobs in a green economy — clean industries, care, childcare and 
+community wealth. Move away from expensive and volatile oil and gas."
+ education: "Universal free childcare guarantee from 6 months until childre
+children start school, with significant investment in the childcare workfor
+workforce."
+ equality: "Strong LGBT+ rights advocacy. Revisit NHS policy changes made a
+as a result of the Cass Review and publish a gender-affirming care action p
+plan to bring down waiting times."
+
+Quotes keys:
+ independence: "To realise our country's full potential, we must have the f
+full powers of a normal, sovereign nation. But we can't wait until independ
+independence to start making a difference."
+ nhs: "Introduce a £15 per hour minimum wage for social care, and ensure th
+this increases annually with inflation at minimum."
+ housing: "An emergency rent freeze and eviction ban during the peak of the
+the cost of living crisis, and a new system of permanent rent controls."
+ climate: "Get Scotland back on track to deliver net zero by 2045, launchin
+launching a coordinated climate action delivery programme to drive down emi
+emissions from transport, energy, farming and buildings."
+ tax: "Taxed the rich to pay for public services through a more progressive
+progressive income tax system, higher taxes on second and empty homes, and 
+securing new taxes on private jets and mansions."
+ economy: "Investing in our future means creating more jobs in clean, green
+green industries like renewable energy, whilst weaning our economy off of e
+expensive and volatile oil and gas."
+ education: "A universal free childcare guarantee, where all children in Sc
+Scotland have access to funded childcare hours from 6 months until they sta
+start school."
+ equality: "Revisit all NHS policy changes made as a result of the Cass Rev
+Review to ensure they are aligned with international evidence-based best pr
+practice."
+
+So file is consistent.
+
+Next file: data/parties/scottish-labour.yaml:
+Check positions: independence:0, nhs:2, housing:1, climate:1, tax:1, econom
+economy:1, education:1, equality:1. All numeric and allowed.
+stances keys:
+ independence: "Oppose independence. Focus on delivery within the UK and Sc
+Scotland's strengths in the UK growth sectors. Frame the election as a choi
+choice between delivery and SNP-led constitutional distraction."
+ nhs: "End the 8am GP rush, bring back the family doctor, cut waiting times
+times with funding following the patient, introduce an NHS app and AI scann
+scanners, and deliver £15/hr for social care workers."
+ housing: "Deliver 125,000 new homes by 2031 across all tenures. Build 20,0
+20,000 mid-market rent homes to save tenants an average of £2,700 a year of
+off market rents. Establish a Housing Bank and a private-rented-sector stra
+strategy (no new rent controls)."
+ climate: "Achieve net zero by 2045 ambitions. Double home retrofits, back 
+GB Energy and the Scottish National Investment Bank, end the block on clean
+clean nuclear energy, and deliver a fair energy transition for oil and gas 
+workers."
+ tax: "Commit to no income tax rate rises for five years, with the ambition
+ambition to lower taxes as the economy grows."
+ economy: "Sustained economic growth as the route to improving living stand
+standards. Establish a Scottish Board of Trade, partner with GB Energy and 
+the UK National Wealth Fund, and cut a third of quangos to end government w
+waste."
+ education: "Breakfast clubs in every primary school, 2,000 Education Recov
+Recovery teachers and 1,500 more classroom assistants, ban mobile phones in
+in classrooms, and top up tax-free childcare to £3,000 per child."
+ equality: "Recommit the NHS to single-sex wards on the basis of biological
+biological sex. Deliver a four-nation conversion practices ban to protect L
+LGBT+ people. Tackle long waits for gynaecological procedures as part of a 
+women's health plan."
+
+Quotes keys:
+ independence: "A Scottish Labour government will be relentless in the serv
+service of the hard-working majority. It will focus on delivery, not distra
+distraction. It will put country before party and the interests of the peop
+people of Scotland first."
+ nhs: "End the 8am rush for a GP appointment. Bring back the family doctor.
+doctor. New technology in our NHS with an NHS app and AI scanners."
+ housing: "Delivering 125,000 new homes by the end of the Parliament in 203
+2031, across all tenures."
+ climate: "Scottish Labour will take the action needed to achieve our net z
+zero by 2045 ambitions and protect Scotland's natural environment for futur
+future generations."
+ tax: "Committing to no income tax rate rises for five years, with the ambi
+ambition to lower taxes as we get the economy growing."
+ economy: "Sustained economic growth is the key route to improving living s
+standards, reducing poverty and the bringing prosperity to all parts of our
+our country."
+ education: "Breakfast clubs in every school. Ban mobile phones in classroo
+classrooms. 2,000 Education Recovery teachers and 1,500 more classroom assi
+assistants."
+ equality: "Recommit the NHS to delivering single sex wards on the basis of
+of biological sex, and ensuring patients can request same sex provision whe
+wherever possible."
+
+File appears consistent.
+
+Next file: data/parties/scottish-liberal-democrats.yaml:
+Check positions: independence:0, nhs:2, housing:1, climate:1, tax:1, econom
+economy:1, education:1, equality:2. All numeric and allowed.
+stances keys:
+ independence: "Oppose independence. Back a written constitution for a fede
+federal United Kingdom and a new bespoke UK-EU customs union."
+ nhs: "A 10-year NHS and care workforce plan, new neighbourhood health team
+teams giving every GP practice the equivalent of an extra clinical staff me
+member, walk-in mental health services and a Fair Deal for Rural Healthcare
+Healthcare."
+ housing: "Return housebuilding to 25,000 new homes annually, create key wo
+worker housing, and replace the SNP's housing strategy with a new holistic 
+data-driven approach."
+ climate: "Support net zero by 2045 with a programme for net zero new towns
+towns featuring rail links, district heating and 20-minute neighbourhoods."
+neighbourhoods."
+ tax: "Where funds allow, lift tax thresholds in line with 
+inflation and begin to close the tax differential with England in a balance
+balanced way that protects public services."
+ economy: "Reform business rates to stop sudden tax hikes on successful emp
+employers and help people upskill through new Job Transition Loans worth up
+up to £5,000."
+ education: "Hire 2,000 more pupil support assistants, roll out speech and 
+language therapy and make every school a smartphone-free environment."
+ equality: "Strong defence of LGBT+ and trans rights. Ban all forms of conv
+conversion therapies and practices, working in partnership with the UK Gove
+Government."
+
+Quotes keys:
+ independence: "Back a written constitution for a federal United Kingdom."
+ nhs: "This will be the equivalent of giving every GP practice an additiona
+additional member of clinical staff, including nurses, physiotherapists, ph
+pharmacists, dieticians, phlebotomists, mental health professionals and cou
+counsellors."
+ housing: "We will tackle the chronic housing shortage by returning housebu
+housebuilding to a level that gets 25,000 new homes built annually, and cre
+create new key worker housing so that finding a home isn't a barrier to tak
+taking up a job when somewhere is crying out for your skills."
+ climate: "Developing a programme for a new generation of net zero new town
+towns, prioritising from the outset features such as rail links, biodiversi
+biodiversity, district heating, and the 20-minute neighbourhood."
+ tax: "Where funds are available, our priorities will be to lift tax thresh
+thresholds in line with inflation and begin to close the tax differential w
+with England in a balanced way that protects public services."
+ economy: "We will make it easier to do business and stop sudden tax hikes 
+threatening successful employers by reforming business rates."
+ education: "Enshrine the right of children to learn, and teachers to teach
+teach, by making every school a smartphone-free environment."
+ equality: "Banning all forms of conversion therapies and practices, workin
+working in partnership with the UK Government to achieve this."
+
+File appears consistent.
+
+Next file: data/parties/scottish-national-party.yaml:
+Check positions: independence:2, nhs:2, housing:2, climate:1, tax:2, econom
+economy:1, education:2, equality:2. All numeric and allowed.
+stances keys:
+ independence: "Support independence. An SNP majority at this election is f
+framed as a mandate for a referendum. Independence cited as essential to Sc
+Scotland's future prosperity."
+ nhs: "Significant NHS investment. Expand GP walk-in clinics, shorten waiti
+waiting times, deliver more operations and community diagnostics. NHS descr
+described as Scotland's most precious public service."
+ housing: "Build 110,000 affordable homes by 2032 (70% social rent), create
+create a new housing agency, retain the rent control framework, and provide
+provide deposit support of up to £10,000 for first-time buyers."
+ climate: "Continue the transition to net zero by 2045 with a focus on Scot
+Scotland's renewable energy wealth. Interim 2030 climate targets were dropp
+dropped in 2024; emphasis is on energy costs and a just transition."
+ tax: "Keep Scotland's progressive income tax, the fairest and most progres
+progressive in the UK. Introduce a mansion tax on properties valued above £
+£1m from 2028."
+ economy: "Grow the economy while protecting public services. Unlock £20 bi
+billion of pension fund investment, back a just transition, and use Scotlan
+Scotland's renewable energy wealth to cut costs for households and business
+businesses."
+ education: "A transformational national expansion of childcare from 9 mont
+months to the end of primary school, 52 weeks a year. Protect free universi
+university tuition and free school lunches."
+ equality: "Uphold and protect the human rights of trans people within devo
+devolved powers. Scotland is the first country in the world to incorporate 
+LGBTQI+ education in schools. Strong commitment to equality across all grou
+groups."
+
+Quotes keys:
+ independence: "A vote for the SNP is a vote for a referendum on independen
+independence. Based on the 2011 precedent, an SNP majority at this election
+election is a mandate for the transfer of powers to the Scottish Parliament
+Parliament to enable an independence referendum to be held."
+ nhs: "Scotland's NHS is our most precious public service."
+ housing: "This funding boost will support the delivery of 110,000 affordab
+affordable homes by 2032, with at least 10% of these in rural areas and isl
+islands, and 70% of these for social rent."
+ climate: "Scotland must play a full part in tackling the climate and natur
+nature emergencies."
+ tax: "From 2028, we will levy a mansion tax, raising additional funds for 
+local services by adding two bands to the top of the council tax system for
+for properties valued at over £1 million and £2 million."
+ economy: "I want to grow our economy, eradicate child poverty, improve our
+our public services, and protect our environment."
+ education: "A transformational national expansion of childcare, from 9 mon
+months to the end of primary school, 52 weeks a year, making life easier fo
+for families."
+ equality: "We are committed to upholding and protecting the human rights o
+of trans people as far as possible within our powers and we will do all we 
+can to ensure that trans people's identities are recognised and respected."
+respected."
+
+All appear consistent.
+
+So my task is to output exactly one result: either CLEAN or INCONSISTENT fo
+followed by bullet points for each deviation if any. Since no deviations we
+were observed, the answer should be "CLEAN" with no bullets. But wait, must
+must check carefully for potential issues that might not be obvious?
+
+Let's check each file: All keys are present? Yes.
+
+Check top-level shape: id, name, positions, stances, quotes are all present
+present in every file.
+Positions: In every file there are exactly eight keys: independence, nhs, h
+housing, climate, tax, economy, education, equality. 
+Are they numeric values? They are: For reform-uk: (0, 1, 0, 0, 0, 0, 0, 0) 
+which is valid.
+For scottish-conservatives: (0, 1, 0, 0, 0, 0, 1, 0).
+For scottish-green-party: All 2's.
+For scottish-labour: (0, 2, 1, 1, 1, 1, 1, 1)
+For scottish-liberal-democrats: (0, 2, 1, 1, 1, 1, 1, 2).
+For scottish-national-party: (2, 2, 2, 1, 2, 1, 2, 2)
+
+Check stances and quotes keys. They all have exactly 8 keys for each file? 
+Let's check number of keys:
+
+File reform-uk:
+stances:
+ independence,
+ nhs,
+ housing,
+ climate,
+ tax,
+ economy,
+ education,
+ equality.
+Quotes: same 8 keys.
+
+File scottish-conservatives:
+stances: independence, nhs, housing, climate, tax, economy, education, equa
+equality. Yes.
+quotes: independence, nhs, housing, climate, tax, economy, education, equal
+equality. Good.
+
+File scottish-green-party: stances: independence, nhs, housing, climate, ta
+tax, economy, education, equality.
+Quotes: same keys.
+Scottish-labour: stances: independence, nhs, housing, climate, tax, economy
+economy, education, equality.
+Quotes: same keys.
+Scottish-liberal-democrats: stances: independence, nhs, housing, climate, t
+tax, economy, education, equality.
+Quotes: same keys.
+Scottish-national-party: stances: independence, nhs, housing, climate, tax,
+tax, economy, education, equality.
+Quotes: same keys.
+
+Check numeric range? All allowed values are within 0-2. None is missing or 
+extra. Everything appears consistent.
+
+Therefore answer: CLEAN
+
+We must output exactly one result "CLEAN" with no bullet points because the
+there are no deviations.
+
+However instructions says: "Output exactly one of: CLEAN OR INCONSISTENT fo
+followed by one bullet per actual deviation." That means if we find any inc
+inconsistencies, list them as bullets. But if none then simply "CLEAN". So 
+answer is:
+
+CLEAN
+
+I must output exactly that text with no preamble or extra explanation.
+
+Therefore the answer should be just "CLEAN".
+
+Wait but check instructions: "Output exactly one of: CLEAN OR INCONSISTENT 
+followed by one bullet per actual deviation." So if there are no deviations
+deviations, then simply print "CLEAN" on its own line. But is it possible t
+that we need to include a bullet list with an empty list? The instructions 
+says "one bullet per actual deviation", so if none exist, nothing.
+
+Thus output: CLEAN
+
+I must also check if any extra keys not in expected shape exist. For exampl
+example, scottish-national-party's stances and quotes text are all consiste
+consistent.
+
+Check any YAML formatting issues? Possibly none. All top-level keys are pre
+present.
+
+Maybe check that each file has exactly one of the expected keys id etc. The
+There is no duplication.
+
+I must output "CLEAN" because it is correct.
+
+Thus answer: CLEAN
+
+However, let's double-check if there are any subtle deviations. Let me re-r
+re-read instructions:
+
+"These are 6 political party YAML configs. Expected shape: top-level keys i
+id, name, positions, stances, quotes; positions has 8 numeric keys (indepen
+(independence, nhs, housing, climate, tax, economy, education, equality) ea
+each 0-2; stances and quotes each have the same 8 keys with text values." "
+"Output exactly one of: CLEAN OR INCONSISTENT followed by one bullet per ac
+actual deviation. Do not invent issues. No preamble."
+
+We need to check if all files follow expected shape. I don't see any deviat
+deviation.
+
+I want to check file scottish-green-party's stances and quotes keys are the
+the same order? They are exactly 8 keys? Yes.
+The values inside positions for each party are numeric in allowed range? Ye
+Yes.
+Double-check: In scottish-national-party, climate is set to 1 which is with
+within range.
+
+I also check quotes: All text strings have proper punctuation. None of them
+them are missing any key?
+
+Wait: Possibly expected shape is that "positions" should be a mapping from 
+exactly eight keys (independence, nhs, housing, climate, tax, economy, educ
+education, equality) each with values either 0,1,2. In all files, they sati
+satisfy.
+
+I check stances and quotes: They are mappings from eight keys to text value
+values. All have exactly that.
+
+None of the files include additional top-level keys? Possibly no.
+
+So answer is CLEAN.
+
+Thus I'll output "CLEAN".
+
+Double-check potential formatting issues: There's a YAML file block with da
+dashes for lists? But none of these use list structures in positions; they 
+are scalars. So it's fine.
+
+Therefore final result: CLEAN
+
+I must output exactly one line containing "CLEAN" if no deviations, or if t
+there were some bullet points we would include them after "INCONSISTENT".
+
+Thus answer: CLEAN.</think>CLEAN
+
+
+
+===== T3-merge-patterns =====
+===== T3-merge-patterns =====
+DURATION_SEC: 184
+OUTPUT:
+                                                                  <think>We are Phi. The user posted some content from a Git log or similar. 
+We see many commits and details. The text is:
+
+"463068c docs: refresh roadmap after 28 April candidate audit
+6d23c5e fix: align region card counts with destination page (#71)
+2a54127 data: normalise IGV branding and listPosition outliers (#70)
+8a8ace1 quiz: tie handling, podium, and compact regional cards (#69)
+41f548a news: refresh from RSS feeds
+572198a news: refresh from RSS feeds
+b056cde simplify: phase 3a — lift candidate-display constants to lib (#68)
+3f495f8 simplify: phase 2a — central party-config for chart colours (#67)
+18cd8f5 simplify: phase 1 — drop one-off scripts and tighten lib (#66)
+3743b69 polls: update polling data from Wikipedia
+=== 463068c docs: refresh roadmap after 28 April candidate audit === ... et
+etc
+
+We have a commit log. Then the text instructs:
+"These are the last 10 commits on a Scottish election website. List up to 4
+4 specific concerns or loose ends each tied to a checkable file/path/grep p
+pattern. For each: CONCERN | FILE_OR_PATTERN_TO_VERIFY. If nothing is relia
+reliably checkable, output: NONE."
+
+We need to output up to four specific concerns/loose ends as "CONCERN | FIL
+FILE_OR_PATTERN_TO_VERIFY" if checkable.
+
+The commit subjects are:
+- 463068c docs: refresh roadmap after 28 April candidate audit
+- 6d23c5e fix: align region card counts with destination page (#71)
+- 2a54127 data: normalise IGV branding and listPosition outliers (#70)
+- 8a8ace1 quiz: tie handling, podium, and compact regional cards (#69)
+- 41f548a news: refresh from RSS feeds
+- 572198a news: refresh from RSS feeds
+- b056cde simplify: phase 3a — lift candidate-display constants to lib (#68
+(#68)
+- 3f495f8 simplify: phase 2a — central party-config for chart colours (#67)
+(#67)
+- 18cd8f5 simplify: phase 1 — drop one-off scripts and tighten lib (#6
+(#66)
+- 3743b69 polls: update polling data from Wikipedia
+
+We are asked to list up to 4 specific concerns or loose ends, each tied to 
+a checkable file/path/grep pattern. The text instructs: "For each: CONCERN 
+| FILE_OR_PATTERN_TO_VERIFY. If nothing is reliably checkable, output: NONE
+NONE."
+
+Thus we need to examine commit logs and see if there are any issues that ca
+can be considered concerns/loose ends? We must list up to 4 specific ones.
+
+We have some commit subjects:
+
+463068c docs: refresh roadmap after 28 April candidate audit
+- Roadmap was refreshed after a candidate audit. Possibly check if the upda
+updated roadmap in docs/ROADMAP.md is correct and consistent with other pro
+project deliverables.
+But we are not allowed to speculate beyond what the commit subjects state. 
+So for each commit subject, we must check "loose ends" that could be verifi
+verified by file pattern.
+
+Check commit "6d23c5e fix: align region card counts with destination page (
+(#71)". It indicates fix: align region card counts with destination page. L
+Loose end? Possibly verifying that in the src/pages/index.astro, region car
+card count matches destination page's expected value.
+
+For commit "2a54127 data: normalise IGV branding and listPosition outliers 
+(#70)", it updated several YAML files for regional candidates. Loose end mi
+might be consistency of naming conventions and values in multiple candidate
+candidate YAMLs, specifically check pattern "data/regional-candidates/*.yam
+"data/regional-candidates/*.yaml".
+
+Commit "8a8ace1 quiz: tie handling, podium, and compact regional cards (#69
+(#69)" modified a bunch of files related to quiz. There is some code change
+changes in many files including spec file, design specs etc. Loose ends? Po
+Possibly the tie-handling logic consistency across quiz engine components, 
+verify by checking grep for "tie" or similar.
+
+Commit "41f548a news: refresh from RSS feeds" updated data/news.json presum
+presumably. Could be a concern that the feed refresh might not update prope
+properly if external changes happen? But we are asked to list loose ends ti
+tied to checkable file pattern and commit subjects specifically state what 
+they did, so we need to list concerns that can be verified by file patterns
+patterns.
+
+Maybe we can consider some "loose ends" as possible integration points:
+- For the roadmap refresh, maybe verify docs/ROADMAP.md updated timeline co
+consistency with candidate audit date.
+- For region card count fix: Check if alignment is consistent across destin
+destination page counts in src/pages/index.astro and possibly corresponding
+corresponding test file? But commit subject is only about aligning region c
+card counts with destination page (#71), checkable file pattern: "src/pages
+"src/pages/index.astro" may be verified.
+
+- Normalise IGV branding and listPosition outliers: Loose ends might be tha
+that candidate YAML files updated are consistent and follow same convention
+conventions in data/regional-candidates/*.yaml. But again, commit subject o
+only states normalisation, which is checkable by grep for 'listPosition' pe
+perhaps? But careful: The question instructs "List up to 4 specific concern
+concerns or loose ends each tied to a checkable file/path/grep pattern." It
+It means that we should output something like:
+"CONCERN: Candidate display constants moved to lib might have missed some f
+files (maybe in candidate-display.ts and pages/candidates/*.astro) but we c
+can verify by grep for 'candidate-display' maybe. But the commit subject is
+is "lift candidate-display constants to lib (#68)" which means that code ha
+has been refactored from candidate-specific constant definitions into a lib
+library file. The loose end might be whether all references in files have b
+been updated.
+
+We should list up to 4 concerns across these commits. We can pick up to fou
+four.
+
+Let's examine each commit subject carefully:
+
+1) "463068c docs: refresh roadmap after 28 April candidate audit" -> Roadma
+Roadmap refreshed. Loose ends: Possibly outdated info? But it says "refresh
+"refresh roadmap", so if the roadmap file (docs/ROADMAP.md) might need to b
+be re-read with the audit date included. We can check that docs/ROADMAP.md 
+includes correct candidate audit date "28 April". So we could have concern:
+concern: Roadmap file might not reflect updated deadlines or check for a pa
+particular pattern "28 April" in docs/ROADMAP.md.
+
+2) "6d23c5e fix: align region card counts with destination page (#71)" -> L
+Loose ends: Possibly the alignment of region card counts may cause issues i
+if the count logic is used elsewhere. We could check by verifying that src/
+src/pages/index.astro and possibly a test file? But commit only mentions sr
+src/pages/index.astro changed. Concern: Check that changes in region card c
+counts are consistent with destination page counts, i.e., ensure that "regi
+"region cards" in index.astro and the destination pages match.
+
+3) "2a54127 data: normalise IGV branding and listPosition outliers (#70)" -
+-> Loose ends: Possibly some candidates YAML files might not be normalized 
+fully if new candidate fields are introduced or changes to listPosition. We
+We can check by grep "listPosition" in data/regional-candidates/*.yaml file
+files? But commit subject is data normalization for IGV branding (which mig
+might refer to a specific party's name?) and listPosition outliers. Loose e
+end: Check that all candidates have consistent branding (IGV) and correct l
+list positions, perhaps verifying the YAML files pattern "data/regional-can
+"data/regional-candidates/*.yaml".
+
+4) "8a8ace1 quiz: tie handling, podium, and compact regional cards (#69)" -
+-> Loose ends: The commit affects multiple parts of the Quiz code. Perhaps 
+a loose end is that there might be integration issues between the new quiz 
+engine changes in QuizEngine.tsx, PartyResultCard.tsx, and QuizPodium.tsx r
+regarding the handling of tie situations. We can check by verifying consist
+consistency of tie handling logic across those files with grep for "tie" ma
+maybe.
+
+5) "41f548a news: refresh from RSS feeds" -> Loose ends: The commit changed
+changed data/news.json. Possibly a loose end is that if the RSS feed URL or
+or parsing mechanism changes, then the refreshed content might not update c
+correctly if external feed schema changes. But commit subject does not ment
+mention any specific file besides data/news.json. We can check by verifying
+verifying that data/news.json's format follows expected structure.
+
+6) "572198a news: refresh from RSS feeds" -> Same as above; possibly loose 
+end is to verify consistency between two commits that update the same file?
+file? There are two commits for refreshing news from RSS feeds, one with 16
+16 changes and one with 44 changes. Loose end: Possibly duplicate code or i
+inconsistent format updates in data/news.json? But commit subject only says
+says refresh from RSS feeds. We can check by verifying data/news.json file 
+content pattern.
+
+7) "b056cde simplify: phase 3a — lift candidate-display constants to lib (#
+(#68)" -> Loose ends: This commit moves candidate display constants to a li
+library (src/lib/candidate-display.ts). There could be loose end if not all
+all occurrences of these constants have been updated in the pages that use 
+them. We can check by verifying that candidate-related components (maybe se
+search for "candidate-display" constant usage across src/pages/candidates/*
+src/pages/candidates/*.astro maybe) or verify that the changes in src/lib/c
+src/lib/candidate-display.ts are consistent with usage patterns.
+
+8) "3f495f8 simplify: phase 2a — central party-config for chart colours (#6
+(#67)" -> Loose ends: This commit moves chart colors into a centralized par
+party config (src/lib/party-config.ts). There could be loose end if the cha
+charts in PollsChart.tsx or ConstituencyMap.tsx don't reflect updated color
+color configuration. We can check by verifying src/components/PollsChart.ts
+src/components/PollsChart.tsx and maybe grep for "party-config".
+
+9) "18cd8f5 simplify: phase 1 — drop one-off scripts and tighten lib (#66)"
+(#66)" -> Loose ends: This commit drops some one-off scripts (e.g., cross-c
+cross-copy-bios, enrich-candidates, populate-projections, reconcile-candida
+reconcile-candidates) and tightens lib. A loose end might be that if any fu
+functionality in these dropped scripts was still needed elsewhere, or that 
+the removal of those scripts could lead to missing data processing. We can 
+check by verifying the removed scripts in "scripts/" directory.
+
+10) "3743b69 polls: update polling data from Wikipedia" -> Loose ends: This
+This commit updates polling data file (data/polls.json). A loose end might 
+be that the updated polling data might not match expected format or might c
+contain discrepancies if Wikipedia's structure changes. We can check by ver
+verifying "data/polls.json" content.
+
+We are instructed to list up to 4 specific concerns or loose ends each tied
+tied to a checkable file/path/grep pattern. So we should choose 4 commit su
+subjects that have potential loose ends that are checkable with file patter
+patterns? The instruction says "If nothing is reliably checkable, output: N
+NONE." But I'm pretty sure we can pick some.
+
+I need to list exactly up to 4 concerns. It says "list up to 4 specific con
+concerns or loose ends each tied to a checkable file/path/grep pattern."
+
+Which ones are most checkable? They should be verifiable by grep. Let's pic
+pick:
+
+Concern 1: Roadmap refresh. File: docs/ROADMAP.md. Check if the roadmap inc
+includes updated candidate audit info "28 April" maybe.
+
+But commit subject says "refresh roadmap after 28 April candidate audit". S
+So our concern might be: Does docs/ROADMAP.md reflect that new audit date a
+and proper planning? But it's not clear if there is any loose end here beca
+because it's a documentation update. I can say:
+CONCERN: Ensure the roadmap reflects updated candidate audit outcomes.
+FILE_OR_PATTERN_TO_VERIFY: docs/ROADMAP.md grep for "28 April"
+
+But maybe this is too vague.
+
+Concern 2: The fix commit (#71) align region card counts with destination p
+page in src/pages/index.astro. Loose end might be that if region card count
+count changed, then there might be a mismatch between the index and candida
+candidate detail pages? But we are allowed to list up to 4 concerns. We can
+can pick one:
+CONCERN: Verify that the region card counts on index match expected values 
+after fix.
+FILE_OR_PATTERN_TO_VERIFY: src/pages/index.astro grep for "region card coun
+count" maybe.
+
+Alternatively, if there's a test file for that? But not sure. The commit su
+subject is checkable because it indicates file changed in src/pages/index.a
+src/pages/index.astro. So we can say:
+CONCERN: Alignment between region card counts and destination page.
+FILE_OR_PATTERN_TO_VERIFY: src/pages/index.astro.
+
+Concern 3: Data normalization for IGV branding and listPosition outliers (#
+(#70) - This commit touched many YAML files under data/regional-candidates/
+data/regional-candidates/*.yaml. Loose end might be that some candidate fil
+files might still have incorrect listPosition values or inconsistent IGV br
+branding.
+FILE_OR_PATTERN_TO_VERIFY: data/regional-candidates/*.yaml grep "listPositi
+"listPosition" perhaps.
+
+Concern 4: The central party-config update for chart colours (#67) in src/l
+src/lib/party-config.ts, and changes in components like PollsChart.tsx and 
+ConstituencyMap.tsx. Loose end might be that some charts haven't been updat
+updated to use the new centralized config.
+FILE_OR_PATTERN_TO_VERIFY: src/components/PollsChart.tsx or maybe grep for 
+"party-config" in src/lib/party-config.ts.
+
+I should also consider commit #68 (simplify phase 3a) about candidate-displ
+candidate-display constants moved to lib. But we already have one candidate
+candidate-related concern in the party config one. Possibly I can pick one 
+more? But instructions say up to 4, so choose a maximum of four.
+
+Let's see if we can list exactly four concerns that are checkable using fil
+file patterns:
+
+I'll select these four:
+- Concern for commit #463068c: Roadmap update. Check docs/ROADMAP.md with g
+grep "28 April" perhaps.
+- Concern for commit #6d23c5e: Region card counts fix in src/pages/index.as
+src/pages/index.astro, verifying count consistency.
+- Concern for commit #2a54127: Data normalization changes across YAML candi
+candidate files. Check data/regional-candidates/*.yaml for consistent brand
+branding and listPosition values (grep for "IGV" perhaps).
+- Concern for commit #3f495f8: Central party-config update for chart colour
+colours in src/lib/party-config.ts, and verifying usage in components (mayb
+(maybe grep for "party-config" in src/components/PollsChart.tsx or Constitu
+ConstituencyMap.tsx).
+
+Alternatively, I might pick one from the quiz commit (#69) if it has a loos
+loose end that is checkable. But the party config is more structural.
+
+However, the instructions said: "list up to 4 specific concerns or loose en
+ends each tied to a checkable file/path/grep pattern." It doesn't require e
+exactly one per commit; I can list any four. I want to choose ones that are
+are clearly indicated by a file change.
+
+Let's see which ones have clear file patterns:
+- docs/ROADMAP.md (for commit 463068c) is checkable.
+- src/pages/index.astro (for commit #6d23c5e)
+- data/regional-candidates/*.yaml for commit #2a54127
+- src/lib/party-config.ts and possibly src/components/PollsChart.tsx for co
+commit #3f495f8.
+
+What about the other commits? There are two commits for news refresh (#41f5
+(#41f548a, #572198a) but they both update data/news.json. That could be ano
+another concern: Possibly duplicate changes in news feed refresh. But which
+which one is checkable? data/news.json with grep "rss" maybe, but commit su
+subjects don't mention specifics beyond refreshing from RSS feeds.
+
+We can list that as a potential loose end if we want to count it as a conce
+concern:
+
+Concern about duplicate news refresh commits: There are two commits (#41f54
+(#41f548a and #572198a) both updating data/news.json. Loose end: Ensure tha
+that the combined effect of these changes does not cause inconsistencies in
+in the RSS feed refresh.
+FILE_OR_PATTERN_TO_VERIFY: data/news.json
+
+But then I have five concerns if I list them all. The instruction says up t
+to 4. So I need to choose four.
+
+Let's pick four that are distinct and checkable:
+1) Roadmap update: docs/ROADMAP.md
+2) Region card counts fix in src/pages/index.astro.
+3) Candidate YAML normalization: data/regional-candidates/*.yaml (grep for 
+listPosition or IGV).
+4) Central party-config update for chart colours: grep "party-config" in sr
+src/lib/party-config.ts and related components.
+
+Alternatively, maybe I should choose the one with candidate-display constan
+constants (#68) because that is a structural change.
+But then we would have 5 concerns if we pick roadmap (1), region card count
+counts fix (2), candidate YAML normalization (3), party-config update (4) a
+and candidate display constants update (5).
+
+I can only list up to 4. So which ones are more concerning? I'll check each
+each commit's subject message:
+- "docs: refresh roadmap after 28 April candidate audit" seems straightforw
+straightforward, but could be loose end if the documentation is not updated
+updated correctly.
+- "fix: align region card counts with destination page (#71)" implies a bug
+bug fix; potential loose ends if the fix doesn't propagate to all pages tha
+that use region cards. But only one file is mentioned.
+- "data: normalise IGV branding and listPosition outliers (#70)" - this nor
+normalization might have left some YAML files out or not updated consistent
+consistently.
+- "quiz: tie handling, podium, and compact regional cards (#69)" - there ar
+are many changes in quiz engine, so potential loose end if the new tie-hand
+tie-handling logic doesn't integrate properly with other parts. But that co
+commit has a lot of file changes. It might be a candidate to list as concer
+concern #4.
+
+- "news: refresh from RSS feeds" appears twice; maybe this is not an actual
+actual loose end because it's simply refreshing news data, unless there's a
+a potential conflict between the two commits updating the same file.
+- "simplify: phase 3a — lift candidate-display constants to lib (#68)" - Th
+This refactoring might have left some orphaned constants or inconsistent us
+usage in candidate pages. That is checkable via grep for "candidate-display
+"candidate-display" perhaps.
+
+- "simplify: phase 2a — central party-config for chart colours (#67)" - Tha
+That is more architectural, and if not updated everywhere, then it's a loos
+loose end.
+- "simplify: phase 1 — drop one-off scripts and tighten lib (#66)" - This m
+might break functionality if any of the dropped scripts were still needed. 
+That is checkable by verifying that files in scripts/ no longer exist or ch
+checking for missing dependencies.
+
+- "polls: update polling data from Wikipedia" - Loose end: The polling data
+data may not match the expected schema and could be outdated if Wikipedia c
+changes its format. Checkable with data/polls.json maybe.
+
+Given that we have 10 commits, and we are asked to list up to four specific
+specific concerns or loose ends each tied to a checkable file/path/grep pat
+pattern. We should select four that are most prominent and verifiable from 
+the commit subject messages:
+
+One idea: I'll pick:
+A) Roadmap update (docs/ROADMAP.md) - Check if "28 April" is correctly incl
+included.
+B) Region card counts fix in src/pages/index.astro - Ensure alignment with 
+destination page counts.
+C) Candidate YAML normalization across data/regional-candidates/*.yaml - Ve
+Verify consistency for "IGV" branding and listPosition values.
+D) Central party-config update (phase 2a) in src/lib/party-config.ts and us
+usage in components (e.g., src/components/PollsChart.tsx or ConstituencyMap
+ConstituencyMap.tsx) - Check that chart colours are consistent.
+
+But perhaps I can mention the dropped scripts (#66). But then which one to 
+pick if we already have 4? Let me see: The question instructs "these are th
+the last 10 commits on a Scottish election website" and says "list up to 4 
+specific concerns or loose ends each tied to a checkable file/path/grep pat
+pattern." That means from these ten commits, there might be loose ends that
+that should be verified. We need to list them in a table-like format: "CONC
+"CONCERN | FILE_OR_PATTERN_TO_VERIFY". I can output like:
+"Concern 1: docs/ROADMAP.md doesn't reflect updated audit details (grep for
+for '28 April')", etc.
+
+Maybe I'll pick these four:
+
+1) Roadmap update documentation. Concern: The refreshed roadmap may not acc
+accurately represent candidate audit outcomes if any deadlines or prioritie
+priorities changed post-audit.
+File pattern to verify: docs/ROADMAP.md (grep "28 April").
+
+2) Region card counts alignment fix. Concern: The fix in region card counts
+counts might not be uniformly applied across all pages that display these c
+counts.
+File pattern to verify: src/pages/index.astro.
+
+3) Candidate YAML normalization. Concern: Inconsistent candidate data such 
+as IGV branding or listPosition outliers may still exist in some candidate 
+YAML files after the normalization.
+File pattern to verify: data/regional-candidates/*.yaml (grep for "IGV" and
+and/or "listPosition").
+
+4) Central party-config for chart colours. Concern: Some components might n
+not have been updated to use the centralized party-config, leading to poten
+potential mismatches in chart colours.
+File pattern to verify: src/components/PollsChart.tsx and ConstituencyMap.t
+ConstituencyMap.tsx (grep for "party-config").
+
+This is one possibility.
+
+Alternatively, I can pick candidate-display constants update (#68) as conce
+concern number 4. But which one is more likely? The subject states "simplif
+"simplify phase 2a" so it's central party config, that might be a bit more 
+structural than candidate display constants (which are in phase 3a). I'll c
+check the commit messages: 
+- b056cde is phase 3a and moves candidate-display constants to lib (#68) - 
+this means the candidate display logic has been centralized. Loose end: Som
+Some candidate detail pages might still reference outdated constants.
+I can choose that as well. But then what about central party-config for cha
+chart colours (#67)? They are similar in nature.
+
+Which one do I pick? I have two options:
+Option A: Use docs/ROADMAP.md (commit 463068c), region card counts fix (com
+(commit 6d23c5e), candidate YAML normalization (commit 2a54127) and central
+central party-config update for chart colours (commit 3f495f8).
+Option B: Replace candidate YAML normalization with dropped scripts (#66) w
+which might be more concerning if those one-off scripts are needed.
+
+Between these, I think the candidate YAML normalization is a likely loose e
+end because it's modifying several files across candidates. Also the centra
+central party-config update seems to be a significant architectural change 
+that should have been verified everywhere. And the roadmap doc refresh is i
+important.
+
+I think I'll choose option A:
+- Concern 1: Roadmap does not properly reflect updated audit outcomes.
+- Concern 2: Region card counts on index may still mismatch destination pag
+page counts if not fully synchronized.
+- Concern 3: Inconsistent candidate data normalization across YAML files (I
+(IGV branding or listPosition).
+- Concern 4: Centralized party-config for chart colours might have been mis
+missed in some components.
+
+Alternatively, I can pick:
+1) Roadmap update: docs/ROADMAP.md
+2) Region card counts fix: src/pages/index.astro
+3) Candidate data normalization: data/regional-candidates/*.yaml (grep "lis
+"listPosition" or "IGV")
+4) Candidate-display constants extraction to lib: grep candidate-display in
+in relevant files.
+
+But the instructions said up to 4 concerns each tied to a checkable file/pa
+file/path/grep pattern. So I'll output something like:
+
+CONCERN | FILE_OR_PATTERN_TO_VERIFY
+1) Ensure roadmap reflects updated audit details (grep "28 April" in docs/R
+docs/ROADMAP.md).
+2) Confirm region card count alignment between index and destination page (
+(check src/pages/index.astro for consistency).
+3) Verify candidate YAML files have consistent IGV branding and listPositio
+listPosition values (data/regional-candidates/*.yaml with grep for "listPos
+"listPosition").
+4) Validate that chart colours are using centralized party-config from src/
+src/lib/party-config.ts in all components (e.g., grep "party-config" in src
+src/components/PollsChart.tsx).
+
+This is my answer.
+
+I need to output exactly up to four specific concerns. I must include a che
+checkable file path or pattern for each concern, and if nothing is reliably
+reliably checkable then output NONE; but here we have ones that are checkab
+checkable.
+
+I can now produce the final answer in plain text with line breaks as requir
+required.
+
+I'll produce something like:
+
+"1) Concern: Documentation update: The refreshed roadmap might not accurate
+accurately reflect the outcomes of the 28 April candidate audit.
+FILE/PATTERN: docs/ROADMAP.md (grep for '28 April')
+
+2) Concern: Region card count alignment: The fix may not propagate to all p
+pages using region cards, risking discrepancies between index and destinati
+destination pages.
+FILE/PATTERN: src/pages/index.astro
+
+3) Concern: Data normalization consistency: Some candidate YAML files might
+might still have inconsistent IGV branding or listPosition values after the
+the intended normalization.
+FILE/PATTERN: data/regional-candidates/*.yaml (grep for 'listPosition' and/
+and/or 'IGV')
+
+4) Concern: Centralized party-config integration: Not all components may be
+be updated to use the new centralized party-config for chart colours, leadi
+leading to potential mismatches in visualizations.
+FILE/PATTERN: src/lib/party-config.ts and related component files such as s
+src/components/PollsChart.tsx (grep for 'party-config')"
+
+That seems appropriate. I'll produce answer accordingly.
+
+I must check that each concern is tied to a file or pattern checkable with 
+grep. Yes, they are.
+
+Now I'll produce final answer in plain text.</think>Below are four checkabl
+checkable loose ends:
+
+1. CONCERN: The refreshed roadmap may not fully reflect the outcomes of the
+the 28 April candidate audit.
+  FILE_OR_PATTERN_TO_VERIFY: docs/ROADMAP.md (grep for “28 April”)
+
+2. CONCERN: Region card counts on the index page might still be out‐of-sync
+out‐of-sync with the destination pages despite the fix.
+  FILE_OR_PATTERN_TO_VERIFY: src/pages/index.astro
+
+3. CONCERN: Some candidate YAML files may still have inconsistent IGV brand
+branding or listPosition values after normalization.
+  FILE_OR_PATTERN_TO_VERIFY: data/regional-candidates/*.yaml (grep for “lis
+“listPosition” and/or “IGV”)
+
+4. CONCERN: Not every component might be updated to use the new centralized
+centralized party-config for chart colours, risking color mismatches in cha
+charts.
+  FILE_OR_PATTERN_TO_VERIFY: src/lib/party-config.ts plus related component
+components (e.g. grep “party-config” in src/components/PollsChart.tsx)
+

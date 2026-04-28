@@ -36,7 +36,11 @@ If `ollama` is not on PATH or `ollama list` is empty, do the work yourself and m
 
 ## Pattern
 
-Always: gather context, pipe to `ollama run`, report the model used so a bad answer is visible.
+Three steps, in order, every time: **gather → delegate → verify**.
+
+1. **Gather** the context you can fit in a short prompt (≤ 8k tokens; local models degrade above that).
+2. **Delegate** with a constrained prompt that asks for an exact output shape.
+3. **Verify** every specific claim the model returns against the actual files before acting on it. Treat the model's output as a hypothesis, not a finding.
 
 ```bash
 MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh prose)
@@ -50,7 +54,25 @@ cat build.log | ollama run "$MODEL" \
   "List only the lines indicating test failures. One per line, no commentary."
 ```
 
-Keep prompts short; local models degrade above ~8k tokens. For long inputs, use the `long-context` tier.
+Always report the model used ("Delegated to qwen3.6:35b-a3b-q8_0 (prose tier)") so a bad answer is visible to the user. For long inputs, use the `long-context` tier.
+
+## Prompt scope — closed vs open
+
+Local models reliably produce closed-form output (extract, classify, restructure) but invent findings when asked open-ended questions (find loose ends, suggest improvements, what should we worry about). In one measured session, an 80B model produced four confident concerns from a 10-commit diffstat plus subject lines; all four were wrong on verification (claimed missing automation that existed, claimed missing test coverage that existed, etc.).
+
+Closed prompts that work well:
+- "List the lines in this log that match `<pattern>`."
+- "Extract `{name, party, position}` as JSON from each candidate block."
+- "Classify each TODO as P0/P1/P2."
+- "Does this YAML match this expected shape? Output CLEAN or list deviations."
+
+Open prompts that produce hallucination:
+- "Find anything interesting in this diff."
+- "What patterns or loose ends do you see?"
+- "Suggest improvements."
+- "Is there something we should worry about?"
+
+If the answer would be valuable specifically because the model is *reasoning beyond what is in the prompt*, that is the wrong job for a local model. Do it yourself or ask Claude.
 
 ## Tier → model routing
 
@@ -63,7 +85,20 @@ Keep prompts short; local models degrade above ~8k tokens. For long inputs, use 
 | `reasoning`    | Structured extraction, classification, triage.  |
 | `long-context` | Large logs, many-file scans, big diffs.         |
 
+The `prose` tier is for *generating* prose (commit messages, summaries), not for *inferring* about prose. For analytical work over a diff or log, use `reasoning` even if the input is text-heavy. See `experiments/results/` for measured accuracy by tier and task type.
+
 Preference order per tier lives in `scripts/pick-model.sh`. Edit that file (not the skill body) when your installed models change.
+
+## Failure modes — concrete examples
+
+These are real failure modes observed in production use, surfaced as warnings when you find yourself doing them.
+
+- **The "find anything interesting" prompt.** Producing fabricated concerns is the highest-volume failure. If your prompt asks the model to surface things that are not in the input, expect invented findings. Constrain it to listing what *is* present, in a fixed shape, then verify.
+- **Asking a reasoning model to verify its own claim.** The model cannot read your filesystem. If it says "X probably exists in file Y", that is a hypothesis. Run `grep` yourself.
+- **Treating long output as confidence.** Reasoning models emit chain-of-thought, which can mask a wrong answer in plausible-sounding scaffolding. Look at the final verdict, not the volume.
+- **Hardcoding model names in calls.** Models drift out every few weeks. Always go through `pick-model.sh <tier>`.
+- **Putting secrets into the prompt.** Local is safer than cloud, but the prompt still ends up in shell history and ollama logs.
+- **Bigger model = better answer.** Not always. The largest installed model (80B) was the worst performer on inference tasks in measured runs; an 11GB reasoning model beat it. Prefer the smallest model sufficient — see `scripts/audit-models.sh` for upgrade signals.
 
 ## Keeping the model set current
 
