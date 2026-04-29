@@ -82,6 +82,27 @@ The first baseline shipped at N=1 per cell. The findings are directionally usefu
 - **Better runner failure handling.** `body=$(ollama run … || echo "<RUN FAILED>")` swallows real errors silently. Surface a non-zero exit alongside the marker so a downstream scoring step can detect it.
 - **Cosmetic output cleanup.** After the perl ANSI strip, raw outputs still have a leading whitespace block from where the spinner sat. Add `sed -E 's/^[[:space:]]+//' | grep -v '^$'` after the perl filter so checked-in outputs are cleanly readable.
 
+## Phase 8 — Observability and feedback
+
+The skill currently runs blind: there is no record of how often it fires, which tier was picked, how long the local model took, or whether the output was usable. Before the skill can claim it saves tokens or routes correctly, it needs data. The four failure modes (wrong tier picked, hallucinated output, delegated when it shouldn't, didn't delegate when it should) split across two layers.
+
+Runtime telemetry — automatic, no agent cooperation required:
+
+- A `scripts/delegate.sh` wrapper that `SKILL.md` teaches Claude to invoke instead of bare `ollama run`. Captures tier, resolved model, prompt size, output size, wall-time, and exit status, then appends one JSON line to `~/.claude/skills/delegate-to-ollama/metrics.jsonl`. Append-only, on by default, opt-out via env var. Estimating tokens-not-sent-to-Anthropic from prompt+output sizes gives a defensible "tokens saved" headline.
+- A `scripts/metrics-summary.sh` that reads the JSONL and prints volume per tier, p50/p95 latency, total tokens-avoided, and a frequency-by-model breakdown. Read-only.
+
+Correctness signals — gated in CI or scheduled, not realtime:
+
+- Trigger-accuracy belongs in the Phase 2 `evals/eval-set.json` and `scripts/eval-skill-triggers.sh` runner. That answers "did the skill fire when it should have" and "did it fire when it shouldn't have."
+- Output accuracy belongs in the Phase 7 `experiments/` framework. That answers "is the picked model still good enough" per fixture. Rerun whenever `pick-model.sh` preferences change materially.
+
+Explicitly deferred until evidence demands it:
+
+- Agent-supplied verdict (worked/wrong/partial) appended after delegation. Hard to enforce across agents, easy to skip; only worth building if the experiments rerun cadence proves too slow to catch quality regressions.
+- Centralised metrics aggregation across machines. Single-machine JSONL is enough until there is a second machine running the skill.
+
+Sequence: build the wrapper + JSONL after Phase 2 CI exists (so trigger-eval correctness is gated first), before Phase 4 capability expansion (so new tiers ship with telemetry from day one).
+
 ## Out of scope
 
 - Code edits, refactors, or feature implementation. Local models are weak agents and the skill description explicitly rejects these. The local-brain finding stands: "they didn't need Smolagents, they needed `git status | ollama run model`".
