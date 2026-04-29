@@ -19,7 +19,7 @@ If the user says any of: "delegate where it fits", "use ollama where appropriate
 
 Fits:
 - Summarise a long log, diff, file, or PR description.
-- Draft a commit message, changelog entry, or release note.
+- Draft a commit message, changelog entry, or release note for a single-file mechanical change.
 - Classify or triage N items (relevant/noise, bug/feature).
 - First-pass "what does this file do" over many files.
 - Extract structured fields (JSON) from free-form text.
@@ -99,6 +99,7 @@ These are real failure modes observed in production use, surfaced as warnings wh
 - **Hardcoding model names in calls.** Models drift out every few weeks. Always go through `pick-model.sh <tier>`.
 - **Putting secrets into the prompt.** Local is safer than cloud, but the prompt still ends up in shell history and ollama logs.
 - **Bigger model = better answer.** Not always. The largest installed model (80B) was the worst performer on inference tasks in measured runs; an 11GB reasoning model beat it. Prefer the smallest model sufficient — see `scripts/audit-models.sh` for upgrade signals.
+- **Cross-PR / multi-feature commit message drafting.** Asking the prose tier to summarise a diff that spans many commits or unrelated features invites fabrication — the model pattern-matches on the markdown text and invents which feature shipped where. In one observed session, a 35B prose-tier model produced a confident 4-paragraph commit message claiming code routing changes that the diff did not contain, and dropping a category ("crypto") that the diff explicitly mentioned. Commit-message drafting is in the Fits list only for *single-file mechanical* changes; for multi-feature or cross-PR summaries, do it yourself.
 
 ## Keeping the model set current
 
