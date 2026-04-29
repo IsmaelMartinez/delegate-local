@@ -19,7 +19,7 @@ If the user says any of: "delegate where it fits", "use ollama where appropriate
 
 Fits:
 - Summarise a long log, diff, file, or PR description.
-- Draft a commit message, changelog entry, or release note for a *single-file or mechanically-related* change. For commits spanning multiple unrelated features or many PRs, do it yourself — see failure modes below.
+- Draft a commit message, changelog entry, or release note for a single-file mechanical change.
 - Classify or triage N items (relevant/noise, bug/feature).
 - First-pass "what does this file do" over many files.
 - Extract structured fields (JSON) from free-form text.
