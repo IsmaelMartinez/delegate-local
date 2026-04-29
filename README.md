@@ -15,6 +15,24 @@ MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh prose)
 git diff HEAD~5 | ollama run "$MODEL" "Summarise in 3 bullets."
 ```
 
+### Capturing output non-interactively
+
+When the response is being captured by another tool (a Bash wrapper, a CI step, an agent harness) rather than read in a terminal, `ollama run` interleaves spinner ANSI sequences (`\x1b[?25l` / `\x1b[?2026h` / `\x1b[K`) and partial-word stream-rewrites (`[9D[K`) into stdout. The actual response is fine; the noise just makes the captured bytes hard to parse.
+
+Two reliable workarounds:
+
+```bash
+# Option 1: write to file, strip control codes on read
+ollama run "$MODEL" "..." > /tmp/out.txt 2>/dev/null
+sed -E $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' /tmp/out.txt
+
+# Option 2: pipe-strip inline
+ollama run "$MODEL" "..." 2>/dev/null \
+  | sed -E $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g'
+```
+
+Both keep the model output and drop the cursor-control bytes. `--hidethinking` does not currently affect the spinner — it only suppresses `<think>...</think>` blocks for reasoning models.
+
 ## Requirements
 
 - [Ollama](https://ollama.com) with at least one model pulled
