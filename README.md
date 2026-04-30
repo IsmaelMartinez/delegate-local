@@ -61,6 +61,16 @@ bash ~/.claude/skills/delegate-to-ollama/scripts/audit-models.sh
 - `scripts/audit-models.sh` — prints installed models, tier routing, and llmfit-driven upgrade suggestions filtered to first-party providers. Read-only; never pulls.
 - `tests/run-tests.sh` — unit tests for the two scripts. Run with `bash tests/run-tests.sh`.
 
+## Validation
+
+Three scripts gate every PR via GitHub Actions:
+
+- `scripts/validate-frontmatter.sh SKILL.md` — asserts the SKILL.md frontmatter has required fields, the `name` matches the directory, and `name` matches the Claude Skills regex.
+- `scripts/validate-skill-content.sh SKILL.md` — scans for seven categories of dangerous content (auth-disable, permissive flags, credential exfiltration, base64 obfuscation, zero-width / bidi unicode, broad tool grants, external URLs). Justified false positives go in `.content-check-allow`.
+- `scripts/eval-skill-triggers.sh` — validates `evals/eval-set.json` shape by default; with `--api` and `ANTHROPIC_API_KEY` set, runs each tagged query through Claude using only the SKILL.md frontmatter description as the trigger surface and asserts recall + negative-precision thresholds.
+
+To enable the API-mode trigger eval in CI, configure `ANTHROPIC_API_KEY` in repo secrets (Settings → Secrets and variables → Actions). Without the secret the API step is skipped, not failed.
+
 ## Design notes
 
 The skill intentionally avoids frameworks. Local models are good summarisers and weak agents; delegation is a shell pipe, not an orchestration layer. The `pick-model.sh` preference lists are the single point of truth for routing — no hardcoded model names in the skill body.

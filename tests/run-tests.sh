@@ -125,6 +125,15 @@ EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
 assert_eq "qwen3.6:35b-a3b" "$OUT" "prose picks qwen3.6 when installed"
 rm -rf "$tmp"
 
+# 7b. Prose tier prefers qwen3.6 over qwen3-next when both are installed.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME                              ID SIZE   MODIFIED
+qwen3.6:35b-a3b                   aa 30 GB  1 day ago
+qwen3-next:80b-a3b-instruct-q8_0  bb 84 GB  1 week ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+assert_eq "qwen3.6:35b-a3b" "$OUT" "prose picks qwen3.6 ahead of qwen3-next"
+rm -rf "$tmp"
+
 # 8. No preference match -> exit 1 (do NOT return an arbitrary fallback).
 tmp=$(mktemp -d)
 make_mock_ollama "$tmp" "NAME               ID SIZE  MODIFIED

@@ -1,0 +1,33 @@
+{
+  "skill": "delegate-to-ollama",
+  "model": "claude-sonnet-4-6",
+  "thresholds": {
+    "positive_recall": 0.9,
+    "negative_precision": 0.9
+  },
+  "queries": [
+    {"id": "p01", "tag": "exact",      "expect": "trigger",    "query": "i've got a ~4000 line build log from our CI run this morning (its in ~/Downloads/ci-run-8472.log, our GitLab job that timed out). can you skim it and give me just the lines that mention test failures or panics? don't need full context just a short list"},
+    {"id": "p02", "tag": "exact",      "expect": "trigger",    "query": "can you look at the diff between my current branch and main and draft a commit message? nothing fancy, just the usual conventional commit format. the diff is mostly in src/auth/ and i added a new middleware for session refresh"},
+    {"id": "p03", "tag": "exact",      "expect": "trigger",    "query": "i've got this csv export from zendesk with 380 support tickets — subject + first reply. can you triage each one as either 'bug' 'feature request' or 'usage question' and give me the result as a new csv? file is at ./tickets-2026-03.csv"},
+    {"id": "p04", "tag": "paraphrase", "expect": "trigger",    "query": "there's 28 markdown docs in docs/runbooks/ that i inherited from the old team. can you give me a one-liner for each describing what it's about? just enough so i can decide which ones to keep"},
+    {"id": "p05", "tag": "exact",      "expect": "trigger",    "query": "i copied this long email thread from legal into notes.txt. can you pull out the deadline dates and the action items assigned to me (my name is ismael) as structured json? no need for the rest"},
+    {"id": "p06", "tag": "exact",      "expect": "trigger",    "query": "please rewrite this release notes draft in a friendlier tone. customers will read this. current draft is in RELEASE_NOTES.md, version 2.4.0"},
+    {"id": "p07", "tag": "paraphrase", "expect": "trigger",    "query": "can you do the log triage locally rather than sending it to the api? the log has internal hostnames and staging creds i don't want leaving my machine. its at /var/log/app/auth.log from today"},
+    {"id": "p08", "tag": "exact",      "expect": "trigger",    "query": "i need a short changelog entry summarising the last 12 commits on this branch. something i can paste into our internal monthly update. bullets are fine"},
+    {"id": "p09", "tag": "paraphrase", "expect": "trigger",    "query": "my colleague sent over a 70-page pdf transcript of an all-hands meeting. i just want the 5 most important decisions that were made + who owns each. file is meeting-q1-2026.pdf"},
+    {"id": "p10", "tag": "paraphrase", "expect": "trigger",    "query": "can you classify each file in src/legacy/ as 'still used', 'maybe dead', or 'definitely remove' based on whether it's imported anywhere? just eyeball them quickly, i'll verify after"},
+    {"id": "n01", "tag": "adjacent",   "expect": "no-trigger", "query": "my test test_auth_refresh_flow is flaky — fails maybe 1 in 5 runs with a timeout on line 142. i've already added retries. can you dig in and find the root cause?"},
+    {"id": "n02", "tag": "adjacent",   "expect": "no-trigger", "query": "we're deciding between using kafka or kinesis for the new event pipeline. throughput is around 2k msgs/sec and we already use aws for everything else. which would you recommend?"},
+    {"id": "n03", "tag": "adjacent",   "expect": "no-trigger", "query": "can you review this PR? https://github.com/plg-tech/auth-service/pull/412 — it changes how we hash passwords and i want another set of eyes before we merge"},
+    {"id": "n04", "tag": "adjacent",   "expect": "no-trigger", "query": "i'm getting `TypeError: cannot read property 'map' of undefined` in our react dashboard on the /billing page, but only when the user has no invoices. can you trace why useInvoices() isn't returning an array?"},
+    {"id": "n05", "tag": "adjacent",   "expect": "no-trigger", "query": "write me a fastapi endpoint at POST /api/v2/users that validates the email format, checks uniqueness against postgres, and returns 201 with the new user id"},
+    {"id": "n06", "tag": "adjacent",   "expect": "no-trigger", "query": "refactor the models/billing.py file so the pricing logic is pulled out of the InvoiceGenerator class into a separate PricingEngine class. keep backward compat on the public methods"},
+    {"id": "n07", "tag": "adjacent",   "expect": "no-trigger", "query": "is there a security vulnerability in this jwt validation? it's verifying the signature but i'm not sure about the exp claim handling. here's the snippet: ```def verify(token): return jwt.decode(token, SECRET, algorithms=['HS256'])```"},
+    {"id": "n08", "tag": "unrelated",  "expect": "no-trigger", "query": "whats the difference between claude 4.6 and claude 4.7? i use claude code daily and wondering if i should upgrade"},
+    {"id": "n09", "tag": "adjacent",   "expect": "no-trigger", "query": "our nightly sync job failed last night with exit code 137. i've already checked the cloudwatch logs — OOM killed. can you tell me why memory spiked and suggest a fix?"},
+    {"id": "n10", "tag": "adjacent",   "expect": "no-trigger", "query": "i need to design a database schema for a multi-tenant saas where tenants can have nested orgs. should i use row-level security or separate schemas per tenant? walk me through the tradeoffs"},
+    {"id": "n11", "tag": "unrelated",  "expect": "no-trigger", "query": "what's the difference between a spirit and a liqueur? trying to follow a cocktail recipe and it just says 'spirit of choice'"},
+    {"id": "n12", "tag": "unrelated",  "expect": "no-trigger", "query": "if i invest 5k at 4.5% annual compounded monthly for 7 years, what's the final balance?"},
+    {"id": "n13", "tag": "unrelated",  "expect": "no-trigger", "query": "my dog keeps chewing the corner of the rug whenever i leave for work. she's 2yrs old, well-fed. is this anxiety or just boredom?"}
+  ]
+}
