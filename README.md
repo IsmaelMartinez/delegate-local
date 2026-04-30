@@ -41,17 +41,31 @@ Both keep the model output and drop the cursor-control bytes. `--hidethinking` d
 
 ## Install
 
-Copy the directory into your Claude skills folder:
+### Universal (recommended)
+
+Use [Vercel Labs' `skills` CLI](https://github.com/vercel-labs/skills), which symlinks the skill into every detected agent tool (Claude Code, Codex, OpenCode, Cursor, Copilot, and many others) so updates propagate everywhere at once:
 
 ```bash
-git clone <this-repo> delegate-to-ollama
-cp -r delegate-to-ollama ~/.claude/skills/
+npx skills add IsmaelMartinez/delegate-to-ollama
 ```
 
-Claude Code picks it up on the next session. Run the audit once to confirm routing:
+Pass `-g` to install globally (`~/<agent>/skills/`) instead of per-project, `--copy` to make independent copies on systems without symlink support, or `-a claude-code` to limit to a specific agent.
+
+### Manual copy
+
+The skill is conformant with the [Agent Skills standard](https://agentskills.io/specification) — `SKILL.md` at the directory root with `name` and `description` frontmatter — so any tool that reads that format can use it. Drop the directory into the tool's expected skills path:
 
 ```bash
-bash ~/.claude/skills/delegate-to-ollama/scripts/audit-models.sh
+git clone https://github.com/IsmaelMartinez/delegate-to-ollama
+cp -r delegate-to-ollama ~/.claude/skills/   # or your tool's skills dir
+```
+
+### Confirm routing
+
+After install, run the audit from wherever the skill landed:
+
+```bash
+bash <install-path>/scripts/audit-models.sh
 ```
 
 ## Files
