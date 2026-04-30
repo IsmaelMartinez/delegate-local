@@ -41,14 +41,32 @@ Both keep the model output and drop the cursor-control bytes. `--hidethinking` d
 
 ## Install
 
-Copy the directory into your Claude skills folder:
+### Claude Code plugin (recommended)
+
+Install via the Claude Code marketplace command, pointing at this repo:
 
 ```bash
-git clone <this-repo> delegate-to-ollama
-cp -r delegate-to-ollama ~/.claude/skills/
+/plugin marketplace add IsmaelMartinez/delegate-to-ollama
+/plugin install delegate-to-ollama@delegate-to-ollama-marketplace
 ```
 
-Claude Code picks it up on the next session. Run the audit once to confirm routing:
+The plugin manifest lives in `.claude-plugin/`. Plugin install copies the skill into `~/.claude/plugins/cache/` and Claude Code picks it up on the next session.
+
+### Manual copy (any agent that reads SKILL.md)
+
+The skill is conformant with the [Agent Skills standard](https://agentskills.io/specification) — `SKILL.md` at the directory root with `name` and `description` frontmatter — so any tool that reads that format can use it. Drop the directory into the tool's expected skills path:
+
+```bash
+git clone https://github.com/IsmaelMartinez/delegate-to-ollama
+# Claude Code:
+cp -r delegate-to-ollama ~/.claude/skills/
+# Codex:
+cp -r delegate-to-ollama .agents/skills/
+```
+
+For other agent tools, check their documentation for the local skills directory.
+
+### Confirm routing
 
 ```bash
 bash ~/.claude/skills/delegate-to-ollama/scripts/audit-models.sh

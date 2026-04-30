@@ -1,0 +1,20 @@
+{
+  "name": "delegate-to-ollama",
+  "description": "Offload summarisation, triage, classification, and bulk-text tasks from Claude Code to locally-installed Ollama models. Saves Anthropic API tokens and keeps content on-device.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Ismael Martinez"
+  },
+  "homepage": "https://github.com/IsmaelMartinez/delegate-to-ollama",
+  "repository": "https://github.com/IsmaelMartinez/delegate-to-ollama",
+  "license": "MIT",
+  "keywords": [
+    "ollama",
+    "local-models",
+    "summarisation",
+    "delegation",
+    "skill",
+    "tokens-saving",
+    "on-device"
+  ]
+}
