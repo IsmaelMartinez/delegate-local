@@ -18,10 +18,20 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 allow_file="${ALLOW_FILE:-$repo_root/.content-check-allow}"
 
+# Normalize $file to a repo-root-relative path so allow-file keys are stable
+# regardless of whether the caller passed `./SKILL.md`, `SKILL.md`, or an
+# absolute path. Falls back to the original path if it's outside the repo.
+file_abs=$(cd "$(dirname "$file")" && pwd)/$(basename "$file")
+file_key="${file_abs#"$repo_root"/}"
+
 # Categories as "TAG||extended-regex" pairs (case-insensitive).
 declare -a CATEGORIES=(
   'SEC_DISABLE||(disable|turn[ _-]?off|skip|bypass)[ _-]+(auth|authn|authz|sso|mfa|2fa|tls|ssl|cert|verification|signature|sandbox|seccomp|apparmor|selinux)'
   'SEC_PERMISSIVE||(allow[_-]?all|trust[_-]?all|trust-all-certs|--no-verify|--insecure|--disable[_-]?ssl|verify[ _=]+false|YOLO|0\.0\.0\.0/0|::/0|chmod[ ]+(-R[ ]+)?0?777)'
+  # Bare `nc` (two chars) is not in the tools list because it false-positives on
+  # "non-reasoning", "concurrent", etc. when followed by a credential-like noun
+  # within 200 chars. Use `ncat` if you mean the tool; `nc` invocations of real
+  # exfils are rare in skill markdown anyway.
   'CRED_EXFIL||(^|[^a-zA-Z])(curl|wget|ncat)[[:space:]]+.{0,200}(token|api[_-]?key|secret|password|bearer|aws_secret|gh_token|anthropic_api_key|gitlab_token)'
   'OBFUSC_B64||(base64[ _-]?-d|base64[ ]+--decode|echo[ ]+[A-Za-z0-9+/]{40,}={0,2})'
   'TOOL_BROAD||^[ ]*allowed-tools:[ ]*["'\'']?\*["'\'']?[ ]*$'
@@ -49,14 +59,14 @@ fi
 violations=0
 report_hit() {
   local tag="$1" line_no="$2" content="$3"
-  local key_line="$tag:$file:$line_no"
+  local key_line="$tag:$file_key:$line_no"
   local sha
   sha=$(printf '%s' "$content" | shasum -a 256 | awk '{print $1}')
   local key_sha="$tag:sha256:$sha"
   if [[ "$allow_keys" == *$'\n'"$key_line"$'\n'* || "$allow_keys" == *$'\n'"$key_sha"$'\n'* ]]; then
     return 0
   fi
-  echo "::error file=$file,line=$line_no::$tag: ${content:0:120}" >&2
+  echo "::error file=$file_key,line=$line_no::$tag: ${content:0:120}" >&2
   violations=$((violations+1))
 }
 

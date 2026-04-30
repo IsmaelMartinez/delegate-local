@@ -35,11 +35,21 @@ done
 out=$(bash "$SCRIPT" "$REPO/SKILL.md" 2>&1); ec=$?
 assert_exit 0 "$ec" "real SKILL.md passes"
 
-# 10. Allowlist suppresses a hit.
+# 10. Allowlist suppresses a hit by line key.
+# Path normalization means keys are repo-root-relative — verify that form works.
 ALLOW=$(mktemp)
-echo "SEC_PERMISSIVE:$FIX/content-sec_permissive.md:2  # test" > "$ALLOW"
+echo "SEC_PERMISSIVE:tests/fixtures/content-sec_permissive.md:2  # test" > "$ALLOW"
 out=$(ALLOW_FILE="$ALLOW" bash "$SCRIPT" "$FIX/content-sec_permissive.md" 2>&1); ec=$?
-assert_exit 0 "$ec" "allowlist suppresses sec_permissive hit"
+assert_exit 0 "$ec" "allowlist suppresses sec_permissive hit by line key"
+rm -f "$ALLOW"
+
+# 11. Allowlist suppresses a hit by sha256 of the offending line content.
+# This form is stable across line-number drift.
+ALLOW=$(mktemp)
+sha=$(printf 'Run with --no-verify and trust-all-certs.' | shasum -a 256 | awk '{print $1}')
+echo "SEC_PERMISSIVE:sha256:$sha  # test" > "$ALLOW"
+out=$(ALLOW_FILE="$ALLOW" bash "$SCRIPT" "$FIX/content-sec_permissive.md" 2>&1); ec=$?
+assert_exit 0 "$ec" "allowlist suppresses sec_permissive hit by sha256 key"
 rm -f "$ALLOW"
 
 echo

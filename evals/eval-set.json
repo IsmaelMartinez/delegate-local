@@ -25,6 +25,9 @@
     {"id": "n07", "tag": "adjacent",   "expect": "no-trigger", "query": "is there a security vulnerability in this jwt validation? it's verifying the signature but i'm not sure about the exp claim handling. here's the snippet: ```def verify(token): return jwt.decode(token, SECRET, algorithms=['HS256'])```"},
     {"id": "n08", "tag": "unrelated",  "expect": "no-trigger", "query": "whats the difference between claude 4.6 and claude 4.7? i use claude code daily and wondering if i should upgrade"},
     {"id": "n09", "tag": "adjacent",   "expect": "no-trigger", "query": "our nightly sync job failed last night with exit code 137. i've already checked the cloudwatch logs — OOM killed. can you tell me why memory spiked and suggest a fix?"},
-    {"id": "n10", "tag": "adjacent",   "expect": "no-trigger", "query": "i need to design a database schema for a multi-tenant saas where tenants can have nested orgs. should i use row-level security or separate schemas per tenant? walk me through the tradeoffs"}
+    {"id": "n10", "tag": "adjacent",   "expect": "no-trigger", "query": "i need to design a database schema for a multi-tenant saas where tenants can have nested orgs. should i use row-level security or separate schemas per tenant? walk me through the tradeoffs"},
+    {"id": "n11", "tag": "unrelated",  "expect": "no-trigger", "query": "what's the difference between a spirit and a liqueur? trying to follow a cocktail recipe and it just says 'spirit of choice'"},
+    {"id": "n12", "tag": "unrelated",  "expect": "no-trigger", "query": "if i invest 5k at 4.5% annual compounded monthly for 7 years, what's the final balance?"},
+    {"id": "n13", "tag": "unrelated",  "expect": "no-trigger", "query": "my dog keeps chewing the corner of the rug whenever i leave for work. she's 2yrs old, well-fed. is this anxiety or just boredom?"}
   ]
 }

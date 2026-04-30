@@ -92,10 +92,19 @@ while read -r row; do
   verdict=$(jq -r '.content[0].text // empty' <<<"$resp" | tr -d '[:space:]' | tr 'a-z' 'A-Z')
   jq -nc --arg id "$id" --arg expect "$expect" --arg verdict "$verdict" --arg query "$query" \
     '{id:$id, expect:$expect, verdict:$verdict, query:$query}' >> "$results_file"
+  # Classify the verdict. Order matters: NOTRIGGER must be checked before
+  # TRIGGER because the latter is a prefix of the former. Glob match tolerates
+  # stray punctuation the model might emit despite the "no punctuation"
+  # instruction. Garbage (neither prefix matches) counts as a miss against the
+  # expected outcome — strict scoring discourages eval-set ambiguity.
+  is_trigger=0; is_notrigger=0
+  if   [[ "$verdict" == NOTRIGGER* ]]; then is_notrigger=1
+  elif [[ "$verdict" == TRIGGER* ]];   then is_trigger=1
+  fi
   if [[ "$expect" == "trigger" ]]; then
-    if [[ "$verdict" == "TRIGGER" ]]; then tp=$((tp+1)); else fn=$((fn+1)); fi
+    if (( is_trigger )); then tp=$((tp+1)); else fn=$((fn+1)); fi
   else
-    if [[ "$verdict" == "NOTRIGGER" ]]; then tn=$((tn+1)); else fp=$((fp+1)); fi
+    if (( is_notrigger )); then tn=$((tn+1)); else fp=$((fp+1)); fi
   fi
 done < <(jq -c '.queries[]' "$eval_set")
 
