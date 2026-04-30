@@ -34,6 +34,12 @@ jobs:
       - name: Validate-content tests
         run: bash tests/test-validate-content.sh
 
+      - name: Delegate.sh tests
+        run: bash tests/test-delegate.sh
+
+      - name: Metrics-summary tests
+        run: bash tests/test-metrics-summary.sh
+
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh
 

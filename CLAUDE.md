@@ -22,10 +22,22 @@ Audit installed models and see tier routing plus llmfit upgrade suggestions (req
 bash scripts/audit-models.sh
 ```
 
-Resolve a tier to a model name (used by Claude when delegating, also useful for one-off shell pipes):
+Resolve a tier to a model name (used internally by `delegate.sh`, also useful for one-off shell pipes):
 
 ```bash
 bash scripts/pick-model.sh <code|prose|reasoning|long-context>
+```
+
+Wrap a delegation through the metrics-capturing wrapper (preferred over bare `ollama run`):
+
+```bash
+echo "<context>" | bash scripts/delegate.sh prose "<prompt>"
+```
+
+Read the metrics roll-up:
+
+```bash
+bash scripts/metrics-summary.sh
 ```
 
 Run the empirical accuracy fixtures against a specific installed model and append timing + raw output to `experiments/results/raw/<slug>.txt`:
@@ -39,6 +51,8 @@ There is no build step, no linter, no package manager. Everything is plain bash 
 ## Architecture
 
 `scripts/pick-model.sh` is the single source of truth for tier-to-model routing. Each tier (`code`, `prose`, `reasoning`, `long-context`) holds a substring-matched preference list, highest capability first; the script returns the first installed model whose name contains a preference substring. When the installed model set changes, edit the `prefs` arrays in this script — never hardcode model names in `SKILL.md` or in shell pipes that delegate work.
+
+`scripts/delegate.sh` is the wrapper `SKILL.md` teaches Claude to invoke. It calls `pick-model.sh`, runs `ollama run`, strips spinner ANSI bytes from the captured output (so the response is clean for downstream parsers), and appends one JSON line per invocation to `~/.claude/skills/delegate-to-ollama/metrics.jsonl`. Set `DELEGATE_TO_OLLAMA_NO_METRICS=1` to opt out for a single call. The metrics file is intentionally outside the repo so it survives `git clean -fdx` and isn't committed by accident. `scripts/metrics-summary.sh` reads that JSONL and prints volume/latency/tokens-avoided rollups; both scripts are idempotent and read-only with respect to the rest of the system.
 
 `scripts/audit-models.sh` is read-only by design and never pulls models. It cross-checks `llmfit recommend --json` output against `ollama list` because llmfit tracks its own HuggingFace GGUF cache rather than Ollama's model store. The `hf_stem` function strips provider prefix and quant/variant suffixes (`-instruct`, `-fp8`, `-q4_K_M`, etc.) so that `Qwen/Qwen3.6-35B-A3B-Instruct-Q8_0` matches an installed `qwen3.6:35b-a3b-q8_0`. Suggestions are filtered to first-party providers (Alibaba/Google/Meta/Microsoft/DeepSeek/Mistral/Zhipu) because third-party fine-tunes rarely appear on the Ollama library under the same name. The 3-point delta threshold for surfacing an upgrade is intentional — anything smaller is noise from llmfit's scoring.
 
