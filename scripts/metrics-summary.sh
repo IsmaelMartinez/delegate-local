@@ -32,10 +32,15 @@ if (( total == 0 )); then
   exit 0
 fi
 
-ts_first=$(jq -rs 'min_by(.ts) | .ts' "$metrics_file")
-ts_last=$(jq -rs 'max_by(.ts) | .ts' "$metrics_file")
-total_avoided=$(jq -s 'map(.estimated_tokens_avoided) | add' "$metrics_file")
-errors=$(jq -s '[.[] | select(.exit_status != 0)] | length' "$metrics_file")
+# Single jq pass for the four headline numbers — saves three reparses on
+# large metrics files. Tab-separated so `read` splits cleanly.
+IFS=$'\t' read -r ts_first ts_last total_avoided errors < <(jq -rs '
+  [
+    (min_by(.ts) | .ts),
+    (max_by(.ts) | .ts),
+    (map(.estimated_tokens_avoided) | add),
+    (map(select(.exit_status != 0)) | length)
+  ] | @tsv' "$metrics_file")
 
 echo "=== delegate-to-ollama metrics ==="
 echo "File:                $metrics_file"

@@ -73,7 +73,9 @@ fi
 
 # Run ollama and strip spinner / cursor-control ANSI bytes from the output.
 # The same sed pattern is documented in README "Capturing output non-interactively".
-output=$(printf '%s' "$full_input" | ollama run "$model" 2>/dev/null \
+# stderr is *not* redirected — real errors (server down, missing model, OOM)
+# need to reach the user. The spinner that needs cleaning lives on stdout.
+output=$(printf '%s' "$full_input" | ollama run "$model" \
   | sed -E $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' \
   | sed -E $'s/\x1b\\][^\a]*\a//g')
 status=$?
