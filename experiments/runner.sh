@@ -27,14 +27,25 @@ run_task() {
   echo "===== $task_id =====" >> "$out"
   local start
   start=$(date +%s)
-  local body
+  # Run ollama, strip ANSI/cursor noise and the spinner braille bytes, then
+  # drop the leading blank-line block the spinner left behind (awk: skip until
+  # first non-empty line, then print everything). Track the pipeline status
+  # via `|| run_status=$?` — set -e plus pipefail mean a bare PIPESTATUS check
+  # would never run, and PIPESTATUS doesn't see inside command substitutions
+  # anyway. With pipefail enabled, $? on the substitution is the failed step's
+  # exit code if any element in the pipeline failed.
+  local body run_status=0
   body=$(ollama run "$model" "$prompt" < "$fixture" 2>&1 \
     | perl -pe 's/\e\[[0-9;?]*[a-zA-Z]//g; s/\e\][^\a]*\a//g; s/\e\[\?[0-9]+[lh]//g; s/\r//g; s/\xe2\xa0[\x80-\xbf]//g' \
-    || echo "<RUN FAILED>")
+    | awk 'NF || seen { seen=1; print }') || run_status=$?
   local end
   end=$(date +%s)
   local elapsed=$((end - start))
   echo "DURATION_SEC: $elapsed" >> "$out"
+  echo "RUN_STATUS: $run_status" >> "$out"
+  if (( run_status != 0 )); then
+    echo "RUN_FAILED: ollama exited $run_status" >> "$out"
+  fi
   echo "OUTPUT:" >> "$out"
   echo "$body" >> "$out"
   echo "" >> "$out"
