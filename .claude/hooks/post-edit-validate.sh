@@ -18,7 +18,7 @@ case "$file" in
     bash scripts/validate-frontmatter.sh "$file" >&2 || exit 2
     bash scripts/validate-skill-content.sh "$file" >&2 || exit 2
     ;;
-  */scripts/*.sh|*/tests/*.sh)
+  *scripts/*.sh|*tests/*.sh)
     bash -n "$file" >&2 || exit 2
     ;;
   *evals/eval-set.json)
