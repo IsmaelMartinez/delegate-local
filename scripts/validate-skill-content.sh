@@ -28,11 +28,10 @@ file_key="${file_abs#"$repo_root"/}"
 declare -a CATEGORIES=(
   'SEC_DISABLE||(disable|turn[ _-]?off|skip|bypass)[ _-]+(auth|authn|authz|sso|mfa|2fa|tls|ssl|cert|verification|signature|sandbox|seccomp|apparmor|selinux)'
   'SEC_PERMISSIVE||(allow[_-]?all|trust[_-]?all|trust-all-certs|--no-verify|--insecure|--disable[_-]?ssl|verify[ _=]+false|YOLO|0\.0\.0\.0/0|::/0|chmod[ ]+(-R[ ]+)?0?777)'
-  # Bare `nc` (two chars) is not in the tools list because it false-positives on
-  # "non-reasoning", "concurrent", etc. when followed by a credential-like noun
-  # within 200 chars. Use `ncat` if you mean the tool; `nc` invocations of real
-  # exfils are rare in skill markdown anyway.
-  'CRED_EXFIL||(^|[^a-zA-Z])(curl|wget|ncat)[[:space:]]+.{0,200}(token|api[_-]?key|secret|password|bearer|aws_secret|gh_token|anthropic_api_key|gitlab_token)'
+  # `nc` is included alongside `ncat` because the `(^|[^a-zA-Z])...[[:space:]]+`
+  # boundary correctly excludes the substring inside words like "once",
+  # "concurrent", "non-reasoning". Without that boundary, `nc` was too noisy.
+  'CRED_EXFIL||(^|[^a-zA-Z])(curl|wget|nc|ncat)[[:space:]]+.{0,200}(token|api[_-]?key|secret|password|bearer|aws_secret|gh_token|anthropic_api_key|gitlab_token)'
   'OBFUSC_B64||(base64[ _-]?-d|base64[ ]+--decode|echo[ ]+[A-Za-z0-9+/]{40,}={0,2})'
   'TOOL_BROAD||^[ ]*allowed-tools:[ ]*["'\'']?\*["'\'']?[ ]*$'
 )

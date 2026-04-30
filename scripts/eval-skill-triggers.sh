@@ -52,8 +52,10 @@ fi
 command -v curl >/dev/null || { echo "curl not on PATH" >&2; exit 2; }
 
 # Extract the frontmatter description from SKILL.md (used as the trigger surface).
+# Capture indented continuation lines so YAML block scalars / folded multi-line
+# descriptions are preserved in full — truncation here would skew recall.
 description=$(awk 'BEGIN{c=0} /^---[[:space:]]*$/{c++; next} c==1' "$skill" \
-  | awk '/^description:/{sub(/^description: */,""); print}')
+  | awk '/^description:/{sub(/^description: */,""); print; while(getline && /^[[:space:]]+/) print}')
 if [[ -z "$description" ]]; then echo "could not parse description from $skill" >&2; exit 2; fi
 
 model=$(jq -r '.model // "claude-sonnet-4-6"' "$eval_set")

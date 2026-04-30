@@ -27,7 +27,9 @@ fm=$(awk 'BEGIN{c=0} /^---[[:space:]]*$/{c++; next} c==1{print} c==2{exit}' "$sk
 if [[ -z "$fm" ]]; then fail "no frontmatter"; fi
 
 name=$(awk -F': *' '/^name:/{sub(/^name: */,""); gsub(/["\x27]/,""); print; exit}' <<<"$fm")
-desc=$(awk -F': *' '/^description:/{sub(/^description: */,""); print; exit}' <<<"$fm")
+# Capture description, including indented continuation lines for YAML block
+# scalars (`|` / `>`) or folded multi-line strings.
+desc=$(awk '/^description:/{sub(/^description: */,""); print; while(getline && /^[[:space:]]+/) print}' <<<"$fm")
 
 [[ -n "$name" ]] || fail "missing name"
 [[ -n "$desc" ]] || fail "missing description"
