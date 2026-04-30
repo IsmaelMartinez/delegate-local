@@ -28,15 +28,16 @@ run_task() {
   local start
   start=$(date +%s)
   # Run ollama, strip ANSI/cursor noise and the spinner braille bytes, then
-  # drop the leading whitespace block the spinner left behind. Track ollama's
-  # exit status separately from the post-processing so a real failure surfaces
-  # as a non-zero RUN_STATUS line — `<RUN FAILED>` alone hides genuine errors.
-  local body run_status
+  # drop the leading blank-line block the spinner left behind (awk: skip until
+  # first non-empty line, then print everything). Track the pipeline status
+  # via `|| run_status=$?` — set -e plus pipefail mean a bare PIPESTATUS check
+  # would never run, and PIPESTATUS doesn't see inside command substitutions
+  # anyway. With pipefail enabled, $? on the substitution is the failed step's
+  # exit code if any element in the pipeline failed.
+  local body run_status=0
   body=$(ollama run "$model" "$prompt" < "$fixture" 2>&1 \
     | perl -pe 's/\e\[[0-9;?]*[a-zA-Z]//g; s/\e\][^\a]*\a//g; s/\e\[\?[0-9]+[lh]//g; s/\r//g; s/\xe2\xa0[\x80-\xbf]//g' \
-    | sed -E 's/^[[:space:]]+//' \
-    | awk 'NF || seen { seen=1; print }')
-  run_status=${PIPESTATUS[0]}
+    | awk 'NF || seen { seen=1; print }') || run_status=$?
   local end
   end=$(date +%s)
   local elapsed=$((end - start))
