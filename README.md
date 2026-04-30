@@ -41,35 +41,31 @@ Both keep the model output and drop the cursor-control bytes. `--hidethinking` d
 
 ## Install
 
-### Claude Code plugin (recommended)
+### Universal (recommended)
 
-Install via the Claude Code marketplace command, pointing at this repo:
+Use [Vercel Labs' `skills` CLI](https://github.com/vercel-labs/skills), which symlinks the skill into every detected agent tool (Claude Code, Codex, OpenCode, Cursor, Copilot, and many others) so updates propagate everywhere at once:
 
 ```bash
-/plugin marketplace add IsmaelMartinez/delegate-to-ollama
-/plugin install delegate-to-ollama@delegate-to-ollama-marketplace
+npx skills add IsmaelMartinez/delegate-to-ollama
 ```
 
-The plugin manifest lives in `.claude-plugin/`. Plugin install copies the skill into `~/.claude/plugins/cache/` and Claude Code picks it up on the next session.
+Pass `-g` to install globally (`~/<agent>/skills/`) instead of per-project, `--copy` to make independent copies on systems without symlink support, or `-a claude-code` to limit to a specific agent.
 
-### Manual copy (any agent that reads SKILL.md)
+### Manual copy
 
 The skill is conformant with the [Agent Skills standard](https://agentskills.io/specification) — `SKILL.md` at the directory root with `name` and `description` frontmatter — so any tool that reads that format can use it. Drop the directory into the tool's expected skills path:
 
 ```bash
 git clone https://github.com/IsmaelMartinez/delegate-to-ollama
-# Claude Code:
-cp -r delegate-to-ollama ~/.claude/skills/
-# Codex:
-cp -r delegate-to-ollama .agents/skills/
+cp -r delegate-to-ollama ~/.claude/skills/   # or your tool's skills dir
 ```
-
-For other agent tools, check their documentation for the local skills directory.
 
 ### Confirm routing
 
+After install, run the audit from wherever the skill landed:
+
 ```bash
-bash ~/.claude/skills/delegate-to-ollama/scripts/audit-models.sh
+bash <install-path>/scripts/audit-models.sh
 ```
 
 ## Files
