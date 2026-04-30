@@ -38,7 +38,11 @@ jobs:
         run: bash scripts/eval-skill-triggers.sh
 
       - name: Trigger eval (API mode)
-        if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: bash scripts/eval-skill-triggers.sh --api
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY not configured; skipping API-mode trigger eval"
+            exit 0
+          fi
+          bash scripts/eval-skill-triggers.sh --api
