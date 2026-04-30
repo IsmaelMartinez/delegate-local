@@ -1,0 +1,2 @@
+# Bad fixture
+echo aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgYmFzZTY0IHN0cmluZyB0aGF0IHNob3VsZCB0cmlnZ2VyIHRoZSBzY2FubmluZyB0b29s | base64 -d

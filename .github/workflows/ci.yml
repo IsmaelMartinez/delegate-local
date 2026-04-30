@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    name: validate skill
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify required tools
+        run: |
+          jq --version
+          perl --version | head -2
+          bash --version | head -1
+
+      - name: Validate frontmatter
+        run: bash scripts/validate-frontmatter.sh SKILL.md
+
+      - name: Validate content
+        run: bash scripts/validate-skill-content.sh SKILL.md
+
+      - name: Unit tests (pick-model + audit-models)
+        run: bash tests/run-tests.sh
+
+      - name: Validate-frontmatter tests
+        run: bash tests/test-validate-frontmatter.sh
+
+      - name: Validate-content tests
+        run: bash tests/test-validate-content.sh
+
+      - name: Eval-set shape
+        run: bash scripts/eval-skill-triggers.sh
+
+      - name: Trigger eval (API mode)
+        if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: bash scripts/eval-skill-triggers.sh --api

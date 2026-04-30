@@ -1,0 +1,13 @@
+# delegate-to-ollama content scan allowlist
+#
+# Format: CATEGORY:path:line_no  # justification
+#         CATEGORY:sha256:<64-hex-of-line>  # justification
+#
+# Lines starting with # are comments. Use the sha256 form when line numbers are
+# fragile (the line content may move). Use the line-number form for stable
+# locations like fixture references.
+#
+# Categories: SEC_DISABLE, SEC_PERMISSIVE, CRED_EXFIL, OBFUSC_B64,
+#             OBFUSC_UNICODE, TOOL_BROAD, URL_EXTERNAL
+#
+# (Empty allowlist — every match is currently a real violation.)
