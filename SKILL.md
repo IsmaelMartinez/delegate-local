@@ -42,19 +42,19 @@ Three steps, in order, every time: **gather → delegate → verify**.
 2. **Delegate** with a constrained prompt that asks for an exact output shape.
 3. **Verify** every specific claim the model returns against the actual files before acting on it. Treat the model's output as a hypothesis, not a finding.
 
+Use `scripts/delegate.sh <tier> "<prompt>"` — it resolves the tier to a model, runs `ollama run`, strips spinner ANSI bytes from the captured output, and appends one JSON line per invocation to `~/.claude/skills/delegate-to-ollama/metrics.jsonl` for `scripts/metrics-summary.sh` to roll up later.
+
 ```bash
-MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh prose)
-git diff HEAD~5 | ollama run "$MODEL" \
+git diff HEAD~5 | bash ~/.claude/skills/delegate-to-ollama/scripts/delegate.sh prose \
   "Summarise this diff in 3 bullets focused on user-visible changes."
 ```
 
 ```bash
-MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh reasoning)
-cat build.log | ollama run "$MODEL" \
+cat build.log | bash ~/.claude/skills/delegate-to-ollama/scripts/delegate.sh reasoning \
   "List only the lines indicating test failures. One per line, no commentary."
 ```
 
-Always report the model used ("Delegated to qwen3.6:35b-a3b-q8_0 (prose tier)") so a bad answer is visible to the user. For long inputs, use the `long-context` tier.
+Always report the model used ("Delegated to qwen3.6:35b-a3b-q8_0 (prose tier)") so a bad answer is visible to the user. For long inputs, use the `long-context` tier. To opt out of metrics for a single invocation, set `DELEGATE_TO_OLLAMA_NO_METRICS=1`. To resolve the model without delegating (e.g., for inspection), call `pick-model.sh` directly.
 
 ## Prompt scope — closed vs open
 

@@ -57,9 +57,11 @@ bash ~/.claude/skills/delegate-to-ollama/scripts/audit-models.sh
 ## Files
 
 - `SKILL.md` — triggering description and usage patterns Claude reads.
+- `scripts/delegate.sh <tier> "<prompt>"` — wraps `pick-model.sh` + `ollama run`, strips spinner ANSI from output, and appends one JSON line per invocation to `~/.claude/skills/delegate-to-ollama/metrics.jsonl`. Use this in place of bare `ollama run`.
 - `scripts/pick-model.sh <tier>` — resolves `code|prose|reasoning|long-context` to the best installed Ollama model via substring preference lists. Edit this file (not the skill body) when your installed set changes.
 - `scripts/audit-models.sh` — prints installed models, tier routing, and llmfit-driven upgrade suggestions filtered to first-party providers. Read-only; never pulls.
-- `tests/run-tests.sh` — unit tests for the two scripts. Run with `bash tests/run-tests.sh`.
+- `scripts/metrics-summary.sh` — reads the metrics JSONL and prints volume per tier, p50/p95 latency, total tokens-avoided, and top models by frequency. Read-only.
+- `tests/` — unit tests for every script. Run with `bash tests/run-tests.sh` (and the per-script `bash tests/test-*.sh`).
 
 ## Validation
 
