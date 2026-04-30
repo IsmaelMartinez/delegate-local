@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash tests/run-tests.sh)",
+      "Bash(bash tests/test-validate-frontmatter.sh)",
+      "Bash(bash tests/test-validate-content.sh)",
+      "Bash(bash tests/test-delegate.sh)",
+      "Bash(bash tests/test-metrics-summary.sh)",
+      "Bash(bash scripts/validate-frontmatter.sh *)",
+      "Bash(bash scripts/validate-skill-content.sh *)",
+      "Bash(bash scripts/eval-skill-triggers.sh)",
+      "Bash(bash scripts/audit-models.sh)",
+      "Bash(bash scripts/pick-model.sh *)",
+      "Bash(bash scripts/metrics-summary.sh *)",
+      "Bash(gh run watch *)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/post-edit-validate.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
