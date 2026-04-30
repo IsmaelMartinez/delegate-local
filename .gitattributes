@@ -1,0 +1,4 @@
+# Treat baseline raw outputs as generated content so GitHub collapses the
+# multi-thousand-line model dumps in PR diffs by default. The scored markdown
+# (experiments/results/*.md) stays in normal-diff mode.
+experiments/results/raw/** linguist-generated=true
