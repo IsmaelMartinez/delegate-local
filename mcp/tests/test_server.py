@@ -189,6 +189,12 @@ def test_model_url_empty():
     assert server._model_url("") == ""
 
 
+def test_model_url_leading_colon():
+    """Defensive: a name starting with ':' has an empty stem, must not produce
+    a malformed `https://ollama.com/library/` URL."""
+    assert server._model_url(":latest") == ""
+
+
 def test_list_related_projects_returns_four_siblings():
     projects = server.list_related_projects()
     assert len(projects) == 4

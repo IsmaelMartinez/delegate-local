@@ -80,6 +80,8 @@ def _model_url(model: str) -> str:
     if not model:
         return ""
     base = model.split(":", 1)[0]
+    if not base:
+        return ""
     if "/" in base:
         return f"https://ollama.com/{base}"
     return f"https://ollama.com/library/{base}"
@@ -137,7 +139,7 @@ def audit_models() -> str:
 
 
 @app.tool()
-def list_related_projects() -> list[dict]:
+def list_related_projects() -> list[dict[str, str]]:
     """Return the four sibling projects this skill cross-links to.
 
     Each entry has {"name", "url", "summary"}. Mirrors the README's
