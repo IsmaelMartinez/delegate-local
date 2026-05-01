@@ -52,9 +52,11 @@ Tying delegate-to-ollama into the rest of your portfolio compounds its value.
 - [done] Repo-butler integration: have repo-butler track this repo on the same dashboard as the others. Should pick it up automatically once the GitHub repo exists. (README "Related projects" paragraph 4 — confirms repo-butler picks it up automatically; no integration code required here.)
 - [done] Optional MCP server wrapping the audit and pick-model scripts so non-Claude tools can query them programmatically rather than shelling out. *(Python package under `mcp/`, exposes `pick_model` / `audit_models` / `list_tiers` via the official `mcp` SDK; thin `subprocess.run` wrapper, no reimplemented logic. CI gains a `mcp-server` job running `pytest mcp/tests/` independently of the bash validate job. Rationale in `docs/adr/0004-optional-mcp-server.md`.)*
 
-### Phase 5 follow-ups
+### Phase 5 follow-ups (from PR #22 review)
 
-- Surface external links in MCP tool responses. `pick_model` currently returns a bare model name (e.g. `qwen3.6:35b-a3b-q8_0`) with no link to its `ollama.com/library/<stem>` page; `audit_models` mentions llmfit and the Ollama library in plain text but doesn't ship structured links a client could render natively; the four sibling projects (`local-brain`, `ai-model-advisor`, `llmfit`, `repo-butler`) only live in the README, not in the MCP surface. Two design directions worth exploring when a real consumer asks: add a `url` field to `pick_model`'s response and a new `list_related_projects` tool returning name+url+one-line summary for the four siblings, or expose them as MCP resources rather than tools. The choice depends on whether the consumer renders structured fields or just displays the text blob — defer until that's known. *(Backlog — captured 2026-05-01.)*
+- Surface external links in MCP tool responses.
+  - **Context:** `pick_model` returns bare model names (e.g. `qwen3.6:35b-a3b-q8_0`) with no link to the `ollama.com/library/<stem>` page; `audit_models` mentions `llmfit` and the Ollama library in plain text but doesn't ship structured links a client could render natively; the four sibling projects (`local-brain`, `ai-model-advisor`, `llmfit`, `repo-butler`) only live in the README, not in the MCP surface.
+  - **Design:** Explore adding a `url` field to `pick_model`'s response and a new `list_related_projects` tool returning name+url+one-line summary for the four siblings, or exposing them as MCP resources rather than tools. The choice depends on whether the consumer renders structured fields or just displays the text blob — defer until that's known. *(Backlog — captured 2026-05-01.)*
 
 ## Phase 6 — Recurring maintenance
 
