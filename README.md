@@ -53,7 +53,7 @@ Pass `-g` to install globally (`~/<agent>/skills/`) instead of per-project, `--c
 
 ### Manual copy
 
-The skill is conformant with the [Agent Skills standard](https://agentskills.io/specification) — `SKILL.md` at the directory root with `name` and `description` frontmatter — so any tool that reads that format can use it. Drop the directory into the tool's expected skills path:
+The skill is conformant with the [Agent Skills standard](https://agentskills.io/specification) — `SKILL.md` at the directory root with `name` and `description` frontmatter — so any tool that reads that format can use it. The repo is also AAIF-discoverable directly: a symlink at `.agents/skills/delegate-to-ollama` points at the repo root, so tools that scan the AAIF layout (Cursor, Copilot, OpenCode) find the skill without per-tool copying. Drop the directory into the tool's expected skills path:
 
 ```bash
 git clone https://github.com/IsmaelMartinez/delegate-to-ollama
