@@ -58,3 +58,22 @@ jobs:
             exit 0
           fi
           bash scripts/eval-skill-triggers.sh --api
+
+  mcp-server:
+    name: mcp server (python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install package
+        working-directory: mcp
+        run: pip install -e ".[dev]"
+
+      - name: Run pytest
+        working-directory: mcp
+        run: pytest -q
