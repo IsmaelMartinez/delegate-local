@@ -104,14 +104,18 @@ MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh vision)
 ollama run "$MODEL" "Describe what is in this screenshot." --image /tmp/screen.png
 ```
 
-`embedding` is `ollama embed`, not `ollama run`, so it bypasses `delegate.sh` entirely:
+`embedding` uses the Ollama HTTP API (`POST /api/embed`) rather than the `ollama run` CLI — `ollama` has no `embed` subcommand. The API runs on the same daemon as `ollama run`, so no extra setup is needed:
 
 ```bash
 MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh embedding)
-ollama embed "$MODEL" "the text to embed"
+curl -s http://localhost:11434/api/embed \
+  -d "$(jq -n --arg m "$MODEL" --arg t "the text to embed" '{model:$m, input:$t}')" \
+  | jq -r '.embeddings[0]'
 ```
 
-Both call shapes will fold into `delegate.sh` once the wrapper learns about images and the embed command.
+The response is JSON with an `embeddings` field (array of float arrays — one per input). Embedding bypasses `delegate.sh` because the wrapper assumes a text-out shape; vector output would need a different metrics line.
+
+Both call shapes will fold into `delegate.sh` once the wrapper learns about images, and a separate path is added for the embed API if usage justifies it.
 
 ## Failure modes — concrete examples
 
