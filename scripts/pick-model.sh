@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Pick the best installed Ollama model for a task tier.
-# Usage: pick-model.sh <tier>
+# Usage: pick-model.sh [--dry-run] <tier>
 #   tier ∈ {code, prose, reasoning, long-context}
 # Prints the model name on stdout, or exits 1 if no match and 2 on usage error.
+# With --dry-run, also prints the resolution trace (tier, preference list,
+# installed models, matched preference) to stderr so it can be inspected
+# without affecting downstream pipes that consume stdout.
 #
 # Preference order per tier is a substring-matched list, highest capability first.
 # Edit the arrays below when your installed set changes. Run `ollama list` to see
@@ -10,9 +13,15 @@
 
 set -euo pipefail
 
+dry_run=0
+if [[ "${1:-}" == "--dry-run" ]]; then
+  dry_run=1
+  shift
+fi
+
 tier="${1:-}"
 if [[ -z "$tier" ]]; then
-  echo "usage: pick-model.sh <code|prose|reasoning|long-context>" >&2
+  echo "usage: pick-model.sh [--dry-run] <code|prose|reasoning|long-context>" >&2
   exit 2
 fi
 
@@ -23,6 +32,11 @@ case "$tier" in
   long-context) prefs=("qwen3.6" "qwen3-next" "llama4:scout" "qwen3-coder-next" "llama4" "glm-4") ;;
   *) echo "unknown tier: $tier" >&2; exit 2 ;;
 esac
+
+if (( dry_run )); then
+  echo "dry-run: tier=$tier" >&2
+  echo "dry-run: preferences=${prefs[*]}" >&2
+fi
 
 if ! command -v ollama >/dev/null 2>&1; then
   echo "ollama not on PATH" >&2
@@ -35,12 +49,22 @@ if [[ -z "$installed" ]]; then
   exit 1
 fi
 
+if (( dry_run )); then
+  echo "dry-run: installed=$(printf '%s' "$installed" | tr '\n' ' ')" >&2
+fi
+
 for p in "${prefs[@]}"; do
   match=$(printf '%s\n' "$installed" | grep -m1 -F -- "$p" || true)
   if [[ -n "$match" ]]; then
+    if (( dry_run )); then
+      echo "dry-run: matched preference='$p' -> model='$match'" >&2
+    fi
     echo "$match"
     exit 0
   fi
 done
 
+if (( dry_run )); then
+  echo "dry-run: no preference matched any installed model" >&2
+fi
 exit 1
