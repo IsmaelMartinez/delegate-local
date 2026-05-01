@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Pick the best installed Ollama model for a task tier.
 # Usage: pick-model.sh [--dry-run] <tier>
-#   tier ∈ {code, prose, reasoning, long-context}
+#   tier ∈ {code, prose, reasoning, long-context,
+#           vision, embedding, premium-general, reasoning-vision}
 # Prints the model name on stdout, or exits 1 if no match and 2 on usage error.
 # With --dry-run, also prints the resolution trace (tier, preference list,
 # installed models, matched preference) to stderr so it can be inspected
@@ -10,8 +11,19 @@
 # Preference order per tier is a substring-matched list, highest capability first.
 # Edit the arrays below when your installed set changes. Run `ollama list` to see
 # what you have. Prefer the smallest model sufficient — bigger is not better.
+#
+# Note: vision and reasoning-vision tiers resolve a model name but do NOT go
+# through scripts/delegate.sh today (which lacks --image flag passthrough);
+# embedding tier uses `ollama embed`, not `ollama run`. See SKILL.md for the
+# call shape per tier.
 
 set -euo pipefail
+
+# Single source of truth for the tier name list. The case statement below is
+# the runtime gate (each branch needs its own prefs array, so the list of
+# names is intrinsically duplicated there) but the usage message and the
+# header comment are derived from this.
+TIERS="code|prose|reasoning|long-context|vision|embedding|premium-general|reasoning-vision"
 
 dry_run=0
 while [[ "${1:-}" == --* ]]; do
@@ -29,16 +41,20 @@ trace() {
 
 tier="${1:-}"
 if [[ -z "$tier" ]]; then
-  echo "usage: pick-model.sh [--dry-run] <code|prose|reasoning|long-context>" >&2
+  echo "usage: pick-model.sh [--dry-run] <$TIERS>" >&2
   exit 2
 fi
 
 case "$tier" in
-  code)         prefs=("qwen3-coder-next" "qwen3-coder" "deepseek-r1" "qwen3.5") ;;
-  prose)        prefs=("qwen3.6" "qwen3-next" "gemma4:latest" "gemma4" "llama4" "qwen3.5") ;;
-  reasoning)    prefs=("phi4-reasoning" "qwq" "deepseek-r1" "glm-4") ;;
-  long-context) prefs=("qwen3.6" "qwen3-next" "llama4:scout" "qwen3-coder-next" "llama4" "glm-4") ;;
-  *) echo "unknown tier: $tier" >&2; exit 2 ;;
+  code)             prefs=("qwen3-coder-next" "qwen3-coder" "deepseek-r1" "qwen3.5") ;;
+  prose)            prefs=("qwen3.6" "qwen3-next" "gemma4:latest" "gemma4" "llama4" "qwen3.5") ;;
+  reasoning)        prefs=("phi4-reasoning" "qwq" "deepseek-r1" "glm-4") ;;
+  long-context)     prefs=("qwen3.6" "qwen3-next" "llama4:scout" "qwen3-coder-next" "llama4" "glm-4") ;;
+  vision)           prefs=("qwen3-vl:30b-a3b-thinking" "qwen3-vl") ;;
+  embedding)        prefs=("nomic-embed-text" "bge-large") ;;
+  premium-general)  prefs=("qwen3.5:122b") ;;
+  reasoning-vision) prefs=("phi4-reasoning-vision" "qwen3-vl:30b-a3b-thinking") ;;
+  *) echo "unknown tier: $tier (valid: $TIERS)" >&2; exit 2 ;;
 esac
 
 trace "tier=$tier"

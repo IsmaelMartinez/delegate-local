@@ -182,6 +182,62 @@ EC=0; run "$SAFE_PATH" bash "$PICK" --bogus prose || true
 assert_eq "2" "$EC" "unknown flag -> exit 2"
 assert_contains "unknown option: --bogus" "$ERR" "unknown flag -> stderr names the bad option"
 
+# 14. vision tier picks qwen3-vl thinking model when installed.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME                          ID SIZE   MODIFIED
+qwen3-vl:30b-a3b-thinking     vv 25 GB  1 day ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" vision || true
+assert_eq "qwen3-vl:30b-a3b-thinking" "$OUT" "vision picks qwen3-vl thinking variant"
+rm -rf "$tmp"
+
+# 15. embedding tier picks nomic-embed-text when installed.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME                ID SIZE   MODIFIED
+nomic-embed-text    nn 137 MB 1 day ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" embedding || true
+assert_eq "nomic-embed-text" "$OUT" "embedding picks nomic-embed-text"
+rm -rf "$tmp"
+
+# 16. embedding tier falls back to bge-large when nomic absent.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME       ID SIZE   MODIFIED
+bge-large  bb 335 MB 1 day ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" embedding || true
+assert_eq "bge-large" "$OUT" "embedding falls back to bge-large"
+rm -rf "$tmp"
+
+# 17. premium-general tier picks qwen3.5 122b variant when installed.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME                       ID SIZE    MODIFIED
+qwen3.5:122b-a10b-q4_K_M   pp 70 GB   1 day ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" premium-general || true
+assert_eq "qwen3.5:122b-a10b-q4_K_M" "$OUT" "premium-general picks qwen3.5:122b"
+rm -rf "$tmp"
+
+# 18. premium-general does NOT silently downshift to qwen3.5:27b.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME         ID SIZE  MODIFIED
+qwen3.5:27b  qq 17 GB 1 day ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" premium-general || true
+assert_eq "1" "$EC" "premium-general -> exit 1 when only smaller qwen3.5 installed"
+rm -rf "$tmp"
+
+# 19. reasoning-vision picks phi4-reasoning-vision when installed.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME                       ID SIZE   MODIFIED
+phi4-reasoning-vision:15b  rv 11 GB  1 day ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" reasoning-vision || true
+assert_eq "phi4-reasoning-vision:15b" "$OUT" "reasoning-vision picks phi4-reasoning-vision"
+rm -rf "$tmp"
+
+# 20. reasoning-vision falls back to qwen3-vl thinking when phi4 absent.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME                       ID SIZE   MODIFIED
+qwen3-vl:30b-a3b-thinking  vv 25 GB  1 day ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" reasoning-vision || true
+assert_eq "qwen3-vl:30b-a3b-thinking" "$OUT" "reasoning-vision falls back to qwen3-vl thinking"
+rm -rf "$tmp"
+
 echo
 echo "=== audit-models.sh ==="
 

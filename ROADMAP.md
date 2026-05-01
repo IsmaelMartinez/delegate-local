@@ -36,11 +36,11 @@ The skill currently only works for Claude Code users. plg-agent-skills shows how
 
 Your M5 Max with 128GB unified memory has headroom for tiers the skill currently ignores. Each new tier needs a `pick-model.sh` preference list and at least one matching local model installed.
 
-- Vision tier: route image-bearing tasks (screenshot OCR, photo description, visual triage) to `qwen3-vl:30b-a3b-thinking` or the vision-capable Qwen3.6. Add a `vision` tier to `pick-model.sh`.
-- Embedding tier: `nomic-embed-text-v1.5` (137M) or `bge-large-en-v1.5` (335M) for local semantic search. Useful for "find the runbook that talks about X" patterns over docs and code.
-- Premium-general tier: `Qwen3.5-122B-A10B` for prose tasks where you want more depth than the 80B Qwen3-Next, still at MoE speed.
-- Reasoning-with-vision: `phi4-reasoning-vision-15B` for the small slice of tasks that need both.
-- A `--dry-run` mode in `pick-model.sh` and helper invocations that prints what would happen without spending GPU cycles, useful for debugging routing.
+- [scaffolded] Vision tier: route image-bearing tasks (screenshot OCR, photo description, visual triage) to `qwen3-vl:30b-a3b-thinking` or the vision-capable Qwen3.6. Add a `vision` tier to `pick-model.sh`. *(Routing in `pick-model.sh` and SKILL.md note landed; resolution gated on `ollama pull qwen3-vl:30b-a3b-thinking`. `delegate.sh` `--image` passthrough still TODO — vision currently bypasses the wrapper.)*
+- [scaffolded] Embedding tier: `nomic-embed-text-v1.5` (137M) or `bge-large-en-v1.5` (335M) for local semantic search. Useful for "find the runbook that talks about X" patterns over docs and code. *(Routing landed; resolution gated on `ollama pull nomic-embed-text`. Calls `ollama embed` not `ollama run` — bypasses `delegate.sh`.)*
+- [scaffolded] Premium-general tier: `Qwen3.5-122B-A10B` for prose tasks where you want more depth than the 80B Qwen3-Next, still at MoE speed. *(Routing landed; resolution gated on `ollama pull qwen3.5:122b-a10b-q4_K_M`. Q4_K_M fits the 128GB headroom; Q8_0 would not. Same call shape as `prose` tier — works through `delegate.sh`.)*
+- [scaffolded] Reasoning-with-vision: `phi4-reasoning-vision-15B` for the small slice of tasks that need both. *(Routing landed; resolution gated on `ollama pull phi4-reasoning-vision:15b`. Falls back to `qwen3-vl:30b-a3b-thinking` if available. Same vision call-shape caveat.)*
+- [done] A `--dry-run` mode in `pick-model.sh` and helper invocations that prints what would happen without spending GPU cycles, useful for debugging routing. (Landed in #16.)
 
 ## Phase 5 — Ecosystem integration
 
