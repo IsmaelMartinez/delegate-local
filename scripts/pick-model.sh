@@ -14,10 +14,18 @@
 set -euo pipefail
 
 dry_run=0
-if [[ "${1:-}" == "--dry-run" ]]; then
-  dry_run=1
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --dry-run) dry_run=1 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
   shift
-fi
+done
+
+trace() {
+  (( dry_run )) && printf "dry-run: %s\n" "$*" >&2
+  return 0
+}
 
 tier="${1:-}"
 if [[ -z "$tier" ]]; then
@@ -33,10 +41,8 @@ case "$tier" in
   *) echo "unknown tier: $tier" >&2; exit 2 ;;
 esac
 
-if (( dry_run )); then
-  echo "dry-run: tier=$tier" >&2
-  echo "dry-run: preferences=${prefs[*]}" >&2
-fi
+trace "tier=$tier"
+trace "preferences=${prefs[*]}"
 
 if ! command -v ollama >/dev/null 2>&1; then
   echo "ollama not on PATH" >&2
@@ -49,22 +55,16 @@ if [[ -z "$installed" ]]; then
   exit 1
 fi
 
-if (( dry_run )); then
-  echo "dry-run: installed=$(printf '%s' "$installed" | tr '\n' ' ')" >&2
-fi
+trace "installed=$(printf '%s' "$installed" | tr '\n' ' ')"
 
 for p in "${prefs[@]}"; do
   match=$(printf '%s\n' "$installed" | grep -m1 -F -- "$p" || true)
   if [[ -n "$match" ]]; then
-    if (( dry_run )); then
-      echo "dry-run: matched preference='$p' -> model='$match'" >&2
-    fi
+    trace "matched preference='$p' -> model='$match'"
     echo "$match"
     exit 0
   fi
 done
 
-if (( dry_run )); then
-  echo "dry-run: no preference matched any installed model" >&2
-fi
+trace "no preference matched any installed model"
 exit 1

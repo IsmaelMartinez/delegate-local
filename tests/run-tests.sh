@@ -177,6 +177,11 @@ EC=0; run "$SAFE_PATH" bash "$PICK" --dry-run || true
 assert_eq "2" "$EC" "dry-run no tier -> exit 2"
 assert_contains "usage:" "$ERR" "dry-run no tier -> usage on stderr"
 
+# 13. Unknown flag: usage error (exit 2) with informative stderr.
+EC=0; run "$SAFE_PATH" bash "$PICK" --bogus prose || true
+assert_eq "2" "$EC" "unknown flag -> exit 2"
+assert_contains "unknown option: --bogus" "$ERR" "unknown flag -> stderr names the bad option"
+
 echo
 echo "=== audit-models.sh ==="
 
