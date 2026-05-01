@@ -86,10 +86,12 @@ If the answer would be valuable specifically because the model is *reasoning bey
 | `long-context`     | Large logs, many-file scans, big diffs.                          |
 | `vision`           | Image OCR, screenshot triage, visual description.                |
 | `embedding`        | Local semantic search ("which doc talks about X").               |
-| `premium-general`  | Long-form prose where the standard `prose` tier isn't deep enough.|
+| `premium-general`  | Explicit opt-in for verbose enumeration; **not** a quality upgrade over `prose` (see baseline). |
 | `reasoning-vision` | Structured extraction or classification from screenshots.        |
 
 The `prose` tier is for *generating* prose (commit messages, summaries), not for *inferring* about prose. For analytical work over a diff or log, use `reasoning` even if the input is text-heavy. See `experiments/results/` for measured accuracy by tier and task type.
+
+The `premium-general` tier exists for tasks where the user has explicitly chosen a larger model. Do **not** route prose work to it by default — the 2026-05-01 baseline measured `qwen3.5:122b` as the worst T3 performer in the matrix (citation rate 0.16, vs 0.71 for the 31B `gemma4` and 0.36 for the default `qwen3.6:35b`), with high claim volume that ignored the prompt's 4-claim cap. Bigger does not mean better; verify outputs from this tier especially carefully.
 
 Preference order per tier lives in `scripts/pick-model.sh`. Edit that file (not the skill body) when your installed models change.
 

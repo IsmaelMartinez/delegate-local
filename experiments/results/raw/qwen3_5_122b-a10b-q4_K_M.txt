@@ -1,0 +1,3979 @@
+MODEL: qwen3.5:122b-a10b-q4_K_M
+DATE: 2026-05-01T11:16:35Z
+REPS: 3
+T3_SNAPSHOT: 2026-04-28
+
+===== T1-doc-drift rep 1 =====
+DURATION_SEC: 199
+RUN_STATUS: 0
+OUTPUT:
+                                                                                                                                                                             Thinking...
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Input: A list of 4 ROADMAP CLAIMS (A, B, C, D) from a Scottish elec
+election website's docs.
+    *   Input: EVIDENCE FROM THE CODEBASE (file listings, grep results, cod
+code snippets).
+    *   Task: Audit each claim against the evidence.
+    *   Output Format: Exactly four lines, one per claim. Format: `CLAIM_X:
+`CLAIM_X: <already-done|still-open> — <one-line evidence reference>`.
+    *   Constraints: No preamble, no commentary, no chain of thought.
+
+2.  **Analyze Claim A:**
+    *   Claim: Publish a "How we did" projection retrospective page compari
+comparing each constituency's projected top-3 shares against the actual res
+result.
+    *   Evidence: "There is no "How we did" retrospective page or related c
+code anywhere in the repo."
+    *   Verdict: still-open.
+    *   Evidence Reference: No "How we did" retrospective page or related c
+code found in repo.
+
+3.  **Analyze Claim B:**
+    *   Claim: Retire the dead projection default. scripts/populate-project
+scripts/populate-projections.ts still carries a defaultProjection template 
+but every constituency has an explicit override.
+    *   Evidence: `grep for defaultProjection or DEFAULT_PROJECTION across 
+scripts/ and src/:` shows `(no matches)`. Also `scripts/ directory listing`
+listing` does not include `scripts/populate-projections.ts` (it lists `proj
+`project-from-polls.ts`, `sync-*.ts`, etc., but not `populate-projections.t
+`populate-projections.ts`).
+    *   Verdict: already-done. (Since the file and the pattern don't exist 
+anymore).
+    *   Evidence Reference: scripts/populate-projections.ts absent and grep
+grep for defaultProjection returns no matches.
+
+4.  **Analyze Claim C:**
+    *   Claim: yaml.stringify({ lineWidth: 0 }) in apply-party-positions.ts
+apply-party-positions.ts to match populate-projections.ts and stop YAML lin
+line-rewrap churn on manifesto updates.
+    *   Evidence: `scripts/apply-party-positions.ts:60: fs.writeFileSync(fi
+fs.writeFileSync(filePath, yaml.stringify(data, { lineWidth: 0 }));`.
+    *   Verdict: already-done. (The code exists exactly as described).
+    *   Evidence Reference: scripts/apply-party-positions.ts:60 contains ya
+yaml.stringify(data, { lineWidth: 0 }).
+
+5.  **Analyze Claim D:**
+    *   Claim: Deep-freeze the data caches (or don't — current shallow free
+freeze matches the existing pattern across all six cached loaders in src/li
+src/lib/data.ts).
+    *   Evidence: `src/lib/data.ts cache pattern:` shows "Six cached loader
+loaders all use the same shallow Object.freeze on the returned value. No de
+deep-freeze applied anywhere. Pattern is consistent."
+    *   Interpretation: The claim says "Deep-freeze... (or don't — current 
+shallow freeze matches...)". The evidence confirms the current pattern is s
+shallow freeze and consistent. This implies the decision was effectively ma
+made to keep shallow freeze (since the evidence confirms the status quo mat
+matches the "or don't" condition). However, usually, if a claim says "Do X 
+(or don't if Y)", and Y is true, is it "already-done"? The claim is essenti
+essentially asking to verify the freeze strategy. The evidence confirms the
+the strategy (shallow freeze) is in place and consistent. The claim isn't a
+a directive to change it if shallow is fine, it's a roadmap item to resolve
+resolve the question. Since the evidence says "Pattern is consistent" with 
+shallow freeze, the item is resolved/validated as "don't deep-freeze".
+    *   Alternative interpretation: The claim is an action item "Deep-freez
+"Deep-freeze...". The parenthetical says "(or don't...)". If the evidence s
+shows shallow freeze is used consistently, the action "Deep-freeze" is *not
+*not* taken, but the "don't" part is validated. In roadmap auditing, if the
+the code reflects the final decision (even if that decision is "don't do it
+it"), it's often marked "already-done" or "resolved". However, looking at t
+the phrasing "Deep-freeze the data caches (or don't...)", it suggests a tas
+task to decide. The evidence confirms the decision was "don't" (shallow fre
+freeze matches existing pattern). Let's look closer. The claim title is "De
+"Deep-freeze the data caches". The parenthetical provides a condition for n
+not doing it. Since the code *currently* uses shallow freeze and the eviden
+evidence says "Pattern is consistent", the work to ensure this consistency 
+is done. But strictly speaking, the action "Deep-freeze" was not done. The 
+action "Verify/Decide" is done. Given the context of "Retire dead projectio
+projection default" (Claim B) where removing the file counts as done, here 
+maintaining the status quo (shallow freeze) counts as done because the alte
+alternative (changing to deep freeze) wasn't needed per the evidence "match
+"matches the existing pattern".
+    *   Wait, let's re-read Claim D carefully: "Deep-freeze the data caches
+caches (or don't — current shallow freeze matches the existing pattern acro
+across all six cached loaders in src/lib/data.ts)." This reads like a decis
+decision point. If the code *already* does shallow freeze consistently, the
+the decision to keep it is effectively recorded. The evidence confirms the 
+current state matches the "or don't" clause. So the roadmap item is satisfi
+satisfied (by confirming the status quo).
+    *   Verdict: already-done. (Evidence confirms shallow freeze pattern is
+is consistent and no deep freeze was needed/implemented, matching the "or d
+don't" condition).
+    *   Evidence Reference: src/lib/data.ts shows consistent shallow Object
+Object.freeze across six cached loaders.
+
+6.  **Refine Evidence References:**
+    *   A: No "How we did" retrospective page or related code found in repo
+repo.
+    *   B: scripts/populate-projections.ts absent and grep for defaultProje
+defaultProjection returns no matches.
+    *   C: scripts/apply-party-positions.ts:60 contains yaml.stringify(data
+yaml.stringify(data, { lineWidth: 0 }).
+    *   D: src/lib/data.ts shows consistent shallow Object.freeze across si
+six cached loaders.
+
+7.  **Final Check:**
+    *   Format: `CLAIM_X: <status> — <evidence>`
+    *   Status options: `already-done` or `still-open`.
+    *   A: still-open (No code exists).
+    *   B: already-done (File gone, dead code removed).
+    *   C: already-done (Code present).
+    *   D: already-done (Pattern confirmed as intended "or don't").
+
+    *Wait, re-evaluating Claim B:* The claim says "Retire the dead projecti
+projection default. scripts/populate-projections.ts still carries a default
+defaultProjection template...". The evidence says `grep for defaultProjecti
+defaultProjection` has no matches and `populate-projections.ts` is not in t
+the directory listing. This means the file has been deleted or the content 
+removed. Since the goal was to retire it, and it's gone, it's `already-done
+`already-done`.
+
+    *Re-evaluating Claim D:* The claim is phrased as an action "Deep-freeze
+"Deep-freeze...". The parenthetical is a fallback. If the evidence shows sh
+shallow freeze is *already* there and consistent, then the "Deep-freeze" ac
+action wasn't taken, but the "or don't" condition is met. In an audit conte
+context, if the roadmap item's goal was resolved (either by doing or not do
+doing), it's closed. However, usually "already-done" implies the work descr
+described in the main clause is done. But the main clause includes the pare
+parenthetical alternative. The text "current shallow freeze matches the exi
+existing pattern" suggests the decision was made to keep shallow freeze. I 
+will mark it `already-done` because the state described in the parenthetica
+parenthetical (which negates the main action) is confirmed by evidence.
+
+    *Wait, looking at Claim D again:* "Deep-freeze the data caches (or don'
+don't — current shallow freeze matches the existing pattern...)"
+    If the roadmap says "Do X (or Y)", and the code is Y, is it "already-do
+"already-done"? Yes, the roadmap decision is implemented.
+    Evidence: "Six cached loaders all use the same shallow Object.freeze on
+on the returned value. No deep-freeze applied anywhere. Pattern is consiste
+consistent."
+    This confirms the "or don't" path is active.
+    So `already-done`.
+
+    *Re-evaluating Claim A:* "There is no "How we did" retrospective page o
+or related code anywhere in the repo." -> `still-open`.
+
+    *Re-evaluating Claim C:* `scripts/apply-party-positions.ts:60: fs.write
+fs.writeFileSync(filePath, yaml.stringify(data, { lineWidth: 0 }));` -> `al
+`already-done`.
+
+    *Re-evaluating Claim B:* `scripts/populate-projections.ts` not in listi
+listing, `grep` for `defaultProjection` no matches. -> `already-done`.
+
+8.  **Final Formatting:**
+    Ensure no extra spaces or lines.
+
+    CLAIM_A: still-open — No "How we did" retrospective page or related cod
+code found in repo.
+    CLAIM_B: already-done — scripts/populate-projections.ts absent and grep
+grep for defaultProjection returns no matches.
+    CLAIM_C: already-done — scripts/apply-party-positions.ts:60 contains ya
+yaml.stringify(data, { lineWidth: 0 }).
+    CLAIM_D: already-done — src/lib/data.ts shows consistent shallow Object
+Object.freeze across six cached loaders.
+
+    Wait, I need to check if Claim D is really "already-done". The claim ti
+title is "Deep-freeze". If I say "already-done", it implies deep-freezing h
+happened. But the parenthetical says "(or don't)". If I mark it "already-do
+"already-done", it might imply the main action was taken. However, in roadm
+roadmap auditing, if the ticket is resolved by the "or don't" condition bei
+being met, it is closed/done. But strictly, the *claim* "Deep-freeze" is no
+not done. The *roadmap item* is resolved. The prompt asks to audit the clai
+claim. "Deep-freeze... (or don't...)". Since the evidence confirms the code
+code *doesn't* deep freeze but matches the "or don't" condition, the state 
+is stable. I will stick with `already-done` because the ambiguity is resolv
+resolved and the code reflects the final decision (which was "don't"). Actu
+Actually, looking at Claim B "Retire...", if it's retired, it's done. Here 
+"Deep-freeze... or don't". If we didn't, is it done? Yes, because the condi
+condition for not doing it is verified.
+    However, a safer interpretation might be `still-open` if the task was e
+explicitly to implement deep-freeze unless proven otherwise, but the eviden
+evidence says "Pattern is consistent" with shallow. It sounds like a verifi
+verification task. I'll treat the confirmation of the "don't" state as comp
+completion of the item.
+    Actually, looking at the wording: "Deep-freeze... (or don't — current s
+shallow freeze matches...)". This looks like a note *in the claim* describi
+describing the current state. It's asking "Should we deep freeze? (Or don't
+don't, because it already matches...)". If the evidence says "It already ma
+matches", then the issue is resolved. So `already-done`.
+
+    Let's check Claim B again. "scripts/populate-projections.ts still carri
+carries a defaultProjection template". Evidence says file doesn't exist. So
+So the problem described in the claim no longer exists. So `already-done`.
+
+    Let's check Claim C. "yaml.stringify({ lineWidth: 0 }) in apply-party-p
+apply-party-positions.ts". Evidence says it is there. So `already-done`.
+
+    Let's check Claim A. "Publish... page". Evidence says "There is no... p
+page". So `still-open`.
+
+    One more check on D. If I mark `already-done`, does it imply the code w
+was changed? The claim asks for a decision/action. The evidence confirms th
+the status quo (shallow) is consistent. This resolves the "or don't" clause
+clause. I will use `already-done`.
+
+    Wait, looking closely at D's evidence: "Six cached loaders all use the 
+same shallow Object.freeze... No deep-freeze applied anywhere. Pattern is c
+consistent."
+    The claim says "Deep-freeze... (or don't — current shallow freeze match
+matches...)".
+    If the code *already* does shallow freeze and it's consistent, the "or 
+don't" branch is the valid current state. The roadmap item is effectively a
+acknowledging the state and deciding to keep it. So the item is closed.
+
+    Okay, ready to write.
+
+    Wait, one detail on Claim B. The directory listing provided in the evid
+evidence:
+    scripts/apply-party-positions.ts
+    scripts/fix-incumbents-regional.ts
+    ...
+    scripts/validate-data.ts
+    It does *not* list `populate-projections.ts`.
+    The claim says "scripts/populate-projections.ts still carries a default
+defaultProjection template".
+    Since the file is gone, the claim's premise is false (it doesn't still 
+carry it, it doesn't exist). Thus the cleanup is done. `already-done`.
+
+    One detail on Claim C.
+    Claim: "yaml.stringify({ lineWidth: 0 }) in apply-party-positions.ts".
+    Evidence: `scripts/apply-party-positions.ts:60: fs.writeFileSync(filePa
+fs.writeFileSync(filePath, yaml.stringify(data, { lineWidth: 0 }));`
+    Match found. `already-done`.
+
+    One detail on Claim A.
+    Claim: "Publish... page".
+    Evidence: "There is no... page... anywhere in the repo."
+    Mismatch. `still-open`.
+
+    One detail on Claim D.
+    Claim: "Deep-freeze... (or don't...)"
+    Evidence: "Six cached loaders all use the same shallow Object.freeze...
+Object.freeze... No deep-freeze applied anywhere. Pattern is consistent."
+    This matches the "or don't" condition. `already-done`.
+
+    Wait, is there a nuance? If the claim was "Deep-freeze the data caches"
+caches", and the text in parenthesis was just context *to the auditor* or *
+*to the developer*? The text says "(or don't — current shallow freeze match
+matches the existing pattern across all six cached loaders in src/lib/data.
+src/lib/data.ts)". This reads like a conditional instruction. "Do this, unl
+unless the current pattern is already consistent, in which case don't." Sin
+Since the evidence says the pattern *is* consistent, the instruction was "d
+"don't". So the work is done (by not doing it).
+    Okay.
+
+    Wait, I should check if I need to output `CLAIM_A` or `Claim A`. The pr
+prompt says "For each claim output one line in this exact format: CLAIM_X: 
+<already-done|still-open> — <one-line evidence reference>."
+    So `CLAIM_A:`, `CLAIM_B:`, etc.
+
+    Let's draft the lines.
+    CLAIM_A: still-open — No "How we did" retrospective page or related cod
+code found in repo.
+    CLAIM_B: already-done — scripts/populate-projections.ts absent and grep
+grep for defaultProjection returns no matches.
+    CLAIM_C: already-done — scripts/apply-party-positions.ts:60 contains ya
+yaml.stringify(data, { lineWidth: 0 }).
+    CLAIM_D: already-done — src/lib/data.ts shows consistent shallow Object
+Object.freeze across six cached loaders.
+
+    Double check Claim D evidence text. "Pattern is consistent" is key. The
+The claim says "matches the existing pattern". The evidence confirms "match
+"matches". So it's done.
+
+    One final check on constraints: "No preamble, no commentary, no chain o
+of thought, just four lines."
+    Okay.
+
+    One tiny adjustment on Claim B evidence reference to be precise based o
+on provided text.
+    Evidence text: "grep for defaultProjection or DEFAULT_PROJECTION across
+across scripts/ and src/: (no matches)" and "scripts/ directory listing" do
+does not show populate-projections.ts.
+    Combined: scripts/populate-projections.ts absent and grep for defaultPr
+defaultProjection returns no matches.
+    This is accurate.
+
+    One tiny adjustment on Claim D evidence reference.
+    Evidence text: "Six cached loaders all use the same shallow Object.free
+Object.freeze on the returned value. No deep-freeze applied anywhere. Patte
+Pattern is consistent."
+    My summary: src/lib/data.ts shows consistent shallow Object.freeze acro
+across six cached loaders.
+    This is accurate.
+
+    Final check on Claim C evidence reference.
+    Evidence text: "scripts/apply-party-positions.ts:60: fs.writeFileSync(f
+fs.writeFileSync(filePath, yaml.stringify(data, { lineWidth: 0 }));"
+    My summary: scripts/apply-party-positions.ts:60 contains yaml.stringify
+yaml.stringify(data, { lineWidth: 0 }).
+    This is accurate.
+
+    Final check on Claim A evidence reference.
+    Evidence text: "There is no "How we did" retrospective page or related 
+code anywhere in the repo."
+    My summary: No "How we did" retrospective page or related code found in
+in repo.
+    This is accurate.
+
+    Ready.
+
+    Wait, looking at Claim B again. "Retire the dead projection default."
+    If the file is gone, the default is retired.
+    If the file exists but default is gone, it's retired.
+    Here file is gone. So definitely retired. `already-done`.
+
+    Looking at Claim D again.
+    If the roadmap says "Deep-freeze... (or don't...)", and we are auditing
+auditing if the claim is done.
+    If the code is shallow freeze, and the claim allows shallow freeze ("or
+("or don't"), then the claim is satisfied.
+    It's a bit ambiguous if "Done" means "Deep frozen" or "Claim resolved".
+resolved". Given the parenthetical is part of the claim text provided, sati
+satisfying the parenthetical counts as satisfying the claim.
+    So `already-done`.
+
+    One last check on the output format.
+    `CLAIM_X: <status> — <evidence>`
+    Make sure to use `—` (em-dash or en-dash?). The prompt uses `—` in the 
+example format `CLAIM_X: <already-done|still-open> — <one-line evidence ref
+reference>`. I should use that exact separator.
+    The prompt example uses `—` (em-dash). I will use that.
+    Wait, the prompt text says `CLAIM_X: <already-done|still-open> — <one-l
+<one-line evidence reference>`.
+    I will copy that dash.
+
+    Wait, I need to make sure I don't add markdown code blocks unless reque
+requested. "just four lines". I will output raw text lines.
+    Actually, usually "just four lines" means the content of the response. 
+I will avoid markdown blocks to be safe, or just use plain text. I'll outpu
+output plain text.
+
+    Wait, checking the separator again. In the prompt: `CLAIM_X: <already-d
+<already-done|still-open> — <one-line evidence reference>`. It looks like a
+an em-dash `—`. I will use that.
+
+    Wait, one more check on Claim D.
+    If the claim is "Deep-freeze the data caches", and I say "already-done"
+"already-done", does it mislead that deep-freeze happened?
+    But the claim *includes* the text "(or don't — current shallow freeze m
+matches...)". This text is part of the "ROADMAP CLAIMS" provided in the pro
+prompt input.
+    So the claim *is* "Deep-freeze... (or don't...)".
+    So if "don't" is true, the claim is satisfied.
+    So `already-done` is correct.
+
+    Final check on Claim A.
+    Evidence: "There is no "How we did" retrospective page or related code 
+anywhere in the repo."
+    Status: `still-open`.
+    Reason: Work not done.
+
+    Okay, proceeding to generate output.
+
+    One detail: "one-line evidence reference". I should keep it concise.
+    A: No "How we did" retrospective page or related code found in repo.
+    B: scripts/populate-projections.ts absent and grep for defaultProjectio
+defaultProjection returns no matches.
+    C: scripts/apply-party-positions.ts:60 contains yaml.stringify(data, { 
+lineWidth: 0 }).
+    D: src/lib/data.ts shows consistent shallow Object.freeze across six ca
+cached loaders.
+
+    All look good.
+    Wait, Claim B: "scripts/populate-projections.ts still carries a default
+defaultProjection template".
+    Evidence: `scripts/ directory listing` doesn't show it. `grep` finds no
+nothing.
+    So the file is gone.
+    My evidence reference: "scripts/populate-projections.ts absent and grep
+grep for defaultProjection returns no matches."
+    This accurately reflects the evidence provided.
+
+    Claim C: "yaml.stringify({ lineWidth: 0 }) in apply-party-positions.ts"
+apply-party-positions.ts".
+    Evidence: `scripts/apply-party-positions.ts:60: fs.writeFileSync(filePa
+fs.writeFileSync(filePath, yaml.stringify(data, { lineWidth: 0 }));`
+    My evidence reference: "scripts/apply-party-positions.ts:60 contains ya
+yaml.stringify(data, { lineWidth: 0 })."
+    Accurate.
+
+    Claim D: "Deep-freeze... (or don't... current shallow freeze matches...
+matches...)"
+    Evidence: "Six cached loaders all use the same shallow Object.freeze...
+Object.freeze... Pattern is consistent."
+    My evidence reference: "src/lib/data.ts shows consistent shallow Object
+Object.freeze across six cached loaders."
+    Accurate.
+
+    Claim A: "Publish... page".
+    Evidence: "There is no... page...".
+    My evidence reference: "No "How we did" retrospective page or related c
+code found in repo."
+    Accurate.
+
+    I will ensure no markdown fencing.
+    Wait, I should check if I need to bold the CLAIM_X. The prompt says "ou
+"output one line in this exact format: CLAIM_X: ...". I will follow the tex
+text exactly.
+    I will not use bolding unless implied. The example `CLAIM_X` is upperca
+uppercase. I will use `CLAIM_A`, `CLAIM_B`, `CLAIM_C`, `CLAIM_D`.
+    Wait, the prompt says "For each claim output one line". It implies I sh
+should label them A, B, C, D.
+    "CLAIM_X" is a placeholder. I should replace X with A, B, C, D.
+    So `CLAIM_A:`, `CLAIM_B:`, etc.
+
+    Let's go.
+...done thinking.
+
+CLAIM_A: still-open — No "How we did" retrospective page or related code fo
+found in repo.
+CLAIM_B: already-done — scripts/populate-projections.ts absent and grep for
+for defaultProjection returns no matches.
+CLAIM_C: already-done — scripts/apply-party-positions.ts:60 contains yaml.s
+yaml.stringify(data, { lineWidth: 0 }).
+CLAIM_D: already-done — src/lib/data.ts shows consistent shallow Object.fre
+Object.freeze across six cached loaders.
+
+===== T2-party-config rep 1 =====
+DURATION_SEC: 288
+RUN_STATUS: 0
+OUTPUT:
+                                                                                                                                    Thinking...
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Input: 6 YAML configuration files for political parties (Reform UK,
+UK, Scottish Conservatives, Scottish Green Party, Scottish Labour, Scottish
+Scottish Liberal Democrats, Scottish National Party).
+    *   Expected Shape:
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`.
+        *   `positions`: 8 numeric keys (`independence`, `nhs`, `h
+`housing`, `climate`, `tax`, `economy`, `education`, `equality`), each valu
+value 0-2.
+        *   `stances`: 8 text keys matching the `positions` keys.
+        *   `quotes`: 8 text keys matching the `positions` keys.
+    *   Output Format: Exactly one of `CLEAN` OR `INCONSISTENT` followed by
+by one bullet per actual deviation. No preamble.
+    *   Constraint: Do not invent issues.
+
+2.  **Validate Each File:**
+
+    *   **File 1: `data/parties/reform-uk.yaml`**
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`. (Present)
+        *   `positions` keys: `independence`, `nhs`, `housing`, `climate`, 
+`tax`, `economy`, `education`, `equality`. (8 keys, all present)
+        *   `positions` values: All integers (0 or 1). (0, 1, 0, 0, 0, 0, 0
+0, 0, 0). Wait, let's check the YAML structure provided in the prompt.
+            *   `independence: 0`
+            *   `nhs: 1`
+            *   `housing: 0`
+            *   `climate: 0`
+            *   `tax: 0`
+            *   `economy: 0`
+            *   `education: 0`
+            *   `equality: 0`
+            *   All numeric 0-2. OK.
+        *   `stances` keys: `independence`, `nhs`, `housing`, `climate`, `t
+`tax`, `economy`, `education`, `equality`. (8 keys, all present)
+        *   `quotes` keys: `independence`, `nhs`, `housing`, `climate`, `ta
+`tax`, `economy`, `education`, `equality`. (8 keys, all present)
+        *   *Observation*: The structure looks consistent with the expected
+expected shape.
+
+    *   **File 2: `data/parties/scottish-conservatives.yaml`**
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`. (Present)
+        *   `positions` keys: `independence`, `nhs`, `housing`, `climate`, 
+`tax`, `economy`, `education`, `equality`. (8 keys, all present)
+        *   `positions` values: All integers (0 or 1).
+        *   `stances` keys: 8 keys matching `positions`.
+        *   `quotes` keys: 8 keys matching `positions`.
+        *   *Observation*: Consistent.
+
+    *   **File 3: `data/parties/scottish-green-party.yaml`**
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`. (Present)
+        *   `positions` keys: 8 keys matching expected.
+        *   `positions` values: All integers (2).
+        *   `stances` keys: 8 keys.
+        *   `quotes` keys: 8 keys.
+        *   *Observation*: Consistent.
+
+    *   **File 4: `data/parties/scottish-labour.yaml`**
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`. (Present)
+        *   `positions` keys: 8 keys.
+        *   `positions` values: All integers (0, 1, 2).
+        *   `stances` keys: 8 keys.
+        *   `quotes` keys: 8 keys.
+        *   *Observation*: Consistent.
+
+    *   **File 5: `data/parties/scottish-liberal-democrats.yaml`**
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`. (Present)
+        *   `positions` keys: 8 keys.
+        *   `positions` values: All integers (0, 1, 2).
+        *   `stances` keys: 8 keys.
+        *   `quotes` keys: 8 keys.
+        *   *Observation*: Consistent.
+
+    *   **File 6: `data/parties/scottish-national-party.yaml`**
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`. (Present)
+        *   `positions` keys: 8 keys.
+        *   `positions` values: All integers (1, 2).
+        *   `stances` keys: 8 keys.
+        *   `quotes` keys: 8 keys.
+        *   *Observation*: Consistent.
+
+3.  **Detailed Check for Subtle Inconsistencies:**
+
+    *   Check key names across all files for uniformity.
+        *   Expected: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`.
+        *   File 1 (Reform): Matches.
+        *   File 2 (Con): Matches.
+        *   File 3 (Green): Matches.
+        *   File 4 (Lab): Matches.
+        *   File 5 (LibDem): Matches.
+        *   File 6 (SNP): Matches.
+
+    *   Check value ranges in `positions`.
+        *   Expected: 0-2 numeric.
+        *   File 1: 0, 1. OK.
+        *   File 2: 0, 1. OK.
+        *   File 3: 2. OK.
+        *   File 4: 0, 1, 2. OK.
+        *   File 5: 0, 1, 2. OK.
+        *   File 6: 1, 2. OK.
+
+    *   Check presence of keys in `stances` and `quotes`.
+        *   All files seem to have the 8 required keys in `stances` and `qu
+`quotes` corresponding to `positions`.
+
+    *   Check YAML syntax validity (implied).
+        *   The text provided looks like valid YAML. Indentation seems cons
+consistent (2 spaces).
+        *   Keys are unquoted strings (valid).
+        *   Values are strings (quoted or unquoted) or integers.
+        *   One thing to check: In `quotes`, are the values properly format
+formatted as strings?
+            *   Reform UK: `independence: "Which is why..."` (quoted)
+            *   Scottish Con: `independence: "In 2014..."` (quoted)
+            *   Scottish Green: `independence: "To realise..."` (quoted)
+            *   Scottish Labour: `independence: "A Scottish Labour..."` (qu
+(quoted)
+            *   Scottish LibDem: `independence: "Back a written..."` (quote
+(quoted)
+            *   SNP: `independence: "A vote for the SNP..."` (quoted)
+            *   All quotes appear to be valid strings.
+
+    *   Check for missing keys or extra keys.
+        *   All files have exactly the 5 top-level keys.
+        *   All `positions`, `stances`, `quotes` sections have exactly the 
+8 issue keys.
+
+    *   Wait, I need to look closer at the YAML structure provided in the p
+prompt.
+        *   File 1: `id: reform-uk` ... `positions:` ... `stances:` ... `qu
+`quotes:` ...
+        *   File 2: `id: scottish-conservatives` ...
+        *   File 3: `id: scottish-green-party` ...
+        *   File 4: `id: scottish-labour` ...
+        *   File 5: `id: scottish-liberal-democrats` ...
+        *   File 6: `id: scottish-national-party` ...
+
+    *   Is there any discrepancy in the number of items?
+        *   Reform UK `stances`: 8 items.
+        *   Reform UK `quotes`: 8 items.
+        *   Scottish Con `stances`: 8 items.
+        *   Scottish Con `quotes`: 8 items.
+        *   Scottish Green `stances`: 8 items.
+        *   Scottish Green `quotes`: 8 items.
+        *   Scottish Lab `stances`: 8 items.
+        *   Scottish Lab `quotes`: 8 items.
+        *   Scottish LibDem `stances`: 8 items.
+        *   Scottish LibDem `quotes`: 8 items.
+        *   SNP `stances`: 8 items.
+        *   SNP `quotes`: 8 items.
+
+    *   Are there any formatting oddities?
+        *   In `reform-uk.yaml`, `positions` values are on separate lines.
+        *   In `scottish-conservatives.yaml`, `positions` values are on sep
+separate lines.
+        *   It seems consistent.
+
+    *   Let's check the keys in `quotes` against `positions`.
+        *   Reform UK: `independence`, `nhs`, `housing`, `climate`, `tax`, 
+`economy`, `education`, `equality`. (Matches)
+        *   Scottish Con: `independence`, `nhs`, `housing`, `climate`, `tax
+`tax`, `economy`, `education`, `equality`. (Matches)
+        *   Scottish Green: `independence`, `nhs`, `housing`, `climate`, `t
+`tax`, `economy`, `education`, `equality`. (Matches)
+        *   Scottish Lab: `independence`, `nhs`, `housing`, `climate`, `tax
+`tax`, `economy`, `education`, `equality`. (Matches)
+        *   Scottish LibDem: `independence`, `nhs`, `housing`, `climate`, `
+`tax`, `economy`, `education`, `equality`. (Matches)
+        *   SNP: `independence`, `nhs`, `housing`, `climate`, `tax`, `econo
+`economy`, `education`, `equality`. (Matches)
+
+    *   Wait, I need to check if there are any *hidden* inconsistencies in 
+the text provided.
+        *   File separators: `==========================`.
+        *   The prompt asks to validate the *content* based on the "Expecte
+"Expected shape".
+        *   Is there any deviation?
+        *   Let's check the `positions` values again.
+            *   Reform UK: 0, 1, 0, 0, 0, 0, 0, 0. (Valid)
+            *   Scottish Con: 0, 1, 0, 0, 0, 0, 1, 0. (Valid)
+            *   Scottish Green: 2, 2, 2, 2, 2, 2, 2, 2. (Valid)
+            *   Scottish Lab: 0, 2, 1, 1, 1, 1, 1, 1. (Valid)
+            *   Scottish LibDem: 0, 2, 1, 1, 1, 1, 1, 2. (Valid)
+            *   SNP: 2, 2, 2, 1, 2, 1, 2, 2. (Valid)
+
+    *   Is there any missing key in `stances` or `quotes`?
+        *   Reform UK: All 8 present.
+        *   Scottish Con: All 8 present.
+        *   Scottish Green: All 8 present.
+        *   Scottish Lab: All 8 present.
+        *   Scottish LibDem: All 8 present.
+        *   SNP: All 8 present.
+
+    *   Is there any extra key?
+        *   Scanning... No extra keys observed in the `positions`, `stances
+`stances`, or `quotes` sections.
+
+    *   Is there any type error?
+        *   `positions` are integers.
+        *   `stances` are strings.
+        *   `quotes` are strings.
+        *   `id` is string.
+        *   `name` is string.
+        *   Everything looks correct.
+
+    *   Wait, I need to look extremely closely at the YAML syntax provided 
+in the prompt block.
+        *   Sometimes prompts have subtle formatting issues like missing in
+indentation or colons.
+        *   File 1:
+            ```yaml
+            id: reform-uk
+            name: Reform UK
+            positions:
+              independence: 0
+              ...
+            ```
+            Looks standard.
+        *   File 6 (SNP):
+            ```yaml
+            id: scottish-national-party
+            name: Scottish National Party (SNP)
+            positions:
+              independence: 2
+              ...
+            ```
+            Looks standard.
+
+    *   Is there a discrepancy in the number of separators or headers?
+        *   The prompt shows `FILE: ...` headers.
+        *   This is metadata, not part of the YAML data itself, but the pro
+prompt says "These are 6 political party YAML configs."
+        *   The validation is on the *YAML content*.
+        *   However, if the prompt implies checking the provided text block
+block as a whole, I should check if the YAML blocks are valid within themse
+themselves.
+        *   They appear to be valid YAML fragments.
+
+    *   Wait, is there a discrepancy in the *keys* inside `stances` or `quo
+`quotes`?
+        *   Let's check `scottish-labour.yaml` `quotes`.
+            *   `independence`, `nhs`, `housing`, `climate`, `tax`, `econom
+`economy`, `education`, `equality`.
+            *   Count: 8.
+        *   Let's check `scottish-liberal-democrats.yaml` `quotes`.
+            *   `independence`, `nhs`, `housing`, `climate`, `tax`, `econom
+`economy`, `education`, `equality`.
+            *   Count: 8.
+
+    *   Wait, I might have missed something in `scottish-conservatives.yaml
+`scottish-conservatives.yaml`.
+        *   `positions`: `independence`, `nhs`, `housing`, `climate`, `tax`
+`tax`, `economy`, `education`, `equality`.
+        *   `stances`: `independence`, `nhs`, `housing`, `climate`, `tax`, 
+`economy`, `education`, `equality`.
+        *   `quotes`: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`.
+        *   All match.
+
+    *   Wait, is there an issue with `scottish-national-party.yaml`?
+        *   `id: scottish-national-party`
+        *   `name: Scottish National Party (SNP)`
+        *   `positions`...
+        *   `stances`...
+        *   `quotes`...
+        *   All look fine.
+
+    *   Let's check `reform-uk.yaml` `quotes` indentation.
+        *   `quotes:`
+        *   `  independence: "..."`
+        *   Indentation is 2 spaces. Consistent with `positions`.
+
+    *   Wait, I need to check if *all* 8 keys are present in *every* sectio
+section for *every* file.
+        *   Reform UK: 8 keys in positions, stances, quotes.
+        *   Scottish Con: 8 keys in positions, stances, quotes.
+        *   Scottish Green: 8 keys in positions, stances, quotes.
+        *   Scottish Lab: 8 keys in positions, stances, quotes.
+        *   Scottish LibDem: 8 keys in positions, stances, quotes.
+        *   SNP: 8 keys in positions, stances, quotes.
+
+    *   Wait, is there a hidden character or formatting issue in the prompt
+prompt text?
+        *   `==========================` separators are present.
+        *   `FILE: data/parties/...` headers are present.
+        *   This is likely just context. I am validating the YAML data.
+        *   The prompt says "Output exactly one of: CLEAN OR INCONSISTENT".
+INCONSISTENT".
+        *   If I find *any* deviation, I must output INCONSIS
+INCONSISTENT.
+        *   If everything matches the schema, I output CLEAN.
+
+    *   Let's do a final rigorous scan for any missing keys.
+        *   Reform UK:
+            *   positions: indep, nhs, housing, climate, tax, econ, edu, eq
+eq. (8)
+            *   stances: indep, nhs, housing, climate, tax, econ, edu, eq. 
+(8)
+            *   quotes: indep, nhs, housing, climate, tax, econ, edu, eq. (
+(8)
+        *   Scottish Con:
+            *   positions: indep, nhs, housing, climate, tax, econ, edu, eq
+eq. (8)
+            *   stances: indep, nhs, housing, climate, tax, econ, edu, eq. 
+(8)
+            *   quotes: indep, nhs, housing, climate, tax, econ, edu, eq. (
+(8)
+        *   Scottish Green:
+            *   positions: indep, nhs, housing, climate, tax, econ, edu, eq
+eq. (8)
+            *   stances: indep, nhs, housing, climate, tax, econ, edu, eq. 
+(8)
+            *   quotes: indep, nhs, housing, climate, tax, econ, edu, eq. (
+(8)
+        *   Scottish Lab:
+            *   positions: indep, nhs, housing, climate, tax, econ, edu, eq
+eq. (8)
+            *   stances: indep, nhs, housing, climate, tax, econ, edu, eq. 
+(8)
+            *   quotes: indep, nhs, housing, climate, tax, econ, edu, eq. (
+(8)
+        *   Scottish LibDem:
+            *   positions: indep, nhs, housing, climate, tax, econ, edu, eq
+eq. (8)
+            *   stances: indep, nhs, housing, climate, tax, econ, edu, eq. 
+(8)
+            *   quotes: indep, nhs, housing, climate, tax, econ, edu, eq. (
+(8)
+        *   SNP:
+            *   positions: indep, nhs, housing, climate, tax, econ, edu, eq
+eq. (8)
+            *   stances: indep, nhs, housing, climate, tax, econ, edu, eq. 
+(8)
+            *   quotes: indep, nhs, housing, climate, tax, econ, edu, eq. (
+(8)
+
+    *   Is there any value type mismatch?
+        *   All `positions` are numbers.
+        *   All `stances` are strings.
+        *   All `quotes` are strings.
+
+    *   Is there any key naming mismatch?
+        *   `independence` vs `indep`? No, all are `independence`.
+        *   `economy` vs `econ`? No, all are `economy`.
+        *   `equality` vs `eq`? No, all are `equality`.
+
+    *   Conclusion: The data appears completely consistent with the expecte
+expected shape.
+
+4.  **Final Verification:**
+    *   Did I miss anything in the prompt description of the "Expected shap
+shape"?
+    *   "top-level keys id, name, positions, stances, quotes" -> Checked.
+    *   "positions has 8 numeric keys (independence, nhs, housing, climate,
+climate, tax, economy, education, equality) each 0-2" -> Checked.
+    *   "stances and quotes each have the same 8 keys with text values" -> 
+Checked.
+    *   "Output exactly one of: CLEAN OR INCONSISTENT followed by one bulle
+bullet per actual deviation." -> Since there are no deviations, output `CLE
+`CLEAN`.
+
+    *   Wait, one detail: "Followed by one bullet per actual deviation."
+    *   If it is CLEAN, I just output `CLEAN`.
+    *   Wait, the instruction says "Output exactly one of: CLEAN OR INCONSI
+INCONSISTENT followed by one bullet per actual deviation."
+    *   Usually, this means if CLEAN, just output CLEAN. If INCONSISTENT, o
+output INCONSISTENT then bullets.
+    *   I will output `CLEAN`.
+
+    *   Wait, let me double check the `quotes` in `scottish-labour.yaml`.
+        *   `equality: "Recommit the NHS to single-sex wards on the basis o
+of biological sex. Deliver a four-nation conversion practices ban to protec
+protect LGBT+ people. Tackle long waits for gynaecological procedures as pa
+part of a women's health plan."`
+        *   This is a string. OK.
+    *   Let me double check `scottish-conservatives.yaml` `quotes`.
+        *   `education: "Raising school standards."`
+        *   This is a string. OK.
+    *   Let me double check `reform-uk.yaml` `positions`.
+        *   `equality: 0`.
+        *   This is a number. OK.
+
+    *   Is there any indentation inconsistency?
+        *   Reform UK: 2 spaces for keys under `positions`, `stances`, `quo
+`quotes`.
+        *   Scottish Con: 2 spaces.
+        *   Scottish Green: 2 spaces.
+        *   Scottish Lab: 2 spaces.
+        *   Scottish LibDem: 2 spaces.
+        *   SNP: 2 spaces.
+    *   YAML is indentation-sensitive, but for validation of *shape* (keys 
+and values), slight whitespace variations often don't matter unless it brea
+breaks parsing. The text provided looks syntactically valid.
+
+    *   Wait, I need to check if there are any *missing* keys in the `stanc
+`stances` or `quotes` sections compared to `positions`.
+        *   In `scottish-labour.yaml`, `positions` has `equality`. `stances
+`stances` has `equality`. `quotes` has `equality`.
+        *   In `scottish-liberal-democrats.yaml`, `positions` has `equality
+`equality`. `stances` has `equality`. `quotes` has `equality`.
+        *   All match.
+
+    *   Wait, I notice something in `scottish-conservatives.yaml`.
+        *   `positions:`
+        *   `  independence: 0`
+        *   ...
+        *   `  education: 1`
+        *   `  equality: 0`
+        *   `stances:`
+        *   `  independence: Strong opposition...`
+        *   ...
+        *   `  education: Raise school standards...`
+        *   `  equality: Socially conservative...`
+        *   `quotes:`
+        *   `  independence: "In 2014..."`
+        *   ...
+        *   `  education: "Raising school standards."`
+        *   `  equality: "Following the Supreme Court..."`
+        *   All 8 keys present.
+
+    *   Is there any key *order* requirement? No, YAML is unordered maps.
+    *   Is there any requirement that `positions` values must be 0, 1, or 2
+2? Yes, "each 0-2". All values checked fall within this range.
+
+    *   I am confident the data is CLEAN.
+
+5.  **Construct Output:**
+    *   Just `CLEAN`.
+
+    *   Wait, let me look at `scottish-national-party.yaml` again.
+    *   `id: scottish-national-party`
+    *   `name: Scottish National Party (SNP)`
+    *   `positions:`
+    *   `  independence: 2`
+    *   `  nhs: 2`
+    *   `  housing: 2`
+    *   `  climate: 1`
+    *   `  tax: 2`
+    *   `  economy: 1`
+    *   `  education: 2`
+    *   `  equality: 2`
+    *   `stances:`
+    *   `  independence: Support independence...`
+    *   `  nhs: Significant NHS investment...`
+    *   `  housing: Build 110,000...`
+    *   `  climate: Continue the transition...`
+    *   `  tax: Keep Scotland's progressive...`
+    *   `  economy: Grow the economy...`
+    *   `  education: A transformational...`
+    *   `  equality: Uphold and protect...`
+    *   `quotes:`
+    *   `  independence: "A vote for the SNP..."`
+    *   `  nhs: "Scotland's NHS is..."`
+    *   `  housing: "This funding boost..."`
+    *   `  climate: "Scotland must play..."`
+    *   `  tax: "From 2028..."`
+    *   `  economy: "I want to grow..."`
+    *   `  education: "A transformational..."`
+    *   `  equality: "We are committed..."`
+
+    *   Everything looks perfect.
+
+    *   Wait, one more check on `reform-uk.yaml`.
+    *   `positions:`
+    *   `  independence: 0`
+    *   `  nhs: 1`
+    *   `  housing: 0`
+    *   `  climate: 0`
+    *   `  tax: 0`
+    *   `  economy: 0`
+    *   `  education: 0`
+    *   `  equality: 0`
+    *   `stances:`
+    *   `  independence: Oppose independence...`
+    *   `  nhs: NHS Scotland stays...`
+    *   `  housing: Repeal SNP tenancy...`
+    *   `  climate: Scrap all SNP...`
+    *   `  tax: Cut income tax...`
+    *   `  economy: Cut £7.5bn...`
+    *   `  education: Direct school-leavers...`
+    *   `  equality: Socially conservative...`
+    *   `quotes:`
+    *   `  independence: "Which is why..."`
+    *   `  nhs: "Under Reform UK..."`
+    *   `  housing: "Reform UK will repeal..."`
+    *   `  climate: "Scrap all SNP..."`
+    *   `  tax: "First, Reform will..."`
+    *   `  economy: "Which can be easily..."`
+    *   `  education: "Rather than sending..."`
+    *   `  equality: "The SNP have not..."`
+
+    *   Looks clean.
+
+    *   Wait, I need to check if there are any *extra* keys in the top leve
+level.
+    *   All files have `id`, `name`, `positions`, `stakes`, `quotes`. (Wait
+(Wait, is it `stakes` or `stances`? It is `stances`.)
+    *   All files have `stances`.
+    *   All files have `quotes`.
+    *   No extra keys like `description` or `leader`.
+
+    *   Final check on `scottish-green-party.yaml`.
+    *   `positions` values are all `2`.
+    *   `stances` and `quotes` have text.
+    *   All 8 keys present.
+
+    *   Okay, I'm satisfied. The data is consistent.
+
+    *   Wait, I need to check the `FILE:` headers. The prompt says "FILE: d
+data/parties/reform-uk.yaml".
+    *   The prompt asks to validate the "6 political party YAML configs".
+    *   The headers are meta-information. I should ignore them for the sche
+schema validation unless they imply the file content should match the filen
+filename (id).
+    *   File 1: `id: reform-uk`. Filename `reform-uk.yaml`. Match.
+    *   File 2: `id: scottish-conservatives`. Filename `scottish-conservati
+`scottish-conservatives.yaml`. Match.
+    *   File 3: `id: scottish-green-party`. Filename `scottish-green-party.
+`scottish-green-party.yaml`. Match.
+    *   File 4: `id: scottish-labour`. Filename `scottish-labour.yaml`. Mat
+Match.
+    *   File 5: `id: scottish-liberal-democrats`. Filename `scottish-libera
+`scottish-liberal-democrats.yaml`. Match.
+    *   File 6: `id: scottish-national-party`. Filename `scottish-national-
+`scottish-national-party.yaml`. Match.
+    *   This consistency is good, though not strictly part of the "Expected
+"Expected shape" defined in the prompt ("top-level keys id, name..."). Howe
+However, it confirms data integrity.
+
+    *   I will output `CLEAN`.
+...done thinking.
+
+CLEAN
+
+===== T3-merge-patterns rep 1 =====
+DURATION_SEC: 170
+RUN_STATUS: 0
+OUTPUT:
+                                                       Thinking...
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Input: A list of the last 10 commits on a Scottish election website
+website, including commit hashes, subjects, and diff stats (files changed, 
+insertions/deletions).
+    *   Task: List up to 4 specific concerns or loose ends.
+    *   Constraint 1: Each concern must be tied to a checkable file/path/gr
+file/path/grep pattern.
+    *   Constraint 2: Format: `CONCERN | FILE_OR_PATTERN_TO_VERIFY`.
+    *   Constraint 3: If nothing is reliably checkable, output `NONE`.
+    *   Constraint 4: Do not speculate beyond what the commit subjects stat
+state.
+
+2.  **Analyze the Commits:**
+    *   `463068c`: docs: refresh roadmap after 28 April candidate audit. Fi
+File: `docs/ROADMAP.md`.
+    *   `6d23c5e`: fix: align region card counts with destination page (#71
+(#71). File: `src/pages/index.astro`.
+    *   `2a54127`: data: normalise IGV branding and listPosition outliers (
+(#70). Files: `data/regional-candidates/*.yaml`.
+    *   `8a8ace1`: quiz: tie handling, podium, and compact regional cards (
+(#69). Files: `src/components/QuizEngine.tsx`, `src/components/QuizPodium.t
+`src/components/QuizPodium.tsx`, `src/lib/quiz-helpers.ts`, tests, specs.
+    *   `41f548a` & `572198a`: news: refresh from RSS feeds. File: `data/ne
+`data/news.json`.
+    *   `b056cde`: simplify: phase 3a — lift candidate-display constants to
+to lib (#68). Files: `src/lib/candidate-display.ts`, candidate pages.
+    *   `3f495f8`: simplify: phase 2a — central party-config for chart colo
+colours (#67). Files: `src/lib/party-config.ts`, chart components.
+    *   `18cd8f5`: simplify: phase 1 — drop one-off scripts and tighten lib
+lib (#66). Files: scripts (deleted), `src/lib/data.ts`, `src/lib/party-matc
+`src/lib/party-match.ts`.
+    *   `3743b69`: polls: update polling data from Wikipedia. File: `data/p
+`data/polls.json`.
+
+3.  **Identify Potential Concerns/Loose Ends based *only* on commit subject
+subjects and visible diffs:**
+
+    *   *Concern 1 (Roadmap Audit):* Commit `463068c` mentions "refresh roa
+roadmap after 28 April candidate audit". This implies an audit happened on 
+28 April. The commit subject says it's a refresh *after* the audit. A poten
+potential concern is whether the audit findings are fully reflected in the 
+roadmap or if the audit status itself is still pending verification in the 
+code/data. However, the prompt says "Do not speculate beyond what the commi
+commit subjects state." The subject states the audit happened. A checkable 
+item might be verifying the roadmap content against the audit date. But is 
+there a loose end? Maybe the roadmap itself needs to ensure it reflects the
+the post-audit state accurately. Let's look for something more tangible.
+    *   *Concern 2 (Data Normalisation):* Commit `2a54127` normalizes "IGV 
+branding and listPosition outliers". This involved changes to many YAML fil
+files in `data/regional-candidates/`. A concern could be whether *all* regi
+regional candidates were covered or if outliers remain in other candidate s
+sets (e.g., constituency). The commit specifically lists `data/regional-can
+`data/regional-candidates`. It doesn't mention `data/constituency-candidate
+`data/constituency-candidates`. This is a checkable pattern.
+    *   *Concern 3 (Quiz Spec vs Implementation):* Commit `8a8ace1` introdu
+introduces "tie handling, podium, and compact regional cards". It adds spec
+spec files (`.../specs/2026-04-28-quiz-tie-handling-design.md`) and impleme
+implementation files. A concern is alignment between the spec design and th
+the actual component logic. However, the commit message doesn't explicitly 
+flag a discrepancy. A better concern might be regarding the "compact region
+regional cards" mentioned in the subject but implemented in `src/components
+`src/components/PartyResultCard.tsx`. Are the cards truly compact as specif
+specified in the plan? The plan file exists (`plans/2026-04-28-quiz-tie-han
+(`plans/2026-04-28-quiz-tie-handling.md`). Checking if the component matche
+matches the plan is valid.
+    *   *Concern 4 (News Refresh Frequency):* Commits `41f548a` and `572198
+`572198a` both say "news: refresh from RSS feeds". They happened sequential
+sequentially (implied by the list order). Having two consecutive refresh co
+commits might indicate instability or a script running twice. The file is `
+`data/news.json`. A concern is whether this is automated or manual, but tha
+that's speculative. A concrete concern is if `data/news.json` is kept up-to
+up-to-date given multiple manual-looking refreshes. However, the most tangi
+tangible check is ensuring the `data/news.json` content matches the latest 
+RSS source at the time of the build, but I can't check external RSS. I can 
+check the file itself for duplicates or freshness markers.
+    *   *Concern 5 (Script Deletion):* Commit `18cd8f5` deletes several scr
+scripts (`scripts/cross-copy-bios.ts`, `scripts/enrich-candidates.ts`, etc.
+etc.). A concern is if any references to these scripts remain in documentat
+documentation, CI pipelines, or remaining scripts that might break. The dif
+diff shows `docs/superpowers/plans/...` added. It doesn't show CI files (`.
+(`.github/workflows`, `package.json` scripts) in the changed files list. A 
+concern is whether the build process or CI still references the deleted scr
+scripts.
+    *   *Concern 6 (Candidate Display Constants):* Commit `b056cde` lifts c
+constants to `src/lib/candidate-display.ts`. Files changed include constitu
+constituency and regional candidate pages. A concern is whether the logic i
+is consistent across all candidate page types (constituency vs regional). T
+The diff shows changes in both `[id].astro` and `constituency/[id].astro` a
+and `regional/[id].astro`. It seems covered.
+    *   *Concern 7 (Polls Data):* Commit `3743b69` updates `data/polls.json
+`data/polls.json` from Wikipedia. Wikipedia data changes. A concern is whet
+whether the source citation is preserved in the JSON or if it becomes stale
+stale. The file `data/polls.json` is the checkable item.
+
+    *   *Refining Concerns for Checkability:*
+        1.  **Data Scope:** Commit `2a54127` fixes outliers in `data/region
+`data/regional-candidates`. It does not mention constituency candidates. **
+**Check:** Verify if `data/constituency-candidates` contains similar outlie
+outliers.
+        2.  **Deleted Scripts:** Commit `18cd8f5` deletes scripts in `scrip
+`scripts/`. **Check:** Verify if CI/CD configs (e.g., `.github/workflows`, 
+`package.json`) still reference deleted scripts.
+        3.  **Quiz Spec Alignment:** Commit `8a8ace1` adds `specs/...md` an
+and implements `QuizEngine.tsx`. **Check:** Ensure `src/components/QuizEngi
+`src/components/QuizEngine.tsx` implements logic defined in `specs/2026-04-
+`specs/2026-04-28-quiz-tie-handling-design.md`.
+        4.  **Roadmap Audit Status:** Commit `463068c` updates `docs/ROADMA
+`docs/ROADMAP.md` after an audit. **Check:** Verify `docs/ROADMAP.md` expli
+explicitly references the 28 April audit status or outcomes.
+
+    *   *Wait, Constraint Check:* "Do not speculate beyond what the commit 
+subjects state."
+        *   Concern 1 (Const candidates): The subject says "normalise IGV b
+branding and listPosition outliers (#70)". It lists the files. It doesn't m
+mention constituency. Is it a concern that they *weren't* touched? It might
+might be intentional (no outliers there). Speculating they have outliers is
+is risky. Better to focus on the files mentioned.
+        *   Concern 2 (Deleted scripts): The subject says "drop one-off scr
+scripts". It lists the deleted scripts. It does not list CI files. If CI re
+references them, it breaks. This is a valid check based on "drop scripts".
+        *   Concern 3 (Quiz): Subject says "quiz: tie handling...". Adds sp
+spec and component. Checking if component matches spec is standard verifica
+verification.
+        *   Concern 4 (News): Two news refreshes in a row (`41f548a`, `5721
+`572198a`). Is this a concern? It might just be a re-run. But checking `dat
+`data/news.json` for duplicate entries or timestamps is checkable.
+        *   Concern 5 (Roadmap): Subject says "refresh roadmap after 28 Apr
+April candidate audit". Checking if the roadmap mentions the audit date is 
+checkable.
+
+    *   *Selecting the Top 4:*
+        1.  **Script Deletion Impact:** `18cd8f5` deletes scripts. **Check:
+**Check:** `grep -r "scripts/\|scripts/" .github package.json` (Check if de
+deleted scripts are referenced elsewhere).
+        2.  **Data Consistency (Regional vs Const):** `2a54127` fixes regio
+regional outliers. **Check:** `grep -l "listPosition\|IGV" data/constituenc
+data/constituency-candidates/*.yaml` (Check if similar fields exist in unmo
+unmodified directory). *Self-Correction:* The subject says "normalise... ou
+outliers". It implies there were outliers. It doesn't say there aren't othe
+others. But verifying the scope of the fix is valid. Actually, a safer chec
+check is verifying the specific keys changed in the modified files are cons
+consistent.
+        3.  **Quiz Implementation vs Design:** `8a8ace1` adds a design spec
+spec and implementation. **Check:** `diff src/components/QuizEngine.tsx spe
+specs/2026-04-28-quiz-tie-handling-design.md` (or grep for tie logic). Let'
+Let's phrase it as verifying tie logic existence.
+        4.  **Roadmap Audit Reference:** `463068c` mentions "after 28 April
+April candidate audit". **Check:** `grep "28 April\|audit" docs/ROADMAP.md`
+docs/ROADMAP.md` (Verify the context is preserved).
+
+    *   *Refining for "Checkable File/Path/Grep":*
+        1.  `scripts/` deletion might break CI. Check: `grep -l "scripts/" 
+.github/workflows/* package.json`.
+        2.  News refresh duplicates. Check: `data/news.json` for duplicate 
+entries or timestamps.
+        3.  Quiz Tie Handling logic. Check: `src/lib/quiz-helpers.ts` for t
+tie-handling functions.
+        4.  Candidate Data Normalization. Check: `data/regional-candidates/
+`data/regional-candidates/*.yaml` for `listPosition` consistency.
+
+    *   *Re-evaluating "Loose Ends/Concerns":*
+        *   Concern: Scripts deleted might be referenced in remaining build
+build steps.
+        *   Concern: Two consecutive news commits might indicate a failure 
+to persist or manual intervention needed.
+        *   Concern: Quiz spec exists, does code match?
+        *   Concern: Roadmap mentions audit, does it contain actionable ite
+items from it?
+
+    *   *Constraint: "Do not speculate beyond what the commit subjects stat
+state."*
+        *   I cannot assume CI breaks. I can check if references exist.
+        *   I cannot assume news refresh is manual. I can check the file co
+content.
+        *   I cannot assume code mismatches spec. I can check if logic exis
+exists.
+
+    *   *Drafting the Output:*
+        1.  **Loose End:** Potential orphaned references to deleted scripts
+scripts in build configuration. **Check:** `grep -r "scripts/" .github pack
+package.json`
+        2.  **Loose End:** Potential duplicate entries in news feed resulti
+resulting from consecutive refresh commits. **Check:** `cat data/news.json 
+| grep -E '"url"|"date"'`
+        3.  **Loose End:** Verification that quiz tie-handling logic is pre
+present in the helper library. **Check:** `grep -i "tie" src/lib/quiz-helpe
+src/lib/quiz-helpers.ts`
+        4.  **Loose End:** Confirmation that roadmap reflects the post-audi
+post-audit status. **Check:** `grep "audit" docs/ROADMAP.md`
+
+    *   *Wait, looking closer at commit 2a54127:* It normalizes `listPositi
+`listPosition` outliers. A concern is whether `listPosition` values are con
+consistent across the file set.
+    *   *Looking at 8a8ace1:* It adds `specs/...`. A concern is if the spec
+spec is outdated or ignored.
+    *   *Looking at 18cd8f5:* It deletes `scripts/populate-projections.ts` 
+(805 lines). This is significant logic. Concern: Where is projection logic 
+now? It says "drop one-off scripts". Maybe it's integrated elsewhere. Check
+Check: `grep -r "populate-projections" src/`.
+
+    *   *Let's pick the strongest 4 based on explicit text in the log.*
+        1.  **Deleted Scripts Referenced:** Commit `18cd8f5` deletes `scrip
+`scripts/`. Verify no remaining references. `FILE_OR_PATTERN`: `grep -r "sc
+"scripts/" .github/ package.json`
+        2.  **News Data Integrity:** Commits `41f548a` & `572198a` refresh 
+`data/news.json`. Verify no duplicates. `FILE_OR_PATTERN`: `data/news.json`
+`data/news.json`
+        3.  **Quiz Tie Logic:** Commit `8a8ace1` introduces
+introduces tie handling. Verify implementation. `FILE_OR_PATTERN`: `src/lib
+`src/lib/quiz-helpers.ts`
+        4.  **Candidate Outliers:** Commit `2a54127` fixes outliers in regi
+regional candidates. Verify consistency in modified files. `FILE_OR_PATTERN
+`FILE_OR_PATTERN`: `data/regional-candidates/*.yaml`
+
+    *   *Refining the Concern descriptions:*
+        1.  Concern: Remaining build configuration may reference deleted sc
+scripts. | Pattern: `grep -r "scripts/cross-copy-bios\|scripts/enrich-candi
+"scripts/cross-copy-bios\|scripts/enrich-candidates" .github package.json` 
+(Be specific to deleted files).
+        2.  Concern: Consecutive RSS refreshes may have introduced duplicat
+duplicate news entries. | Pattern: `data/news.json`
+        3.  Concern: Tie handling logic introduced in commit may lack test 
+coverage or be incomplete. | Pattern: `tests/quiz-helpers.test.ts` (Actuall
+(Actually, the commit added tests. So checking the tests is good). Let's st
+stick to the implementation file.
+        4.  Concern: Normalization of `listPosition` values might not be un
+uniform across all modified regional candidate files. | Pattern: `grep "lis
+"listPosition" data/regional-candidates/*.yaml`
+
+    *   *Wait, check constraint "up to 4".*
+    *   *Check constraint "Do not speculate".*
+        *   Speculating "may have introduced duplicates" is borderline. Bet
+Better: "Verify freshness or structure".
+        *   Speculating "may reference deleted scripts" is a risk assessmen
+assessment. Better: "Check for references".
+        *   The prompt asks for "specific concerns or loose ends".
+        *   Let's try to be precise.
+
+        1.  **Concern:** Build pipeline or package scripts might still invo
+invoke deleted utility scripts. | **Check:** `grep -r "scripts/" .github/ p
+package.json`
+        2.  **Concern:** `data/news.json` may contain duplicate entries due
+due to multiple sequential refresh commits. | **Check:** `data/news.json`
+        3.  **Concern:** `src/lib/quiz-helpers.ts` may lack explicit handli
+handling for tie scenarios despite commit subject claims. | **Check:** `gre
+`grep -i "tie" src/lib/quiz-helpers.ts`
+        4.  **Concern:** `docs/ROADMAP.md` may not explicitly reference the
+the "28 April candidate audit" mentioned in the commit subject. | **Check:*
+**Check:** `grep "28 April" docs/ROADMAP.md`
+
+    *   *Final Review against constraints:*
+        *   Up to 4? Yes.
+        *   Specific concern? Yes.
+        *   Tied to checkable file/path/grep? Yes.
+        *   No speculation? "may contain" is a hypothesis, but the check ve
+verifies it. The concern is valid based on the commit log (2 commits in a r
+row).
+        *   Commit subjects state: "news: refresh from RSS feeds" (twice). 
+Concern: Duplicates.
+        *   Commit subject state: "drop one-off scripts". Concern: Leftover
+Leftover refs.
+        *   Commit subject state: "tie handling". Concern: Implementation e
+existence.
+        *   Commit subject state: "refresh roadmap after 28 April candidate
+candidate audit". Concern: Roadmap content accuracy.
+
+    *   *Wait, one more check on commit 18cd8f5:* It deleted `scripts/popul
+`scripts/populate-projections.ts`. This is a huge file (805 lines). If this
+this logic is gone, where did projections go? The commit subject says "drop
+"drop one-off scripts". This implies they aren't needed. A concern is verif
+verifying they aren't needed elsewhere. But the check `grep -r "scripts/pop
+"scripts/populate-projections"` is sufficient.
+
+    *   *Let's finalize the phrasing.*
+...done thinking.
+
+1. CONCERN: Remaining build configuration or package scripts might still in
+invoke deleted utility scripts | FILE_OR_PATTERN_TO_VERIFY: `grep -r "scrip
+"scripts/cross-copy-bios\|scripts/enrich-candidates" .github/ package.json`
+package.json`
+2. CONCERN: Consecutive RSS refresh commits may have introduce
+introduced duplicate entries in the news feed | FILE_OR_PATTERN_TO_VERIFY: 
+`data/news.json`
+3. CONCERN: Implementation may lack explicit logic for the claimed tie-hand
+tie-handling functionality | FILE_OR_PATTERN_TO_VERIFY: `grep -i "tie" src/
+src/lib/quiz-helpers.ts`
+4. CONCERN: Roadmap documentation may not explicitly reflect the post-audit
+post-audit status mentioned in the commit | FILE_OR_PATTERN_TO_VERIFY: `gre
+`grep "28 April" docs/ROADMAP.md`
+
+===== T1-doc-drift rep 2 =====
+DURATION_SEC: 157
+RUN_STATUS: 0
+OUTPUT:
+                  Thinking...
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Input: A list of 4 roadmap claims (A, B, C, D) and evidence from th
+the codebase.
+    *   Task: Audit the roadmap against the evidence.
+    *   Output Format: Exactly four lines, one for each claim. Format: `CLA
+`CLAIM_X: <already-done|still-open> — <one-line evidence reference>`.
+    *   Constraints: No preamble, no commentary, no chain of thought.
+
+2.  **Analyze Claim A:**
+    *   Claim: Publish a "How we did" projection retrospective page compari
+comparing each constituency's projected top-3 shares against the actual res
+result.
+    *   Evidence: "There is no "How we did" retrospective page or related c
+code anywhere in the repo."
+    *   Verdict: `still-open`.
+    *   Evidence Reference: "no related code anywhere in the repo".
+
+3.  **Analyze Claim B:**
+    *   Claim: Retire the dead projection default. scripts/populate-project
+scripts/populate-projections.ts still carries a defaultProjection template 
+but every constituency has an explicit override.
+    *   Evidence: `grep for defaultProjection or DEFAULT_PROJECTION across 
+scripts/ and src/: (no matches)`.
+    *   Interpretation: The grep search found no matches for `defaultProjec
+`defaultProjection` or `DEFAULT_PROJECTION`. This implies the default proje
+projection template mentioned in the claim does not exist or has been remov
+removed/renamed such that the claim's premise ("still carries a defaultProj
+defaultProjection template") is false based on the evidence provided. Howev
+However, the claim says "Retire the dead projection default... still carrie
+carries...". If the grep shows *no matches*, then the template isn't there 
+anymore.
+    *   Wait, let's look closer. The claim says "scripts/populate-projectio
+"scripts/populate-projections.ts still carries a defaultProjection template
+template". The evidence says `grep ... (no matches)`. This means the file `
+`scripts/populate-projections.ts` does not contain `defaultProjection` or `
+`DEFAULT_PROJECTION`. Therefore, the cleanup (retiring the default) appears
+appears to be *done* or the file no longer exists/contains it.
+    *   However, looking at the `scripts/ directory listing`: `scripts/popu
+`scripts/populate-projections.ts` is *not* in the listing. The listing show
+shows: `apply-party-positions.ts`, `fix-incumbents-regional.ts`, `fix-incum
+`fix-incumbents.ts`, `lib`, `project-from-polls.ts`, `replace-dc-source-url
+`replace-dc-source-urls.ts`, `sync-news.ts`, `sync-polls.ts`, `sync-regiona
+`sync-regional-candidates.ts`, `validate-data.ts`.
+    *   `scripts/populate-projections.ts` is missing from the directory lis
+listing.
+    *   If the file itself is gone, the default inside it is gone.
+    *   Verdict: `already-done`.
+    *   Evidence Reference: `populate-projections.ts missing from scripts/ 
+listing and no defaultProjection matches`.
+
+4.  **Analyze Claim C:**
+    *   Claim: `yaml.stringify({ lineWidth: 0 })` in `apply-party-positions
+`apply-party-positions.ts` to match `populate-projections.ts` and stop YAML
+YAML line-rewrap churn on manifesto updates.
+    *   Evidence: `scripts/apply-party-positions.ts:60: fs.writeFileSync(fi
+fs.writeFileSync(filePath, yaml.stringify(data, { lineWidth: 0 }));`
+    *   Interpretation: The code exists exactly as described in the claim. 
+The claim was to *do* this. Since it is present in the code, the task is co
+complete.
+    *   Verdict: `already-done`.
+    *   Evidence Reference: `apply-party-positions.ts:60 includes lineWidth
+lineWidth: 0`.
+
+5.  **Analyze Claim D:**
+    *   Claim: Deep-freeze the data caches (or don't — current shallow free
+freeze matches the existing pattern across all six cached loaders in src/li
+src/lib/data.ts).
+    *   Evidence: `src/lib/data.ts cache pattern: Six cached loaders all us
+use the same shallow Object.freeze on the returned value. No deep-freeze ap
+applied anywhere. Pattern is consistent.`
+    *   Interpretation: The claim says "Deep-freeze ... (or don't — current
+current shallow freeze matches ...)". This is a conditional claim. It sugge
+suggests doing one or the other, but explicitly acknowledges the current st
+state ("current shallow freeze matches...").
+    *   Usually, a roadmap item "Deep-freeze the data caches" implies an ac
+action to change it. The parenthetical "(or don't...)" suggests if the curr
+current state matches the pattern, it's acceptable.
+    *   The evidence confirms: "Six cached loaders all use the same shallow
+shallow Object.freeze... Pattern is consistent."
+    *   Since the evidence confirms the pattern is consistent and shallow f
+freezing is the existing pattern (matching the claim's contingency), the st
+state of the codebase aligns with the "or don't" acceptance criteria.
+    *   However, is the claim *actioned*? If the claim is "Deep-freeze... (
+(or don't)", and we haven't deep-frozen, but the condition for "don't" is m
+met (pattern matches), then it's effectively resolved/accepted as is.
+    *   But looking strictly at the action "Deep-freeze", it hasn't happene
+happened. But the claim includes the "or don't" clause which validates the 
+current state.
+    *   Let's look at the wording: "Deep-freeze the data caches (or don't —
+— current shallow freeze matches the existing pattern across all six cached
+cached loaders in src/lib/data.ts)."
+    *   Evidence says: "Six cached loaders all use the same shallow Object.
+Object.freeze... Pattern is consistent."
+    *   This means the condition for "don't" is satisfied. The status quo i
+is validated.
+    *   Therefore, the item is effectively closed/accepted as done (in the 
+sense of decision made).
+    *   Verdict: `already-done`.
+    *   Evidence Reference: `data.ts loaders use consistent shallow Object.
+Object.freeze`.
+
+    *Re-evaluating Claim B*:
+    The claim says "scripts/populate-projections.ts still carries a default
+defaultProjection template".
+    Evidence says `scripts/ directory listing` does *not* include `scripts/
+`scripts/populate-projections.ts`.
+    If the file doesn't exist, the claim about it carrying a template is mo
+moot, and the cleanup (retiring it) is done.
+    Verdict: `already-done`.
+
+    *Re-evaluating Claim A*:
+    Claim: "Publish a ... page".
+    Evidence: "There is no ... page or related code anywhere in the repo."
+    Verdict: `still-open`.
+
+    *Re-evaluating Claim C*:
+    Claim: "yaml.stringify({ lineWidth: 0 }) in apply-party-positions.ts".
+    Evidence: `scripts/apply-party-positions.ts:60: fs.writeFileSync(filePa
+fs.writeFileSync(filePath, yaml.stringify(data, { lineWidth: 0 }));`
+    Verdict: `already-done`.
+
+    *Re-evaluating Claim D*:
+    Claim: "Deep-freeze ... (or don't ...)".
+    Evidence: "Six cached loaders all use the same shallow Object.freeze ..
+... Pattern is consistent."
+    Since the "or don't" condition is met (pattern matches), the roadmap it
+item is resolved.
+    Verdict: `already-done`.
+
+    *Refining Evidence References:*
+    Need to be concise one-line evidence references.
+
+    Claim A: CLAIM_A: still-open — no related code or page found in repo.
+    Claim B: CLAIM_B: already-done — populate-projections.ts missing from s
+scripts/ and no defaultProjection matches.
+    Claim C: CLAIM_C: already-done — apply-party-positions.ts:60 confirms l
+lineWidth: 0 usage.
+    Claim D: CLAIM_D: already-done — data.ts loaders use consistent shallow
+shallow Object.freeze matching pattern.
+
+    Wait, for Claim B, the grep evidence says `(no matches)` for `defaultPr
+`defaultProjection`. The file listing says `populate-projections.ts` is mis
+missing. Both confirm the cleanup is done.
+    For Claim D, the claim is phrased as a choice "Deep-freeze (or don't)".
+don't)". Since the evidence confirms the current state matches the "don't" 
+criteria (pattern consistent), the item is resolved.
+
+    Let's check the constraints again: "No preamble, no commentary, no chai
+chain of thought, just four lines."
+    Format: `CLAIM_X: <already-done|still-open> — <one-line evidence refere
+reference>`.
+
+    Drafting lines:
+    CLAIM_A: still-open — no "How we did" page or related code exists in re
+repo.
+    CLAIM_B: already-done — scripts/populate-projections.ts absent from lis
+listing and grep returns no matches.
+    CLAIM_C: already-done — apply-party-positions.ts:60 implements yaml.str
+yaml.stringify with lineWidth: 0.
+    CLAIM_D: already-done — src/lib/data.ts confirms six loaders use consis
+consistent shallow Object.freeze.
+
+    Double Check Claim B: The claim says "Retire the dead projection defaul
+default. scripts/populate-projections.ts still carries...". This implies th
+the claim was written *before* the retirement. The evidence shows the file 
+is gone. So the retirement is done.
+    Double Check Claim D: The claim text is "Deep-freeze the data caches (o
+(or don't — current shallow freeze matches the existing pattern across all 
+six cached loaders in src/lib/data.ts)." The text in the claim *describes* 
+the current pattern. The evidence confirms the pattern exists. So the decis
+decision (not to deep-freeze) is supported by evidence. Thus "already-done"
+"already-done" regarding the decision state.
+
+    Final check on format: `CLAIM_X: <status> — <evidence>`.
+
+    One line per claim.
+    No extra text.
+
+    Claim A: CLAIM_A: still-open — no "How we did" retrospective page or re
+related code in repo.
+    Claim B: CLAIM_B: already-done — populate-projections.ts missing from s
+scripts/ and no defaultProjection matches found.
+    Claim C: CLAIM_C: already-done — apply-party-positions.ts:60 contains y
+yaml.stringify with lineWidth: 0.
+    Claim D: CLAIM_D: already-done — src/lib/data.ts shows six loaders usin
+using consistent shallow Object.freeze pattern.
+
+    Wait, Claim B evidence: "scripts/ directory listing" shows `populate-pr
+`populate-projections.ts` is NOT there. "grep ... (no matches)". Both suppo
+support it. I'll combine for brevity or pick the strongest. The file listin
+listing is stronger evidence that the file carrying the default is gone.
+    Claim B Revised: CLAIM_B: already-done — scripts/populate-projections.t
+scripts/populate-projections.ts missing from directory listing.
+
+    Claim D Revised: CLAIM_D: already-done — data.ts loaders use consistent
+consistent shallow Object.freeze matching claim's existing pattern.
+
+    Claim C Revised: CLAIM_C: already-done — apply-party-positions.ts:60 co
+confirms yaml.stringify lineWidth: 0.
+
+    Claim A Revised: CLAIM_A: still-open — no "How we did" page or related 
+code found in repo.
+
+    Looks good.
+
+    Wait, one nuance on Claim D. The claim is "Deep-freeze ... (or don't ..
+...)". If the task was "Deep-freeze", and we didn't, is it done? The parent
+parenthetical makes it a conditional task. "Do X or Y if Z". Z is true. So 
+task is resolved. "already-done" fits best as the state is settled.
+
+    One nuance on Claim B. The claim says "Retire... scripts/populate-proje
+scripts/populate-projections.ts still carries...". This reads like the clai
+claim was written when the file *did* exist. The evidence shows it *doesn't
+*doesn't*. So the task "Retire" is complete.
+
+    Final check on constraints: "No preamble, no commentary, no chain of th
+thought, just four lines."
+
+    Ready.
+
+    Wait, I need to make sure I don't add markdown code blocks around the o
+output. Just the text.
+    Actually, usually "just four lines" implies plain text.
+    I will output exactly four lines.
+
+    Line 1: CLAIM_A: still-open — no "How we did" retrospective page or rel
+related code in repo.
+    Line 2: CLAIM_B: already-done — scripts/populate-projections.ts missing
+missing from directory listing.
+    Line 3: CLAIM_C: already-done — apply-party-positions.ts:60 confirms ya
+yaml.stringify lineWidth: 0.
+    Line 4: CLAIM_D: already-done — src/lib/data.ts confirms six loaders us
+use consistent shallow Object.freeze.
+
+    Wait, Claim B evidence reference should probably mention the grep too o
+or just the file listing. File listing is sufficient.
+    Claim D evidence reference: "src/lib/data.ts cache pattern: Six cached 
+loaders all use the same shallow Object.freeze".
+    I'll shorten it to fit "one-line evidence reference".
+
+    Revised Line 2: CLAIM_B: already-done — populate-projections.ts absent 
+from scripts/ listing and grep finds no matches.
+    Revised Line 4: CLAIM_D: already-done — src/lib/data.ts confirms six lo
+loaders use consistent shallow Object.freeze.
+
+    Let's refine for brevity and accuracy.
+    Claim A: CLAIM_A: still-open — no "How we did" retrospective page or re
+related code in repo.
+    Claim B: CLAIM_B: already-done — populate-projections.ts missing from s
+scripts/ and no defaultProjection matches.
+    Claim C: CLAIM_C: already-done — apply-party-positions.ts:60 implements
+implements yaml.stringify with lineWidth: 0.
+    Claim D: CLAIM_D: already-done — data.ts loaders use consistent shallow
+shallow Object.freeze matching existing pattern.
+
+    Looks solid.
+
+    Wait, Claim B: The claim mentions "scripts/populate-projections.ts stil
+still carries a defaultProjection template". The evidence says "grep... (no
+(no matches)". This means the string doesn't exist. But the file listing al
+also shows the file is missing. If the file is missing, the template is gon
+gone. So "already-done" is correct.
+    Claim D: The claim says "Deep-freeze ... (or don't — current shallow fr
+freeze matches...)". The evidence says "current shallow freeze matches". So
+So the "or don't" condition is met. The item is closed.
+
+    One final check on Claim B. If the file `populate-projections.ts` is mi
+missing, does `scripts/populate-projections.ts` exist? The listing says:
+    `scripts/ directory listing:`
+    `apply-party-positions.ts`
+    ...
+    `populate-projections.ts` is NOT in the list.
+    So the file is gone.
+    So Claim B is `already-done`.
+
+    One final check on Claim C.
+    Evidence: `scripts/apply-party-positions.ts:60: fs.writeFileSync(filePa
+fs.writeFileSync(filePath, yaml.stringify(data, { lineWidth: 0 }));`
+    Claim: `yaml.stringify({ lineWidth: 0 }) in apply-party-positions.ts`.
+    Matches perfectly. `already-done`.
+
+    One final check on Claim A.
+    Evidence: `There is no "How we did" retrospective page or related code 
+anywhere in the repo.`
+    Claim: `Publish a "How we did" projection retrospective page`.
+    Task not done. `still-open`.
+
+    One final check on Claim D.
+    Evidence: `src/lib/data.ts cache pattern: Six cached loaders all use th
+the same shallow Object.freeze on the returned value.`
+    Claim: `Deep-freeze ... (or don't — current shallow freeze matches the 
+existing pattern...)`
+    Since current matches pattern, the decision to "don't" is validated. `a
+`already-done`.
+
+    Okay, writing output.
+
+    Wait, I should ensure I use the exact format `CLAIM_X: <status> — <evid
+<evidence>`.
+    Ensure spaces around the dash? The prompt says `CLAIM_X: <already-done|
+<already-done|still-open> — <one-line evidence reference>`. It uses an em-d
+em-dash or en-dash `—`. I will use the one provided in the prompt instructi
+instruction `—`.
+    Wait, looking at the prompt: `CLAIM_X: <already-done|still-open> — <one
+<one-line evidence reference>`.
+    I will copy that dash character.
+
+    Wait, checking the prompt's dash: `—`. It looks like an em-dash.
+    Okay.
+
+    Line 1: CLAIM_A: still-open — no "How we did" retrospective page or rel
+related code in repo.
+    Line 2: CLAIM_B: already-done — populate-projections.ts missing from sc
+scripts/ listing and grep finds no matches.
+    Line 3: CLAIM_C: already-done — apply-party-positions.ts:60 implements 
+yaml.stringify with lineWidth: 0.
+    Line 4: CLAIM_D: already-done — src/lib/data.ts confirms six loaders us
+use consistent shallow Object.freeze.
+
+    Wait, I need to make sure I don't violate "no chain of thought". I am t
+thinking now, but outputting only the lines.
+    Final check on Claim B evidence. The prompt evidence says: `grep for de
+defaultProjection or DEFAULT_PROJECTION across scripts/ and src/: (no match
+matches)`. And `scripts/ directory listing` does not show `populate-project
+`populate-projections.ts`.
+    I will combine them for a robust reference.
+    "populate-projections.ts missing from scripts/ listing and grep finds n
+no matches" covers it.
+
+    Final check on Claim D.
+    "src/lib/data.ts confirms six loaders use consistent shallow Object.fre
+Object.freeze" covers the evidence provided.
+
+    Okay, proceeding.
+...done thinking.
+
+CLAIM_A: still-open — no "How we did" retrospective page or related code in
+in repo.
+CLAIM_B: already-done — populate-projections.ts missing from scripts/ listi
+listing and grep finds no matches.
+CLAIM_C: already-done — apply-party-positions.ts:60 implements yaml.stringi
+yaml.stringify with lineWidth: 0.
+CLAIM_D: already-done — src/lib/data.ts confirms six loaders use consistent
+consistent shallow Object.freeze.
+
+===== T2-party-config rep 2 =====
+DURATION_SEC: 242
+RUN_STATUS: 0
+OUTPUT:
+                                                                                                                                                     Thinking...
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Input: 6 YAML files representing political party data (Reform UK, S
+Scottish Conservatives, Scottish Green Party, Scottish Labour, Scottish Lib
+Liberal Democrats, Scottish National Party).
+    *   Expected Shape:
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`.
+        *   `positions`: 8 numeric keys (`independence`, `nhs`, `h
+`housing`, `climate`, `tax`, `economy`, `education`, `equality`), values 0-
+0-2.
+        *   `stances`: 8 text keys (matching `positions` keys).
+        *   `quotes`: 8 text keys (matching `positions` keys).
+    *   Output Format: Exactly one of:
+        *   `CLEAN`
+        *   `INCONSISTENT` followed by one bullet per actual deviation.
+    *   Constraint: Do not invent issues. No preamble.
+
+2.  **Validate Each File:**
+
+    *   **File 1: `data/parties/reform-uk.yaml`**
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`. (OK)
+        *   `positions`:
+            *   `independence`: 0 (OK)
+            *   `nhs`: 1 (OK)
+            *   `housing`: 0 (OK)
+            *   `climate`: 0 (OK)
+            *   `tax`: 0 (OK)
+            *   `economy`: 0 (OK)
+            *   `education`: 0 (OK)
+            *   `equality`: 0 (OK)
+            *   Count: 8 keys. Values 0-2. (OK)
+        *   `stances`:
+            *   Keys: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`. (8 keys) (OK)
+        *   `quotes`:
+            *   Keys: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`. (8 keys) (OK)
+        *   Status: **CLEAN** (so far)
+
+    *   **File 2: `data/parties/scottish-conservatives.yaml`**
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`. (OK)
+        *   `positions`:
+            *   `independence`: 0
+            *   `nhs`: 1
+            *   `housing`: 0
+            *   `climate`: 0
+            *   `tax`: 0
+            *   `economy`: 0
+            *   `education`: 1
+            *   `equality`: 0
+            *   Count: 8 keys. Values 0-2. (OK)
+        *   `stances`:
+            *   Keys: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`. (8 keys) (OK)
+        *   `quotes`:
+            *   Keys: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`. (8 keys) (OK)
+        *   Status: **CLEAN** (so far)
+
+    *   **File 3: `data/parties/scottish-green-party.yaml`**
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`. (OK)
+        *   `positions`:
+            *   All keys present (8).
+            *   Values: All 2. (OK, range 0-2).
+        *   `stances`:
+            *   Keys: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`. (8 keys) (OK)
+        *   `quotes`:
+            *   Keys: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`. (8 keys) (OK)
+        *   Status: **CLEAN** (so far)
+
+    *   **File 4: `data/parties/scottish-labour.yaml`**
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`. (OK)
+        *   `positions`:
+            *   `independence`: 0
+            *   `nhs`: 2
+            *   `housing`: 1
+            *   `climate`: 1
+            *   `tax`: 1
+            *   `economy`: 1
+            *   `education`: 1
+            *   `equality`: 1
+            *   Count: 8 keys. Values 0-2. (OK)
+        *   `stances`:
+            *   Keys: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`. (8 keys) (OK)
+        *   `quotes`:
+            *   Keys: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`. (8 keys) (OK)
+        *   Status: **CLEAN** (so far)
+
+    *   **File 5: `data/parties/scottish-liberal-democrats.yaml`**
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`. (OK)
+        *   `positions`:
+            *   `independence`: 0
+            *   `nhs`: 2
+            *   `housing`: 1
+            *   `climate`: 1
+            *   `tax`: 1
+            *   `economy`: 1
+            *   `education`: 1
+            *   `equality`: 2
+            *   Count: 8 keys. Values 0-2. (OK)
+        *   `stances`:
+            *   Keys: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`. (8 keys) (OK)
+        *   `quotes`:
+            *   Keys: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`. (8 keys) (OK)
+        *   Status: **CLEAN** (so far)
+
+    *   **File 6: `data/parties/scottish-national-party.yaml`**
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`. (OK)
+        *   `positions`:
+            *   `independence`: 2
+            *   `nhs`: 2
+            *   `housing`: 2
+            *   `climate`: 1
+            *   `tax`: 2
+            *   `economy`: 1
+            *   `education`: 2
+            *   `equality`: 2
+            *   Count: 8 keys. Values 0-2. (OK)
+        *   `stances`:
+            *   Keys: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`. (8 keys) (OK)
+        *   `quotes`:
+            *   Keys: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`. (8 keys) (OK)
+        *   Status: **CLEAN** (so far)
+
+3.  **Cross-Check Consistency:**
+    *   Are all required keys present in all files? Yes.
+    *   Are all numeric positions within 0-2? Yes.
+    *   Do `stances` and `quotes` keys match the `positions` keys exactly?
+        *   Reform UK: independence, nhs, housing, climate, tax, economy, e
+education, equality. (Matches)
+        *   Scottish Conservatives: independence, nhs, housing, climate, ta
+tax, economy, education, equality. (Matches)
+        *   Scottish Green Party: independence, nhs, housing, climate, tax,
+tax, economy, education, equality. (Matches)
+        *   Scottish Labour: independence, nhs, housing, climate, tax, econ
+economy, education, equality. (Matches)
+        *   Scottish Liberal Democrats: independence, nhs, housing, climate
+climate, tax, economy, education, equality. (Matches)
+        *   SNP: independence, nhs, housing, climate, tax, economy, educati
+education, equality. (Matches)
+    *   Are there any missing keys in `stances` or `quotes` compared to `po
+`positions`?
+        *   Reform UK: 8 positions, 8 stances, 8 quotes.
+        *   Scottish Conservatives: 8 positions, 8 stances, 8 quotes.
+        *   Scottish Green Party: 8 positions, 8 stances, 8 quotes.
+        *   Scottish Labour: 8 positions, 8 stances, 8 quotes.
+        *   Scottish Liberal Democrats: 8 positions, 8 stances, 8 quotes.
+        *   SNP: 8 positions, 8 stances, 8 quotes.
+
+4.  **Final Verification:**
+    *   Check for typos in keys.
+    *   Reform UK `positions`: independence, nhs, housing, climate, tax, ec
+economy, education, equality.
+    *   Reform UK `stances`: independence, nhs, housing, climate, tax, econ
+economy, education, equality.
+    *   Reform UK `quotes`: independence, nhs, housing, climate, tax, econo
+economy, education, equality.
+    *   ... (Repeat check for all) ...
+    *   All look consistent.
+    *   Check values: All integers 0, 1, or 2.
+    *   Check structure: YAML syntax looks valid.
+
+5.  **Conclusion:** The data is consistent with the expected shape and cons
+constraints.
+
+6.  **Construct Output:** `CLEAN`
+
+Wait, let me double-check the keys again carefully.
+Reform UK:
+positions: independence, nhs, housing, climate, tax, economy, education, eq
+equality (8)
+stances: independence, nhs, housing, climate, tax, economy, education, equa
+equality (8)
+quotes: independence, nhs, housing, climate, tax, economy, education, equal
+equality (8)
+
+Scottish Conservatives:
+positions: independence, nhs, housing, climate, tax, economy, education, eq
+equality (8)
+stances: independence, nhs, housing, climate, tax, economy, education, equa
+equality (8)
+quotes: independence, nhs, housing, climate, tax, economy, education, equal
+equality (8)
+
+Scottish Green Party:
+positions: independence, nhs, housing, climate, tax, economy, education, eq
+equality (8)
+stances: independence, nhs, housing, climate, tax, economy, education, equa
+equality (8)
+quotes: independence, nhs, housing, climate, tax, economy, education, equal
+equality (8)
+
+Scottish Labour:
+positions: independence, nhs, housing, climate, tax, economy, education, eq
+equality (8)
+stances: independence, nhs, housing, climate, tax, economy, education, equa
+equality (8)
+quotes: independence, nhs, housing, climate, tax, economy, education, equal
+equality (8)
+
+Scottish Liberal Democrats:
+positions: independence, nhs, housing, climate, tax, economy, education, eq
+equality (8)
+stances: independence, nhs, housing, climate, tax, economy, education, equa
+equality (8)
+quotes: independence, nhs, housing, climate, tax, economy, education, equal
+equality (8)
+
+Scottish National Party:
+positions: independence, nhs, housing, climate, tax, economy, education, eq
+equality (8)
+stances: independence, nhs, housing, climate, tax, economy, education, equa
+equality (8)
+quotes: independence, nhs, housing, climate, tax, economy, education, equal
+equality (8)
+
+All keys match across all files. All values are within range. Structure mat
+matches expected shape.
+
+Wait, I need to check the YAML syntax specifically for any indentation erro
+errors that might make it invalid YAML, though the prompt implies checking 
+logical consistency based on the schema provided ("Expected shape"). Howeve
+However, usually, "INCONSISTENT" in this context refers to data schema viol
+violations or missing keys/values.
+Looking at the provided text:
+- `positions:` followed by indented keys.
+- `stances:` followed by indented keys.
+- `quotes:` followed by indented keys.
+All seem properly indented (2 spaces).
+Values are integers or strings.
+Strings are quoted in some places but not others?
+In YAML, unquoted strings are fine unless they contain special characters.
+Reform UK quotes:
+"Which is why Reform UK says ENOUGH to the distraction of another referendu
+referendum." (Quoted)
+Under Reform UK, the NHS in Scotland will remain free at the point of need 
+and will be fully funded by general taxation. (Unquoted)
+This is valid YAML.
+
+Let's check if any key is missing.
+Reform UK positions: 8 keys.
+Stances: 8 keys.
+Quotes: 8 keys.
+All match the required 8 topics.
+
+Is there any deviation?
+The prompt says "Output exactly one of: CLEAN OR INCONSISTENT followed by o
+one bullet per actual deviation."
+Since I found no deviations, the output should be `CLEAN`.
+
+Wait, I should check the `positions` values again.
+Reform UK: 0, 1, 0, 0, 0, 0, 0, 0. (All 0-2)
+Scottish Conservatives: 0, 1, 0, 0, 0, 0, 1, 0. (All 0-2)
+Scottish Green: 2, 2, 2, 2, 2, 2, 2, 2. (All 0-2)
+Scottish Labour: 0, 2, 1, 1, 1, 1, 1, 1. (All 0-2)
+Scottish Lib Dem: 0, 2, 1, 1, 1, 1, 1, 2. (All 0-2)
+SNP: 2, 2, 2, 1, 2, 1, 2, 2. (All 0-2)
+
+Everything looks correct.
+
+One minor thing: `quotes` in Scottish Labour under `equality`.
+"Recommit the NHS to single sex wards on the basis of biological sex, and e
+ensuring patients can request same sex provision wherever possible."
+Matches key `equality`.
+
+One minor thing: `quotes` in Scottish Green under `equality`.
+"Revisit all NHS policy changes made as a result of the Cass Review to ensu
+ensure they are aligned with international evidence-based best practice."
+Matches key `equality`.
+
+One minor thing: `quotes` in Scottish Conservatives under `education`.
+"Raising school standards."
+Matches key `education`.
+
+One minor thing: `quotes` in Scottish Conservatives under `independence`.
+"In 2014, two million Scots voted to stay in the United Kingdom. It was a d
+divisive time for our country, but the result of the independence referendu
+referendum was clear."
+Matches key `independence`.
+
+All keys align with the 8 expected topics: independence, nhs, housing, clim
+climate, tax, economy, education, equality.
+
+I will output CLEAN.
+
+Wait, I need to be extremely careful. Is there any hidden inconsistency?
+Expected shape: "positions has 8 numeric keys... each 0-2".
+Reform UK `positions`:
+independence: 0
+nhs: 1
+housing: 0
+climate: 0
+tax: 0
+economy: 0
+education: 0
+equality: 0
+(All numeric, all 0-2).
+
+Stances and Quotes have "same 8 keys with text values".
+All files have these 8 keys in stances and quotes.
+
+Okay, I'm confident it is CLEAN.
+
+Wait, checking the YAML delimiters.
+`======...======` lines are separators in the prompt description, not part 
+of the YAML file content itself usually, but here they are presented as par
+part of the "FILE" block. The prompt says "FILE: data/parties/reform-uk.yam
+data/parties/reform-uk.yaml". The content starts at `id: reform-uk`. The `=
+`======` lines are likely delimiters for the prompt structure, not part of 
+the YAML. I should treat the content between the headers as the file conten
+content.
+The content provided:
+```
+id: reform-uk
+name: Reform UK
+positions:
+...
+```
+This is valid YAML.
+
+Wait, is there any missing key in `positions` for any party?
+Reform: 8 keys.
+Cons: 8 keys.
+Green: 8 keys.
+Labour: 8 keys.
+LibDem: 8 keys.
+SNP: 8 keys.
+
+Is there any missing key in `stances`?
+Reform: 8 keys.
+Cons: 8 keys.
+Green: 8 keys.
+Labour: 8 keys.
+LibDem: 8 keys.
+SNP: 8 keys.
+
+Is there any missing key in `quotes`?
+Reform: 8 keys.
+Cons: 8 keys.
+Green: 8 keys.
+Labour: 8 keys.
+LibDem: 8 keys.
+SNP: 8 keys.
+
+Everything matches.
+
+One detail: "Expected shape: top-level keys id, name, positions, stances, q
+quotes".
+All files have these 5 top-level keys.
+
+One detail: "positions has 8 numeric keys (independence, nhs, housing, clim
+climate, tax, economy, education, equality)".
+All files have exactly these 8 keys under positions.
+
+One detail: "stances and quotes each have the same 8 keys".
+All files have exactly these 8 keys under stances and quotes.
+
+Result: CLEAN.
+
+Wait, I need to check if there are any extra keys.
+Reform UK: No extra keys.
+Scottish Conservatives: No extra keys.
+Scottish Green Party: No extra keys.
+Scottish Labour: No extra keys.
+Scottish Liberal Democrats: No extra keys.
+Scottish National Party: No extra keys.
+
+Looks solid.
+
+Wait, checking Scottish Conservative `quotes` > `education`.
+Key: `education`
+Value: `"Raising school standards."`
+Matches.
+
+Checking Scottish Green `quotes` > `equality`.
+Key: `equality`
+Value: `"Revisit all NHS policy changes made as a result of the Cass Review
+Review to ensure they are aligned with international evidence-based best pr
+practice."`
+Matches.
+
+Checking SNP `quotes` > `equality`.
+Key: `equality`
+Value: `"We are committed to upholding and protecting the human rights of t
+trans people as far as possible within our powers and we will do all we can
+can to ensure that trans people's identities are recognised and respected."
+respected."`
+Matches.
+
+Checking Reform UK `quotes` > `equality`.
+Key: `equality`
+Value: `"The SNP have not protected local communities and women and girls i
+in Scotland in preference to pursuing woke policies on immigration and gend
+gender."`
+Matches.
+
+Checking Scottish Labour `quotes` > `equality`.
+Key: `equality`
+Value: `"Recommit the NHS to delivering single sex wards on the basis of bi
+biological sex, and ensuring patients can request same sex provision wherev
+wherever possible."`
+Matches.
+
+Checking Scottish Lib Dem `quotes` > `equality`.
+Key: `equality`
+Value: `"Banning all forms of conversion therapies and practices, working i
+in partnership with the UK Government to achieve this."`
+Matches.
+
+All present.
+
+Final check on `positions` values.
+Reform: 0, 1, 0, 0, 0, 0, 0, 0.
+Cons: 0, 1, 0, 0, 0, 0, 1, 0.
+Green: 2, 2, 2, 2, 2, 2, 2, 2.
+Labour: 0, 2, 1, 1, 1, 1, 1, 1.
+LibDem: 0, 2, 1, 1, 1, 1, 1, 2.
+SNP: 2, 2, 2, 1, 2, 1, 2, 2.
+
+All integers. All within 0-2.
+
+I am ready to output CLEAN.
+
+Wait, I noticed something in the prompt description of expected shape: "pos
+"positions has 8 numeric keys (independence, nhs, housing, climate, tax, ec
+economy, education, equality) each 0-2".
+In the files, are the keys ordered differently?
+Reform UK: independence, nhs, housing, climate, tax, economy, education, eq
+equality.
+Cons: independence, nhs, housing, climate, tax, economy, education, equalit
+equality.
+Green: independence, nhs, housing, climate, tax, economy, education, equali
+equality.
+Labour: independence, nhs, housing, climate, tax, economy, education, equal
+equality.
+LibDem: independence, nhs, housing, climate, tax, economy, education, equal
+equality.
+SNP: independence, nhs, housing, climate, tax, economy, education, equality
+equality.
+
+Ordering is consistent across all files.
+
+Wait, looking closely at Scottish Labour `positions`:
+independence: 0
+nhs: 2
+housing: 1
+climate: 1
+tax: 1
+economy: 1
+education: 1
+equality: 1
+Order: independence, nhs, housing, climate, tax, economy, education, equali
+equality.
+Consistent.
+
+Looking closely at Scottish Liberal Democrats `positions`:
+independence: 0
+nhs: 2
+housing: 1
+climate: 1
+tax: 1
+economy: 1
+education: 1
+equality: 2
+Order: independence, nhs, housing, climate, tax, economy, education, equali
+equality.
+Consistent.
+
+Looking closely at SNP `positions`:
+independence: 2
+nhs: 2
+housing: 2
+climate: 1
+tax: 2
+economy: 1
+education: 2
+equality: 2
+Order: independence, nhs, housing, climate, tax, economy, education, equali
+equality.
+Consistent.
+
+It seems perfectly clean.
+
+One last check: YAML syntax.
+`id: reform-uk`
+`name: Reform UK`
+`positions:`
+`  independence: 0`
+Indentation looks correct (2 spaces).
+No trailing commas or other syntax errors visible.
+
+I will proceed with CLEAN.
+
+Wait, I must check if there are any duplicate keys within a file.
+Reform UK:
+positions keys are unique.
+stances keys are unique.
+quotes keys are unique.
+Top level keys are unique.
+Same for others.
+
+Okay, definitely CLEAN.
+
+Wait, I need to make sure I don't miss anything subtle.
+"Output exactly one of: CLEAN OR INCONSISTENT followed by one bullet per ac
+actual deviation."
+If I find nothing, just "CLEAN".
+
+Is there any file name mismatch?
+The prompt lists:
+`FILE: data/parties/reform-uk.yaml`
+`FILE: data/parties/scottish-conservatives.yaml`
+`FILE: data/parties/scottish-green-party.yaml`
+`FILE: data/parties/scottish-labour.yaml`
+`FILE: data/parties/scottish-liberal-democrats.yaml`
+`FILE: data/parties/scottish-national-party.yaml`
+
+The `id` fields:
+`id: reform-uk` (matches file)
+`id: scottish-conservatives` (matches file)
+`id: scottish-green-party` (matches file)
+`id: scottish-labour` (matches file)
+`id: scottish-liberal-democrats` (matches file)
+`id: scottish-national-party` (matches file)
+
+This is a good consistency check, though not explicitly required by the "Ex
+"Expected shape" schema provided in the prompt (which only lists `id`, `nam
+`name`, `positions`, `stances`, `quotes`). However, it adds to the "CLEAN" 
+confidence.
+
+Wait, is there a `name` field consistency issue?
+Reform UK -> Reform UK
+Scottish Conservatives -> Scottish Conservative and Unionist Party
+Scottish Green Party -> Scottish Green Party
+Scottish Labour -> Scottish Labour Party
+Scottish Liberal Democrats -> Scottish Liberal Democrats
+Scottish National Party -> Scottish National Party (SNP)
+
+These look like reasonable names. No schema violation.
+
+Okay, I'm done checking.
+...done thinking.
+
+CLEAN
+
+===== T3-merge-patterns rep 2 =====
+DURATION_SEC: 282
+RUN_STATUS: 0
+OUTPUT:
+                                                      Thinking...
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Input: A list of the last 10 commits on a Scottish election website
+website repository.
+    *   Task: List up to 4 specific concerns or loose ends.
+    *   Constraint 1: Each concern must be tied to a checkable file/path/gr
+file/path/grep pattern.
+    *   Constraint 2: Format: `CONCERN | FILE_OR_PATTERN_TO_VERIFY`.
+    *   Constraint 3: If nothing is reliably checkable, output: `NONE`.
+    *   Constraint 4: Do not speculate beyond what the commit subjects stat
+state.
+
+2.  **Analyze the Commits:**
+    *   `463068c docs: refresh roadmap after 28 April candidate audit` (doc
+(docs/ROADMAP.md)
+    *   `6d23c5e fix: align region card counts with destination page (#71)`
+(#71)` (src/pages/index.astro)
+    *   `2a54127 data: normalise IGV branding and listPosition outliers (#7
+(#70)` (data/regional-candidates/*.yaml)
+    *   `8a8ace1 quiz: tie handling, podium, and compact regional cards (#6
+(#69)` (Multiple files: quiz specs, components, tests)
+    *   `41f548a news: refresh from RSS feeds` (data/news.json)
+    *   `572198a news: refresh from RSS feeds` (data/news.json)
+    *   `b056cde simplify: phase 3a — lift candidate-display constants to l
+lib (#68)` (src/lib/candidate-display.ts, etc.)
+    *   `3f495f8 simplify: phase 2a — central party-config for chart colour
+colours (#67)` (src/lib/party-config.ts, etc.)
+    *   `18cd8f5 simplify: phase 1 — drop one-off scripts and tighten lib (
+(#66)` (scripts/ deleted, docs added)
+    *   `3743b69 polls: update polling data from Wikipedia` (data/polls.jso
+(data/polls.json)
+
+3.  **Identify Potential Concerns/Loose Ends:**
+    *   *Concern 1:* The commit `8a8ace1 quiz: tie handling, podium, and co
+compact regional cards (#69)` introduces significant quiz logic changes (16
+(1600 insertions, 93 deletions) including new specs and tests. A concern co
+could be whether the tests cover the tie-handling logic adequately or if th
+the spec aligns with implementation. However, looking at the file list, `te
+`tests/quiz-helpers.test.ts` exists. A specific checkable concern is whethe
+whether the new quiz components are actually wired up in the main app flow,
+flow, or if the spec documents are stale compared to code. But the prompt a
+asks for concerns *tied to a checkable file/path*.
+    *   *Concern 2:* The commit `18cd8f5 simplify: phase 1 — drop one-off s
+scripts and tighten lib (#66)` deletes several scripts (`scripts/cross-copy
+(`scripts/cross-copy-bios.ts`, `scripts/enrich-candidates.ts`, etc.). A con
+concern is whether any cron jobs or CI/CD pipelines still reference these d
+deleted scripts. This is checkable via grep for the script names in other c
+config files (though config files aren't listed in the diff, they are stand
+standard repo files). However, based *strictly* on the provided text, I can
+can only check what's visible. The deleted files are visible in the diff su
+summary. A concern is if references to these scripts exist in remaining fil
+files. Pattern: `grep -r "cross-copy-bios\|enrich-candidates" .`
+    *   *Concern 3:* The commit `6d23c5e fix: align region card counts with
+with destination page (#71)` mentions aligning counts. A concern is whether
+whether the data source for region cards matches the data source for the de
+destination page. Checkable in `src/pages/index.astro` vs data files.
+    *   *Concern 4:* The commit `2a54127 data: normalise IGV branding and l
+listPosition outliers (#70)` modifies many candidate YAML files. A concern 
+is whether the "listPosition" normalization logic is consistent across all 
+candidates or if some outliers remain unaddressed. Checkable in `data/regio
+`data/regional-candidates/*.yaml`.
+    *   *Concern 5:* The commits `41f548a` and `572198a` both say `news: re
+refresh from RSS feeds`. There are two news refresh commits close together.
+together. A concern is whether this indicates a race condition or double-re
+double-refresh issue, or if the `data/news.json` is manually edited vs auto
+auto-generated. Checkable in `data/news.json`.
+    *   *Concern 6:* Commit `463068c docs: refresh roadmap after 28 April c
+candidate audit`. The roadmap is updated. A concern is if the roadmap statu
+status matches the current code state (e.g., phases 1, 2, 3a are done, are 
+there more phases?). Checkable in `docs/ROADMAP.md`.
+
+4.  **Select Top 4 Specific & Checkable Concerns:**
+
+    *   *Selection 1 (Deleted Scripts):* The deletion of automation scripts
+scripts (`scripts/populate-projections.ts`, etc.) raises the question of ho
+how projections are now updated.
+        *   Concern: Verify if deleted automation scripts are still referen
+referenced in CI/CD or remaining code.
+        *   Pattern: `scripts/` or `grep -r "populate-projections"`
+    *   *Selection 2 (Quiz Spec vs Code):* The large addition of quiz spec 
+files (`2026-04-28-quiz-tie-handling.md`) alongside implementation.
+        *   Concern: Ensure the implementation matches the design spec intr
+introduced in the same commit.
+        *   Pattern: `docs/./plans/2026-04-28-quiz-tie-handling.md` vs `src
+`src/components/QuizEngine.tsx`
+    *   *Selection 3 (Candidate Data Consistency):* Commit `2a54127` normal
+normalized `listPosition` outliers.
+        *   Concern: Verify no other candidates have inconsistent `listPosi
+`listPosition` values outside the normalized set.
+        *   Pattern: `data/regional-candidates/*.yaml`
+    *   *Selection 4 (News Refresh Frequency):* Two consecutive news refres
+refresh commits (`41f548a`, `572198a`) suggest potential instability or man
+manual intervention.
+        *   Concern: Check if `data/news.json` contains duplicate entries o
+or timestamps indicating rapid successive updates.
+        *   Pattern: `data/news.json`
+
+    *Refining Selection 1:* The prompt says "Do not speculate beyond what t
+the commit subjects state." The commit subject says "drop one-off scripts".
+scripts". It doesn't say they are broken, just dropped. A concern might be 
+if the functionality they provided is still needed. But checking for refere
+references is a solid technical check.
+    *Refining Selection 2:* The commit introduces a spec file. A concern is
+is if that spec is actually being used or if it's documentation debt.
+    *Refining Selection 3:* The commit says "normalise ... outliers". A con
+concern is if any outliers remain.
+    *Refining Selection 4:* Two news commits. Concern: Is the news feed par
+parsing stable?
+
+    Let's try to find concerns that are directly implied by the commit mess
+messages and diffs.
+
+    1.  **Deleted Scripts Functionality:** `scripts/populate-projections.ts
+`scripts/populate-projections.ts` was deleted (805 lines). Projections are 
+mentioned in `src/pages/guide.astro` (modified in phase 2a).
+        *   Concern: Verify functionality of projections after removal of `
+`populate-projections.ts`.
+        *   Pattern: `scripts/populate-projections.ts` (to confirm deletion
+deletion) & `src/pages/guide.astro` (usage).
+        *   Actually, better: Check if `src/pages/guide.astro` still relies
+relies on data that `populate-projections.ts` generated.
+        *   Let's stick to the deletion itself. "Verify no remaining refere
+references to deleted automation scripts."
+        *   Pattern: `grep -r "populate-projections\|enrich-candidates"`
+
+    2.  **Quiz Spec vs Implementation:** Commit `8a8ace1` adds `.../plans/2
+`.../plans/2026-04-28-quiz-tie-handling.md`.
+        *   Concern: Ensure quiz implementation adheres to the new tie-hand
+tie-handling spec.
+        *   Pattern: `docs/./plans/2026-04-28-quiz-tie-handling.md` | `src/
+`src/components/QuizEngine.tsx`
+
+    3.  **Candidate Data Normalization:** Commit `2a54127` modifies 15 YAML
+YAML files to normalize `listPosition`.
+        *   Concern: Verify no `listPosition` outliers remain in other cand
+candidate files not listed in the diff.
+        *   Pattern: `data/regional-candidates/*.yaml`
+
+    4.  **Roadmap Alignment:** Commit `463068c` refreshes roadmap after "ca
+"candidate audit".
+        *   Concern: Verify roadmap milestones align with current code stat
+state (e.g., phases 1-3a completed).
+        *   Pattern: `docs/ROADMAP.md`
+
+    *Wait, constraint check:* "If nothing is reliably checkable, output: NO
+NONE."
+    The pattern `grep -r "populate-projections"` is reliable in a file syst
+system context. The pattern `data/regional-candidates/*.yaml` is reliable.
+    Let's ensure the concern is specific.
+
+    *Revision 1:*
+    CONCERN: Verify no remaining code references deleted script `populate-p
+`populate-projections.ts`.
+    FILE_OR_PATTERN_TO_VERIFY: `grep -r "populate-projections"`
+
+    *Revision 2:*
+    CONCERN: Confirm `listPosition` values are consistent across all region
+regional candidate YAMLs.
+    FILE_OR_PATTERN_TO_VERIFY: `data/regional-candidates/*.yaml`
+
+    *Revision 3:*
+    CONCERN: Ensure `QuizEngine.tsx` implements the logic defined in the ne
+new tie-handling spec.
+    FILE_OR_PATTERN_TO_VERIFY: `docs/./plans/2026-04-28-quiz-tie-handling.m
+`docs/./plans/2026-04-28-quiz-tie-handling.md` | `src/components/QuizEngine
+`src/components/QuizEngine.tsx`
+
+    *Revision 4:*
+    CONCERN: Validate `data/news.json` reflects recent RSS refreshes withou
+without duplicates from consecutive commits.
+    FILE_OR_PATTERN_TO_VERIFY: `data/news.json`
+
+    *Wait, constraint:* "List up to 4 specific concerns... For each: CONCER
+CONCERN | FILE_OR_PATTERN_TO_VERIFY."
+    I need to make sure I don't combine too many things in one line if it v
+violates the format.
+    Format: `CONCERN | FILE_OR_PATTERN_TO_VERIFY`
+
+    Let's refine the concerns to be strictly about what the commit says.
+    1.  `scripts/` deletion.
+    2.  `data/regional-candidates` normalization.
+    3.  `docs/./plans/` spec alignment.
+    4.  `docs/ROADMAP.md` status vs code phases (1, 2, 3a mentioned in simp
+simplify commits).
+
+    One more check: `41f548a` and `572198a` are both `news: refresh from RS
+RSS feeds`. This looks like a potential loop or quick re-run.
+    Concern: Check for duplicate entries resulting from consecutive RSS ref
+refresh commits.
+    Pattern: `data/news.json`
+
+    Let's finalize the 4.
+
+    1.  **Concern:** Verify no remaining references exist to the deleted au
+automation scripts (`populate-projections`, `enrich-candidates`, etc.).
+        **Pattern:** `grep -r "populate-projections\|enrich-candidates\|rec
+"populate-projections\|enrich-candidates\|reconcile-candidates"`
+    2.  **Concern:** Confirm all `listPosition` values in regional candidat
+candidate data are normalized and outliers removed.
+        **Pattern:** `data/regional-candidates/*.yaml`
+    3.  **Concern:** Ensure the quiz component logic matches the newly adde
+added tie-handling design spec.
+        **Pattern:** `docs/./plans/2026-04-28-quiz-tie-handling.md` | `src/
+`src/components/QuizEngine.tsx`
+    4.  **Concern:** Validate the roadmap status aligns with the completion
+completion of simplify phases (1, 2a, 3a).
+        **Pattern:** `docs/ROADMAP.md`
+
+    Wait, I should check if the path `docs/./plans/...` is correct based on
+on the diff. The diff shows `.../plans/2026-04-28-quiz-tie-handling.md`. It
+It likely sits in `docs/plans/`. The diff shows `.../plans/...`. I will ass
+assume `docs/plans/`. The diff snippet says `.../plans/2026-04-28-quiz-tie-
+`.../plans/2026-04-28-quiz-tie-handling.md`. I'll use `docs/plans/2026-04-2
+`docs/plans/2026-04-28-quiz-tie-handling.md`.
+
+    Also, regarding "Do not speculate beyond what the commit subjects state
+state."
+    Speculation: "Ensure the quiz component logic matches..." -> The commit
+commit subject says "quiz: tie handling...". The diff adds a spec file and 
+the code. It's reasonable to check alignment.
+    Speculation: "Verify no remaining references..." -> The commit says "dr
+"drop one-off scripts". Checking if they are dropped completely is valid.
+    Speculation: "Confirm all listPosition values..." -> The commit says "n
+"normalise... outliers". Checking if outliers remain is valid.
+    Speculation: "Validate the roadmap status..." -> The commit says "refre
+"refresh roadmap after... candidate audit". Checking if it's updated is val
+valid.
+
+    One thing: The format request is `CONCERN | FILE_OR_PATTERN_TO_VERIFY`.
+FILE_OR_PATTERN_TO_VERIFY`. I should keep the concern concise.
+
+    Let's double check the paths from the diff.
+    Commit `18cd8f5`: `scripts/cross-copy-bios.ts`, `scripts/enrich-candida
+`scripts/enrich-candidates.ts`, `scripts/populate-projections.ts`, `scripts
+`scripts/reconcile-candidates.ts`.
+    Commit `2a54127`: `data/regional-candidates/*.yaml`.
+    Commit `8a8ace1`: `.../plans/2026-04-28-quiz-tie-handling.md` (looks li
+like docs folder based on context of other files like `docs/ROADMAP.md` and
+and `docs/superpowers/...`). The diff shows `.../plans/...`. I will use `do
+`docs/plans/`.
+    Commit `463068c`: `docs/ROADMAP.md`.
+
+    One more check on the News commits. `41f548a` and `572198a` both touch 
+`data/news.json`. This is a specific pattern worth noting.
+    Concern: Check `data/news.json` for anomalies resulting from two consec
+consecutive RSS refresh commits.
+    Pattern: `data/news.json`
+
+    Is checking for anomalies "speculating"? It's checking the file content
+content.
+    I think the "Deleted Scripts" is a stronger concern because 1297 lines 
+were deleted.
+    The "News" commits might just be a manual fix followed by a refresh.
+    I will stick with the 4 strongest technical checks derived from the dif
+diffs.
+
+    1.  **Concern:** Verify deleted automation scripts are not referenced i
+in remaining configuration or code.
+        **Pattern:** `grep -r "populate-projections\|enrich-candidates"`
+    2.  **Concern:** Ensure no `listPosition` outliers remain in unmodified
+unmodified regional candidate YAML files.
+        **Pattern:** `data/regional-candidates/*.yaml`
+    3.  **Concern:** Verify quiz implementation aligns with the newly intro
+introduced tie-handling design specification.
+        **Pattern:** `docs/plans/2026-04-28-quiz-tie-handling.md` | `src/co
+`src/components/QuizEngine.tsx`
+    4.  **Concern:** Confirm `docs/ROADMAP.md` accurately reflects the comp
+completion of simplify phases 1, 2a, and 3a.
+        **Pattern:** `docs/ROADMAP.md`
+
+    Wait, I need to check the path for the quiz spec. The diff says `.../pl
+`.../plans/2026-04-28-quiz-tie-handling.md`. Usually `docs/`. Commit `18cd8
+`18cd8f5` has `docs/superpowers/plans/...`. So likely `docs/plans/`. I'll u
+use `docs/plans/2026-04-28-quiz-tie-handling.md`.
+
+    One more thing: The prompt asks for "specific concerns or loose ends".
+    The "News" double commit is a loose end. Two commits touching the same 
+file with the same subject in the log implies something might be off (e.g.,
+(e.g., CI run twice, manual fix then auto refresh).
+    Maybe swap Roadmap for News? Roadmap is just "refreshed". News is "refr
+"refreshed" twice. The double refresh is more suspicious.
+    Let's swap 4.
+
+    4.  **Concern:** Investigate why `data/news.json` was updated in two co
+consecutive commits with identical subjects.
+        **Pattern:** `data/news.json` | `git log -- data/news.json`
+
+    Actually, `git log` is an external command, not a file/grep pattern. Th
+The constraint says "FILE_OR_PATTERN_TO_VERIFY". `data/news.json` is the fi
+file. The concern is checking the content/timestamps within the file.
+    "Check for duplicate entries or timestamps indicating rapid successive 
+updates."
+    Pattern: `data/news.json`
+
+    Okay, final selection.
+    1. Deleted scripts references.
+    2. Candidate data outliers.
+    3. Quiz spec alignment.
+    4. News double-commit anomaly.
+
+    Wait, looking at `18cd8f5` diff: `scripts/...` are deleted.
+    Looking at `2a54127` diff: `data/regional-candidates/*.yaml` modified.
+    Looking at `8a8ace1` diff: `docs/plans/...` added.
+    Looking at `41f548a` & `572198a`: `data/news.json` modified twice.
+
+    Let's format carefully.
+
+    Concern: Verify no references to deleted scripts like `populate-project
+`populate-projections.ts` remain in the codebase.
+    Pattern: `grep -r "populate-projections"`
+
+    Concern: Check `listPosition` values in unmodified candidate files to e
+ensure no outliers persist.
+    Pattern: `data/regional-candidates/*.yaml`
+
+    Concern: Validate that the quiz tie-handling logic in `QuizEngine` matc
+matches the design spec added in the same commit.
+    Pattern: `docs/plans/2026-04-28-quiz-tie-handling.md` | `src/components
+`src/components/QuizEngine.tsx`
+
+    Concern: Investigate the cause of consecutive RSS feed refresh commits 
+on `data/news.json`.
+    Pattern: `data/news.json`
+
+    Wait, the pattern for the third one has a pipe `|`. The output format i
+is `CONCERN | FILE_OR_PATTERN_TO_VERIFY`. I should probably use a single pa
+pattern or a clear path. Using `|` inside the pattern might confuse the par
+parser if it expects the delimiter to be `|`.
+    Better to list the main file.
+    Pattern: `src/components/QuizEngine.tsx` (implies checking against spec
+spec). Or just `docs/plans/2026-04-28-quiz-tie-handling.md`.
+    Actually, to verify alignment, you need both. But if I must choose a pa
+pattern to verify *the concern*, maybe listing both is okay as long as it's
+it's on one side of the delimiter.
+    However, standard practice for these prompts is usually single file or 
+grep.
+    Let's try: `docs/plans/2026-04-28-quiz-tie-handling.md | src/components
+src/components/QuizEngine.tsx` as the pattern part.
+    Or just `src/components/QuizEngine.tsx` and the concern mentions the sp
+spec.
+    Let's keep it simple. `src/components/QuizEngine.tsx`. The concern impl
+implies checking against the spec.
+    Actually, the spec is the "loose end" (documentation vs code).
+    Let's go with:
+    CONCERN: Verify `listPosition` normalization was applied consistently a
+across all regional candidates.
+    PATTERN: `data/regional-candidates/*.yaml`
+
+    CONCERN: Ensure deleted automation scripts (`scripts/`) are not referen
+referenced in CI or remaining source files.
+    PATTERN: `grep -r "scripts/"` (Too broad). `grep -r "populate-projectio
+"populate-projections"` (Better).
+
+    CONCERN: Confirm the new quiz tie-handling spec is implemented in the f
+frontend components.
+    PATTERN: `src/components/QuizEngine.tsx`
+
+    CONCERN: Determine why `data/news.json` received two identical update c
+commits consecutively.
+    PATTERN: `data/news.json`
+
+    One more check on the "Do not speculate" rule.
+    "Determine why... consecutively" might be slightly speculative (maybe t
+they did it on purpose). "Investigate the cause" is better. "Check for dupl
+duplicates" is more factual.
+    "Check `data/news.json` for duplicate entries resulting from consecutiv
+consecutive refresh commits."
+    Pattern: `data/news.json`
+
+    Okay, ready to write.
+
+    Wait, looking at `18cd8f5` again. `scripts/` folder content is deleted.
+deleted.
+    Pattern: `scripts/` (to check if folder is empty or gone). Or `
+`grep -r "populate-projections"`.
+    I'll use `grep -r "populate-projections"` as it's more specific to the 
+deleted file name.
+
+    Wait, one more thing. The prompt says "List up to 4 specific concerns..
+concerns...".
+    I will provide exactly 4.
+
+    One detail on the Quiz spec path. The diff says `.../plans/2026-04-28-q
+`.../plans/2026-04-28-quiz-tie-handling.md`. In `18cd8f5`, there is `docs/s
+`docs/superpowers/plans/...`. It is highly likely the quiz spec is `docs/pl
+`docs/plans/...`. I will use that.
+
+    Final check on constraints:
+    - Up to 4.
+    - CONCERN | FILE_OR_PATTERN_TO_VERIFY
+    - No speculation beyond commit subjects.
+    - Checkable.
+
+    1. Scripts deletion.
+    2. Candidate data.
+    3. Quiz spec.
+    4. News double commit.
+
+    Wait, `41f548a` and `572198a` are listed. The log shows `6d23c5e` is be
+before them in the list provided in the prompt description?
+    The prompt lists:
+    1. 463068c
+    2. 6d23c5e
+    3. 2a54127
+    4. 8a8ace1
+    5. 41f548a
+    6. 572198a
+    7. b056cde
+    8. 3f495f8
+    9. 18cd8f5
+    10. 3743b69
+    This order is reverse chronological (newest first).
+    So 41f548a and 572198a are in the middle. They are consecutive in this 
+log list (items 5 and 6).
+    Wait, `6d23c5e` is before them. `b056cde` is after them.
+    So `41f548a` (news) and `572198a` (news) are sequential in the commit h
+history shown.
+    Wait, looking closely:
+    ...
+    8a8ace1
+    41f548a news
+    572198a news
+    b056cde
+    ...
+    Yes, they are sequential. This is a valid concern.
+
+    Let's draft the response.
+
+    1. CONCERN: Verify no remaining references exist to deleted automation 
+scripts like `populate-projections.ts`.
+       PATTERN: `grep -r "populate-projections"`
+    2. CONCERN: Confirm `listPosition` values in regional candidate files a
+are normalized without outliers.
+       PATTERN: `data/regional-candidates/*.yaml`
+    3. CONCERN: Ensure quiz tie-handling implementation matches the added d
+design specification.
+       PATTERN: `docs/plans/2026-04-28-quiz-tie-handling.md` | `src/compone
+`src/components/QuizEngine.tsx`
+    4. CONCERN: Check for data duplication or errors in news feed given con
+consecutive refresh commits.
+       PATTERN: `data/news.json`
+
+    Refining Pattern 3 to be safer. `|` might be interpreted as the separat
+separator.
+    The prompt says "FILE_OR_PATTERN_TO_VERIFY".
+    I will combine them with a space or comma. Or just pick the primary fil
+file.
+    Let's pick the spec file as the anchor for the "loose end" (spec vs cod
+code). Or the code.
+    Actually, the concern is about the *match*.
+    I'll list both separated by comma. `docs/plans/2026-04-28-quiz-tie-hand
+`docs/plans/2026-04-28-quiz-tie-handling.md, src/components/QuizEngine.tsx`
+src/components/QuizEngine.tsx`
+    Or I can just list the spec file and the 
+concern implies the code.
+    Let's list the code file, as that's where the logic lives. The spec is 
+the reference.
+    Concern: Verify `QuizEngine.tsx` implements the tie-handling logic defi
+defined in the new spec.
+    Pattern: `src/components/QuizEngine.tsx` (and the spec file is the refe
+reference).
+    Actually, to be most helpful, I should indicate where to check both.
+    `src/components/QuizEngine.tsx`, `docs/plans/2026-04-28-quiz-tie-handli
+`docs/plans/2026-04-28-quiz-tie-handling.md`
+    I will use the comma separator for multiple files in the pattern field.
+field.
+
+    Wait, "Do not speculate beyond what the commit subjects state."
+    "Verify... matches... spec" is checking alignment, not speculating on *
+*why* it doesn't match. That's fine.
+    "Check for data duplication" is checking content, fine.
+    "Verify no remaining references" is checking content, fine.
+    "Confirm... normalized" is checking content, fine.
+
+    One adjustment on the first concern. The files were deleted. `grep` on 
+a repo might not find them if they are truly gone, but might find reference
+references in other files.
+    Pattern: `grep -r "populate-projections"` is valid.
+
+    Final check on format: `CONCERN | FILE_OR_PATTERN_TO_VERIFY`.
+    I will ensure the separator is clearly `|`.
+
+    One detail: `docs/plans/2026-04-28-quiz-tie-handling.md`. The diff show
+shows `.../plans/2026-04-28-quiz-tie-handling.md`. It might be `docs/specs/
+`docs/specs/`.
+    Looking at `8a8ace1` diff:
+    `.../plans/2026-04-28-quiz-tie-handling.md`
+    `.../specs/2026-04-28-quiz-tie-handling-design.md`
+    So there are two files. `plans` and `specs`.
+    I will use `docs/plans/2026-04-28-quiz-tie-handling.md`.
+
+    Wait, looking at `18cd8f5`: `docs/superpowers/plans/...` exists.
+    So `docs/plans/` is plausible. I'll use `docs/plans/`.
+
+    Let's finalize.
+    1. Scripts.
+    2. YAML data.
+    3. Quiz code/spec.
+    4. News data.
+
+    Wait, I should check if I can find `docs/plans` in the list.
+    Commit `8a8ace1`: `.../plans/2026-04-28-quiz-tie-handling.md`
+    Commit `18cd8f5`: `docs/superpowers/plans/2026-04-28-simplify.md`
+    So `docs/plans/` is consistent with `docs/superpowers/plans/`.
+    I will use `docs/plans/2026-04-28-quiz-tie-handling.md`.
+
+    Wait, one last thing. The prompt says "If nothing is reliably checkable
+checkable, output: NONE."
+    Everything here is checkable via file system commands.
+
+    Okay, writing the response.
+    Make sure to follow the "CONCERN | FILE_OR_PATTERN_TO_VERIFY" format st
+strictly.
+    No extra text.
+    Up to 4.
+
+    Wait, I need to make sure the "CONCERN" part is distinct from the patte
+pattern.
+    Example: `Verify... | path/to/file`
+
+    One adjustment: The "News" concern.
+    Commit 572198a says "news: refresh from RSS feeds".
+    Commit 41f548a says "news: refresh from RSS feeds".
+    Identical subjects.
+    Concern: Check for duplicate news entries or timestamps indicating unin
+unintended rapid refreshes.
+    Pattern: `data/news.json`
+
+    Okay, good to go.
+...done thinking.
+
+VERIFY NO REFERENCES TO DELETED AUTOMATION SCRIPTS LIKE `POPULATE-PROJECTIO
+`POPULATE-PROJECTIONS.TS` REMAIN IN SOURCE FILES | `grep -r "populate-proje
+"populate-projections"`
+CONFIRM `LISTPOSITION` VALUES IN REGIONAL CANDIDATE FILES ARE NORMALIZED WI
+WITHOUT OUTLIERS | `data/regional-candidates/*.yaml`
+ENSURE QUIZ TIE-HANDLING IMPLEMENTATION MATCHES THE ADDED DESIGN SPECIFICAT
+SPECIFICATION | `docs/plans/2026-04-28-quiz-tie-handling.md`, `src/componen
+`src/components/QuizEngine.tsx`
+CHECK FOR DATA DUPLICATION OR ANOMALIES IN NEWS FEED GIVEN CONSECUTIVE IDEN
+IDENTICAL COMMITS | `data/news.json`
+
+===== T1-doc-drift rep 3 =====
+DURATION_SEC: 196
+RUN_STATUS: 0
+OUTPUT:
+                  Thinking...
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Input: A list of 4 Roadmap Claims (A, B, C, D) and corresponding Ev
+Evidence from the codebase.
+    *   Task: Audit the roadmap against the codebase evidence.
+    *   Output Format: Exactly 4 lines, one per claim. Format: `CLAIM_X: <s
+<status> — <evidence reference>`.
+    *   Constraints: No preamble, no commentary, no chain of thought.
+
+2.  **Evaluate Claim A:**
+    *   Claim: Publish a "How we did" projection retrospective page compari
+comparing each constituency's projected top-3 shares against the actual res
+result.
+    *   Evidence: "There is no "How we did" retrospective page or related c
+code anywhere in the repo."
+    *   Status: still-open (since the page/code doesn't exist).
+    *   Evidence Reference: "no retrospective page or related code anywhere
+anywhere in the repo".
+
+3.  **Evaluate Claim B:**
+    *   Claim: Retire the dead projection default. scripts/populate-project
+scripts/populate-projections.ts still carries a defaultProjection template 
+but every constituency has an explicit override.
+    *   Evidence: "grep for defaultProjection or DEFAULT_PROJECTION across 
+scripts/ and src/: (no matches)". Also, the scripts directory listing does 
+not show `populate-projections.ts` (it shows `apply-party-positions.ts`, `f
+`fix-incumbents.ts`, etc., but not `populate-projections.ts`).
+    *   Status: already-done (since grep found no matches and the file isn'
+isn't even listed).
+    *   Evidence Reference: "grep for defaultProjection or DEFAULT_PROJECTI
+DEFAULT_PROJECTION across scripts/ and src/: (no matches)".
+
+4.  **Evaluate Claim C:**
+    *   Claim: yaml.stringify({ lineWidth: 0 }) in apply-party-positions.ts
+apply-party-positions.ts to match populate-projections.ts and stop YAML lin
+line-rewrap churn on manifesto updates.
+    *   Evidence: "scripts/apply-party-positions.ts:60:    fs.writeFileSync
+fs.writeFileSync(filePath, yaml.stringify(data, { lineWidth: 0 }));".
+    *   Status: already-done (since the code exists as described).
+    *   Evidence Reference: "scripts/apply-party-positions.ts:60: yaml.stri
+yaml.stringify(data, { lineWidth: 0 })".
+
+5.  **Evaluate Claim D:**
+    *   Claim: Deep-freeze the data caches (or don't — current shallow free
+freeze matches the existing pattern across all six cached loaders in src/li
+src/lib/data.ts).
+    *   Evidence: "src/lib/data.ts cache pattern: Six cached loaders all us
+use the same shallow Object.freeze on the returned value. No deep-freeze ap
+applied anywhere. Pattern is consistent."
+    *   Analysis: The claim is phrased as "(or don't — current shallow free
+freeze matches...)". The evidence confirms the current shallow freeze match
+matches the existing pattern and no deep-freeze is applied. This implies th
+the decision was effectively made to stick with the current pattern (or at 
+least the status quo is confirmed). However, usually, a roadmap item implie
+implies an action to take. If the roadmap says "Deep-freeze... (or don't...
+don't...)", and the evidence says "current shallow freeze matches... Patter
+Pattern is consistent", it implies the state aligns with the "don't" option
+option described in the claim text.
+    *   Re-reading Claim D: "Deep-freeze the data caches (or don't — curren
+current shallow freeze matches the existing pattern across all six cached l
+loaders in src/lib/data.ts)."
+    *   This looks like a status check claim. Is the work done? The evidenc
+evidence says the pattern is consistent and shallow freeze is used. The cla
+claim acknowledges the option to "don't" if shallow matches. Since the evid
+evidence confirms the shallow freeze pattern exists and is consistent, the 
+"audit" status depends on interpretation.
+    *   Interpretation 1: The task was to either deep-freeze OR confirm sha
+shallow is fine. Evidence confirms shallow is consistent. So the item is re
+resolved/accepted as is. -> already-done.
+    *   Interpretation 2: The task was "Deep-freeze". The parenthetical is 
+context. Evidence says "No deep-freeze applied". -> still-open.
+    *   Better Interpretation: The claim text itself contains the resolutio
+resolution condition: "(or don't — current shallow freeze matches...)". Sin
+Since the evidence confirms "current shallow freeze matches the existing pa
+pattern... Pattern is consistent", the condition for "don't" is met. Theref
+Therefore, the roadmap item is considered closed/accepted as current state.
+state.
+    *   Evidence Reference: "src/lib/data.ts cache pattern: ... curre
+current shallow freeze matches the existing pattern".
+    *   Status: already-done (because the "or don't" condition is satisfied
+satisfied by the evidence).
+
+    *Wait, let's look closer at Claim D.*
+    Claim: "Deep-freeze the data caches (or don't — current shallow freeze 
+matches the existing pattern across all six cached loaders in src/lib/data.
+src/lib/data.ts)."
+    This reads like a decision log entry rather than a todo. It says "Do X,
+X, or if X isn't needed because Y, then Y."
+    Evidence: "Six cached loaders all use the same shallow Object.freeze...
+Object.freeze... No deep-freeze applied anywhere. Pattern is consistent."
+    Since the evidence confirms the "shallow freeze matches the existing pa
+pattern", the "or don't" clause is validated. The work is effectively done 
+(by not doing it, as per the claim's logic).
+    So: `CLAIM_D: already-done — src/lib/data.ts uses consistent shallow Ob
+Object.freeze pattern`.
+
+    *Alternative View:* If the claim is interpreted as "Implement deep free
+freeze", and evidence says "No deep-freeze applied", then it's still-open. 
+However, the claim explicitly includes the fallback condition "or don't — [
+[condition]". The evidence confirms [condition]. Thus the claim is satisfie
+satisfied.
+    Let's check Claim B again. Claim B says "Retire the dead projection def
+default...". Evidence says "grep... (no matches)". This means the file/vari
+file/variable doesn't exist. So it's already done.
+    Claim A says "Publish...". Evidence says "There is no... page". So it's
+it's still-open.
+    Claim C says "yaml.stringify...". Evidence says "scripts/apply-party-po
+"scripts/apply-party-positions.ts:60...". So it's already-done.
+
+    So for D: The claim allows for "don't". Evidence supports "don't" (beca
+(because shallow is consistent). So it counts as done/accepted.
+
+    Let's refine the evidence reference for D.
+    Evidence: "src/lib/data.ts cache pattern: Six cached loaders all use th
+the same shallow Object.freeze...".
+
+6.  **Final Formatting:**
+    *   Line 1: CLAIM_A: still-open — no "How we did" retrospective page or
+or related code anywhere in the repo.
+    *   Line 2: CLAIM_B: already-done — grep for defaultProjection or DEFAU
+DEFAULT_PROJECTION across scripts/ and src/ shows no matches.
+    *   Line 3: CLAIM_C: already-done — scripts/apply-party-positions.ts:60
+scripts/apply-party-positions.ts:60 contains yaml.stringify(data, { lineWid
+lineWidth: 0 }).
+    *   Line 4: CLAIM_D: already-done — src/lib/data.ts cache pattern shows
+shows six cached loaders use consistent shallow Object.freeze with no deep-
+deep-freeze applied.
+
+    Wait, check Claim D status again. If the roadmap item is "Deep-freeze..
+"Deep-freeze...", and we choose "don't", is it "already-done"? Usually, roa
+roadmap items are closed when the decision is made and implemented. The evi
+evidence confirms the implementation (shallow freeze) matches the "don't" c
+criteria. So "already-done" fits the audit context of verifying if the road
+roadmap requirement is satisfied.
+    However, if the requirement was strictly "Deep-freeze", and we didn't d
+do it, it's open. But the text includes the exception clause.
+    Let's look at Claim B. "Retire the dead projection default". Evidence: 
+It doesn't exist. So it's retired. -> already-done.
+    Claim D: "Deep-freeze... (or don't...)". Evidence: Shallow is used. -> 
+The "don't" path was taken and validated. -> already-done.
+
+    One more check on Claim B evidence: The scripts directory listing does 
+*not* include `populate-projections.ts`. The claim mentions `scripts/popula
+`scripts/populate-projections.ts still carries a defaultProjection template
+template`. The evidence says `grep for defaultProjection... (no matches)`. 
+This confirms the file/variable is gone. So Claim B is definitely done.
+
+    One more check on Claim C: Claim says "match populate-projections.ts". 
+Evidence shows `apply-party-positions.ts` has `lineWidth: 0`. It doesn't ex
+explicitly show `populate-projections.ts` having it (since the file might b
+be deleted per Claim B), but the core action of applying `lineWidth: 0` in 
+`apply-party-positions.ts` is confirmed present. So Claim C is done.
+
+    One more check on Claim A: Explicitly states no page exists. -> still-o
+still-open.
+
+    Final check on formatting: "CLAIM_X: <already-done|still-open> — <one-l
+<one-line evidence reference>".
+
+    Drafting lines:
+    CLAIM_A: still-open — There is no "How we did" retrospective page or re
+related code anywhere in the repo.
+    CLAIM_B: already-done — grep for defaultProjection or DEFAULT_PROJECTIO
+DEFAULT_PROJECTION across scripts/ and src/ returns no matches.
+    CLAIM_C: already-done — scripts/apply-party-positions.ts:60 implements 
+yaml.stringify(data, { lineWidth: 0 }).
+    CLAIM_D: already-done — src/lib/data.ts cache pattern confirms six load
+loaders use consistent shallow Object.freeze.
+
+    Wait, looking closely at Claim D's text: "Deep-freeze the data caches (
+(or don't — current shallow freeze matches the existing pattern across all 
+six cached loaders in src/lib/data.ts)."
+    This looks like a note *in* the roadmap explaining why it might not be 
+done, or a task that includes a decision. If the roadmap says "Do X (or Y)"
+Y)", and we did Y, is it "already-done"? Yes, the task is resolved.
+    However, strictly speaking, if the action is "Deep-freeze", and we didn
+didn't deep freeze, one might argue "still-open" if the "or don't" wasn't f
+fully accepted. But the evidence confirms the pattern matches. I will treat
+treat it as satisfied.
+    Actually, looking at the phrasing "current shallow freeze matches...". 
+This implies the audit found the status quo acceptable.
+    Let's consider if "still-open" is safer. If the roadmap says "Deep-free
+"Deep-freeze", and code is "shallow", technically the requirement "Deep-fre
+"Deep-freeze" is not met. The parenthetical offers a justification for not 
+doing it. If the audit confirms the justification holds (pattern is consist
+consistent), the item is closed.
+    I will stick with "already-done" because the condition for not doing it
+it is verified.
+
+    Wait, re-reading Claim B evidence: "scripts/ directory listing: ... pop
+populate-projections.ts is NOT in the list". Claim B says "scripts/populate
+"scripts/populate-projections.ts still carries...". Evidence shows file doe
+doesn't exist. So Claim B is definitely done.
+
+    Re-reading Claim D evidence: "No deep-freeze applied anywhere. Pattern 
+is consistent."
+    If the claim is "Deep-freeze", and no deep-freeze is applied, is it don
+done? The claim includes the option "or don't". Since the evidence confirms
+confirms the condition for "don't" (shallow matches existing pattern), the 
+item is effectively closed/accepted.
+    Let's try to be precise.
+    CLAIM_D: already-done — src/lib/data.ts cache pattern confirms six load
+loaders use consistent shallow Object.freeze matching existing pattern.
+
+    Wait, I need to make sure I don't add commentary.
+    Format: CLAIM_X: <status> — <evidence reference>.
+
+    Let's refine the evidence references to be concise and directly from th
+the provided text.
+
+    Claim A: still-open — There is no "How we did" retrospective page or re
+related code anywhere in the repo.
+    Claim B: already-done — grep for defaultProjection or DEFAULT_PROJECTIO
+DEFAULT_PROJECTION across scripts/ and src/ shows no matches.
+    Claim C: already-done — scripts/apply-party-positions.ts:60 uses yaml.s
+yaml.stringify(data, { lineWidth: 0 }).
+    Claim D: already-done — src/lib/data.ts cache pattern shows six loaders
+loaders use consistent shallow Object.freeze with no deep-freeze applied.
+
+    Wait, for Claim D, is it "already-done"? The roadmap item is "Deep-free
+"Deep-freeze...". The evidence says "No deep-freeze applied". If I say "alr
+"already-done", it implies the work is finished. The work was "Deep-freeze 
+OR Don't". Since "Don't" was chosen and verified, the item is closed.
+    However, if the roadmap item is interpreted as a To-Do "Deep-freeze", t
+then it's not done. But the text *is* the claim. The claim *includes* the c
+condition.
+    Let's look at Claim B. "Retire the dead projection default". It's an ac
+action. Evidence: It's gone. Done.
+    Claim D. "Deep-freeze... (or don't...)". It's a decision/observation ta
+task. Evidence: Shallow is used. Done (decision validated).
+    Okay, I will proceed with this.
+
+    One detail on Claim C: The claim says "to match populate-projections.ts
+populate-projections.ts". Evidence shows `apply-party-positions.ts` has the
+the setting. It doesn't show `populate-projections.ts` having it (because t
+that file is likely deleted per Claim B). But the instruction was to apply 
+it to `apply-party-positions.ts`. That is confirmed.
+    Actually, Claim B says "Retire the dead projection default... scripts/p
+scripts/populate-projections.ts still carries...". Claim C says "match popu
+populate-projections.ts". If populate-projections.ts is gone (Claim B done)
+done), Claim C might be weird. But the audit of Claim C just checks if `app
+`apply-party-positions.ts` has `lineWidth: 0`. It does. So Claim C is done.
+done.
+
+    Final check on constraints: "No preamble, no commentary, no chain of th
+thought, just four lines."
+
+    Constructing the final output.
+
+    CLAIM_A: still-open — There is no "How we did" retrospective page or re
+related code anywhere in the repo.
+    CLAIM_B: already-done — grep for defaultProjection or DEFAULT_PROJECTIO
+DEFAULT_PROJECTION across scripts/ and src/ shows no matches.
+    CLAIM_C: already-done — scripts/apply-party-positions.ts:60 contains ya
+yaml.stringify(data, { lineWidth: 0 }).
+    CLAIM_D: already-done — src/lib/data.ts cache pattern confirms six load
+loaders use consistent shallow Object.freeze with no deep-freeze applied.
+
+    Wait, Claim D status might be debatable. "Deep-freeze" is the verb. "Or
+"Or don't" is the exception. If the codebase does NOT deep freeze, but the 
+roadmap allows "or don't" IF condition met. Evidence confirms condition met
+met. So the roadmap requirement is satisfied. "already-done" is appropriate
+appropriate for an audit of a roadmap item that is either implemented or va
+validated as not needing implementation.
+    Actually, maybe "still-open" is better if the user interprets "Deep-fre
+"Deep-freeze" as the mandatory action. But the text explicitly gives the op
+option. I'll stick with "already-done" as the state is verified against the
+the claim's criteria.
+    Wait, looking at Claim B: "Retire the dead projection default". Evidenc
+Evidence: "no matches". This means the default is already retired (file gon
+gone).
+    Claim D: "Deep-freeze...". Evidence: "No deep-freeze applied". The pare
+parenthetical says "or don't — current shallow freeze matches...". Since th
+the evidence confirms shallow freeze matches, the "don't" path is the corre
+correct state. Thus the roadmap item (which allows this state) is complete.
+complete.
+    Okay.
+
+    One minor adjustment to ensure strict adherence to "one-line evidence r
+reference".
+    Claim A: There is no "How we did" retrospective page or related code an
+anywhere in the repo.
+    Claim B: grep for defaultProjection or DEFAULT_PROJECTION across script
+scripts/ and src/ shows no matches.
+    Claim C: scripts/apply-party-positions.ts:60 contains yaml.stringify(da
+yaml.stringify(data, { lineWidth: 0 }).
+    Claim D: src/lib/data.ts cache pattern confirms six loaders use consist
+consistent shallow Object.freeze with no deep-freeze applied.
+
+    Looks good.
+
+    Wait, Claim B evidence: "scripts/populate-projections.ts still carries 
+a defaultProjection template". Evidence: "grep... (no matches)". This impli
+implies the file or the variable is gone. The claim says "Retire...". Since
+Since it's gone, it's retired.
+    Claim C: "match populate-projections.ts". Even if that file is gone, th
+the `apply-party-positions.ts` has the setting.
+    Claim D: "Deep-freeze...". Evidence says shallow. But claim says "or do
+don't".
+    Okay.
+
+    Double Check Claim D status. If I am a project manager reading this.
+    Roadmap: "Deep freeze (or don't if shallow is fine)".
+    Audit: "Shallow is fine."
+    Conclusion: Item Closed.
+    Status: already-done.
+
+    Ready.
+
+    Wait, I need to make sure I don't use markdown code blocks for the outp
+output unless requested. The prompt says "output one line in this exact for
+format... No preamble...". It implies plain text. I will output plain text 
+lines.
+
+    Wait, one detail on Claim B. The claim mentions `scripts/populate-proje
+`scripts/populate-projections.ts`. The scripts listing does NOT show `popul
+`populate-projections.ts`. The grep shows no matches. This strongly implies
+implies the file is gone. So "Retire" is done.
+
+    Final check on Claim D evidence phrasing. "src/lib/data.ts cache patter
+pattern: Six cached loaders all use the same shallow Object.freeze...". I w
+will use a concise version.
+
+    One thing: Claim D says "Deep-freeze the data caches (or don't...)". If
+If the roadmap item is technically a task "Deep-freeze", and we didn't do i
+it, but justified it...
+    Actually, usually in these audits, if the code matches the description 
+in the claim (including the exception), it's considered done.
+    However, if the claim is interpreted as "Task: Deep freeze", and we did
+didn't do it, it's open.
+    But the claim text *is* the spec. The spec includes the fallback.
+    I will stick with "already-done" because the condition for the fallback
+fallback is met.
+    Wait, if I say "already-done", it implies the claim is fulfilled. The c
+claim is fulfilled if we deep-freeze OR if shallow matches. Shallow matches
+matches. So fulfilled.
+
+    Let's finalize the text.
+    CLAIM_A: still-open — There is no "How we did" retrospective page or re
+related code anywhere in the repo.
+    CLAIM_B: already-done — grep for defaultProjection or DEFAULT_PROJECTIO
+DEFAULT_PROJECTION across scripts/ and src/ shows no matches.
+    CLAIM_C: already-done — scripts/apply-party-positions.ts:60 contains ya
+yaml.stringify(data, { lineWidth: 0 }).
+    CLAIM_D: already-done — src/lib/data.ts cache pattern confirms six load
+loaders use consistent shallow Object.freeze with no deep-freeze applied.
+
+    Wait, for Claim B, the evidence listing `scripts/` directory does not s
+show `populate-projections.ts`. I can also mention that. But the grep resul
+result is stronger proof of the variable/template absence.
+    I'll stick with the grep reference.
+
+    One adjustment for Claim D to make it clearer why it's done: "src/lib/d
+"src/lib/data.ts cache pattern shows consistent shallow Object.freeze match
+matching the 'or don't' condition". No, keep it simple referencing the evid
+evidence provided. "src/lib/data.ts cache pattern shows six loaders use con
+consistent shallow Object.freeze."
+
+    Let's refine Claim D line:
+    CLAIM_D: already-done — src/lib/data.ts cache pattern shows six loaders
+loaders use consistent shallow Object.freeze with no deep-freeze applied.
+    This references the evidence directly.
+
+    One last check: "No preamble, no commentary, no chain of thought, just 
+four lines."
+    I must ensure I don't add markdown blocks like ``` if not requested, bu
+but usually plain text is safer. The prompt says "output one line in this e
+exact format...". I will output 4 plain text lines.
+
+    Wait, Claim C: "yaml.stringify({ lineWidth: 0 }) in apply-party-positio
+apply-party-positions.ts".
+    Evidence: "scripts/apply-party-positions.ts:60: fs.writeFileSync(filePa
+fs.writeFileSync(filePath, yaml.stringify(data, { lineWidth: 0 }));".
+    So the evidence supports it.
+
+    Claim A: "There is no...". Evidence: "There is no...".
+    Claim B: "Retire...". Evidence: "grep... (no matches)".
+
+    Okay, ready to write.
+
+    Wait, Claim D: "or don't — current shallow freeze matches the existing 
+pattern...". Evidence: "current shallow freeze matches the existing pattern
+pattern across all six cached loaders...".
+    So the status is "already-done" because the condition for skipping the 
+deep-freeze is verified.
+
+    One nuance: Claim B says "Retire the dead projection default". If the f
+file is gone, the default is gone.
+    Claim C says "to match populate-projections.ts". If populate-projection
+populate-projections.ts is gone, does it still matter? The action was appli
+applied to apply-party-positions.ts. That action is present. So it's done.
+
+    Final check on line count: 4 lines.
+    Final check on format: CLAIM_X: status — evidence.
+
+    One detail: "No preamble, no commentary, no chain of thought".
+    I will output exactly the 4 lines.
+...done thinking.
+
+CLAIM_A: still-open — There is no "How we did" retrospective page or relate
+related code anywhere in the repo.
+CLAIM_B: already-done — grep for defaultProjection or DEFAULT_PROJECTION ac
+across scripts/ and src/ shows no matches.
+CLAIM_C: already-done — scripts/apply-party-positions.ts:60 contains yaml.s
+yaml.stringify(data, { lineWidth: 0 }).
+CLAIM_D: already-done — src/lib/data.ts cache pattern shows six loaders use
+use consistent shallow Object.freeze with no deep-freeze applied.
+
+===== T2-party-config rep 3 =====
+DURATION_SEC: 597
+RUN_STATUS: 0
+OUTPUT:
+                                                                                                                                                     Thinking...
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Input: 6 YAML files representing political party data (Reform UK, S
+Scottish Conservatives, Scottish Green Party, Scottish Labour, Scottish Lib
+Liberal Democrats, Scottish National Party).
+    *   Expected Shape:
+        *   Top-level keys: `id`, `name`, `positions`, `stances`, `quotes`.
+`quotes`.
+        *   `positions`: 8 numeric keys (`independence`, `nhs`, `h
+`housing`, `climate`, `tax`, `economy`, `education`, `equality`), values 0-
+0-2.
+        *   `stances`: 8 keys (same as above), text values.
+        *   `quotes`: 8 keys (same as above), text values.
+    *   Output Format: Exactly one of `CLEAN` OR `INCONSISTENT` followed by
+by one bullet per actual deviation. No preamble.
+
+2.  **Validate Each File:**
+
+    *   **File 1: `data/parties/reform-uk.yaml`**
+        *   Keys: `id`, `name`, `positions`, `stances`, `quotes`. (Check)
+        *   `positions`: `independence` (0), `nhs` (1), `housing` (0), `cli
+`climate` (0), `tax` (0), `economy` (0), `education` (0), `equality` (0). A
+All numeric, 0-2. Keys match. (Check)
+        *   `stances`: `independence`, `nhs`, `housing`, `climate`, `tax`, 
+`economy`, `education`, `equality`. All present. (Check)
+        *   `quotes`: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`. All present. (Check)
+        *   Status: Clean.
+
+    *   **File 2: `data/parties/scottish-conservatives.yaml`**
+        *   Keys: `id`, `name`, `positions`, `stances`, `quotes`. (Check)
+        *   `positions`: `independence` (0), `nhs` (1), `housing` (0), `cli
+`climate` (0), `tax` (0), `economy` (0), `education` (1), `equality` (0). A
+All numeric, 0-2. Keys match. (Check)
+        *   `stances`: All 8 keys present. (Check)
+        *   `quotes`: All 8 keys present. (Check)
+        *   Status: Clean.
+
+    *   **File 3: `data/parties/scottish-green-party.yaml`**
+        *   Keys: `id`, `name`, `positions`, `stances`, `quotes`. (Check)
+        *   `positions`: `independence` (2), `nhs` (2), `housing` (2), `cli
+`climate` (2), `tax` (2), `economy` (2), `education` (2), `equality` (2). A
+All numeric, 0-2. Keys match. (Check)
+        *   `stances`: All 8 keys present. (Check)
+        *   `quotes`: All 8 keys present. (Check)
+        *   Status: Clean.
+
+    *   **File 4: `data/parties/scottish-labour.yaml`**
+        *   Keys: `id`, `name`, `positions`, `stances`, `quotes`. (Check)
+        *   `positions`: `independence` (0), `nhs` (2), `housing` (1), `cli
+`climate` (1), `tax` (1), `economy` (1), `education` (1), `equality` (1). A
+All numeric, 0-2. Keys match. (Check)
+        *   `stances`: All 8 keys present. (Check)
+        *   `quotes`: All 8 keys present. (Check)
+        *   Status: Clean.
+
+    *   **File 5: `data/parties/scottish-liberal-democrats.yaml`**
+        *   Keys: `id`, `name`, `positions`, `stances`, `quotes`. (Check)
+        *   `positions`: `independence` (0), `nhs` (2), `housing` (1), `cli
+`climate` (1), `tax` (1), `economy` (1), `education` (1), `equality` (2). A
+All numeric, 0-2. Keys match. (Check)
+        *   `stances`: All 8 keys present. (Check)
+        *   `quotes`: All 8 keys present. (Check)
+        *   Status: Clean.
+
+    *   **File 6: `data/parties/scottish-national-party.yaml`**
+        *   Keys: `id`, `name`, `positions`, `stances`, `quotes`. (Check)
+        *   `positions`: `independence` (2), `nhs` (2), `housing` (2), `cli
+`climate` (1), `tax` (2), `economy` (1), `education` (2), `equality` (2). A
+All numeric, 0-2. Keys match. (Check)
+        *   `stances`: All 8 keys present. (Check)
+        *   `quotes`: All 8 keys present. (Check)
+        *   Status: Clean.
+
+3.  **Cross-Check for Consistency:**
+    *   Are the keys in `positions`, `stances`, and `quotes` identical acro
+across all files?
+        *   Required: `independence`, `nhs`, `housing`, `climate`, `tax`, `
+`economy`, `education`, `equality`.
+        *   File 1: Matches.
+        *   File 2: Matches.
+        *   File 3: Matches.
+        *   File 4: Matches.
+        *   File 5: Matches.
+        *   File 6: Matches.
+    *   Are `positions` values within 0-2?
+        *   File 1: 0, 1, 0, 0, 0, 0, 0, 0. (Yes)
+        *   File 2: 0, 1, 0, 0, 0, 0, 1, 0. (Yes)
+        *   File 3: 2, 2, 2, 2, 2, 2, 2, 2. (Yes)
+        *   File 4: 0, 2, 1, 1, 1, 1, 1, 1. (Yes)
+        *   File 5: 0, 2, 1, 1, 1, 1, 1, 2. (Yes)
+        *   File 6: 2, 2, 2, 1, 2, 1, 2, 2. (Yes)
+    *   Are there any missing keys in `stances` or `quotes`?
+        *   All files seem to have all 8 keys in both sections.
+
+4.  **Final Verification:**
+    *   Wait, I need to look closer at the YAML structure provided in the p
+prompt.
+    *   File 1 (Reform UK): `positions` keys: independence, nhs, housing, c
+climate, tax, economy, education, equality. `stances` keys: independence, n
+nhs, housing, climate, tax, economy, education, equality. `quotes` keys: in
+independence, nhs, housing, climate, tax, economy, education, equality.
+    *   File 2 (Scottish Conservatives): Same keys.
+    *   File 3 (Scottish Green Party): Same keys.
+    *   File 4 (Scottish Labour): Same keys.
+    *   File 5 (Scottish Lib Dems): Same keys.
+    *   File 6 (Scottish National Party): Same keys.
+
+    *   Wait, let's check the `positions` values again.
+    *   Reform UK: `positions` has `independence: 0`, `nhs: 1`, `housing: 0
+0`, `climate: 0`, `tax: 0`, `economy: 0`, `education: 0`, `equality: 0`.
+    *   Scottish Conservatives: `positions` has `independence: 0`, `nhs: 1`
+1`, `housing: 0`, `climate: 0`, `tax: 0`, `economy: 0`, `education: 1`, `eq
+`equality: 0`.
+    *   Scottish Green Party: `positions` has all 2s.
+    *   Scottish Labour: `positions` has `independence: 0`, `nhs: 2`, `hous
+`housing: 1`, `climate: 1`, `tax: 1`, `economy: 1`, `education: 1`, `equali
+`equality: 1`.
+    *   Scottish Lib Dems: `positions` has `independence: 0`, `nhs: 2`, `ho
+`housing: 1`, `climate: 1`, `tax: 1`, `economy: 1`, `education: 1`, `equali
+`equality: 2`.
+    *   SNP: `positions` has `independence: 2`, `nhs: 2`, `housing: 2`, `cl
+`climate: 1`, `tax: 2`, `economy: 1`, `education: 2`, `equality: 2`.
+
+    *   Wait, I need to check if there are any *missing* keys in `stances` 
+or `quotes` compared to the expected 8 keys.
+    *   Reform UK `stances`: independence, nhs, housing, climate, tax, econ
+economy, education, equality. (8 keys)
+    *   Reform UK `quotes`: independence, nhs, housing, climate, tax, econo
+economy, education, equality. (8 keys)
+    *   Scottish Conservatives `stances`: independence, nhs, housing, clima
+climate, tax, economy, education, equality. (8 keys)
+    *   Scottish Conservatives `quotes`: independence, nhs, housing, climat
+climate, tax, economy, education, equality. (8 keys)
+    *   Scottish Green Party `stances`: independence, nhs, housing, climate
+climate, tax, economy, education, equality. (8 keys)
+    *   Scottish Green Party `quotes`: independence, nhs, housing, climate,
+climate, tax, economy, education, equality. (8 keys)
+    *   Scottish Labour `stances`: independence, nhs, housing, climate, tax
+tax, economy, education, equality. (8 keys)
+    *   Scottish Labour `quotes`: independence, nhs, housing, climate, tax,
+tax, economy, education, equality. (8 keys)
+    *   Scottish Lib Dems `stances`: independence, nhs, housing, climate, t
+tax, economy, education, equality. (8 keys)
+    *   Scottish Lib Dems `quotes`: independence, nhs, housing, climate, ta
+tax, economy, education, equality. (8 keys)
+    *   SNP `stances`: independence, nhs, housing, climate, tax, economy, e
+education, equality. (8 keys)
+    *   SNP `quotes`: independence, nhs, housing, climate, tax, economy, ed
+education, equality. (8 keys)
+
+    *   Is there any formatting issue? The prompt says "Output exactly one 
+of: CLEAN OR INCONSISTENT followed by one bullet per actual deviation."
+    *   Since I found no deviations in structure, keys, or value types, the
+the result should be CLEAN.
+
+    *   Let me double check the `positions` values range. The prompt says "
+"each 0-2".
+    *   Reform UK: 0, 1, 0, 0, 0, 0, 0, 0. All valid.
+    *   Scottish Conservatives: 0, 1, 0, 0, 0, 0, 1, 0. All valid.
+    *   Scottish Green Party: All 2. All valid.
+    *   Scottish Labour: 0, 2, 1, 1, 1, 1, 1, 1. All valid.
+    *   Scottish Lib Dems: 0, 2, 1, 1, 1, 1, 1, 2. All valid.
+    *   SNP: 2, 2, 2, 1, 2, 1, 2, 2. All valid.
+
+    *   Let me check the keys order or existence strictly.
+    *   Expected: `independence`, `nhs`, `housing`, `climate`, `tax`, `econ
+`economy`, `education`, `equality`.
+    *   Reform UK: `independence`, `nhs`, `housing`, `climate`, `tax`, `eco
+`economy`, `education`, `equality`. (Matches)
+    *   Scottish Conservatives: `independence`, `nhs`, `housing`, `climate`
+`climate`, `tax`, `economy`, `education`, `equality`. (Matches)
+    *   Scottish Green Party: `independence`, `nhs`, `housing`, `climate`, 
+`tax`, `economy`, `education`, `equality`. (Matches)
+    *   Scottish Labour: `independence`, `nhs`, `housing`, `climate`, `tax`
+`tax`, `economy`, `education`, `equality`. (Matches)
+    *   Scottish Lib Dems: `independence`, `nhs`, `housing`, `climate`, `ta
+`tax`, `economy`, `education`, `equality`. (Matches)
+    *   SNP: `independence`, `nhs`, `housing`, `climate`, `tax`, `economy`,
+`economy`, `education`, `equality`. (Matches)
+
+    *   Wait, I need to check the YAML syntax provided in the prompt text.
+    *   Sometimes there are trailing spaces or weird characters.
+    *   The prompt shows `======...` separators.
+    *   File content seems standard YAML.
+    *   Are there any duplicate keys? No.
+    *   Are there any missing keys in `id` or `name`? All present.
+
+    *   Wait, I might have missed something subtle.
+    *   Let's check the `positions` keys again in `scottish-national-party.
+`scottish-national-party.yaml`.
+    *   `positions`:
+        *   independence: 2
+        *   nhs: 2
+        *   housing: 2
+        *   climate: 1
+        *   tax: 2
+        *   economy: 1
+        *   education: 2
+        *   equality: 2
+    *   All there.
+
+    *   Let's check `scottish-liberal-democrats.yaml`.
+    *   `positions`:
+        *   independence: 0
+        *   nhs: 2
+        *   housing: 1
+        *   climate: 1
+        *   tax: 1
+        *   economy: 1
+        *   education: 1
+        *   equality: 2
+    *   All there.
+
+    *   Let's check `scottish-labour.yaml`.
+    *   `positions`:
+        *   independence: 0
+        *   nhs: 2
+        *   housing: 1
+        *   climate: 1
+        *   tax: 1
+        *   economy: 1
+        *   education: 1
+        *   equality: 1
+    *   All there.
+
+    *   Let's check `scottish-green-party.yaml`.
+    *   `positions`:
+        *   independence: 2
+        *   nhs: 2
+        *   housing: 2
+        *   climate: 2
+        *   tax: 2
+        *   economy: 2
+        *   education: 2
+        *   equality: 2
+    *   All there.
+
+    *   Let's check `scottish-conservatives.yaml`.
+    *   `positions`:
+        *   independence: 0
+        *   nhs: 1
+        *   housing: 0
+        *   climate: 0
+        *   tax: 0
+        *   economy: 0
+        *   education: 1
+        *   equality: 0
+    *   All there.
+
+    *   Let's check `reform-uk.yaml`.
+    *   `positions`:
+        *   independence: 0
+        *   nhs: 1
+        *   housing: 0
+        *   climate: 0
+        *   tax: 0
+        *   economy: 0
+        *   education: 0
+        *   equality: 0
+    *   All there.
+
+    *   Is there any issue with the `quotes` values containing newlines tha
+that break YAML structure?
+    *   In YAML, multi-line strings usually require `|` or `>`. However, lo
+looking at the provided text:
+        *   `quotes:
+          independence: "Which is why Reform UK says ENOUGH to the distract
+distraction of another referendum."`
+        *   These look like single-line strings enclosed in quotes. Even if
+if they wrap visually in the prompt display, structurally they appear as si
+single lines in the YAML block provided (e.g., `independence: "..."`).
+        *   Wait, looking closely at `scottish-national-party.yaml` -> `quo
+`quotes` -> `independence`: `"A vote for the SNP is a vote for a referendum
+referendum on independence. Based on the 2011 precedent, an SNP majority at
+at this election is a mandate for the transfer of powers to the Scottish Pa
+Parliament to enable an independence referendum to be held."`
+        *   This is one line.
+        *   `scottish-green-party.yaml` -> `quotes` -> `tax`: `"Taxed the r
+rich to pay for public services through a more progressive income tax syste
+system, higher taxes on second and empty homes, and securing new taxes on p
+private jets and mansions."`
+        *   This is one line.
+        *   The prompt display might wrap text due to width, but the YAML s
+structure seems consistent with single-line quoted strings.
+
+    *   Wait, I need to check if *all* keys in `stances` and `quotes` match
+match the keys in `positions`.
+    *   The prompt says: "stances and quotes each have the same 8 keys with
+with text values."
+    *   I verified this in step 3. They all match the 8 keys defined in `po
+`positions`.
+
+    *   Is there any deviation in the `id` field format?
+    *   `reform-uk`, `scottish-conservatives`, `scottish-green-party`, `sco
+`scottish-labour`, `scottish-liberal-democrats`, `scottish-national-party`.
+`scottish-national-party`.
+    *   All seem to follow the `data/parties/<id>
+`data/parties/<id>.yaml` pattern suggested by the filename headers in the p
+prompt (e.g., `FILE: data/parties/reform-uk.yaml`). The `id` field matches 
+the filename stem.
+
+    *   Is there any inconsistency in the `name` field?
+    *   `Reform UK`
+    *   `Scottish Conservative and Unionist Party`
+    *   `Scottish Green Party`
+    *   `Scottish Labour Party`
+    *   `Scottish Liberal Democrats`
+    *   `Scottish National Party (SNP)`
+    *   All present.
+
+    *   Conclusion: The data appears consistent with the schema described.
+
+5.  **Final Decision:**
+    *   Result: CLEAN.
+    *   Reasoning: All files contain the required top-level keys. `position
+`positions` contains 8 numeric keys within range 0-2. `stances` and `quotes
+`quotes` contain the same 8 keys with text values. No missing keys, no type
+type errors, no structural inconsistencies found.
+
+6.  **Construct Output:**
+    *   `CLEAN`
+...done thinking.
+
+CLEAN
+
+===== T3-merge-patterns rep 3 =====
+DURATION_SEC: 253
+RUN_STATUS: 0
+OUTPUT:
+                                                 Thinking...
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Input: A list of 10 git commits (hash, type, subject, file changes)
+changes) from a Scottish election website repository.
+    *   Task: List up to 4 specific concerns or loose ends.
+    *   Constraint 1: Each concern must be tied to a checkable file/path/gr
+file/path/grep pattern.
+    *   Constraint 2: Format: `CONCERN | FILE_OR_PATTERN_TO_VERIFY`.
+    *   Constraint 3: Do not speculate beyond what the commit subjects stat
+state.
+    *   Constraint 4: If nothing is reliably checkable, output `NONE`.
+
+2.  **Analyze the Commits:**
+
+    *   `463068c docs: refresh roadmap after 28 April candidate audit`
+        *   Files: `docs/ROADMAP.md`
+        *   Concern: Roadmap freshness/accuracy relative to audit date.
+        *   Checkable: `docs/ROADMAP.md`
+
+    *   `6d23c5e fix: align region card counts with destination page (#71)`
+(#71)`
+        *   Files: `src/pages/index.astro`
+        *   Concern: Discrepancy between card counts and actual data/pages.
+data/pages.
+        *   Checkable: `src/pages/index.astro`
+
+    *   `2a54127 data: normalise IGV branding and listPosition outliers (#7
+(#70)`
+        *   Files: `data/regional-candidates/*.yaml` (multiple files)
+        *   Concern: Inconsistent branding or position data in candidate YA
+YAMLs.
+        *   Checkable: `data/regional-candidates/*.yaml`
+
+    *   `8a8ace1 quiz: tie handling, podium, and compact regional cards (#6
+(#69)`
+        *   Files: `src/components/QuizEngine.tsx`, `src/components/QuizPod
+`src/components/QuizPodium.tsx`, `src/lib/quiz-helpers.ts`, etc.
+        *   Concern: Quiz logic (tie handling) correctness.
+        *   Checkable: `src/components/QuizEngine.tsx` or `tests/quiz-helpe
+`tests/quiz-helpers.test.ts`
+
+    *   `41f548a news: refresh from RSS feeds` & `572198a news: refresh fro
+from RSS feeds`
+        *   Files: `data/news.json`
+        *   Concern: Stale news data if RSS refresh fails.
+        *   Checkable: `data/news.json`
+
+    *   `b056cde simplify: phase 3a — lift candidate-display constants to l
+lib (#68)`
+        *   Files: `src/lib/candidate-display.ts`, `src/pages/candidates/[i
+`src/pages/candidates/[id].astro`
+        *   Concern: Import consistency or unused constants after refactori
+refactoring.
+        *   Checkable: `src/lib/candidate-display.ts`
+
+    *   `3f495f8 simplify: phase 2a — central party-config for chart colour
+colours (#67)`
+        *   Files: `src/lib/party-config.ts`, `src/components/ConstituencyM
+`src/components/ConstituencyMap.tsx`
+        *   Concern: Chart color consistency across components.
+        *   Checkable: `src/lib/party-config.ts`
+
+    *   `18cd8f5 simplify: phase 1 — drop one-off scripts and tighten lib (
+(#66)`
+        *   Files: `scripts/` (deleted), `src/lib/`
+        *   Concern: Orphaned references to deleted scripts in other parts 
+of the codebase.
+        *   Checkable: `grep -r "populate-projections" .` (or similar)
+
+    *   `3743b69 polls: update polling data from Wikipedia`
+        *   Files: `data/polls.json`
+        *   Concern: Data accuracy/sync with Wikipedia source.
+        *   Checkable: `data/polls.json`
+
+3.  **Select Top 4 Concerns:**
+    I need to select concerns that are "loose ends" or potential issues bas
+based *only* on the commit messages, tied to specific files.
+
+    *   *Selection 1 (Script Deletion):* Commit `18cd8f5` deleted several s
+scripts (`scripts/populate-projections.ts`, etc.). A common loose end is le
+leaving references to these deleted scripts in CI/CD, docs, or other code.
+        *   Concern: References to deleted migration scripts may still exis
+exist in config or docs.
+        *   Pattern: `grep -r "populate-projections\|reconcile-candidates" 
+.` (excluding git dir) or check `docs/superpowers/plans/2026-04-28-simplify
+`docs/superpowers/plans/2026-04-28-simplify.md`.
+
+    *   *Selection 2 (Quiz Logic):* Commit `8a8ace1` introduces "tie handli
+handling" in the quiz engine. Logic errors in tie-breaking are common.
+        *   Concern: Quiz tie-breaking logic may not cover all edge cases d
+defined in the spec.
+        *   Pattern: `src/components/QuizEngine.tsx` or `src/lib/quiz-helpe
+`src/lib/quiz-helpers.ts`. Let's pick the helpers as they contain the logic
+logic.
+
+    *   *Selection 3 (Candidate Data Normalization):* Commit `2a54127` norm
+normalizes "listPosition outliers". If outliers weren't fully caught or if 
+new data is added without the schema validation, data integrity is at risk.
+risk.
+        *   Concern: Regional candidate YAML files may still contain i
+inconsistent `listPosition` or branding values.
+        *   Pattern: `data/regional-candidates/*.yaml`.
+
+    *   *Selection 4 (News Refresh):* Commits `41f548a` and `572198a` refre
+refresh `data/news.json`. This implies a manual or cron process. If the cro
+cron fails or the RSS source changes, the file becomes stale.
+        *   Concern: Static news file might be stale if the RSS refresh pro
+process is not automated/monitored.
+        *   Pattern: `data/news.json` (check timestamps) or look for the re
+refresh script if it exists (but commits imply data changes, maybe script n
+not shown). Better to check the file itself for timestamp validity or look 
+for a script responsible. The commit says "refresh from RSS feeds", implyin
+implying a script exists somewhere or is manual. Since no script file is li
+listed in changes, checking the data file's freshness is the direct check. 
+Alternatively, check if `src/pages/index.astro` (from commit `6d23c5e`) rel
+relies on this. Let's stick to the file modified.
+        *   Actually, a better "loose end" regarding commit `18cd8f5` is th
+that scripts were deleted. A loose end is verifying they aren't referenced 
+in `package.json` or CI.
+        *   Let's look for a config check. `package.json` usually contains 
+scripts.
+        *   Concern: `package.json` may still reference deleted migration s
+scripts.
+        *   Pattern: `package.json`.
+
+    *   *Refining Selection 4:* Commit `3f495f8` centralizes party config f
+for colors. A loose end is ensuring all components that *used* to define co
+colors locally actually use the new central config.
+        *   Concern: Components may still override party colors instead of 
+using `src/lib/party-config.ts`.
+        *   Pattern: `src/components/` (grep for color definitions). Or jus
+just check the file `src/lib/party-config.ts` to ensure it covers all parti
+parties.
+        *   Let's go with the Quiz one, it's more specific to logic.
+        *   Let's go with the Script deletion one, it's high risk.
+        *   Let's go with the Candidate Data one, it's data integrity.
+        *   Let's go with the News one, it's data freshness.
+
+    *   *Wait, constraint:* "Do not speculate beyond what the commit subjec
+subjects state."
+    *   Commit `18cd8f5` says "drop one-off scripts". I shouldn't speculate
+speculate about `package.json` if it's not in the diff. But checking if the
+the scripts are gone is checkable. Checking if references remain is a logic
+logical step but might be speculation if I can't see `package.json` in the 
+diff. However, `grep` is a valid verification pattern.
+    *   Commit `8a8ace1` mentions "tie handling". Checking the test file is
+is explicitly listed in the diff (`tests/quiz-helpers.test.ts`). This is a 
+very strong checkable link.
+    *   Commit `2a54127` mentions "normalise ... outliers". Checking the YA
+YAML files for consistency is directly related.
+    *   Commit `6d23c5e` mentions "align region card counts". Checking `src
+`src/pages/index.astro` for the count logic vs the data is the fix itself.
+    *   Commit `3743b69` updates polling data.
+
+    *   *Re-evaluating "Loose Ends/Concerns":*
+        1.  **Deleted Scripts:** Commit `18cd8f5` deleted `scripts/populate
+`scripts/populate-projections.ts`. A concern is whether these are still inv
+invoked elsewhere.
+            *   Pattern: `grep -r "populate-projections" .`
+        2.  **Quiz Tie Logic:** Commit `8a8ace1` adds complex logic ("tie h
+handling"). Tests exist, but logic complexity often leads to edge case fail
+failures.
+            *   Pattern: `src/lib/quiz-helpers.ts` (or `tests/quiz-helpers.
+`tests/quiz-helpers.test.ts` to see coverage).
+        3.  **Candidate Data Consistency:** Commit `2a54127` fixes "outlier
+"outliers". Concern is regression or missed files.
+            *   Pattern: `data/regional-candidates/*.yaml`
+        4.  **Centralized Config:** Commit `3f495f8` centralizes colors. Co
+Concern is consistency across components.
+            *   Pattern: `src/components/` (grep for hardcoded colors) or `
+`src/lib/party-config.ts`. Let's pick the central file to verify completene
+completeness.
+            *   Actually, commit `41f548a`/`572198a` update `data/news.json
+`data/news.json`. Concern: Staleness.
+            *   Let's pick the "Script References" one as it's a clear clea
+cleanup task often left incomplete.
+            *   Let's pick the "Quiz Logic" one as it involves new logic.
+            *   Let's pick the "Candidate Data" one as it involves multiple
+multiple files.
+            *   Let's pick the "News Refresh" one as it implies an external
+external dependency process.
+
+    *   *Refining for "Checkable File/Path/Grep":*
+        1.  Concern: Deleted migration scripts might still be referenced in
+in CI or package scripts. | Pattern: `grep -r "populate-projections\|reconc
+"populate-projections\|reconcile-candidates" . --exclude-dir=.git`
+        2.  Concern: Quiz tie-handling logic may fail specific edge cases n
+not covered in unit tests. | Pattern: `src/lib/quiz-helpers.ts`
+        3.  Concern: Regional candidate YAML files may contain unnormalized
+unnormalized `listPosition` or branding values. | Pattern: `data/regional-c
+`data/regional-candidates/*.yaml`
+        4.  Concern: News data in `data/news.json` may be stale if RSS refr
+refresh automation fails. | Pattern: `data/news.json` (check `lastUpdated` 
+or similar) OR `src/pages/index.astro` (where news is likely rendered). The
+The commit just changes `data/news.json`. Checking the file's modification 
+date relative to commit date is the check.
+        *   Better 4th option: Commit `6d23c5e` fixes counts. Concern: Coun
+Counts might drift again if data source changes. Pattern: `src/pages/index.
+`src/pages/index.astro`.
+        *   Better 4th option: Commit `3f495f8` centralizes config. Concern
+Concern: Old hardcoded colors might remain in components. Pattern: `grep -r
+-r "fill\|stroke.*party" src/components/`.
+        *   Let's stick to the most direct "loose ends".
+        *   1. Deleted script references.
+        *   2. Quiz tie logic integrity.
+        *   3. Candidate data normalization completeness.
+        *   4. Polling data source accuracy (Wikipedia).
+
+    *   *Wait, "Do not speculate beyond what the commit subjects state."*
+        *   Speculating about CI config is outside the diff provided. But `
+`grep` is a command to check the repo state.
+        *   The commit `18cd8f5` explicitly says "drop one-off scripts". Ch
+Checking if they are gone is verifying the commit. Checking if references r
+remain is checking the *state* of the repo.
+        *   Let's focus on what is in the repo based on the diff.
+
+    *   *Selection 1:* Commit `18cd8f5` removed `scripts/`.
+        *   Concern: Residual references to deleted scripts in remaining co
+code or config.
+        *   Pattern: `grep -r "scripts/cross-copy-bios\|scripts/populate-pr
+"scripts/cross-copy-bios\|scripts/populate-projections" .`
+
+    *   *Selection 2:* Commit `8a8ace1` introduces `QuizEngine` tie handlin
+handling.
+        *   Concern: Tie-breaking logic in `src/lib/quiz-helpers.ts` might 
+not match design spec (`specs/2026-04-28-quiz-tie-handling-design.md`).
+        *   Pattern: `src/lib/quiz-helpers.ts` (compared against spec). Or 
+just checking the file.
+        *   Let's simplify: Concern: Logic complexity in quiz helpers requi
+requires verification against test suite. Pattern: `tests/quiz-helpers.test
+`tests/quiz-helpers.test.ts`.
+
+    *   *Selection 3:* Commit `2a54127` normalizes candidate YAMLs.
+        *   Concern: New candidates added after this commit might not follo
+follow the normalized `listPosition` schema.
+        *   Pattern: `data/regional-candidates/*.yaml` (grep for `listPosit
+`listPosition`).
+
+    *   *Selection 4:* Commit `3f495f8` centralizes party config.
+        *   Concern: Components importing colors might not all use the new 
+`src/lib/party-config.ts`.
+        *   Pattern: `src/components/` (grep for hardcoded hex codes or par
+party color logic).
+        *   Alternative: Commit `41f548a`/`572198a` update `data/news.json`
+`data/news.json`. Concern: Manual refresh dependency. Pattern: `data/news.j
+`data/news.json`.
+        *   Let's use the `data/news.json` one. It's a static file refresh.
+refresh.
+        *   Concern: News data staleness if RSS fetch process is no
+not triggered.
+        *   Pattern: `data/news.json`.
+
+    *   *Wait, checking the prompt again:* "List up to 4 specific concerns 
+or loose ends each tied to a checkable file/path/grep pattern."
+    *   "If nothing is reliably checkable, output: NONE."
+    *   Everything listed seems checkable via the file paths or grep patter
+patterns provided.
+
+    *   *Refining the concerns to be strictly based on commit text:*
+        1.  `18cd8f5` removed scripts. Loose end: Do any docs or configs st
+still point to them? Pattern: `grep -r "scripts/populate-projections" .`
+        2.  `8a8ace1` added quiz tie handling. Loose end: Is the implementa
+implementation aligned with the spec? Pattern: `src/components/QuizEngine.t
+`src/components/QuizEngine.tsx` vs `docs/superpowers/plans/2026-04-28-quiz-
+`docs/superpowers/plans/2026-04-28-quiz-tie-handling-design.md` (Wait, the 
+plan is in `plans/`, the spec in `specs/`). The commit diff shows `docs/sup
+`docs/superpowers/plans/...` and `.../specs/...`. I can check `src/componen
+`src/components/QuizEngine.tsx`.
+        3.  `2a54127` fixed outliers. Loose end: Are there any remaining ou
+outliers? Pattern: `data/regional-candidates/*.yaml` (search for `listPosit
+`listPosition`).
+        4.  `6d23c5e` aligns region card counts. Loose end: Do counts match
+match the actual candidate data? Pattern: `src/pages/index.astro` vs `data/
+`data/regional-candidates/*.yaml`.
+        *   Let's pick 4 distinct ones.
+        *   1. Script cleanup verification.
+        *   2. Quiz logic verification.
+        *   3. Candidate data consistency.
+        *   4. News data freshness (manual process risk).
+
+    *   *Drafting the output:*
+        1. Concern: References to deleted migration scripts (e.g., populate
+populate-projections) may remain in codebase. | Pattern: `grep -r "populate
+"populate-projections" . --exclude-dir=.git`
+        2. Concern: Quiz tie-handling implementation in helpers may diverge
+diverge from design spec. | Pattern: `src/lib/quiz-helpers.ts`
+        3. Concern: Regional candidate YAML files may retain unnormalized `
+`listPosition` values. | Pattern: `data/regional-candidates/*.yaml`
+        4. Concern: Static news data may be stale if RSS refresh process is
+is not automated. | Pattern: `data/news.json`
+
+    *   *Critique:*
+        *   1 is a grep pattern on the repo. Valid.
+        *   2 is a file check. Valid.
+        *   3 is a file glob check. Valid.
+        *   4 is a file check (implied content/timestamp). Valid.
+        *   Do I speculate? "may remain", "may diverge", "may retain", "may
+"may be stale". These are concerns based on the changes. The prompt asks fo
+for "concerns". This phrasing is acceptable.
+        *   "Do not speculate beyond what the commit subjects state."
+        *   Commit `18cd8f5` subject: "drop one-off scripts". Concern about
+about remaining references is a logical consequence of dropping scripts.
+        *   Commit `8a8ace1` subject: "quiz: tie handling...". Concern abou
+about implementation vs spec is a logical check.
+        *   Commit `2a54127` subject: "normalise... outliers". Concern abou
+about remaining outliers is logical.
+        *   Commit `41f548a`/`572198a` subject: "refresh from RSS feeds". C
+Concern about staleness is logical.
+
+    *   *Final check on patterns:*
+        *   `grep -r "populate-projections" .` is clear.
+        *   `src/lib/quiz-helpers.ts` is clear.
+        *   `data/regional-candidates/*.yaml` is clear.
+        *   `data/news.json` is clear.
+
+    *   *Wait, one more check:* "If nothing is reliably checkable, output: 
+NONE."
+        *   Are these reliably checkable? Yes, file systems and git grep wo
+work.
+        *   Is `grep` on the file system considered "speculation"? No, it's
+it's a command to verify state.
+        *   Is the concern about `data/news.json` reliability checkable? Yo
+You can check the date in the file vs today. The commit doesn't show *how* 
+it's refreshed (script or manual), but the concern is valid based on the su
+subject "refresh from RSS feeds".
+        *   I will ensure the patterns are specific enough.
+
+    *   *Revised Concerns:*
+        1.  Concern: Deleted scripts referenced in docs or config files cou
+could cause build failures. | Pattern: `grep -r "scripts/populate-projectio
+"scripts/populate-projections\|scripts/reconcile-candidates" .`
+        2.  Concern: Quiz tie-breaking logic in `src/lib/quiz-helpers.ts` r
+requires validation against test coverage. | Pattern: `tests/quiz-helpers.t
+`tests/quiz-helpers.test.ts`
+        3.  Concern: Regional candidate YAMLs may contain unnormalized `lis
+`listPosition` or branding fields. | Pattern: `data/regional-candidates/*.y
+`data/regional-candidates/*.yaml`
+        4.  Concern: `data/news.json` content may be outdated relative to s
+source RSS feeds. | Pattern: `data/news.json`
+
+        *   Wait, I should check the `docs/superpowers/plans/2026-04-28-sim
+`docs/superpowers/plans/2026-04-28-simplify.md` file mentioned in the diff 
+for `18cd8f5`. It says `75 +++`. It might contain the plan for dropping scr
+scripts. If scripts are mentioned there as "to be dropped", checking that d
+doc is also good. But checking for *remaining references* is more practical
+practical for "loose end".
+        *   I'll stick with the grep for deleted scripts.
+        *   I'll stick with the test file for quiz logic.
+        *   I'll stick with the YAML glob for candidate data.
+        *   I'll stick with `data/news.json` for news.
+
+    *   *Wait, check constraint:* "List up to 4 specific concerns".
+    *   I will provide exactly 4.
+
+    *   *Refining Concern 4:* "News data staleness" is a process concern. I
+Is it checkable? Yes, by checking the file date vs current date. But `data/
+`data/news.json` is the target.
+    *   Is there a better one? Commit `6d23c5e` "align region card counts".
+counts". Concern: Counts in `src/pages/index.astro` might diverge from `dat
+`data/` again.
+    *   This is more code-related than process-related.
+    *   Let's swap News for Index page alignment.
+    *   Concern: Region card counts in `src/pages/index.astro` may drift fr
+from actual candidate data. | Pattern: `src/pages/index.astro`
+
+    *   *Final Selection:*
+        1.  Script References.
+        2.  Quiz Test Coverage.
+        3.  Candidate Data Normalization.
+        4.  Index Page Count Alignment.
+
+    *   *Double Check:* "Do not speculate beyond what the commit subjects s
+state."
+    *   Subject: "drop one-off scripts". Concern: "References... may remain
+remain". (Reasonable check).
+    *   Subject: "quiz: tie handling". Concern: "logic... requires validati
+validation". (Reasonable check).
+    *   Subject: "normalise... outliers". Concern: "YAMLs may contain unnor
+unnormalized...". (Reasonable check).
+    *   Subject: "align region card counts". Concern: "Counts... may drift"
+drift". (Reasonable check).
+
+    *   *Formatting:* `CONCERN | FILE_OR_PATTERN_TO_VERIFY`
+
+    *   *Wait, one detail:* "If nothing is reliably checkable, output: NONE
+NONE."
+    *   Since I found checkable items, I will output the list.
+
+    *   *Final Polish:* Ensure patterns are copy-paste ready (bash/grep).
+
+    1. Concern: Deleted migration scripts may still be referenced in config
+configuration or documentation. | Pattern: `grep -r "populate-projections\|
+"populate-projections\|reconcile-candidates" .`
+    2. Concern: Quiz tie-handling logic in `src/lib/quiz-helpers.ts` requir
+requires verification against unit tests. | Pattern: `tests/quiz-helpers.te
+`tests/quiz-helpers.test.ts`
+    3. Concern: Regional candidate YAML files may retain unnormalized `list
+`listPosition` or branding values. | Pattern: `data/regional-candidates/*.y
+`data/regional-candidates/*.yaml`
+    4. Concern: Region card counts in `src/pages/index.astro` may not match
+match actual candidate data sources. | Pattern: `src/pages/index.astro`
+
+    *   Wait, looking at Commit `18cd8f5`, the plan is in `docs/superpowers
+`docs/superpowers/plans/2026-04-28-simplify.md`. The scripts are deleted. A
+A specific loose end is if the *plan* document says they are dropped but th
+the code isn't clean. But checking for script references is more actionable
+actionable.
+    *   Let's make sure the grep doesn't match the diff itself if I run it 
+on a git diff, but as a verification step on the repo, it's fine.
+    *   I will remove the `--exclude-dir=.git` to keep it simple as per the
+the file paths shown.
+    *   Actually, `grep -r ... .` is standard.
+
+    *   One more check: Commit `41f548a` and `572198a` are both "news: refr
+refresh from RSS feeds". This looks like a quick fix or a cron run. Checkin
+Checking `data/news.json` is the best bet for data integrity. I'll swap the
+the Index page one for News, because Index page fix was already committed a
+as a "fix". News refresh is ongoing. The Index fix might be "done", but New
+News is "refreshed" (implies recurring).
+    *   Actually, the prompt asks for concerns *based on the commits*.
+    *   Commit `6d23c5e` is a fix. The concern is regression.
+    *   Commit `41f548a` is a refresh. The concern is staleness.
+    *   Both are valid. I'll stick with News because "refresh from RSS" imp
+implies a dependency on an external process which is a common loose end.
+    *   Wait, `src/pages/index.astro` was modified in `6d23c5e`.
+    *   Let's go with Index Page Alignment because it was a "fix" specifica
+specifically for counts.
+    *   Actually, the News commits are *two* commits in the list, implying 
+frequent updates or issues.
+    *   Let's keep the 4 I had, but maybe swap 4 to News for variety?
+    *   Let's keep Index Page. It's code logic.
+    *   Wait, `src/pages/index.astro` is the file.
+    *   Okay, ready to write.
+
+    *   Wait, I need to make sure I don't speculate.
+    *   "may remain" is speculation? It's a concern. The prompt asks for "c
+"concerns".
+    *   "If nothing is reliably checkable, output: NONE."
+    *   Okay.
+
+    *   One nuance: `grep -r` checks the current state. The concern is abou
+about the *history* or *future* state relative to the commit.
+    *   Commit `18cd8f5` *deleted* the files. A checkable concern is: Are t
+they gone? (Pattern: `ls scripts/`). Or Are they referenced? (Pattern: `gre
+`grep`).
+    *   I'll use `ls scripts/` or `grep`. `grep` is more "loose end" focuse
+focused.
+    *   Let's use `ls scripts/` to verify deletion? No, `grep` checks for r
+references.
+    *   Okay.
+
+    *   Wait, commit `8a8ace1` added `tests/quiz-helpers.test.ts`.
+    *   Commit `2a54127` modified `data/regional-candidates/...`.
+    *   Commit `6d23c5e` modified `src/pages/index.astro`.
+    *   Commit `18cd8f5` deleted `scripts/...`.
+
+    *   Final plan:
+        1. Deleted scripts references.
+        2. Quiz test coverage.
+        3. Candidate data normalization.
+        4. Index page count logic.
+
+    *   Wait, I need to ensure I don't exceed 4.
+    *   I'll write them out.
+...done thinking.
+
+CONCERN: Deleted migration scripts (e.g., populate-projections) may still b
+be referenced in configuration or documentation | FILE_OR_PATTERN_TO_VERIFY
+FILE_OR_PATTERN_TO_VERIFY: `grep -r "populate-projections\|reconcile-candid
+"populate-projections\|reconcile-candidates" .`
+CONCERN: Quiz tie-handling logic in helpers may lack coverage in unit tests
+tests | FILE_OR_PATTERN_TO_VERIFY: `tests/quiz-helpers.test.ts`
+CONCERN: Regional candidate YAML files may retain unnormalized `listPositio
+`listPosition` or branding values | FILE_OR_PATTERN_TO_VERIFY: `data/region
+`data/regional-candidates/*.yaml`
+CONCERN: Region card counts in index page may diverge from actual candidate
+candidate data | FILE_OR_PATTERN_TO_VERIFY: `src/pages/index.astro`
+
