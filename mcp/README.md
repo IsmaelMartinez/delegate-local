@@ -15,12 +15,19 @@ tier X" or "show me the audit summary" without shelling out.
 - `pick_model(tier, dry_run=False)` — resolves a tier (`code`, `prose`,
   `reasoning`, `long-context`, `vision`, `embedding`, `premium-general`,
   `reasoning-vision`) to the best installed Ollama model. Returns
-  `{"model", "tier", "trace"}`. Set `dry_run=True` to capture the
+  `{"model", "tier", "url", "trace"}`. `url` points at the resolved
+  model's `ollama.com/library/<stem>` page (or its user-namespace page
+  if the name is namespaced). Set `dry_run=True` to capture the
   resolution trace from `pick-model.sh --dry-run`.
 - `audit_models()` — runs `audit-models.sh` and returns its stdout
   verbatim. Read-only; never pulls a model.
 - `list_tiers()` — returns the tier names supported by `pick-model.sh`.
   Parsed from the script so it stays in sync.
+- `list_related_projects()` — returns the four sibling projects this
+  skill cross-links to (`local-brain`, `ai-model-advisor`, `llmfit`,
+  `repo-butler`) as `[{"name", "url", "summary"}, ...]`. Mirrors the
+  README's "Related projects" section so MCP clients can surface
+  clickable links without parsing prose.
 
 ## Install
 
