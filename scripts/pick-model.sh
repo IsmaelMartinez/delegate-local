@@ -19,6 +19,12 @@
 
 set -euo pipefail
 
+# Single source of truth for the tier name list. The case statement below is
+# the runtime gate (each branch needs its own prefs array, so the list of
+# names is intrinsically duplicated there) but the usage message and the
+# header comment are derived from this.
+TIERS="code|prose|reasoning|long-context|vision|embedding|premium-general|reasoning-vision"
+
 dry_run=0
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
@@ -35,7 +41,7 @@ trace() {
 
 tier="${1:-}"
 if [[ -z "$tier" ]]; then
-  echo "usage: pick-model.sh [--dry-run] <code|prose|reasoning|long-context|vision|embedding|premium-general|reasoning-vision>" >&2
+  echo "usage: pick-model.sh [--dry-run] <$TIERS>" >&2
   exit 2
 fi
 
@@ -48,7 +54,7 @@ case "$tier" in
   embedding)        prefs=("nomic-embed-text" "bge-large") ;;
   premium-general)  prefs=("qwen3.5:122b") ;;
   reasoning-vision) prefs=("phi4-reasoning-vision" "qwen3-vl:30b-a3b-thinking") ;;
-  *) echo "unknown tier: $tier" >&2; exit 2 ;;
+  *) echo "unknown tier: $tier (valid: $TIERS)" >&2; exit 2 ;;
 esac
 
 trace "tier=$tier"
