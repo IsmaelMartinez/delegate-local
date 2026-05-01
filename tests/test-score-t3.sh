@@ -177,6 +177,41 @@ EC=0
 out=$(bash "$SCRIPT" /nonexistent/path.txt 2>&1) || EC=$?
 assert_eq "2" "$EC" "missing file: exit 2"
 
+# 12. NONE with trailing punctuation (NONE.) still scores 1.0.
+sandbox=$(mktemp -d); make_sandbox "$sandbox" 2026-04-28
+raw="$sandbox/raw12.txt"
+build_raw "$raw" "NONE."
+out=$(run_score "$sandbox" "$raw")
+assert_contains "mean=1.0000" "$out" "NONE with trailing dot still scores 1.0"
+rm -rf "$sandbox"
+
+# 13. Lowercase 'none' on its own line still scores 1.0.
+sandbox=$(mktemp -d); make_sandbox "$sandbox" 2026-04-28
+raw="$sandbox/raw13.txt"
+build_raw "$raw" "none"
+out=$(run_score "$sandbox" "$raw")
+assert_contains "mean=1.0000" "$out" "lowercase none scores 1.0"
+rm -rf "$sandbox"
+
+# 14. 10+ reps: numeric iteration, rep-10 not sorted before rep-2.
+# Build 10 reps where odd ones cite a real path and even ones cite a fake.
+# Mean should be 5/10 = 0.5 regardless of glob ordering.
+sandbox=$(mktemp -d); make_sandbox "$sandbox" 2026-04-28
+raw="$sandbox/raw14.txt"
+bodies=()
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if (( i % 2 == 1 )); then
+    bodies+=("real | src/pages/index.astro")
+  else
+    bodies+=("fake | nope/${i}.ts")
+  fi
+done
+build_raw "$raw" "${bodies[@]}"
+out=$(run_score "$sandbox" "$raw")
+assert_contains "reps=10" "$out" "10-reps: counted correctly"
+assert_contains "mean=0.5000" "$out" "10-reps: numeric ordering gives correct mean"
+rm -rf "$sandbox"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

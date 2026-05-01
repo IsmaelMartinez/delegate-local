@@ -56,7 +56,9 @@ echo "stop-between-models: $do_stop"
 echo
 
 for model in "$@"; do
-  if ! grep -qF -- "$model" <<<"$installed"; then
+  # Exact-line match — `grep -F` substring alone would match `phi` against
+  # `phi4-reasoning:plus`. `-x` requires the whole line to match the model name.
+  if ! grep -qxF -- "$model" <<<"$installed"; then
     echo "[skip] $model not installed; skipping" >&2
     continue
   fi

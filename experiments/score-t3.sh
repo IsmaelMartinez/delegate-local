@@ -80,14 +80,22 @@ awk '
   in_rep && capture { print > out }
 ' "$infile"
 
-reps=("$work"/rep-*.txt)
-if [[ ! -e "${reps[0]}" ]]; then
+# Count actual rep files written by the awk pass and iterate by index, not by
+# glob — `rep-*.txt` would sort `rep-10.txt` before `rep-2.txt` and misalign
+# the per-rep printout against the rep numbers in the raw file.
+shopt -s nullglob
+rep_files=("$work"/rep-*.txt)
+shopt -u nullglob
+n_reps=${#rep_files[@]}
+if (( n_reps == 0 )); then
   echo "no T3 reps found in $infile" >&2
   exit 1
 fi
 
-# Score one rep file. Prints `<supported> <claimed> <score_x100>` to stdout
-# (scaled int so we can do integer arithmetic for stdev later).
+# Score one rep file. Prints `<supported> <claimed> <score_x10000>` to stdout
+# (scaled int — see SCORE_SCALE below — so we can do integer arithmetic for
+# stdev later without losing precision in the 4-decimal printed output).
+SCORE_SCALE=10000
 score_one() {
   local rep_file="$1"
   local body
@@ -99,10 +107,18 @@ score_one() {
     echo "0 0 0"
     return
   fi
-  if [[ "$body" == "NONE" || "$body" == *$'\n'"NONE" || "$body" == "NONE"$'\n'* ]]; then
-    # The safe answer.
-    echo "1 1 100"
-    return
+  # Accept NONE / None / none, optionally with trailing punctuation
+  # (e.g. `NONE.`) — models sometimes add a full stop even when instructed not
+  # to. Multi-line bodies still need NONE on its own line.
+  local last_line
+  last_line=$(printf '%s' "$body" | tail -n1)
+  if [[ "$last_line" =~ ^[Nn][Oo][Nn][Ee][[:punct:]]*$ ]]; then
+    # Still treat NONE as the safe answer only when it stands alone on a line
+    # of the body — guarding against models that say "concerns: NONE" mid-rep.
+    if [[ "$body" == "$last_line" || "$body" == *$'\n'"$last_line" ]]; then
+      echo "1 1 $SCORE_SCALE"
+      return
+    fi
   fi
 
   local claimed=0 supported=0
@@ -126,38 +142,39 @@ score_one() {
   if (( claimed == 0 )); then
     echo "0 0 0"
   else
-    echo "$supported $claimed $((supported * 100 / claimed))"
+    echo "$supported $claimed $((supported * SCORE_SCALE / claimed))"
   fi
 }
 
-# Aggregate across reps.
+# Aggregate across reps. Score each rep once and cache the result so the
+# per-rep printout below doesn't re-score (which would also re-cat the body
+# and re-grep the fixture for every line).
 total_supported=0
 total_claimed=0
-n_reps=0
-scores=()
-for rep_file in "${reps[@]}"; do
+declare -a per_rep_supported per_rep_claimed scores
+for (( i=1; i<=n_reps; i++ )); do
+  rep_file="$work/rep-$i.txt"
   read -r s c sc < <(score_one "$rep_file")
+  per_rep_supported[i]=$s
+  per_rep_claimed[i]=$c
+  scores+=("$sc")
   total_supported=$((total_supported + s))
   total_claimed=$((total_claimed + c))
-  scores+=("$sc")
-  n_reps=$((n_reps + 1))
 done
 
-# Mean score (x100).
+# Mean score (scaled int).
 sum=0
 for s in "${scores[@]}"; do sum=$((sum + s)); done
 mean=$((sum / n_reps))
 
-# Stdev (population, scaled x100). We compute integer (x100) and convert.
-# Variance = mean( (x - mean)^2 ); using integer math, scale up to 4 digits
-# to keep fractional precision before sqrt.
+# Stdev (population, scaled int). Variance = mean( (x - mean)^2 ); each (x-mean)
+# fits comfortably in int64 even at SCORE_SCALE=10000.
 sumsq=0
 for s in "${scores[@]}"; do
   d=$((s - mean))
   sumsq=$((sumsq + d * d))
 done
 var=$((sumsq / n_reps))
-# Integer sqrt via perl (portable, avoids bc dependency)
 stdev=$(perl -e "printf '%.0f', sqrt($var)")
 
 # Min and max.
@@ -172,26 +189,25 @@ done
 printf "T3 score for %s\n" "$infile"
 printf "  reps: %d\n" "$n_reps"
 printf "  per-rep scores (cited / claimed → fraction):\n"
-i=1
-for rep_file in "${reps[@]}"; do
-  read -r s c sc < <(score_one "$rep_file")
+for (( i=1; i<=n_reps; i++ )); do
+  s=${per_rep_supported[i]}
+  c=${per_rep_claimed[i]}
   if (( c == 0 )); then
     printf "    rep %d: 0/0 → 0.00\n" "$i"
   else
     printf "    rep %d: %d/%d → %0.2f\n" "$i" "$s" "$c" "$(perl -e "printf '%f', $s/$c")"
   fi
-  i=$((i + 1))
 done
 printf "  totals: %d cited / %d claimed across all reps\n" "$total_supported" "$total_claimed"
 printf "  mean: %0.2f   stdev: %0.2f   min: %0.2f   max: %0.2f\n" \
-  "$(perl -e "printf '%f', $mean / 100")" \
-  "$(perl -e "printf '%f', $stdev / 100")" \
-  "$(perl -e "printf '%f', $min / 100")" \
-  "$(perl -e "printf '%f', $max / 100")"
+  "$(perl -e "printf '%f', $mean / $SCORE_SCALE")" \
+  "$(perl -e "printf '%f', $stdev / $SCORE_SCALE")" \
+  "$(perl -e "printf '%f', $min / $SCORE_SCALE")" \
+  "$(perl -e "printf '%f', $max / $SCORE_SCALE")"
 # Machine-parseable (one line, prefixed `T3_SUMMARY:`).
 printf "T3_SUMMARY: reps=%d total_cited=%d total_claimed=%d mean=%0.4f stdev=%0.4f min=%0.4f max=%0.4f\n" \
   "$n_reps" "$total_supported" "$total_claimed" \
-  "$(perl -e "printf '%f', $mean / 100")" \
-  "$(perl -e "printf '%f', $stdev / 100")" \
-  "$(perl -e "printf '%f', $min / 100")" \
-  "$(perl -e "printf '%f', $max / 100")"
+  "$(perl -e "printf '%f', $mean / $SCORE_SCALE")" \
+  "$(perl -e "printf '%f', $stdev / $SCORE_SCALE")" \
+  "$(perl -e "printf '%f', $min / $SCORE_SCALE")" \
+  "$(perl -e "printf '%f', $max / $SCORE_SCALE")"
