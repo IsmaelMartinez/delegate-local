@@ -50,6 +50,8 @@ bash tests/test-validate-frontmatter.sh
 bash tests/test-validate-content.sh
 bash tests/test-delegate.sh
 bash tests/test-metrics-summary.sh
+bash tests/test-score-t3.sh
+bash tests/test-runner.sh
 ```
 
 Run the trigger eval against the live Anthropic API (requires `ANTHROPIC_API_KEY`; gates whether a frontmatter `description` edit keeps recall ≥ 0.9 and negative-precision ≥ 0.9):
@@ -58,10 +60,22 @@ Run the trigger eval against the live Anthropic API (requires `ANTHROPIC_API_KEY
 ANTHROPIC_API_KEY=… bash scripts/eval-skill-triggers.sh --api
 ```
 
-Run the empirical accuracy fixtures against a specific installed model and append timing + raw output to `experiments/results/raw/<slug>.txt`:
+Run the empirical accuracy fixtures against a specific installed model and append timing + raw output to `experiments/results/raw/<slug>.txt`. `--reps N` repeats every task N times within the same file (default 1); `--t3-snapshot DATE` selects which dated T3 fixture (default `2026-04-28`):
 
 ```bash
-bash experiments/runner.sh <ollama-model-name>
+bash experiments/runner.sh [--reps N] [--t3-snapshot DATE] <ollama-model-name>
+```
+
+Run the full sequential baseline matrix (one model resident at a time, `ollama stop` between models so timing is FS-cache-fair):
+
+```bash
+bash experiments/run-baseline.sh [--reps N] [--t3-snapshot DATE] [--no-stop] <model> [<model>...]
+```
+
+Score a model's T3 output deterministically (citation-rate against the dated T3 fixture; replaces the human-judged rubric used in the 2026-04-28 baseline):
+
+```bash
+bash experiments/score-t3.sh experiments/results/raw/<slug>.txt [--t3-snapshot DATE]
 ```
 
 There is no build step, no linter, no package manager. Runtime deps are `bash` (3.2+ — macOS-shipped is fine), `jq`, and `perl` (used in one validator because BSD grep on macOS lacks `-P`). `curl` is required only for `--api` mode of the trigger eval. Cross-platform portability is a real constraint: avoid associative arrays (bash 4-only), avoid `grep -P` (GNU-only), and prefer `perl -CSD` for unicode-aware regex.
@@ -76,7 +90,9 @@ Install for end users is `npx skills add IsmaelMartinez/delegate-to-ollama` (Ver
 
 The validation pipeline is the gate every PR has to clear. Three scripts plus the unit suite, all wired into `.github/workflows/ci.yml` and runnable locally. `scripts/validate-frontmatter.sh` asserts SKILL.md has the required frontmatter fields, `name` matches the directory and the Claude Skills regex, and `description` ≤ 4096 chars. `scripts/validate-skill-content.sh` scans for seven categories of dangerous content (SEC_DISABLE, SEC_PERMISSIVE, CRED_EXFIL, OBFUSC_B64, OBFUSC_UNICODE, TOOL_BROAD, URL_EXTERNAL) using a bash-3-compatible newline-delimited allowlist (associative arrays unavailable on macOS) and `perl -CSD` for the unicode regex. Justified false positives go in `.content-check-allow` keyed by either repo-relative path-and-line or sha256 of the offending line. `scripts/eval-skill-triggers.sh` validates `evals/eval-set.json` shape by default; with `--api` it sends each query through Claude using only the SKILL.md frontmatter description as the trigger surface, scoring recall and negative-precision against the thresholds inside the eval set. The eval-set is the seed for catching trigger drift: 10 positive queries (tagged exact / paraphrase) and 13 negative queries (adjacent / unrelated). When you change preference order in `pick-model.sh`, expect tests in `tests/run-tests.sh` to need updating; when you change SKILL.md frontmatter, the API-mode trigger eval is what tells you whether recall held — the local hook in `.claude/hooks/post-edit-validate.sh` runs the shape-mode and content checks automatically on save but cannot run the API mode (no key in scope).
 
-`tests/run-tests.sh` (15 assertions) covers `pick-model.sh` and `audit-models.sh`. Each validator and wrapper has its own test file (`test-validate-frontmatter.sh` 10, `test-validate-content.sh` 18, `test-delegate.sh` 16, `test-metrics-summary.sh` 13) using `tests/fixtures/` for both shape variants of SKILL.md and category-specific dangerous-content samples. Total 72 assertions run on every PR.
+`tests/run-tests.sh` (32 assertions) covers `pick-model.sh` and `audit-models.sh`. Each validator and wrapper has its own test file (`test-validate-frontmatter.sh` 10, `test-validate-content.sh` 18, `test-delegate.sh` 16, `test-metrics-summary.sh` 13, `test-score-t3.sh` 19, `test-runner.sh` 8) using `tests/fixtures/` for both shape variants of SKILL.md and category-specific dangerous-content samples. Total 116 assertions run on every PR.
+
+`experiments/runner.sh` runs the three fixture tasks (T1 doc-drift, T2 party-config, T3 merge-patterns) against a single Ollama model, with `--reps N` for repeating every task in the same file and `--t3-snapshot DATE` for selecting which dated T3 fixture to use. T1 and T2 fixtures are stable across baselines; T3 ships dated (`task-3-merge-patterns-2026-04-28.txt`) so future baselines snapshot their own input rather than overwriting the existing one. `experiments/run-baseline.sh` is the orchestrator: takes a model list, runs each sequentially with `ollama stop` and a 2-second pause between models so VRAM is released before the next cold load, and writes one raw file per model under `experiments/results/raw/`. `experiments/score-t3.sh` is the deterministic T3 scorer that replaces the human "real / plausible / hallucinated" rubric — it parses each rep's `CONCERN | PATTERN` lines, checks each `PATTERN` as a literal substring against the dated fixture, and reports per-rep, mean, stdev, min, max plus a machine-parseable `T3_SUMMARY:` line. The citation-against-fixture design keeps the score reproducible across machines and time without needing the live source repo to exist.
 
 `scripts/audit-models.sh` is read-only by design and never pulls models. It cross-checks `llmfit recommend --json` output against `ollama list` because llmfit tracks its own HuggingFace GGUF cache rather than Ollama's model store. The `hf_stem` function strips provider prefix and quant/variant suffixes (`-instruct`, `-fp8`, `-q4_K_M`, etc.) so that `Qwen/Qwen3.6-35B-A3B-Instruct-Q8_0` matches an installed `qwen3.6:35b-a3b-q8_0`. Suggestions are filtered to first-party providers (Alibaba/Google/Meta/Microsoft/DeepSeek/Mistral/Zhipu) because third-party fine-tunes rarely appear on the Ollama library under the same name. The 3-point delta threshold for surfacing an upgrade is intentional — anything smaller is noise from llmfit's scoring.
 
