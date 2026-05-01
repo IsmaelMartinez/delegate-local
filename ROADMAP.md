@@ -46,11 +46,11 @@ Your M5 Max with 128GB unified memory has headroom for tiers the skill currently
 
 Tying delegate-to-ollama into the rest of your portfolio compounds its value.
 
-- Cross-link with `local-brain`: it identified the "summariser, not agent" framing this skill operationalises. README should credit and link.
-- Cross-link with `ai-model-advisor`: tier classification and "smaller is better" environmental philosophy come from there.
-- Cross-link with `llmfit`: the audit script depends on it; surface that prominently and feed back any patterns the audit script learns about Ollama vs HuggingFace name mappings.
-- Repo-butler integration: have repo-butler track this repo on the same dashboard as the others. Should pick it up automatically once the GitHub repo exists.
-- Optional MCP server wrapping the audit and pick-model scripts so non-Claude tools can query them programmatically rather than shelling out.
+- [done] Cross-link with `local-brain`: it identified the "summariser, not agent" framing this skill operationalises. README should credit and link. (README "Related projects" paragraph 1 — links to the repo and credits the framing.)
+- [done] Cross-link with `ai-model-advisor`: tier classification and "smaller is better" environmental philosophy come from there. (README "Related projects" paragraph 2 — credits tier vocabulary and the smallest-sufficient principle.)
+- [done] Cross-link with `llmfit`: the audit script depends on it; surface that prominently and feed back any patterns the audit script learns about Ollama vs HuggingFace name mappings. (README "Related projects" paragraph 3 — describes the optional dependency and the `hf_stem` feedback loop.)
+- [done] Repo-butler integration: have repo-butler track this repo on the same dashboard as the others. Should pick it up automatically once the GitHub repo exists. (README "Related projects" paragraph 4 — confirms repo-butler picks it up automatically; no integration code required here.)
+- [done] Optional MCP server wrapping the audit and pick-model scripts so non-Claude tools can query them programmatically rather than shelling out. *(Python package under `mcp/`, exposes `pick_model` / `audit_models` / `list_tiers` via the official `mcp` SDK; thin `subprocess.run` wrapper, no reimplemented logic. CI gains a `mcp-server` job running `pytest mcp/tests/` independently of the bash validate job. Rationale in `docs/adr/0004-optional-mcp-server.md`.)*
 
 ## Phase 6 — Recurring maintenance
 
