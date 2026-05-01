@@ -12,7 +12,7 @@ Early versions of the audit returned the raw recommendation list, which was domi
 
 ## Decision
 
-`audit-models.sh` filters llmfit suggestions to first-party providers only. The current allowlist is Alibaba (Qwen), Google (Gemma), Meta (Llama), Microsoft (Phi), DeepSeek, Mistral, and Zhipu (GLM). These are the providers whose model names propagate to the Ollama library predictably and where the suggested upgrade can be acted on with a single `ollama pull`.
+`audit-models.sh` filters llmfit suggestions to first-party providers only. The current allowlist (see `FIRST_PARTY_FILTER` in the script) is Alibaba (Qwen), Google (Gemma), Meta (Llama), Microsoft (Phi), DeepSeek, Mistral, Zhipu (GLM), and OpenAI. These are the providers whose model names propagate to the Ollama library predictably and where the suggested upgrade can be acted on with a single `ollama pull`.
 
 The 3-point delta threshold for surfacing an upgrade is also intentional. Below that, the difference is noise from llmfit's composite scoring across quality, speed, fit, and context, and would generate suggestions the user would correctly ignore.
 
