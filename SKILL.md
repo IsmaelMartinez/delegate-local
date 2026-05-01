@@ -78,16 +78,40 @@ If the answer would be valuable specifically because the model is *reasoning bey
 
 `pick-model.sh <tier>` resolves a tier to the best installed model at runtime. Do **not** hardcode model names in calls — the installed set changes.
 
-| Tier           | Use for                                         |
-|----------------|-------------------------------------------------|
-| `code`         | Code summaries, diff explanations, renaming.    |
-| `prose`        | Commit messages, docs, release notes.           |
-| `reasoning`    | Structured extraction, classification, triage.  |
-| `long-context` | Large logs, many-file scans, big diffs.         |
+| Tier               | Use for                                                          |
+|--------------------|------------------------------------------------------------------|
+| `code`             | Code summaries, diff explanations, renaming.                     |
+| `prose`            | Commit messages, docs, release notes.                            |
+| `reasoning`        | Structured extraction, classification, triage.                   |
+| `long-context`     | Large logs, many-file scans, big diffs.                          |
+| `vision`           | Image OCR, screenshot triage, visual description.                |
+| `embedding`        | Local semantic search ("which doc talks about X").               |
+| `premium-general`  | Long-form prose where the standard `prose` tier isn't deep enough.|
+| `reasoning-vision` | Structured extraction or classification from screenshots.        |
 
 The `prose` tier is for *generating* prose (commit messages, summaries), not for *inferring* about prose. For analytical work over a diff or log, use `reasoning` even if the input is text-heavy. See `experiments/results/` for measured accuracy by tier and task type.
 
 Preference order per tier lives in `scripts/pick-model.sh`. Edit that file (not the skill body) when your installed models change.
+
+### Call shape per tier
+
+`code`, `prose`, `reasoning`, `long-context`, and `premium-general` all use the standard `delegate.sh <tier> "<prompt>"` wrapper — context on stdin, prompt as the argument, response on stdout, metrics appended to the JSONL.
+
+`vision` and `reasoning-vision` resolve a model name but the wrapper does not yet pass through `--image`. Until that lands, call `ollama run` directly:
+
+```bash
+MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh vision)
+ollama run "$MODEL" "Describe what is in this screenshot." --image /tmp/screen.png
+```
+
+`embedding` is `ollama embed`, not `ollama run`, so it bypasses `delegate.sh` entirely:
+
+```bash
+MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh embedding)
+ollama embed "$MODEL" "the text to embed"
+```
+
+Both call shapes will fold into `delegate.sh` once the wrapper learns about images and the embed command.
 
 ## Failure modes — concrete examples
 
