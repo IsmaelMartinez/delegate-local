@@ -102,7 +102,7 @@ Preference order per tier lives in `scripts/pick-model.sh`. Edit that file (not 
 ```bash
 MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh vision)
 IMG_B64=$(base64 < /tmp/screen.png | tr -d '\n')
-curl -s http://localhost:11434/api/generate \
+curl -s -H "Content-Type: application/json" http://localhost:11434/api/generate \
   -d "$(jq -n --arg m "$MODEL" --arg p "Describe what is in this screenshot." --arg i "$IMG_B64" \
         '{model:$m, prompt:$p, images:[$i], stream:false}')" \
   | jq -r '.response'
@@ -112,9 +112,9 @@ curl -s http://localhost:11434/api/generate \
 
 ```bash
 MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh embedding)
-curl -s http://localhost:11434/api/embed \
+curl -s -H "Content-Type: application/json" http://localhost:11434/api/embed \
   -d "$(jq -n --arg m "$MODEL" --arg t "the text to embed" '{model:$m, input:$t}')" \
-  | jq -r '.embeddings[0]'
+  | jq '.embeddings[0]'
 ```
 
 Both bypass `delegate.sh` because the wrapper currently assumes text-in / text-out via `ollama run`. Folding image and embed call shapes into the wrapper is future work — track it on the roadmap before doing it, since both shapes need different metrics and different output handling than the current pipe.
