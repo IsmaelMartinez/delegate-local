@@ -30,6 +30,19 @@ def scripts_dir() -> Path:
 
 app = FastMCP("delegate-to-ollama")
 
+# Bounded timeouts so a wedged ollama or llmfit can't hang the MCP client
+# indefinitely. pick-model.sh just shells `ollama list`; audit-models.sh
+# additionally shells llmfit and several jq passes.
+PICK_MODEL_TIMEOUT_S = 30
+AUDIT_MODELS_TIMEOUT_S = 120
+
+
+def _run(cmd: list[str], timeout: int, label: str) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{label} timed out after {timeout}s") from exc
+
 
 @app.tool()
 def pick_model(tier: str, dry_run: bool = False) -> dict:
@@ -40,14 +53,15 @@ def pick_model(tier: str, dry_run: bool = False) -> dict:
     that pick-model.sh writes to stderr.
 
     Raises RuntimeError if the tier is unknown, ollama isn't on PATH,
-    or no installed model matches the tier's preferences.
+    no installed model matches the tier's preferences, or the script
+    exceeds PICK_MODEL_TIMEOUT_S.
     """
     script = scripts_dir() / "pick-model.sh"
     cmd = ["bash", str(script)]
     if dry_run:
         cmd.append("--dry-run")
     cmd.append(tier)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = _run(cmd, PICK_MODEL_TIMEOUT_S, "pick-model.sh")
     if result.returncode != 0:
         raise RuntimeError(
             f"pick-model.sh exited {result.returncode}: {result.stderr.strip()}"
@@ -65,10 +79,11 @@ def audit_models() -> str:
 
     Output includes installed models, tier routing, and (if llmfit is on
     PATH) upgrade suggestions filtered to first-party providers. Never
-    pulls or installs anything.
+    pulls or installs anything. Raises RuntimeError if the script exits
+    non-zero or exceeds AUDIT_MODELS_TIMEOUT_S.
     """
     script = scripts_dir() / "audit-models.sh"
-    result = subprocess.run(["bash", str(script)], capture_output=True, text=True)
+    result = _run(["bash", str(script)], AUDIT_MODELS_TIMEOUT_S, "audit-models.sh")
     if result.returncode != 0:
         raise RuntimeError(
             f"audit-models.sh exited {result.returncode}: {result.stderr.strip()}"
@@ -84,7 +99,7 @@ def list_tiers() -> list[str]:
     single source of truth.
     """
     script = scripts_dir() / "pick-model.sh"
-    text = script.read_text()
+    text = script.read_text(encoding="utf-8")
     match = re.search(r'^TIERS="([^"]+)"', text, re.MULTILINE)
     if not match:
         raise RuntimeError(f"could not find TIERS= line in {script}")

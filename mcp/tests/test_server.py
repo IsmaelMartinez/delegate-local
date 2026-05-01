@@ -38,7 +38,7 @@ def test_scripts_dir_respects_env_override(monkeypatch, tmp_path):
 def test_pick_model_happy_path(monkeypatch):
     captured = {}
 
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, timeout):
         captured["cmd"] = cmd
         return _completed(stdout="qwen3.6:35b-a3b-q8_0\n", stderr="", returncode=0)
 
@@ -51,7 +51,7 @@ def test_pick_model_happy_path(monkeypatch):
 
 
 def test_pick_model_dry_run_captures_trace(monkeypatch):
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, timeout):
         assert "--dry-run" in cmd
         return _completed(
             stdout="qwen3.6:35b-a3b-q8_0\n",
@@ -67,7 +67,7 @@ def test_pick_model_dry_run_captures_trace(monkeypatch):
 
 
 def test_pick_model_unknown_tier_raises(monkeypatch):
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, timeout):
         return _completed(stdout="", stderr="unknown tier: bogus", returncode=2)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -76,7 +76,7 @@ def test_pick_model_unknown_tier_raises(monkeypatch):
 
 
 def test_pick_model_no_match_raises(monkeypatch):
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, timeout):
         return _completed(stdout="", stderr="no models installed", returncode=1)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -87,7 +87,7 @@ def test_pick_model_no_match_raises(monkeypatch):
 def test_audit_models_returns_stdout(monkeypatch):
     fake_output = "=== Installed models ===\nqwen3.6:35b-a3b-q8_0\n\n=== Tier routing ===\n"
 
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, timeout):
         assert cmd[0] == "bash"
         assert cmd[1].endswith("audit-models.sh")
         return _completed(stdout=fake_output, stderr="", returncode=0)
@@ -97,7 +97,7 @@ def test_audit_models_returns_stdout(monkeypatch):
 
 
 def test_audit_models_failure_raises(monkeypatch):
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, timeout):
         return _completed(stdout="", stderr="ollama not on PATH", returncode=1)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -141,6 +141,24 @@ def test_list_tiers_missing_marker_raises(monkeypatch, tmp_path):
     monkeypatch.setenv("DELEGATE_TO_OLLAMA_SCRIPTS", str(tmp_path))
     with pytest.raises(RuntimeError, match="could not find TIERS"):
         server.list_tiers()
+
+
+def test_pick_model_timeout_raises(monkeypatch):
+    def fake_run(cmd, capture_output, text, timeout):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match=r"pick-model\.sh timed out after \d+s"):
+        server.pick_model("prose")
+
+
+def test_audit_models_timeout_raises(monkeypatch):
+    def fake_run(cmd, capture_output, text, timeout):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match=r"audit-models\.sh timed out after \d+s"):
+        server.audit_models()
 
 
 def test_app_registers_three_tools():
