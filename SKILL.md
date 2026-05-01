@@ -97,21 +97,27 @@ Preference order per tier lives in `scripts/pick-model.sh`. Edit that file (not 
 
 `code`, `prose`, `reasoning`, `long-context`, and `premium-general` all use the standard `delegate.sh <tier> "<prompt>"` wrapper — context on stdin, prompt as the argument, response on stdout, metrics appended to the JSONL.
 
-`vision` and `reasoning-vision` resolve a model name but the wrapper does not yet pass through `--image`. Until that lands, call `ollama run` directly:
+`vision` and `reasoning-vision` resolve a model name but go through the Ollama HTTP API (`POST /api/generate` with a base64-encoded `images` array) — Ollama 0.21's `ollama run` CLI does not expose an `--image` flag. The API runs on the same daemon as `ollama run`, so no extra setup is needed:
 
 ```bash
 MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh vision)
-ollama run "$MODEL" "Describe what is in this screenshot." --image /tmp/screen.png
+IMG_B64=$(base64 < /tmp/screen.png | tr -d '\n')
+curl -s -H "Content-Type: application/json" http://localhost:11434/api/generate \
+  -d "$(jq -n --arg m "$MODEL" --arg p "Describe what is in this screenshot." --arg i "$IMG_B64" \
+        '{model:$m, prompt:$p, images:[$i], stream:false}')" \
+  | jq -r '.response'
 ```
 
-`embedding` is `ollama embed`, not `ollama run`, so it bypasses `delegate.sh` entirely:
+`embedding` uses `POST /api/embed` for the same reason — `ollama` has no `embed` subcommand:
 
 ```bash
 MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh embedding)
-ollama embed "$MODEL" "the text to embed"
+curl -s -H "Content-Type: application/json" http://localhost:11434/api/embed \
+  -d "$(jq -n --arg m "$MODEL" --arg t "the text to embed" '{model:$m, input:$t}')" \
+  | jq '.embeddings[0]'
 ```
 
-Both call shapes will fold into `delegate.sh` once the wrapper learns about images and the embed command.
+Both bypass `delegate.sh` because the wrapper currently assumes text-in / text-out via `ollama run`. Folding image and embed call shapes into the wrapper is future work — track it on the roadmap before doing it, since both shapes need different metrics and different output handling than the current pipe.
 
 ## Failure modes — concrete examples
 
