@@ -151,6 +151,37 @@ EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" long-context || true
 assert_eq "qwen3.6:35b-a3b" "$OUT" "long-context picks qwen3.6 first"
 rm -rf "$tmp"
 
+# 10. --dry-run with a matching install: stdout = model, stderr has the trace.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
+qwen3.6:35b-a3b   aa 30 GB  1 day ago
+gemma4:latest     yy 9.6 GB 2 weeks ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" --dry-run prose || true
+assert_eq "0" "$EC" "dry-run match -> exit 0"
+assert_eq "qwen3.6:35b-a3b" "$OUT" "dry-run match -> stdout still has model"
+assert_contains "dry-run: tier=prose" "$ERR" "dry-run match -> stderr has tier line"
+assert_contains "dry-run: matched preference='qwen3.6'" "$ERR" "dry-run match -> stderr names matched preference"
+rm -rf "$tmp"
+
+# 11. --dry-run with no matching install: exit 1, stderr explains why.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME            ID SIZE  MODIFIED
+unrelated:model zz 5 GB  1 day ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" --dry-run code || true
+assert_eq "1" "$EC" "dry-run no match -> exit 1"
+assert_contains "no preference matched any installed model" "$ERR" "dry-run no match -> stderr explains why"
+rm -rf "$tmp"
+
+# 12. --dry-run without a tier arg: usage error (exit 2).
+EC=0; run "$SAFE_PATH" bash "$PICK" --dry-run || true
+assert_eq "2" "$EC" "dry-run no tier -> exit 2"
+assert_contains "usage:" "$ERR" "dry-run no tier -> usage on stderr"
+
+# 13. Unknown flag: usage error (exit 2) with informative stderr.
+EC=0; run "$SAFE_PATH" bash "$PICK" --bogus prose || true
+assert_eq "2" "$EC" "unknown flag -> exit 2"
+assert_contains "unknown option: --bogus" "$ERR" "unknown flag -> stderr names the bad option"
+
 echo
 echo "=== audit-models.sh ==="
 
