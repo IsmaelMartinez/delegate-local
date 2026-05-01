@@ -40,6 +40,12 @@ jobs:
       - name: Metrics-summary tests
         run: bash tests/test-metrics-summary.sh
 
+      - name: Score-t3 tests
+        run: bash tests/test-score-t3.sh
+
+      - name: Runner argument-parsing tests
+        run: bash tests/test-runner.sh
+
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh
 
