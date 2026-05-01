@@ -44,7 +44,12 @@ def test_pick_model_happy_path(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     out = server.pick_model("prose")
-    assert out == {"model": "qwen3.6:35b-a3b-q8_0", "tier": "prose", "trace": ""}
+    assert out == {
+        "model": "qwen3.6:35b-a3b-q8_0",
+        "tier": "prose",
+        "url": "https://ollama.com/library/qwen3.6",
+        "trace": "",
+    }
     assert captured["cmd"][0] == "bash"
     assert captured["cmd"][-1] == "prose"
     assert "--dry-run" not in captured["cmd"]
@@ -62,6 +67,7 @@ def test_pick_model_dry_run_captures_trace(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     out = server.pick_model("prose", dry_run=True)
     assert out["model"] == "qwen3.6:35b-a3b-q8_0"
+    assert out["url"] == "https://ollama.com/library/qwen3.6"
     assert "tier=prose" in out["trace"]
     assert "matched preference" in out["trace"]
 
@@ -161,8 +167,48 @@ def test_audit_models_timeout_raises(monkeypatch):
         server.audit_models()
 
 
-def test_app_registers_three_tools():
-    """Smoke-test that all three tool names are registered on the FastMCP app.
+def test_model_url_library_namespace():
+    assert (
+        server._model_url("qwen3.6:35b-a3b-q8_0")
+        == "https://ollama.com/library/qwen3.6"
+    )
+
+
+def test_model_url_no_tag():
+    assert server._model_url("nomic-embed-text") == "https://ollama.com/library/nomic-embed-text"
+
+
+def test_model_url_user_namespace():
+    assert (
+        server._model_url("someuser/foo:tag")
+        == "https://ollama.com/someuser/foo"
+    )
+
+
+def test_model_url_empty():
+    assert server._model_url("") == ""
+
+
+def test_list_related_projects_returns_four_siblings():
+    projects = server.list_related_projects()
+    assert len(projects) == 4
+    names = {p["name"] for p in projects}
+    assert names == {"local-brain", "ai-model-advisor", "llmfit", "repo-butler"}
+    for p in projects:
+        assert set(p.keys()) == {"name", "url", "summary"}
+        assert p["url"].startswith("https://github.com/IsmaelMartinez/")
+        assert p["summary"]
+
+
+def test_list_related_projects_returns_copies():
+    """Mutating the return value must not corrupt the module-level constant."""
+    projects = server.list_related_projects()
+    projects[0]["name"] = "MUTATED"
+    assert server.list_related_projects()[0]["name"] == "local-brain"
+
+
+def test_app_registers_four_tools():
+    """Smoke-test that all four tool names are registered on the FastMCP app.
 
     Uses asyncio to drive the async list_tools() coroutine without
     requiring pytest-asyncio.
@@ -171,4 +217,9 @@ def test_app_registers_three_tools():
 
     tools = asyncio.run(server.app.list_tools())
     names = {t.name for t in tools}
-    assert names == {"pick_model", "audit_models", "list_tiers"}
+    assert names == {
+        "pick_model",
+        "audit_models",
+        "list_tiers",
+        "list_related_projects",
+    }

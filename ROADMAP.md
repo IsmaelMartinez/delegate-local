@@ -54,9 +54,9 @@ Tying delegate-to-ollama into the rest of your portfolio compounds its value.
 
 ### Phase 5 follow-ups (from PR #22 review)
 
-- Surface external links in MCP tool responses.
+- [done] Surface external links in MCP tool responses.
   - **Context:** `pick_model` returns bare model names (e.g. `qwen3.6:35b-a3b-q8_0`) with no link to the `ollama.com/library/<stem>` page; `audit_models` mentions `llmfit` and the Ollama library in plain text but doesn't ship structured links a client could render natively; the four sibling projects (`local-brain`, `ai-model-advisor`, `llmfit`, `repo-butler`) only live in the README, not in the MCP surface.
-  - **Design:** Explore adding a `url` field to `pick_model`'s response and a new `list_related_projects` tool returning name+url+one-line summary for the four siblings, or exposing them as MCP resources rather than tools. The choice depends on whether the consumer renders structured fields or just displays the text blob — defer until that's known. *(Backlog — captured 2026-05-01.)*
+  - **Design:** Explore adding a `url` field to `pick_model`'s response and a new `list_related_projects` tool returning name+url+one-line summary for the four siblings, or exposing them as MCP resources rather than tools. The choice depends on whether the consumer renders structured fields or just displays the text blob — defer until that's known. *(Tools-not-resources path landed: `pick_model` now returns `url`; new `list_related_projects` tool exposes the four siblings. `audit_models` still returns text verbatim — its bash-script stdout already includes URLs, so no second extraction step until a consumer asks.)*
 
 ## Phase 6 — Recurring maintenance
 
