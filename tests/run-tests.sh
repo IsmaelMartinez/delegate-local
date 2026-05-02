@@ -260,6 +260,29 @@ rm -rf "$tmp"
 # code review instead.)
 
 echo
+echo "=== AAIF symlink ==="
+
+# AAIF compliance: .agents/skills/delegate-to-ollama must be a symlink to the
+# repo root, not a regular file or directory copy. Catches the case where a
+# Windows-without-symlinks checkout (or an accidental `cp -L`) replaces the
+# entry with a regular file containing the literal string "../..".
+AAIF_LINK="$SKILL_DIR/.agents/skills/delegate-to-ollama"
+if [[ -L "$AAIF_LINK" ]]; then
+  echo "  PASS  AAIF entry is a symlink"
+  pass=$((pass+1))
+else
+  echo "  FAIL  AAIF entry is not a symlink (path: $AAIF_LINK)"
+  fail=$((fail+1))
+fi
+if [[ -f "$AAIF_LINK/SKILL.md" ]]; then
+  echo "  PASS  AAIF symlink resolves to a directory containing SKILL.md"
+  pass=$((pass+1))
+else
+  echo "  FAIL  $AAIF_LINK/SKILL.md does not resolve"
+  fail=$((fail+1))
+fi
+
+echo
 echo "=== Results ==="
 total=$((pass+fail))
 echo "$pass/$total passed"
