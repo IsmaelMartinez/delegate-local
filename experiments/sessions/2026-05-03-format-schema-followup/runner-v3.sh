@@ -15,7 +15,7 @@ cd "$(dirname "$0")"
 PROMPT_DIR="../2026-05-03-security-review-delegation"
 mkdir -p v3-runs
 : > v3-timing.tsv
-echo -e "model\tsubtask\trep\tseconds\toutput_bytes" > v3-timing.tsv
+echo -e "model\tsubtask\trep\tduration_ms\toutput_bytes" > v3-timing.tsv
 
 # JSON schemas per sub-task. Sub-task 4 is plaintext (no schema).
 SCHEMA_ST1='{"type":"array","minItems":5,"maxItems":5,"items":{"type":"object","properties":{"id":{"type":"string","enum":["F1","F2","F3","F4","F5"]},"severity":{"type":"string","enum":["high","medium","low","info"]}},"required":["id","severity"]}}'
@@ -37,16 +37,16 @@ run_cell() {
     payload=$(jq -n --arg m "$model" --arg p "$prompt" \
       '{model:$m, prompt:$p, stream:false, think:false, options:{temperature:0}}')
   fi
-  local start end
-  start=$(date +%s)
+  local start end dur_ms
+  start=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
   printf '%s' "$payload" | curl -s -X POST http://localhost:11434/api/generate -d @- \
     | jq -r '.response // ""' > "$out"
-  end=$(date +%s)
-  local secs=$((end - start))
+  end=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
+  dur_ms=$((end - start))
   local bytes
   bytes=$(wc -c < "$out" | tr -d ' ')
-  echo -e "${model_label}\t${st}\t${rep}\t${secs}\t${bytes}" >> v3-timing.tsv
-  echo "  [${model_label} st${st} r${rep}] ${secs}s, ${bytes}B"
+  echo -e "${model_label}\t${st}\t${rep}\t${dur_ms}\t${bytes}" >> v3-timing.tsv
+  echo "  [${model_label} st${st} r${rep}] ${dur_ms}ms, ${bytes}B"
 }
 
 ollama stop qwen3.6:35b-a3b-q8_0 2>/dev/null || true

@@ -6,6 +6,8 @@
 **Models:** qwen3.6:35b-a3b-q8_0 (prose tier), qwen3-coder-next:latest (code tier)
 **N:** 3 reps per cell, temperature 0, think:false
 
+**Timing precision caveat:** the `v4-timing.tsv` data was recorded with `date +%s` second-level precision, producing 50–100% error margins for the 1–2 second cell durations. `runner-v4.sh` was subsequently updated (post-PR-#26 review feedback from Gemini) to use `perl -MTime::HiRes` millisecond precision matching `scripts/delegate.sh`; future runs will populate the `duration_ms` column instead. v5 timing was not recorded as a separate TSV (the runs were inline shell). Score data and per-cell outputs are unaffected because temperature 0 makes generation deterministic; only the timing data is impacted.
+
 The v3 retrospective concluded that schema enforcement is shape-not-judgment, and the calibration gap requires a content intervention. v4 and v5 test two such interventions on the same fixture.
 
 ## v4: counterintuitive one-shot example

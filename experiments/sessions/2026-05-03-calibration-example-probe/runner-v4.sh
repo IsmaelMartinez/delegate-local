@@ -9,25 +9,25 @@ set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p v4-runs
 : > v4-timing.tsv
-echo -e "model\tsubtask\trep\tseconds\toutput_bytes" > v4-timing.tsv
+echo -e "model\tsubtask\trep\tduration_ms\toutput_bytes" > v4-timing.tsv
 
 run_cell() {
   local model="$1" model_label="$2" rep="$3"
   local prompt
   prompt=$(cat subtask-1-severity-v4.txt)
   local out="v4-runs/${model_label}-st1-r${rep}.txt"
-  local start end
-  start=$(date +%s)
+  local start end dur_ms
+  start=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
   jq -n --arg m "$model" --arg p "$prompt" \
     '{model:$m, prompt:$p, stream:false, think:false, options:{temperature:0}}' \
     | curl -s -X POST http://localhost:11434/api/generate -d @- \
     | jq -r '.response // ""' > "$out"
-  end=$(date +%s)
-  local secs=$((end - start))
+  end=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
+  dur_ms=$((end - start))
   local bytes
   bytes=$(wc -c < "$out" | tr -d ' ')
-  echo -e "${model_label}\t1\t${rep}\t${secs}\t${bytes}" >> v4-timing.tsv
-  echo "  [${model_label} st1 r${rep}] ${secs}s, ${bytes}B"
+  echo -e "${model_label}\t1\t${rep}\t${dur_ms}\t${bytes}" >> v4-timing.tsv
+  echo "  [${model_label} st1 r${rep}] ${dur_ms}ms, ${bytes}B"
 }
 
 ollama stop qwen3.6:35b-a3b-q8_0 2>/dev/null || true

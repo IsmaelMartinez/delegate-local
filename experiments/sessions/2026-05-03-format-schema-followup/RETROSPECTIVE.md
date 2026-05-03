@@ -6,6 +6,8 @@
 
 **Setup:** Same fixture, same prompts (verbatim from `subtask-*-v2.txt`), same models (qwen3.6:35b-a3b-q8_0, qwen3-coder-next:latest), same N=3, same disciplined defaults (`think:false`, temperature 0). Only difference: API request includes a `format` JSON schema for sub-tasks 1–3 (sub-task 4 stays plaintext). Schemas use `enum` for severity values (`high`/`medium`/`low`/`info`), classification (`REAL`/`ALLOWLISTED_FP`), and ID values (`F1`–`F5`), plus `minItems:5, maxItems:5` to lock array length.
 
+**Timing precision caveat:** the `v3-timing.tsv` data was recorded with `date +%s` second-level precision, which produces 50–100% error margins for the 1–2 second cell durations seen here. The runner script `runner-v3.sh` was subsequently updated (post-PR-#26 review feedback from Gemini) to use `perl -MTime::HiRes` millisecond precision matching `scripts/delegate.sh`; the tsv schema changed from `seconds` to `duration_ms` for future runs. The historical `v3-timing.tsv` data is preserved as-is for reproducibility of the original publication; treat its values as ±1 second.
+
 ## Result: zero delta vs v2
 
 | Sub-task | qwen3.6 v2 | qwen3.6 v3 | Δ | coder-next v2 | coder-next v3 | Δ |
