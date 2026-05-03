@@ -248,6 +248,17 @@ EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" reasoning-vision || true
 assert_eq "qwen3-vl:30b-a3b-thinking" "$OUT" "reasoning-vision falls back to qwen3-vl thinking"
 rm -rf "$tmp"
 
+# 20b. reasoning tier prefers deepseek-r1 over phi4-reasoning when both are
+# installed. Pinned by the 2026-05-03 v6 baseline (deepseek-r1 5/5 vs
+# phi4-reasoning 3.33/5 on directive-rule severity classification, same prompt).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME                  ID SIZE   MODIFIED
+deepseek-r1:32b       dd 19 GB  1 day ago
+phi4-reasoning:plus   pp 11 GB  1 week ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" reasoning || true
+assert_eq "deepseek-r1:32b" "$OUT" "reasoning picks deepseek-r1 ahead of phi4-reasoning"
+rm -rf "$tmp"
+
 echo
 echo "=== pick-model.sh override (Phase 9) ==="
 
