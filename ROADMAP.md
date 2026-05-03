@@ -109,6 +109,16 @@ Explicitly deferred until evidence demands it:
 
 Sequence: build the wrapper + JSONL after Phase 2 CI exists (so trigger-eval correctness is gated first), before Phase 4 capability expansion (so new tiers ship with telemetry from day one).
 
+## Phase 9 — First-run personalisation
+
+The skill ships one set of `pick-model.sh` preferences and assumes the user's installed model set roughly aligns with the shipped order. In practice every machine has a different mix; the skill should adapt itself to the host without forcing a repo fork. Prior art (aider's `~/.aider.model.settings.yml` layered config, Continue.dev's `model: AUTODETECT`, SmarterRouter's `setup` wizard, Claude Code's `.claude/settings.local.json` per-user override) all point at the same shape: ship a community default, let users drop a personal override on top, keep the override outside the repo so `git clean` can't eat it.
+
+- [done] **v1: per-user override hook + read-only init script.** `pick-model.sh` sources `${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-to-ollama/config.sh}` after the shipped defaults populate `prefs`; the override is plain bash that may reassign `prefs` per tier. Untouched tiers fall through to shipped defaults; an absent override changes nothing. `scripts/init.sh` reads `ollama list`, parses the shipped prefs from `pick-model.sh`'s case statement (single source of truth), and emits a starter override to stdout with installed-first ordering — never auto-writes. README "Personalising routing" subsection documents the flow. 13 new tests cover override-replaces, override-leaves-others-alone, override-absent-defaults-win, dry-run-trace-surfaces-override, and init.sh round-trip.
+- llmfit-driven re-ranking. The v1 init.sh preserves shipped order and only promotes installed models; it doesn't yet consult `llmfit recommend --json` to re-rank by hardware fit-score. Worth adding once a user reports that the shipped order is materially wrong for their hardware.
+- Empirical micro-benchmark step. A one-shot run of a tiny fixture per tier (≤200 tokens) against each top-2 candidate would surface per-machine timing so the order is empirical not just llmfit-predicted. Reuses the Phase 7 runner shape with a much smaller fixture set. Deferred until there's evidence that the shipped order needs per-machine tuning beyond promote-installed.
+- Auto-invocation on first delegate. v1 requires explicit `bash scripts/init.sh` invocation. The alternative (zero-touch first-run) trades transparency for friction reduction; revisit if telemetry shows users never run init.
+- Out of scope for this phase: pulling models the user doesn't already have. Phase 1 audit script never auto-pulls and that property holds for `init` too — it suggests, never installs.
+
 ## Out of scope
 
 - Code edits, refactors, or feature implementation. Local models are weak agents and the skill description explicitly rejects these. The local-brain finding stands: "they didn't need Smolagents, they needed `git status | ollama run model`".

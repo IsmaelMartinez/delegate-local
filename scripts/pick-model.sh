@@ -60,6 +60,18 @@ esac
 trace "tier=$tier"
 trace "preferences=${prefs[*]}"
 
+# Per-user override hook. The override file is plain bash sourced after the
+# shipped defaults have populated `prefs`; it sees `$tier` and `$prefs` in
+# scope and may reassign `prefs` to reorder or extend the list. Lives outside
+# the repo so `git clean` can't eat it and it's never accidentally committed.
+config="${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-to-ollama/config.sh}"
+if [[ -f "$config" ]]; then
+  trace "sourcing override: $config"
+  # shellcheck disable=SC1090
+  source "$config"
+  trace "preferences (post-override)=${prefs[*]}"
+fi
+
 if ! command -v ollama >/dev/null 2>&1; then
   echo "ollama not on PATH" >&2
   exit 1
