@@ -294,6 +294,24 @@ assert_eq "qwen3.6:35b-a3b" "$OUT" "missing override file -> shipped defaults st
 unset DELEGATE_TO_OLLAMA_CONFIG
 rm -rf "$tmp"
 
+# 23b. World-writable override is rejected with a warning; shipped defaults win.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
+qwen3.6:35b-a3b   aa 30 GB  1 day ago
+gemma4:latest     yy 9.6 GB 2 weeks ago"
+cat > "$tmp/config.sh" <<'EOF'
+case "$tier" in
+  prose) prefs=("gemma4" "qwen3.6") ;;
+esac
+EOF
+chmod 666 "$tmp/config.sh"
+EC=0
+DELEGATE_TO_OLLAMA_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+assert_eq "qwen3.6:35b-a3b" "$OUT" "world-writable override is ignored, shipped defaults win"
+assert_contains "group/world-writable" "$ERR" "world-writable override produces warning on stderr"
+unset DELEGATE_TO_OLLAMA_CONFIG
+rm -rf "$tmp"
+
 # 24. --dry-run surfaces the override in the trace so users can debug it.
 tmp=$(mktemp -d)
 make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
