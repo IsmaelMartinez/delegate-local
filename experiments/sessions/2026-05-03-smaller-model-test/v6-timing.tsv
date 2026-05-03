@@ -1,0 +1,16 @@
+model	size_gb	rep	duration_ms	output_bytes
+coder-next	51	1	9999	173
+coder-next	51	2	2111	173
+coder-next	51	3	2088	173
+coder-30b	32	1	6622	187
+coder-30b	32	2	916	187
+coder-30b	32	3	923	187
+deepseek-r1-32b	19	1	12383	245
+deepseek-r1-32b	19	2	4167	245
+deepseek-r1-32b	19	3	4232	245
+phi4-reasoning	11	1	397751	48545
+phi4-reasoning	11	2	389332	47142
+phi4-reasoning	11	3	312578	47142
+gemma4	9.6	1	5096	177
+gemma4	9.6	2	859	177
+gemma4	9.6	3	849	177
