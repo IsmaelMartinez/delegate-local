@@ -35,7 +35,7 @@ done
 The lib provides:
 
 - `now_ms` — print Unix epoch milliseconds.
-- `run_api_cell <model> <prompt> <out_file> [<extras_json>]` — call Ollama's `/api/generate` with `stream:false`, `think:false`, `temperature:0`, and `curl -sS --fail`. Sets `CELL_DUR_MS` and `CELL_BYTES` after returning.
+- `run_api_cell <model> <prompt> <out_file> [<extras_json>]` — call Ollama's `/api/generate` with `stream:false`, `think:false`, `temperature:0`, and `curl -sS --fail`. Sets `CELL_DUR_MS` and `CELL_BYTES` after returning. Honours `OLLAMA_HOST` (default `http://localhost:11434`).
 
 The optional `extras_json` argument merges into the request payload, so format-schema decoding (v3 pattern) or one-off think/temperature overrides are still expressible:
 

@@ -57,10 +57,11 @@ run_api_cell() {
   local start end payload
   payload=$(jq -n --arg m "$model" --arg p "$prompt" --argjson e "$extras" \
     '{model:$m, prompt:$p, stream:false, think:false, options:{temperature:0}} * $e')
+  local host="${OLLAMA_HOST:-http://localhost:11434}"
   start=$(now_ms)
-  printf '%s' "$payload" | curl -sS --fail -X POST http://localhost:11434/api/generate -d @- \
+  printf '%s' "$payload" | curl -sS --fail -X POST "$host/api/generate" -d @- \
     | jq -r '.response // ""' > "$out"
   end=$(now_ms)
   CELL_DUR_MS=$((end - start))
-  CELL_BYTES=$(wc -c < "$out" | tr -d ' ')
+  CELL_BYTES=$(wc -c < "$out" | awk '{print $1}')
 }
