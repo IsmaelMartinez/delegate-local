@@ -1,0 +1,31 @@
+/no_think
+You are drafting a PR review comment from a structured findings list. Format:
+- A one-line summary at the top stating the change reviewed and the count of findings by severity.
+- A bulleted list, one finding per line, formatted exactly as: `[SEVERITY] <id> — <one-line title>`. Use the actual id from the input — do NOT use a placeholder like "FX". Use the severities from the input verbatim.
+- A two-line closing note that says all findings are documented in the longer review and the maintainer should weigh REAL findings against documented design intent.
+
+Output the comment text verbatim, nothing else. No JSON, no markdown fences, no header.
+
+Example. Change reviewed: a fictional auth-middleware refactor.
+Example findings: G1 [HIGH] — Hardcoded JWT secret; G2 [LOW] — Verbose error response leaks stack trace.
+
+Example output:
+
+Reviewed auth-middleware refactor. 1 high, 1 low.
+
+- [HIGH] G1 — Hardcoded JWT secret
+- [LOW] G2 — Verbose error response leaks stack trace
+
+All findings are documented in the longer review.
+The maintainer should weigh REAL findings against the documented design intent.
+
+Now produce the equivalent for these:
+
+Change reviewed: Phase 9 v1 of delegate-to-ollama — adds per-user override hook to scripts/pick-model.sh and a new scripts/init.sh that emits a starter override.
+
+Findings (with severities):
+F1 [MEDIUM] — Override path sources arbitrary bash via env var or $HOME
+F2 [MEDIUM] — DELEGATE_TO_OLLAMA_CONFIG env var has higher precedence than $HOME path
+F3 [LOW] — init.sh emits unescaped model names from ollama list into generated bash
+F4 [LOW] — init.sh parses pick-model.sh's case block via perl regex without integrity check
+F5 [INFO] — Override sourcing fails noisily under set -e propagation

@@ -1,0 +1,30 @@
+/no_think
+You are filtering security findings against an allowlist of known-intentional behaviours. For each finding, classify as REAL (concern remains) or ALLOWLISTED_FP (matches an allowlist entry verbatim). When marking ALLOWLISTED_FP, name the matched allowlist entry by id (e.g. "A1"). When REAL, the matched_allowlist field must be null.
+
+Critical rule: a finding only matches an allowlist entry if the allowlist entry covers the ENTIRE finding. If a finding raises a concern that is partially covered AND partially not covered (e.g. allowlist covers behaviour X in context Y, but the finding raises X in context Z that the allowlist explicitly excludes), the finding is REAL.
+
+Output ONLY a JSON array of objects, each {"id": "<id>", "classification": "REAL" | "ALLOWLISTED_FP", "matched_allowlist": "<A?|null>"}. No prose, no markdown fences.
+
+Example. Allowlist:
+A0: Hardcoded test fixtures in test/ directory are intentional for unit tests.
+
+Example finding G0: Hardcoded production secrets in src/main.go (not in test/ directory).
+
+Example output:
+[{"id":"G0","classification":"REAL","matched_allowlist":null}]
+
+Now apply this allowlist:
+A1: Sourcing user-owned bash from $HOME/.claude/skills/* is intentional design parity with aider's ~/.aiderrc and Claude Code's ~/.claude/settings.local.json. Trusting user-owned content in user-owned context is by design.
+A2: Trusting $HOME in a non-elevated single-user developer context is by design. Findings about elevated/CI/service-account contexts where HOME may not be trusted remain REAL.
+
+To these findings:
+
+F1: Override path sources arbitrary bash via env var or $HOME. pick-model.sh sources ${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-to-ollama/config.sh}. Single-user dev context: intentional. Sudo / shared-HOME CI / service account: risk widens.
+
+F2: DELEGATE_TO_OLLAMA_CONFIG env var has higher precedence than $HOME path. Any process that can pre-set this env var redirects override sourcing without filesystem write access. A malicious shell function wrapping ollama, installed via a copy-pasted setup script, could set it to point at attacker content.
+
+F3: init.sh emits unescaped model names from ollama list into generated bash. printf "\"%s\"" with no escape pass. Edge case where a model name contained " or $.
+
+F4: init.sh parses pick-model.sh's case block via perl regex without integrity check. Supply-chain-via-skill-update threat model.
+
+F5: Override sourcing fails noisily under set -e propagation. Malformed override file produces unhelpful exit. UX issue, not exploitable.

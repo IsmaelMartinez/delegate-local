@@ -1,0 +1,22 @@
+/no_think
+You are doing severity classification for a security review. For each finding below, assign exactly one severity from this fixed set: high, medium, low, info. Output ONLY a JSON array of objects, each {"id": "<finding id>", "severity": "<one of: high|medium|low|info>"}. No prose, no markdown fences, no commentary before or after the JSON.
+
+When the finding text says a behaviour is "intentional" in the maintainer's documented context (e.g. single-user dev), do not treat that behaviour as a high-severity vulnerability — that's the maintainer's design choice, not an exploit.
+
+Example input:
+G0: Hardcoded production AWS credentials committed to git history. Discoverable from any public clone.
+
+Example output:
+[{"id":"G0","severity":"high"}]
+
+Now classify these:
+
+F1: Override path sources arbitrary bash via env var or $HOME. pick-model.sh sources ${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-to-ollama/config.sh}. Whoever can write that path or set DELEGATE_TO_OLLAMA_CONFIG executes arbitrary bash. Single-user dev context: intentional. Sudo / shared-HOME CI / service account: risk widens.
+
+F2: DELEGATE_TO_OLLAMA_CONFIG env var has higher precedence than $HOME path. Any process that can pre-set this env var redirects override sourcing without filesystem write access.
+
+F3: init.sh emits unescaped model names from ollama list into generated bash. printf "\"%s\"" with no escape pass. If a model name contained " or $, generated config.sh would break or expand unexpectedly.
+
+F4: init.sh parses pick-model.sh's case block via perl regex without integrity check. If pick-model.sh is compromised upstream, the generated override propagates malicious patterns.
+
+F5: Override sourcing fails noisily under set -e propagation. Malformed override file produces unhelpful exit. Informational, UX issue.
