@@ -36,7 +36,15 @@ def parse(text):
 def score_st1(arr):
     if not isinstance(arr, list):
         return 0
-    return sum(1 for o in arr if isinstance(o, dict) and o.get("severity") == GT_ST1.get(o.get("id")))
+    # Guard: require known id before comparing severity. Without this, a
+    # malformed `{}` dict makes both sides None and `None == None` counts
+    # as a match. (Same fix Gemini applied to scorer-v6.py on PR #27.)
+    return sum(
+        1 for o in arr
+        if isinstance(o, dict)
+        and o.get("id") in GT_ST1
+        and o.get("severity") == GT_ST1[o["id"]]
+    )
 
 
 def score_st2(arr):
