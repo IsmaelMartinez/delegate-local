@@ -1,0 +1,29 @@
+/no_think
+You are categorizing PRs into one of these five categories: REFACTOR, BUGFIX, FEATURE, DOCS, PERF.
+
+CATEGORY RULES (apply in priority order — first match wins, non-negotiable):
+1. DOCS: PR only modifies documentation (README, docs/, CONTRIBUTING, comments). No code changes.
+2. PERF: PR includes measurable speedup numbers (e.g. "X× speedup", "N ms faster", benchmark improvement) with no behavioural change.
+3. BUGFIX: PR fixes incorrect behaviour, usually with a regression test. Look for "fix" of a fault plus a test asserting the corrected behaviour.
+4. FEATURE: PR adds new user-facing functionality (new endpoint, new flag, new client helper users call directly).
+5. REFACTOR: PR explicitly states "no behavioural change" or equivalent with internal restructuring; existing tests unchanged.
+
+Output ONLY a JSON array of objects, each {"id": "<PR id>", "category": "<one of: REFACTOR|BUGFIX|FEATURE|DOCS|PERF>"}. No prose, no markdown fences, no commentary before or after the JSON.
+
+Example input:
+P0: Inline the calls_per_minute helper into its sole caller in rate_limiter.py. Existing tests unchanged. No behavioural change.
+
+Example output:
+[{"id":"P0","category":"REFACTOR"}]
+
+Now categorize:
+
+P1: Extract the token-validation logic from auth_middleware.py into a separate validate_token() helper. Existing test suite passes unchanged with the same coverage. No behavioural difference observed in integration tests.
+
+P2: Fix off-by-one in pagination query — the final page was returning N-1 items instead of the expected N. Added regression test in test_pagination.py::test_last_page_full asserting the correct count.
+
+P3: Add OAuth2 device-flow login support. New endpoint POST /oauth/device, new client-side polling helper, new docs in docs/auth/device-flow.md, new tests covering the happy path and timeout case.
+
+P4: Update README install section to clarify the Windows + WSL2 path. Fix two broken links in CONTRIBUTING.md. No code touched.
+
+P5: Replace the O(n²) nested-loop lookup in index_builder.py with a single-pass sorted merge. Benchmarks attached: 3.2× speedup on the 100k-row test fixture. No API or output change.
