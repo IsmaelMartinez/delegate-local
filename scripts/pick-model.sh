@@ -64,6 +64,11 @@ trace "preferences=${prefs[*]}"
 # shipped defaults have populated `prefs`; it sees `$tier` and `$prefs` in
 # scope and may reassign `prefs` to reorder or extend the list. Lives outside
 # the repo so `git clean` can't eat it and it's never accidentally committed.
+# Trust model: user-owned content executed in the user's own context, by
+# design — same shape as ~/.aiderrc and ~/.claude/settings.local.json. The
+# trade-offs (sudo, shared-HOME CI, env-var redirection) are documented in
+# experiments/sessions/2026-05-03-security-review-delegation/RETROSPECTIVE.md
+# F1/F2 — the threat model assumes single-user dev.
 config="${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-to-ollama/config.sh}"
 if [[ -f "$config" ]]; then
   trace "sourcing override: $config"

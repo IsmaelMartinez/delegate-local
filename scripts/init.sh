@@ -58,6 +58,20 @@ cat <<'EOF'
 case "$tier" in
 EOF
 
+# Escape double-quote, backslash, dollar, and backtick in a string before
+# emitting it inside double-quotes in the generated bash. Ollama's name
+# grammar restricts these characters in practice; this is defense in depth
+# against the F3 finding in
+# experiments/sessions/2026-05-03-security-review-delegation/RETROSPECTIVE.md.
+escape_dq() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//\$/\\\$}"
+  s="${s//\`/\\\`}"
+  printf '%s' "$s"
+}
+
 for tier in $tiers; do
   shipped=$(shipped_prefs "$tier")
   [[ -z "$shipped" ]] && continue
@@ -73,10 +87,10 @@ for tier in $tiers; do
   done <<< "$shipped"
   parts=""
   if [[ ${#installed_first[@]} -gt 0 ]]; then
-    for p in "${installed_first[@]}"; do parts+="\"$p\" "; done
+    for p in "${installed_first[@]}"; do parts+="\"$(escape_dq "$p")\" "; done
   fi
   if [[ ${#remaining[@]} -gt 0 ]]; then
-    for p in "${remaining[@]}"; do parts+="\"$p\" "; done
+    for p in "${remaining[@]}"; do parts+="\"$(escape_dq "$p")\" "; done
   fi
   parts="${parts% }"
   printf "  %s) prefs=(%s) ;;\n" "$tier" "$parts"
