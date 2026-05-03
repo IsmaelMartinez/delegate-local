@@ -39,7 +39,7 @@ run_cell() {
   fi
   local start end dur_ms
   start=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
-  printf '%s' "$payload" | curl -s -X POST http://localhost:11434/api/generate -d @- \
+  printf '%s' "$payload" | curl -sS --fail -X POST http://localhost:11434/api/generate -d @- \
     | jq -r '.response // ""' > "$out"
   end=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
   dur_ms=$((end - start))
