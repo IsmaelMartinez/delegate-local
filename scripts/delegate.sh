@@ -12,6 +12,13 @@
 # Env:
 #   DELEGATE_TO_OLLAMA_NO_METRICS=1         # opt out of metrics logging
 #   DELEGATE_METRICS_FILE=<path>            # override metrics destination
+#   DELEGATE_THINK=true|false               # override thinking mode (default: false)
+#                                           #   false = thinking off — recommended for closed-format
+#                                           #   work (severity, FP filter, structured extraction).
+#                                           #   2026-05-03 baseline: --think=false improved coder-tier
+#                                           #   from 1.5/4 to 3.6/4 on closed sub-tasks at 25× speed.
+#                                           #   Set to true if the model's chain-of-thought genuinely
+#                                           #   helps (rare for the patterns in this skill's Fits list).
 #
 # Output:  cleaned model response on stdout (ANSI control codes stripped)
 # Errors:  pick-model failures and ollama errors propagate the original exit
@@ -75,7 +82,17 @@ fi
 # The same sed pattern is documented in README "Capturing output non-interactively".
 # stderr is *not* redirected — real errors (server down, missing model, OOM)
 # need to reach the user. The spinner that needs cleaning lives on stdout.
-output=$(printf '%s' "$full_input" | ollama run "$model" \
+#
+# --think=false suppresses the model's chain-of-thought tokens for
+# thinking-capable models (Qwen3, Qwen3.5, Qwen3.6, qwen3-coder-next, etc.).
+# Feature-detected so older ollama versions without the flag fall back to
+# bare `ollama run`. Override via DELEGATE_THINK=true if a particular task
+# benefits from reasoning chains.
+think_args=()
+if ollama run --help 2>&1 | grep -q -- '--think'; then
+  think_args=("--think=${DELEGATE_THINK:-false}")
+fi
+output=$(printf '%s' "$full_input" | ollama run "${think_args[@]+"${think_args[@]}"}" "$model" \
   | sed -E $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' \
   | sed -E $'s/\x1b\\][^\a]*\a//g')
 status=$?

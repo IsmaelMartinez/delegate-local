@@ -21,6 +21,8 @@ Fits:
 - Summarise a long log, diff, file, or PR description.
 - Draft a commit message, changelog entry, or release note for a single-file mechanical change.
 - Classify or triage N items (relevant/noise, bug/feature).
+- Closed-form classification with an explicit, finite option set (e.g. "high|medium|low|info" severity, "REAL|FP" filter against a stated allowlist). The 2026-05-03 retrospective measured 5/5 reps perfect on FP-filter when the allowlist rule was explicit and a one-shot example was included.
+- Compose structured prose from a fixed list of items (PR comment from a findings list, release-note bullets from a changelog block). The 2026-05-03 retrospective measured 3/3 PASS on PR-comment composition once the prompt forbade placeholder substitution explicitly.
 - First-pass "what does this file do" over many files.
 - Extract structured fields (JSON) from free-form text.
 - Reformat or rewrite prose.
@@ -42,7 +44,16 @@ Three steps, in order, every time: **gather → delegate → verify**.
 2. **Delegate** with a constrained prompt that asks for an exact output shape.
 3. **Verify** every specific claim the model returns against the actual files before acting on it. Treat the model's output as a hypothesis, not a finding.
 
-Use `scripts/delegate.sh <tier> "<prompt>"` — it resolves the tier to a model, runs `ollama run`, strips spinner ANSI bytes from the captured output, and appends one JSON line per invocation to `~/.claude/skills/delegate-to-ollama/metrics.jsonl` for `scripts/metrics-summary.sh` to roll up later.
+Use `scripts/delegate.sh <tier> "<prompt>"` — it resolves the tier to a model, runs `ollama run` with thinking suppressed (`--think=false` by default; override with `DELEGATE_THINK=true` if reasoning chains genuinely help), strips spinner ANSI bytes from the captured output, and appends one JSON line per invocation to `~/.claude/skills/delegate-to-ollama/metrics.jsonl` for `scripts/metrics-summary.sh` to roll up later.
+
+### Discipline for closed-format work
+
+The 2026-05-03 retrospective (`experiments/sessions/2026-05-03-security-review-delegation/`) measured the same 4-sub-task suite with and without prompt discipline. Without discipline (single shot, thinking on, no example, four sub-tasks bundled in one prompt) the local model scored 1.5 of 4. With discipline (thinking off, one-shot example, atomic single-sub-task call, explicit qualifier rules) qwen3-coder-next:latest scored 3.6 of 4 — within 9% of Haiku's 3.95. The same four practices recur in 2026 practitioner reports:
+
+- **One sub-task per call.** Bundling multiple sub-tasks in one prompt collapses the "single atomic output" property that makes local models reliable. If you have four things to classify, four `delegate.sh` calls are more reliable than one prompt that asks for four answers.
+- **Include a one-shot example in the prompt.** Local models infer the output shape much better from one concrete `Example: ... → output: ...` block than from prose description alone. The example must use a different finding/item from the actual input so it doesn't leak the answer.
+- **Make qualifier rules explicit.** When a finding text says "this is intentional in single-user dev contexts", local models tend to override that qualifier with prior beliefs (CVSS conventions, "code execution is always high"). Spell out in the prompt: *"if the input says behaviour X is intentional in context Y, severity reflects design intent, not vulnerability class"*.
+- **Thinking off is the default.** delegate.sh now passes `--think=false` automatically. The chain-of-thought tax for closed-format work showed up as both alarmist drift on classification and direct format failures (placeholder substitution).
 
 ```bash
 git diff HEAD~5 | bash ~/.claude/skills/delegate-to-ollama/scripts/delegate.sh prose \

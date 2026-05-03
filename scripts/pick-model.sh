@@ -60,6 +60,44 @@ esac
 trace "tier=$tier"
 trace "preferences=${prefs[*]}"
 
+# Per-user override hook. The override file is plain bash sourced after the
+# shipped defaults have populated `prefs`; it sees `$tier` and `$prefs` in
+# scope and may reassign `prefs` to reorder or extend the list. Lives outside
+# the repo so `git clean` can't eat it and it's never accidentally committed.
+# Trust model: user-owned content executed in the user's own context, by
+# design — same shape as ~/.aiderrc and ~/.claude/settings.local.json. The
+# trade-offs (sudo, shared-HOME CI, env-var redirection) are documented in
+# experiments/sessions/2026-05-03-security-review-delegation/RETROSPECTIVE.md
+# F1/F2 — the threat model assumes single-user dev.
+config="${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-to-ollama/config.sh}"
+if [[ -f "$config" ]]; then
+  # Defense-in-depth: skip the override if it isn't owned by the current
+  # user, or if it has group/world write bits set. The trust model assumes
+  # single-user dev; this catches accidents (chmod 666 / shared HOME) before
+  # they become arbitrary-code-execution under our process. BSD `stat` first
+  # (macOS), GNU `stat` fallback (Linux).
+  if stat -f '%Su' "$config" >/dev/null 2>&1; then
+    cfg_owner=$(stat -f '%Su' "$config")
+    cfg_mode=$(stat -f '%Lp' "$config")
+  else
+    cfg_owner=$(stat -c '%U' "$config")
+    cfg_mode=$(stat -c '%a' "$config")
+  fi
+  cfg_mode=$(printf '%03d' "$cfg_mode")
+  cfg_group=${cfg_mode: -2:1}
+  cfg_world=${cfg_mode: -1}
+  if [[ "$cfg_owner" != "$(id -un)" ]]; then
+    echo "warning: $config not owned by $(id -un), skipping override" >&2
+  elif [[ "$cfg_group" == [2367] || "$cfg_world" == [2367] ]]; then
+    echo "warning: $config is group/world-writable (mode $cfg_mode), skipping override" >&2
+  else
+    trace "sourcing override: $config (owner=$cfg_owner, mode=$cfg_mode)"
+    # shellcheck disable=SC1090
+    source "$config"
+    trace "preferences (post-override)=${prefs[*]}"
+  fi
+fi
+
 if ! command -v ollama >/dev/null 2>&1; then
   echo "ollama not on PATH" >&2
   exit 1

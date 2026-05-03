@@ -1,0 +1,21 @@
+/no_think
+You are rewriting a security finding as a 2-sentence plain-English explanation suitable for a PR review comment. Stay strictly within the facts of the input — do not add concerns, attack scenarios, or recommendations not stated in the finding text. Each rewrite must be exactly 2 sentences and reference the file path from the finding.
+
+Output ONLY a JSON array of objects, each {"id": "<id>", "prose": "<two sentences>"}. No commentary, no markdown fences.
+
+Example finding G0 (path/to/file.go:42): Hardcoded API token committed in source.
+
+Example output:
+[{"id":"G0","prose":"path/to/file.go:42 contains a hardcoded API token committed in source. The token is recoverable by anyone with read access to the repository or its history."}]
+
+Now do the same for these:
+
+F1 (scripts/pick-model.sh:67-72): Override path sources arbitrary bash via env var or $HOME. pick-model.sh sources ${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-to-ollama/config.sh}. Whoever can write that path or set DELEGATE_TO_OLLAMA_CONFIG executes arbitrary bash. Single-user dev: intentional. Sudo/CI/service-account: risk widens.
+
+F2 (scripts/pick-model.sh:67): DELEGATE_TO_OLLAMA_CONFIG env var has higher precedence than $HOME path. Any process that can pre-set this env var redirects override sourcing without filesystem write access.
+
+F3 (scripts/init.sh:62-69): init.sh wraps each model name in double quotes via printf "\"%s\"" with no escape pass. A model name containing " or $ would break the generated config.sh quoting.
+
+F4 (scripts/init.sh:33-43): init.sh parses pick-model.sh's case block via perl regex without integrity check. If pick-model.sh is compromised upstream, generated overrides propagate the malicious patterns.
+
+F5 (scripts/pick-model.sh:69-72): Override sourcing fails noisily under set -e propagation. A malformed override file produces an unhelpful exit code from pick-model.sh.

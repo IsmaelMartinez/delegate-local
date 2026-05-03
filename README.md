@@ -68,6 +68,25 @@ After install, run the audit from wherever the skill landed:
 bash <install-path>/scripts/audit-models.sh
 ```
 
+### Personalising routing (optional)
+
+The shipped `pick-model.sh` is one preference list for everyone. To override the order on a specific machine without forking the repo, drop a bash file at `~/.claude/skills/delegate-to-ollama/config.sh`. `pick-model.sh` sources it after the shipped defaults are set, so any tier the file touches wins. Untouched tiers fall through to shipped defaults; an absent file changes nothing.
+
+```bash
+# ~/.claude/skills/delegate-to-ollama/config.sh
+case "$tier" in
+  prose) prefs=("gemma4" "qwen3.6" "qwen3-next") ;;
+esac
+```
+
+`scripts/init.sh` writes a starter override based on what's currently installed — read-only, prints to stdout, never auto-writes:
+
+```bash
+bash <install-path>/scripts/init.sh > ~/.claude/skills/delegate-to-ollama/config.sh
+```
+
+Set `DELEGATE_TO_OLLAMA_CONFIG=/some/other/path.sh` to redirect the override path (useful for testing or per-project overrides).
+
 ## Files
 
 - `SKILL.md` — triggering description and usage patterns Claude reads.

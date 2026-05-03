@@ -1,0 +1,24 @@
+{
+  "subtask_1": [
+    {"id": "F1", "severity": "medium"},
+    {"id": "F2", "severity": "medium"},
+    {"id": "F3", "severity": "low"},
+    {"id": "F4", "severity": "low"},
+    {"id": "F5", "severity": "info"}
+  ],
+  "subtask_2": [
+    {"id": "F1", "classification": "REAL", "matched_allowlist": null},
+    {"id": "F2", "classification": "REAL", "matched_allowlist": null},
+    {"id": "F3", "classification": "REAL", "matched_allowlist": null},
+    {"id": "F4", "classification": "REAL", "matched_allowlist": null},
+    {"id": "F5", "classification": "ALLOWLISTED_FP", "matched_allowlist": null}
+  ],
+  "subtask_3": [
+    {"id": "F1", "prose": "scripts/pick-model.sh:67-72 sources arbitrary bash via DELEGATE_TO_OLLAMA_CONFIG env var or $HOME path, allowing code execution for anyone who can write that path or set the env var. Risk scope expands in elevated contexts like sudo, shared-HOME CI runners, or service accounts beyond the intended single-user dev context."},
+    {"id": "F2", "prose": "scripts/pick-model.sh:67 gives DELEGATE_TO_OLLAMA_CONFIG env var higher precedence than $HOME path, enabling any process to redirect override sourcing without requiring filesystem write access. A malicious shell function could pre-set this env var to point at attacker content."},
+    {"id": "F3", "prose": "scripts/init.sh:62-69 wraps model names in double quotes via printf \"\\\"%%s\\\"\" with no escape pass. A model name containing \" or $ would break the generated config.sh quoting and potentially introduce syntax errors or unintended variable expansion."},
+    {"id": "F4", "prose": "scripts/init.sh:33-43 parses pick-model.sh's case block via perl regex without verifying the source integrity. If pick-model.sh is compromised upstream, the generated override would propagate any malicious patterns into the config."},
+    {"id": "F5", "prose": "scripts/pick-model.sh:69-72 fails noisily when override sourcing encounters set -e propagation. A malformed override file produces an unhelpful exit code rather than graceful fallback."}
+  ],
+  "subtask_4": "Phase 9 v1 of delegate-to-ollama security review — 5 findings: 2 medium, 2 low, 1 info.\n\n- [MEDIUM] F1 — Override path sources arbitrary bash via env var or $HOME\n- [MEDIUM] F2 — DELEGATE_TO_OLLAMA_CONFIG env var has higher precedence than $HOME path\n- [LOW] F3 — init.sh emits unescaped model names from ollama list into generated bash\n- [LOW] F4 — init.sh parses pick-model.sh's case block via perl regex without integrity check\n- [INFO] F5 — Override sourcing fails noisily under set -e propagation\n\nAll findings are documented in the longer review. The maintainer should weigh the four REAL findings against the documented design intent for the single-user developer context and elevated-privilege scenarios."
+}

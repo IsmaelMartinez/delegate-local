@@ -1,0 +1,24 @@
+{
+  "subtask_1": [
+    {"id": "F1", "severity": "medium"},
+    {"id": "F2", "severity": "medium"},
+    {"id": "F3", "severity": "low"},
+    {"id": "F4", "severity": "low"},
+    {"id": "F5", "severity": "info"}
+  ],
+  "subtask_2": [
+    {"id": "F1", "classification": "REAL", "matched_allowlist": null},
+    {"id": "F2", "classification": "REAL", "matched_allowlist": null},
+    {"id": "F3", "classification": "REAL", "matched_allowlist": null},
+    {"id": "F4", "classification": "REAL", "matched_allowlist": null},
+    {"id": "F5", "classification": "REAL", "matched_allowlist": null}
+  ],
+  "subtask_3": [
+    {"id": "F1", "prose": "In `scripts/pick-model.sh` (lines 67–72), the override config is sourced from either the `DELEGATE_TO_OLLAMA_CONFIG` env var or `$HOME/.claude/skills/delegate-to-ollama/config.sh`. Any actor who can write that path or pre-set that env var can execute arbitrary bash within the script's context, so the risk surface widens in sudo, CI, or shared-HOME environments."},
+    {"id": "F2", "prose": "In `scripts/pick-model.sh` (line 67), `DELEGATE_TO_OLLAMA_CONFIG` takes precedence over the `$HOME` default path, so any process that can set this env var before invocation can redirect override sourcing. This redirection requires no filesystem write access, only the ability to influence the environment passed to the script."},
+    {"id": "F3", "prose": "In `scripts/init.sh` (lines 62–69), model names from `ollama list` are written into generated bash using `printf \"\\\"%s\\\"\"` with no escape pass. A model name containing `\"` or `$` would break the quoting in the generated `config.sh` file."},
+    {"id": "F4", "prose": "In `scripts/init.sh` (lines 33–43), a perl regex is used to parse the case block from `scripts/pick-model.sh` with no integrity check on that file. If `pick-model.sh` were compromised upstream, the generated override would propagate whatever malicious patterns the compromised file contains."},
+    {"id": "F5", "prose": "In `scripts/pick-model.sh` (lines 69–72), sourcing a malformed override file under `set -e` propagation causes the script to exit with an unhelpful error code. This is a UX issue and is not exploitable."}
+  ],
+  "subtask_4": "Reviewed Phase 9 v1 of delegate-to-ollama — adds per-user override hook to scripts/pick-model.sh and a new scripts/init.sh that emits a starter override. 2 medium, 2 low, 1 info finding(s).\n\n- [MEDIUM] F1 — Override path sources arbitrary bash via env var or $HOME\n- [MEDIUM] F2 — DELEGATE_TO_OLLAMA_CONFIG env var has higher precedence than $HOME path\n- [LOW] F3 — init.sh emits unescaped model names from ollama list into generated bash\n- [LOW] F4 — init.sh parses pick-model.sh's case block via perl regex without integrity check\n- [INFO] F5 — Override sourcing fails noisily under set -e propagation\n\nAll findings are documented in full detail in the longer security review. The maintainer should weigh the REAL findings against the documented design intent before deciding on any remediation."
+}

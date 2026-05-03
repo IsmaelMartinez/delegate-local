@@ -4,3 +4,11 @@
 __pycache__/
 .venv/
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Per-user telemetry written by scripts/delegate.sh. The default metrics path
+# is $HOME/.claude/skills/delegate-to-ollama/metrics.jsonl, which resolves
+# through the `npx skills add`-installed symlink back to the repo root for
+# anyone developing the skill while it's installed. The file is private to
+# the user and never belongs in git.
+metrics.jsonl

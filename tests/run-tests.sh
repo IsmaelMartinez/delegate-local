@@ -66,12 +66,22 @@ EOF
 }
 
 run() {
-  # run <PATH> <cmd...> -> writes stdout to $OUT, stderr to $ERR, sets $EC
+  # run <PATH> <cmd...> -> writes stdout to $OUT, stderr to $ERR, sets $EC.
+  # HOME is sandboxed to a tmp dir so a real per-user override config in
+  # the developer's actual ~/.claude/skills/... can't leak into test runs.
+  # If $DELEGATE_TO_OLLAMA_CONFIG is set in the parent environment, it is
+  # forwarded so override tests can opt in to a specific config path.
   local custom_path="$1"; shift
-  OUT=$(env -i PATH="$custom_path" HOME="$HOME" "$@" 2>/tmp/.delegate-ollama-test.err) || EC=$?
+  local sandbox_home; sandbox_home=$(mktemp -d)
+  local extra=()
+  if [[ -n "${DELEGATE_TO_OLLAMA_CONFIG:-}" ]]; then
+    extra=(DELEGATE_TO_OLLAMA_CONFIG="$DELEGATE_TO_OLLAMA_CONFIG")
+  fi
+  OUT=$(env -i PATH="$custom_path" HOME="$sandbox_home" ${extra[@]+"${extra[@]}"} "$@" 2>/tmp/.delegate-ollama-test.err) || EC=$?
   EC=${EC:-0}
   ERR=$(cat /tmp/.delegate-ollama-test.err)
   rm -f /tmp/.delegate-ollama-test.err
+  rm -rf "$sandbox_home"
 }
 
 echo "=== pick-model.sh ==="
@@ -236,6 +246,124 @@ make_mock_ollama "$tmp" "NAME                       ID SIZE   MODIFIED
 qwen3-vl:30b-a3b-thinking  vv 25 GB  1 day ago"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" reasoning-vision || true
 assert_eq "qwen3-vl:30b-a3b-thinking" "$OUT" "reasoning-vision falls back to qwen3-vl thinking"
+rm -rf "$tmp"
+
+echo
+echo "=== pick-model.sh override (Phase 9) ==="
+
+# 21. Override file reorders prefs: prose normally picks qwen3.6 first, but
+# an override that puts gemma4 ahead must win.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
+qwen3.6:35b-a3b   aa 30 GB  1 day ago
+gemma4:latest     yy 9.6 GB 2 weeks ago"
+cat > "$tmp/config.sh" <<'EOF'
+case "$tier" in
+  prose) prefs=("gemma4" "qwen3.6") ;;
+esac
+EOF
+EC=0
+DELEGATE_TO_OLLAMA_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+assert_eq "gemma4:latest" "$OUT" "override reorders prose to gemma4 first"
+unset DELEGATE_TO_OLLAMA_CONFIG
+rm -rf "$tmp"
+
+# 22. Override that only touches one tier leaves other tiers on shipped defaults.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
+qwen3-coder:30b   xx 30 GB  1 day ago
+qwen3.6:35b-a3b   aa 30 GB  1 day ago"
+cat > "$tmp/config.sh" <<'EOF'
+case "$tier" in
+  prose) prefs=("not-installed-model") ;;
+esac
+EOF
+EC=0
+DELEGATE_TO_OLLAMA_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" code || true
+assert_eq "qwen3-coder:30b" "$OUT" "override leaves untouched tiers using shipped defaults"
+unset DELEGATE_TO_OLLAMA_CONFIG
+rm -rf "$tmp"
+
+# 23. Override file absent: defaults resolve exactly as before.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
+qwen3.6:35b-a3b   aa 30 GB  1 day ago"
+EC=0
+DELEGATE_TO_OLLAMA_CONFIG="$tmp/does-not-exist.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+assert_eq "qwen3.6:35b-a3b" "$OUT" "missing override file -> shipped defaults still resolve"
+unset DELEGATE_TO_OLLAMA_CONFIG
+rm -rf "$tmp"
+
+# 23b. World-writable override is rejected with a warning; shipped defaults win.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
+qwen3.6:35b-a3b   aa 30 GB  1 day ago
+gemma4:latest     yy 9.6 GB 2 weeks ago"
+cat > "$tmp/config.sh" <<'EOF'
+case "$tier" in
+  prose) prefs=("gemma4" "qwen3.6") ;;
+esac
+EOF
+chmod 666 "$tmp/config.sh"
+EC=0
+DELEGATE_TO_OLLAMA_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+assert_eq "qwen3.6:35b-a3b" "$OUT" "world-writable override is ignored, shipped defaults win"
+assert_contains "group/world-writable" "$ERR" "world-writable override produces warning on stderr"
+unset DELEGATE_TO_OLLAMA_CONFIG
+rm -rf "$tmp"
+
+# 24. --dry-run surfaces the override in the trace so users can debug it.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
+qwen3.6:35b-a3b   aa 30 GB  1 day ago
+gemma4:latest     yy 9.6 GB 2 weeks ago"
+cat > "$tmp/config.sh" <<'EOF'
+case "$tier" in
+  prose) prefs=("gemma4" "qwen3.6") ;;
+esac
+EOF
+EC=0
+DELEGATE_TO_OLLAMA_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" --dry-run prose || true
+assert_contains "sourcing override:" "$ERR" "dry-run names the override file"
+assert_contains "post-override" "$ERR" "dry-run surfaces post-override prefs"
+unset DELEGATE_TO_OLLAMA_CONFIG
+rm -rf "$tmp"
+
+echo
+echo "=== scripts/init.sh (Phase 9) ==="
+
+INIT="$SKILL_DIR/scripts/init.sh"
+
+# 25. ollama missing -> exit 1.
+EC=0; run "$SAFE_PATH" bash "$INIT" || true
+assert_eq "1" "$EC" "init: missing ollama -> exit 1"
+assert_contains "ollama not on PATH" "$ERR" "init: missing ollama -> informative stderr"
+
+# 26. Empty model list -> exit 1 with hint.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME  ID  SIZE  MODIFIED"
+EC=0; run "$tmp:$SAFE_PATH" bash "$INIT" || true
+assert_eq "1" "$EC" "init: empty ollama list -> exit 1"
+assert_contains "nothing to personalise" "$ERR" "init: empty list -> hint message"
+rm -rf "$tmp"
+
+# 27. With installed models, init prints a valid bash override that, when
+# fed back into pick-model.sh, resolves to the same model.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
+qwen3.6:35b-a3b   aa 30 GB  1 day ago
+gemma4:latest     yy 9.6 GB 2 weeks ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$INIT" || true
+assert_eq "0" "$EC" "init: happy path exits 0"
+assert_contains "case \"\$tier\" in" "$OUT" "init: emits a case-on-tier block"
+assert_contains "prose) prefs=(" "$OUT" "init: includes prose tier"
+# Round-trip: write the generated override and check pick-model still picks
+# qwen3.6 for prose (currently-installed-first ordering preserves the win).
+echo "$OUT" > "$tmp/config.sh"
+EC=0
+DELEGATE_TO_OLLAMA_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+assert_eq "qwen3.6:35b-a3b" "$OUT" "init: round-trip override picks the installed model"
+unset DELEGATE_TO_OLLAMA_CONFIG
 rm -rf "$tmp"
 
 echo
