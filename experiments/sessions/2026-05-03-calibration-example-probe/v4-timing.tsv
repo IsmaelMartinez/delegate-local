@@ -1,0 +1,7 @@
+model	subtask	rep	seconds	output_bytes
+qwen3.6	1	1	8	156
+qwen3.6	1	2	2	156
+qwen3.6	1	3	1	156
+coder-next	1	1	9	156
+coder-next	1	2	1	156
+coder-next	1	3	2	156
