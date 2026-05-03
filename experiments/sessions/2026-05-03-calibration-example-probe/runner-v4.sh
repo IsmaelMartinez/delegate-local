@@ -20,7 +20,7 @@ run_cell() {
   start=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
   jq -n --arg m "$model" --arg p "$prompt" \
     '{model:$m, prompt:$p, stream:false, think:false, options:{temperature:0}}' \
-    | curl -s -X POST http://localhost:11434/api/generate -d @- \
+    | curl -sS --fail -X POST http://localhost:11434/api/generate -d @- \
     | jq -r '.response // ""' > "$out"
   end=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
   dur_ms=$((end - start))
