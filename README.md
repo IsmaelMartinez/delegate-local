@@ -107,6 +107,33 @@ Three scripts gate every PR via GitHub Actions:
 
 To enable the API-mode trigger eval in CI, configure `ANTHROPIC_API_KEY` in repo secrets (Settings → Secrets and variables → Actions). Without the secret the API step is skipped, not failed.
 
+## What you actually save
+
+Worth being explicit about this because the skill could easily be oversold.
+
+The delegated call is where the savings live — the local model writes the summary, classification, or patch instead of Claude. That's real and measurable: the metrics rollup (`scripts/metrics-summary.sh`) reports a "tokens avoided" headline computed from real Ollama `prompt_eval_count` + `eval_count` counts. The 2026-05-04 v8 probe's "~250× cheaper than Opus" number is also real for the specific workload it measured — 18 minimal-patch code cells scored by pytest.
+
+But a realistic delegation flow costs more Anthropic tokens than just "the delegated call minus zero." In a typical turn, Claude still spends tokens to:
+
+- read the user's request and decide a local model fits,
+- frame the delegation prompt,
+- read the local model's response back,
+- verify the response against the actual files (for correctness-critical work — see SKILL.md's Discipline subsection on running the test when delegating code, and the gather-delegate-verify pattern throughout).
+
+For small tasks — a 3-bullet diff summary, a one-line commit message — the verification overhead can eat most of the headline saving. The shape where this skill actually pays off is bulk or repeated work: triage 50 TODOs, classify 40 findings against an allowlist, draft release notes from a 200-line changelog. There the per-item Anthropic cost is dominated by the delegated generation, which is the part that moves to local.
+
+Rough annual estimates (char-count tokens, ~1.5 KTok per round-trip that would otherwise go to the API):
+
+| Usage profile                         | Delegations/year | Haiku-equiv save | Sonnet-equiv save | Opus-equiv save |
+|---------------------------------------|------------------|------------------|-------------------|-----------------|
+| Subscription user (Claude Max/Pro)    | any              | $0 (marginal)    | $0                | $0              |
+| Casual API user (~10/hour × 20 h/wk)  | ~10k             | $25–40           | $75–115           | $375–560        |
+| Heavy/team (~500/day × every day)     | ~180k            | $450–700         | $1.4k–2k          | $6.8k–10k       |
+
+The subscription row is the honest one for individual developers: inside a Claude Max or Pro plan the marginal API cost of a delegation is zero, so the direct-dollar saving is zero. The real benefit in that case is different: **context-window preservation** (those tokens don't bloat Claude's active context, so long conversations stay focused) and **privacy** (sensitive logs, configs, and credentials never leave the machine).
+
+More capable local models will shift these numbers but probably not by an order of magnitude. "250× cheaper than Opus" is a headline for one measured shape, not a general claim.
+
 ## Design notes
 
 The skill intentionally avoids frameworks. Local models are good summarisers and weak agents; delegation is a shell pipe, not an orchestration layer. The `pick-model.sh` preference lists are the single point of truth for routing — no hardcoded model names in the skill body.
