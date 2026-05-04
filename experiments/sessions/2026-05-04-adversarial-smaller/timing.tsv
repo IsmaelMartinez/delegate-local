@@ -1,0 +1,13 @@
+model	variant	rep	duration_ms	output_bytes
+deepseek-r1-14b	A	1	5709	325
+deepseek-r1-14b	A	2	1619	325
+deepseek-r1-14b	A	3	1647	325
+deepseek-r1-14b	B	1	2828	357
+deepseek-r1-14b	B	2	1839	357
+deepseek-r1-14b	B	3	1907	357
+phi4-reasoning	A	1	131591	19078
+phi4-reasoning	A	2	154470	19078
+phi4-reasoning	A	3	157263	19078
+phi4-reasoning	B	1	464095	52983
+phi4-reasoning	B	2	267436	32409
+phi4-reasoning	B	3	268187	32409
