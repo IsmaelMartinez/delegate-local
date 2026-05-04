@@ -1,0 +1,13 @@
+model	variant	rep	duration_ms	output_bytes
+deepseek-r1	A	1	8865	351
+deepseek-r1	A	2	3893	351
+deepseek-r1	A	3	3952	351
+deepseek-r1	B	1	6002	351
+deepseek-r1	B	2	4326	351
+deepseek-r1	B	3	4233	351
+coder-next	A	1	10871	355
+coder-next	A	2	2372	355
+coder-next	A	3	2377	355
+coder-next	B	1	2536	306
+coder-next	B	2	2744	306
+coder-next	B	3	2701	306
