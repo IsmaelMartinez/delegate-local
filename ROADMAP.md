@@ -2,6 +2,19 @@
 
 The skill works today as a personal tool. To make it dependable for shared use, it needs hardening borrowed from PLG's agent-skills repo, then distribution beyond Claude Code, then capability expansion.
 
+## Next session — priority-ordered
+
+The eight-PR session on 2026-05-03–04 closed Phase 10's discipline work and the HTTP-API switch. The next session should open directly on these items, in order. The top three are experimental probes that reuse existing fixtures and helpers; 4 and 5 close out old phases.
+
+1. **Code-generation delegation probe under an Aider-style constrained edit format.** The HTTP-API switch (PR #31) unblocked this. It is the highest-leverage gap now that every closed-form-classification experiment in the v5/v6/v7 chain succeeded — the open question is whether code work delegates at all. Reuses `experiments/lib/run_api_cell.sh`; build a new fixture with an expected search/replace diff and a deterministic scorer that applies the diff and runs the existing bash tests.
+2. **Smaller-model size-floor test for the directive-rule pattern.** Pull `deepseek-r1:14b` or `qwen3.5:14b` and re-run the v5/v6 fixture via `experiments/sessions/2026-05-03-smaller-model-test/runner-v6.sh`. Tests whether parity can be reached below the v6-winning 19 GB threshold. Requires a multi-GB model pull — confirm with user before triggering.
+3. **Upstream contribution to Ollama issue #14645.** Post the clean negative-reproduction signal from the v3 experiment to the issue thread (format+think:false works on qwen3.6 and qwen3-coder-next under our conditions, so the bug has a narrower model-family scope than the report suggests). Low-effort triage comment; upgrade to a fix PR only if upstream hasn't started already.
+4. **Semantic-release pipeline + `CHANGELOG.md`.** Conventional-commit prefixes are already in use throughout the history; wiring up `semantic-release` closes the long-open Phase 2 item. Needs one workflow file and a release config.
+5. **Per-tool install docs.** Create `docs/install-claude-code.md`, `docs/install-codex.md`, `docs/install-opencode.md`. Closes the Phase 3 gap not covered by the README's universal install section. Low-urgency but mechanical.
+
+Deferred (not in the priority list, pending a concrete trigger): director-side severity reweighting doc in SKILL.md (deferred until a real consumer reports a calibration disagreement); monthly scheduled `audit-models.sh` automation (Phase 6 recurring maintenance — no cadence yet).
+
+
 ## Phase 1 — Shipped
 
 - [done] `SKILL.md` with YAML frontmatter (`name`, `description`).
