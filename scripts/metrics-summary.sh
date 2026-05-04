@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Read the delegate.sh metrics JSONL and print a summary: volume per tier,
-# p50/p95 latency, total tokens-avoided, top models by frequency.
+# Read the delegate metrics JSONL and print a summary: per-source breakdown
+# (delegate = interactive calls via scripts/delegate.sh, experiment = runner
+# traffic via experiments/lib/run_api_cell.sh), per-tier or per-session
+# rollup, and top models. Entries missing a `source` field are treated as
+# `delegate` for backward compatibility with lines written before the
+# source field landed.
 #
 # Usage:  metrics-summary.sh [--file path]
 # Env:    DELEGATE_METRICS_FILE   override default metrics path
@@ -32,39 +36,77 @@ if (( total == 0 )); then
   exit 0
 fi
 
-# Single jq pass for the four headline numbers — saves three reparses on
-# large metrics files. Tab-separated so `read` splits cleanly.
-IFS=$'\t' read -r ts_first ts_last total_avoided errors < <(jq -rs '
+# Headline: time range, total tokens avoided, errors, counts per source.
+IFS=$'\t' read -r ts_first ts_last total_avoided errors n_delegate n_experiment < <(jq -rs '
+  def src: .source // "delegate";
   [
     (min_by(.ts) | .ts),
     (max_by(.ts) | .ts),
     (map(.estimated_tokens_avoided) | add),
-    (map(select(.exit_status != 0)) | length)
+    (map(select(.exit_status != 0)) | length),
+    (map(select(src == "delegate")) | length),
+    (map(select(src == "experiment")) | length)
   ] | @tsv' "$metrics_file")
 
 echo "=== delegate-to-ollama metrics ==="
 echo "File:                $metrics_file"
 echo "Time range:          $ts_first  →  $ts_last"
-echo "Total invocations:   $total"
+echo "Total invocations:   $total  (delegate=$n_delegate, experiment=$n_experiment)"
 echo "Errors (non-zero):   $errors"
 echo "Tokens avoided (≈):  $total_avoided"
 echo
 
-echo "Per-tier:"
-# For each tier compute count, p50, p95 of duration_ms.
+# Per-source breakdown: count, tokens avoided, p50/p95 latency.
+echo "Per-source:"
 jq -rs '
-  group_by(.tier)
+  def src: .source // "delegate";
+  group_by(src)
   | map({
-      tier: .[0].tier,
+      source: (.[0] | src),
       n: length,
+      tokens: (map(.estimated_tokens_avoided) | add),
       p50: ((sort_by(.duration_ms) | .[(length / 2 | floor)] | .duration_ms)),
       p95: ((sort_by(.duration_ms) | .[((length * 95 / 100) | floor) | if . >= length then length - 1 else . end] | .duration_ms))
     })
   | sort_by(-.n)
   | .[]
-  | "  \(.tier | . + (" " * (14 - length)))  n=\(.n)  p50=\(.p50)ms  p95=\(.p95)ms"
+  | "  \(.source | . + (" " * (12 - length)))  n=\(.n)  tokens≈\(.tokens)  p50=\(.p50)ms  p95=\(.p95)ms"
 ' "$metrics_file"
 echo
+
+# Per-tier (delegate entries only have tier; experiment entries have session).
+has_tier=$(jq -rs 'map(select(.tier != null)) | length' "$metrics_file")
+if (( has_tier > 0 )); then
+  echo "Per-tier (delegate):"
+  jq -rs '
+    map(select(.tier != null))
+    | group_by(.tier)
+    | map({
+        tier: .[0].tier,
+        n: length,
+        p50: ((sort_by(.duration_ms) | .[(length / 2 | floor)] | .duration_ms)),
+        p95: ((sort_by(.duration_ms) | .[((length * 95 / 100) | floor) | if . >= length then length - 1 else . end] | .duration_ms))
+      })
+    | sort_by(-.n)
+    | .[]
+    | "  \(.tier | . + (" " * (14 - length)))  n=\(.n)  p50=\(.p50)ms  p95=\(.p95)ms"
+  ' "$metrics_file"
+  echo
+fi
+
+has_session=$(jq -rs 'map(select(.session != null)) | length' "$metrics_file")
+if (( has_session > 0 )); then
+  echo "Per-session (experiment):"
+  jq -rs '
+    map(select(.session != null))
+    | group_by(.session)
+    | map({session: .[0].session, n: length, ms: (map(.duration_ms) | add)})
+    | sort_by(-.n)
+    | .[]
+    | "  n=\(.n)  total=\(.ms)ms  \(.session)"
+  ' "$metrics_file"
+  echo
+fi
 
 echo "Top models:"
 jq -rs '
