@@ -11,12 +11,21 @@ For each cell:
 Prints per-cell verdicts, a per-(model, task) mean score (1.0 = all reps pass),
 and a per-model aggregate. Also writes a machine-readable v8-scores.tsv.
 
-Limitation: apply_blocks uses str.replace with count=1, so if a SEARCH section
-appears more than once in source.py only the first occurrence is patched. The
-t1-t3 fixtures have unique function bodies so this never bites here, but a
-future fixture with repeated structure would need either larger SEARCH contexts
-(per the prompt's "include more surrounding lines" rule) or a stricter
-multi-occurrence guard in this scorer.
+apply_blocks rejects empty SEARCH sections and SEARCH sections that match more
+than once in source.py — an ambiguous SEARCH returns the APPLY verdict rather
+than silently patching the first hit. The SEARCH/REPLACE format expects the
+model to include enough surrounding context for the match to be unique (that
+rule is in build-prompt.sh's output rules), so ambiguity signals a prompt
+compliance failure, not something the scorer should paper over.
+
+Security note: this scorer executes model-generated Python via pytest on the
+host, with no sandboxing. That is acceptable here because the operator chose
+which Ollama models to run, the fixtures are author-written, and the prompt
+rules forbid new imports. A contributor adapting this scorer for untrusted
+model output, third-party fixtures, or shared CI runners should add sandboxing
+(container, firejail, or `subprocess` with seccomp/resource caps) before
+running. The Future Work section of RETROSPECTIVE.md tracks sandboxing as a
+follow-up if the fixture surface grows.
 """
 from __future__ import annotations
 
@@ -52,9 +61,14 @@ def parse_blocks(text: str):
 def apply_blocks(source: str, blocks):
     current = source
     for search, replace in blocks:
-        if search not in current:
+        if not search:
+            return None, "empty SEARCH block"
+        count = current.count(search)
+        if count == 0:
             return None, f"SEARCH not found: {search[:60]!r}"
-        current = current.replace(search, replace, 1)
+        if count > 1:
+            return None, f"SEARCH is ambiguous ({count} matches): {search[:60]!r}"
+        current = current.replace(search, replace)
     return current, None
 
 
@@ -176,10 +190,15 @@ def self_test():
           patched is None and err is not None and "not found" in err,
           f"patched={patched!r} err={err!r}")
 
-    patched, _ = apply_blocks("a\na\nb\n", [("a", "A")])
-    check("first-match-only limitation holds",
-          patched == "A\na\nb\n",
-          f"patched={patched!r} (expected first a replaced only)")
+    patched, err = apply_blocks("a\na\nb\n", [("a", "A")])
+    check("apply rejects ambiguous SEARCH",
+          patched is None and err is not None and "ambiguous" in err,
+          f"patched={patched!r} err={err!r}")
+
+    patched, err = apply_blocks("x = 1\n", [("", "z = 0\n")])
+    check("apply rejects empty SEARCH",
+          patched is None and err is not None and "empty" in err,
+          f"patched={patched!r} err={err!r}")
 
     if failures:
         for f in failures:
