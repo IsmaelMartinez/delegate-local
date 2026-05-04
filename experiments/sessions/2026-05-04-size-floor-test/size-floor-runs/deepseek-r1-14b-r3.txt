@@ -1,0 +1,7 @@
+[
+  {"id": "F1", "severity": "medium"},
+  {"id": "F2", "severity": "high"},
+  {"id": "F3", "severity": "low"},
+  {"id": "F4", "severity": "medium"},
+  {"id": "F5", "severity": "info"}
+]

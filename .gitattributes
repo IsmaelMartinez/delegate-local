@@ -2,4 +2,4 @@
 # multi-thousand-line model dumps in PR diffs by default. The scored markdown
 # (experiments/results/*.md) stays in normal-diff mode.
 experiments/results/raw/** linguist-generated=true
-experiments/sessions/**/v*-runs/** linguist-generated=true
+experiments/sessions/**/*-runs/** linguist-generated=true
