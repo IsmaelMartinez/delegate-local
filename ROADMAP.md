@@ -112,6 +112,7 @@ Runtime telemetry — automatic, no agent cooperation required:
 
 - [done] A `scripts/delegate.sh` wrapper that `SKILL.md` teaches Claude to invoke instead of bare `ollama run`. Captures tier, resolved model, prompt size, output size, wall-time, and exit status, then appends one JSON line to `~/.claude/skills/delegate-to-ollama/metrics.jsonl`. Append-only, on by default, opt-out via env var. Estimating tokens-not-sent-to-Anthropic from prompt+output sizes gives a defensible "tokens saved" headline. (Landed in #9.)
 - [done] A `scripts/metrics-summary.sh` that reads the JSONL and prints volume per tier, p50/p95 latency, total tokens-avoided, and a frequency-by-model breakdown. Read-only. (Landed in #9.)
+- [done] **Experiment-runner telemetry.** `experiments/lib/run_api_cell.sh` now appends one line per cell to the same metrics JSONL (source:"experiment", session=<leaf dir>) with real Ollama token counts from `prompt_eval_count` + `eval_count` rather than char-based estimates. `metrics-summary.sh` groups by `source`, shows per-session rollup for experiment rows, and falls back to `source:"delegate"` for lines written before the field existed. Closes the observability gap where experiment traffic (~18 cells per v-session) was the single biggest consumer of local inference but invisible to the Phase 8 rollup.
 
 Correctness signals — gated in CI or scheduled, not realtime:
 

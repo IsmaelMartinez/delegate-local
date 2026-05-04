@@ -52,7 +52,9 @@ log_metric() {
   local total=$((pchars + cchars + ochars))
   local tokens_avoided=$((total / 4))
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
-  printf '{"ts":"%s","tier":"%s","model":"%s","prompt_chars":%d,"context_chars":%d,"output_chars":%d,"duration_ms":%d,"exit_status":%d,"estimated_tokens_avoided":%d}\n' \
+  # source:"delegate" discriminates this from experiment-runner traffic that
+  # writes to the same file via experiments/lib/run_api_cell.sh.
+  printf '{"ts":"%s","source":"delegate","tier":"%s","model":"%s","prompt_chars":%d,"context_chars":%d,"output_chars":%d,"duration_ms":%d,"exit_status":%d,"estimated_tokens_avoided":%d}\n' \
     "$ts" "$tier" "$model" "$pchars" "$cchars" "$ochars" "$dur_ms" "$status" "$tokens_avoided" \
     >> "$metrics_file" 2>/dev/null || true
 }

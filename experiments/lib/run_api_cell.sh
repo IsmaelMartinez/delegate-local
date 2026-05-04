@@ -51,17 +51,80 @@ now_ms() {
 #
 # Aborts the script on HTTP error (curl --fail). Caller is expected to be
 # under set -euo pipefail.
+#
+# Metrics: each call appends one JSON line to
+# ${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}
+# with source:"experiment" so the rollup in scripts/metrics-summary.sh can
+# separate interactive delegations from experiment traffic. Opt out with
+# DELEGATE_TO_OLLAMA_NO_METRICS=1. Token counts come from Ollama's own
+# prompt_eval_count / eval_count fields (not char-based estimates) so the
+# "tokens avoided" headline reflects real model usage.
 run_api_cell() {
   local model="$1" prompt="$2" out="$3" extras="${4:-}"
   [[ -z "$extras" ]] && extras='{}'
-  local start end payload
+  local start end payload response_file
   payload=$(jq -n --arg m "$model" --arg p "$prompt" --argjson e "$extras" \
     '{model:$m, prompt:$p, stream:false, think:false, options:{temperature:0}} * $e')
   local host="${OLLAMA_HOST:-http://localhost:11434}"
+  response_file=$(mktemp)
   start=$(now_ms)
+  local status=0
   printf '%s' "$payload" | curl -sS --fail -X POST "$host/api/generate" -d @- \
-    | jq -r '.response // ""' > "$out"
+    > "$response_file" || status=$?
   end=$(now_ms)
   CELL_DUR_MS=$((end - start))
+  if [[ "$status" -eq 0 ]]; then
+    jq -r '.response // ""' "$response_file" > "$out"
+  else
+    : > "$out"
+  fi
   CELL_BYTES=$(wc -c < "$out" | awk '{print $1}')
+
+  _run_api_cell_log_metric "$model" "$response_file" "$status"
+
+  rm -f "$response_file"
+  if [[ "$status" -ne 0 ]]; then
+    return "$status"
+  fi
+}
+
+# Append one JSONL metrics line. Kept separate so the happy path is easy to
+# read and so the metrics code can be disabled without touching the call site.
+_run_api_cell_log_metric() {
+  local model="$1" response_file="$2" status="$3"
+  [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" == "1" ]] && return 0
+  local metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}"
+  mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
+
+  # Session label = leaf directory of the runner's cwd, which is the
+  # per-experiment session folder convention (2026-05-04-code-delegation-probe/).
+  local session
+  session=$(basename "$PWD")
+  local ts
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  # Pull Ollama's own token counters from the response body when the call
+  # succeeded. On failure the fields are absent, so default to 0.
+  local prompt_tokens=0 eval_tokens=0
+  if [[ "$status" -eq 0 && -s "$response_file" ]]; then
+    IFS=$'\t' read -r prompt_tokens eval_tokens < <(jq -r \
+      '[(.prompt_eval_count // 0), (.eval_count // 0)] | @tsv' "$response_file" 2>/dev/null)
+    prompt_tokens=${prompt_tokens:-0}
+    eval_tokens=${eval_tokens:-0}
+  fi
+  local tokens_avoided=$((prompt_tokens + eval_tokens))
+
+  jq -nc \
+    --arg ts "$ts" \
+    --arg source "experiment" \
+    --arg session "$session" \
+    --arg model "$model" \
+    --argjson prompt_tokens "$prompt_tokens" \
+    --argjson eval_tokens "$eval_tokens" \
+    --argjson duration_ms "$CELL_DUR_MS" \
+    --argjson output_bytes "$CELL_BYTES" \
+    --argjson status "$status" \
+    --argjson tokens_avoided "$tokens_avoided" \
+    '{ts:$ts, source:$source, session:$session, model:$model, prompt_tokens:$prompt_tokens, eval_tokens:$eval_tokens, duration_ms:$duration_ms, output_bytes:$output_bytes, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}' \
+    >> "$metrics_file" 2>/dev/null || true
 }

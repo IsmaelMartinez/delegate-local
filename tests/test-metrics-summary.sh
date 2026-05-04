@@ -54,7 +54,32 @@ assert_contains "prose" "$out" "fixture: prose tier appears"
 assert_contains "reasoning" "$out" "fixture: reasoning tier appears"
 assert_contains "qwen3.6:35b-a3b" "$out" "fixture: top model appears"
 assert_contains "phi4-reasoning:plus" "$out" "fixture: second model appears"
+# Lines without a source field count as delegate for backward compatibility.
+assert_contains "delegate=4" "$out" "fixture: source-less entries count as delegate"
+assert_contains "experiment=0" "$out" "fixture: no experiment entries here"
 rm -f "$fixture"
+
+# 4. Mixed-source fixture: delegate + experiment lines together. Verify the
+# summary splits them out and shows per-session rollup for experiment rows.
+mixed=$(mktemp)
+cat > "$mixed" <<'EOF'
+{"ts":"2026-05-04T08:00:00Z","source":"delegate","tier":"prose","model":"qwen3.6:35b-a3b","prompt_chars":40,"context_chars":160,"output_chars":200,"duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-04T09:00:00Z","source":"experiment","session":"2026-05-04-code-delegation-probe","model":"deepseek-r1:32b","prompt_tokens":500,"eval_tokens":80,"duration_ms":4500,"output_bytes":349,"exit_status":0,"estimated_tokens_avoided":580}
+{"ts":"2026-05-04T09:05:00Z","source":"experiment","session":"2026-05-04-code-delegation-probe","model":"qwen3-coder-next:latest","prompt_tokens":500,"eval_tokens":60,"duration_ms":3100,"output_bytes":302,"exit_status":0,"estimated_tokens_avoided":560}
+EOF
+
+EC=0
+out=$(bash "$SCRIPT" --file "$mixed" 2>&1) || EC=$?
+assert_eq 0 "$EC" "mixed: exits 0"
+assert_contains "Total invocations:   3" "$out" "mixed: total count"
+assert_contains "delegate=1" "$out" "mixed: one delegate entry"
+assert_contains "experiment=2" "$out" "mixed: two experiment entries"
+assert_contains "Tokens avoided (≈):  1240" "$out" "mixed: tokens avoided sum across sources"
+assert_contains "Per-source:" "$out" "mixed: per-source header present"
+assert_contains "Per-session (experiment):" "$out" "mixed: per-session header present"
+assert_contains "2026-05-04-code-delegation-probe" "$out" "mixed: session label appears"
+assert_contains "Per-tier (delegate):" "$out" "mixed: per-tier header present for delegate rows"
+rm -f "$mixed"
 
 echo
 echo "$pass passed, $fail failed"
