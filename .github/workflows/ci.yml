@@ -40,6 +40,9 @@ jobs:
       - name: Metrics-summary tests
         run: bash tests/test-metrics-summary.sh
 
+      - name: Run-api-cell tests
+        run: bash tests/test-run-api-cell.sh
+
       - name: Score-t3 tests
         run: bash tests/test-score-t3.sh
 

@@ -36,8 +36,9 @@ if (( total == 0 )); then
   exit 0
 fi
 
-# Headline: time range, total tokens avoided, errors, counts per source.
-IFS=$'\t' read -r ts_first ts_last total_avoided errors n_delegate n_experiment < <(jq -rs '
+# Headline + existence checks in a single jq pass so big metrics files are
+# read once, not three times.
+IFS=$'\t' read -r ts_first ts_last total_avoided errors n_delegate n_experiment n_tier n_session < <(jq -rs '
   def src: .source // "delegate";
   [
     (min_by(.ts) | .ts),
@@ -45,7 +46,9 @@ IFS=$'\t' read -r ts_first ts_last total_avoided errors n_delegate n_experiment 
     (map(.estimated_tokens_avoided) | add),
     (map(select(.exit_status != 0)) | length),
     (map(select(src == "delegate")) | length),
-    (map(select(src == "experiment")) | length)
+    (map(select(src == "experiment")) | length),
+    (map(select(.tier != null)) | length),
+    (map(select(.session != null)) | length)
   ] | @tsv' "$metrics_file")
 
 echo "=== delegate-to-ollama metrics ==="
@@ -75,8 +78,7 @@ jq -rs '
 echo
 
 # Per-tier (delegate entries only have tier; experiment entries have session).
-has_tier=$(jq -rs 'map(select(.tier != null)) | length' "$metrics_file")
-if (( has_tier > 0 )); then
+if (( n_tier > 0 )); then
   echo "Per-tier (delegate):"
   jq -rs '
     map(select(.tier != null))
@@ -94,8 +96,7 @@ if (( has_tier > 0 )); then
   echo
 fi
 
-has_session=$(jq -rs 'map(select(.session != null)) | length' "$metrics_file")
-if (( has_session > 0 )); then
+if (( n_session > 0 )); then
   echo "Per-session (experiment):"
   jq -rs '
     map(select(.session != null))
