@@ -172,6 +172,22 @@ assert_eq 0 "$EC" "DELEGATE_THINK=true: exits 0"
 assert_contains '"think":true' "$(cat "$sniff")" "payload: think:true when overridden"
 rm -rf "$tmp" "$metrics"
 
+# 6b. DELEGATE_THINK with a non-boolean stray value is normalised to false
+# (so a jq parse error can't kill the delegation).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_THINK=yes \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "DELEGATE_THINK=yes (non-boolean): still exits 0"
+assert_contains '"think":false' "$(cat "$sniff")" "payload: non-boolean DELEGATE_THINK normalises to false"
+rm -rf "$tmp" "$metrics"
+
 # 7. HTTP failure (curl non-zero) propagates and is logged.
 tmp=$(mktemp -d)
 make_mock_ollama "$tmp"

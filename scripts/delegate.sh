@@ -36,7 +36,15 @@ pick="$script_dir/pick-model.sh"
 
 metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}"
 host="${OLLAMA_HOST:-http://localhost:11434}"
-think="${DELEGATE_THINK:-false}"
+
+# Normalise DELEGATE_THINK to a strict JSON boolean ("true"/"false") before
+# it reaches jq --argjson, so a stray value like "yes" / "True" / " true "
+# doesn't cause a jq parse error that kills the whole delegation.
+if [[ "${DELEGATE_THINK:-false}" == "true" ]]; then
+  think="true"
+else
+  think="false"
+fi
 
 log_metric() {
   [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" == "1" ]] && return 0
@@ -82,11 +90,11 @@ fi
 payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson th "$think" \
   '{model:$m, prompt:$p, stream:false, think:$th, options:{temperature:0}}')
 
-response=$(printf '%s' "$payload" | curl -sS --fail -X POST "$host/api/generate" -d @-)
+response=$(curl -sS --fail -X POST "$host/api/generate" -d @- <<< "$payload")
 status=$?
 
 if [[ "$status" -eq 0 ]]; then
-  output=$(printf '%s' "$response" | jq -r '.response // ""')
+  output=$(jq -r '.response // ""' <<< "$response")
 else
   output=""
 fi
