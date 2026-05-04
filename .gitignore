@@ -12,3 +12,8 @@ __pycache__/
 # anyone developing the skill while it's installed. The file is private to
 # the user and never belongs in git.
 metrics.jsonl
+
+# Per-cell patched source trees written by session scorers (e.g. scorer-v8.py).
+# Regenerated on every scorer run; the raw model outputs in v*-runs/ are the
+# source of truth, the patched trees are an intermediate artefact.
+experiments/sessions/**/v*-patched/
