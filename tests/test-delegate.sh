@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Unit tests for scripts/delegate.sh.
-# Mocks ollama on a restricted PATH so the test runs the same everywhere.
+# Mocks `ollama list` (used by pick-model.sh) and `curl` (used to call
+# /api/generate) on a restricted PATH so the test runs the same everywhere.
 
 set -u
 
@@ -26,8 +27,7 @@ make_mock_ollama() {
   local dir="$1"
   cat > "$dir/ollama" <<'EOF'
 #!/usr/bin/env bash
-# Mock ollama. `list` returns a fixed model set; `run` echoes a canned reply
-# with some spinner-bytes mixed in so the ANSI strip is exercised.
+# Mock ollama list — just enough for pick-model.sh to resolve a tier.
 case "${1:-}" in
   list)
     cat <<'LIST'
@@ -35,17 +35,33 @@ NAME             ID SIZE   MODIFIED
 qwen3.6:35b-a3b  aa 30 GB  1 day ago
 LIST
     ;;
-  run)
-    # Read stdin to drain it (real ollama would consume it).
-    cat > /dev/null
-    # Emit some ANSI noise + a clean line so the test verifies stripping.
-    printf '\x1b[?25l\x1b[K  spinner\n'
-    printf 'mock-model-output: ok\n'
-    printf '\x1b[?25h'
-    ;;
 esac
 EOF
   chmod +x "$dir/ollama"
+}
+
+make_mock_curl_ok() {
+  # Mock curl: drain stdin (so the pipeline closes cleanly), copy the JSON
+  # payload to a sniff file if requested, then emit a canned JSON response.
+  local dir="$1" sniff="${2:-/dev/null}"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+cat > "${sniff}"
+printf '%s' '{"response":"mock-model-output: ok\\n"}'
+EOF
+  chmod +x "$dir/curl"
+}
+
+make_mock_curl_fail() {
+  # Mock curl that exits non-zero (HTTP error or connection refused).
+  local dir="$1"
+  cat > "$dir/curl" <<'EOF'
+#!/usr/bin/env bash
+cat > /dev/null
+echo "curl: connection refused" >&2
+exit 7
+EOF
+  chmod +x "$dir/curl"
 }
 
 # 1. Missing args -> exit 2.
@@ -57,10 +73,12 @@ EC=0
 out=$(bash "$SCRIPT" prose 2>&1) || EC=$?
 assert_eq 2 "$EC" "missing prompt -> exit 2"
 
-# 2. Happy path: tier resolves, ollama mock returns canned text, output is
-# stripped of ANSI, metrics file has one line with all required fields.
+# 2. Happy path: tier resolves, curl mock returns canned JSON, output is
+# parsed cleanly, metrics file has one line with all required fields.
 tmp=$(mktemp -d)
 make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -68,12 +86,6 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "happy path exits 0"
 assert_contains "mock-model-output: ok" "$out" "model output is in stdout"
-# After ANSI strip we should not see escape bytes.
-if [[ "$out" == *$'\x1b'* ]]; then
-  echo "  FAIL  ANSI bytes stripped from output"; fail=$((fail+1))
-else
-  echo "  PASS  ANSI bytes stripped from output"; pass=$((pass+1))
-fi
 # Metrics line written.
 lines=$(grep -c '^' "$metrics")
 assert_eq 1 "$lines" "metrics file has one line"
@@ -82,11 +94,22 @@ assert_contains '"tier":"prose"' "$line" "metrics: tier"
 assert_contains '"model":"qwen3.6:35b-a3b"' "$line" "metrics: model"
 assert_contains '"exit_status":0' "$line" "metrics: exit_status"
 assert_contains '"prompt_chars":9' "$line" "metrics: prompt_chars"
+# Sniffed payload has the expected JSON shape.
+if [[ -s "$sniff" ]]; then
+  payload=$(cat "$sniff")
+  assert_contains '"model":"qwen3.6:35b-a3b"' "$payload" "payload: model field"
+  assert_contains '"think":false' "$payload" "payload: think:false default"
+  assert_contains '"stream":false' "$payload" "payload: stream:false"
+  assert_contains '"temperature":0' "$payload" "payload: temperature:0"
+else
+  echo "  FAIL  payload sniff: file empty"; fail=$((fail+1))
+fi
 rm -rf "$tmp" "$metrics"
 
 # 3. Opt-out env var suppresses metrics writing.
 tmp=$(mktemp -d)
 make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
 metrics=$(mktemp); rm -f "$metrics"  # ensure file does not exist
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -122,6 +145,7 @@ rm -rf "$tmp" "$metrics"
 # 5. Stdin context is included in metrics char count.
 tmp=$(mktemp -d)
 make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -131,6 +155,54 @@ assert_eq 0 "$EC" "stdin context: exits 0"
 line=$(cat "$metrics")
 # "context-text-here\n" through cat stripping the trailing newline is 17 chars.
 assert_contains '"context_chars":17' "$line" "metrics: context_chars counted"
+rm -rf "$tmp" "$metrics"
+
+# 6. DELEGATE_THINK=true overrides default false in payload.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_THINK=true \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "DELEGATE_THINK=true: exits 0"
+assert_contains '"think":true' "$(cat "$sniff")" "payload: think:true when overridden"
+rm -rf "$tmp" "$metrics"
+
+# 6b. DELEGATE_THINK with a non-boolean stray value is normalised to false
+# (so a jq parse error can't kill the delegation).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_THINK=yes \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "DELEGATE_THINK=yes (non-boolean): still exits 0"
+assert_contains '"think":false' "$(cat "$sniff")" "payload: non-boolean DELEGATE_THINK normalises to false"
+rm -rf "$tmp" "$metrics"
+
+# 7. HTTP failure (curl non-zero) propagates and is logged.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_fail "$tmp"
+metrics=$(mktemp); : > "$metrics"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+if [[ "$EC" -ne 0 ]]; then
+  echo "  PASS  HTTP failure -> non-zero exit"; pass=$((pass+1))
+else
+  echo "  FAIL  HTTP failure -> non-zero exit (got $EC)"; fail=$((fail+1))
+fi
+assert_contains '"exit_status":7' "$(cat "$metrics")" "metrics: HTTP failure exit_status logged"
 rm -rf "$tmp" "$metrics"
 
 echo

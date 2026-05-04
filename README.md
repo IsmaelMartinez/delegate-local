@@ -90,7 +90,7 @@ Set `DELEGATE_TO_OLLAMA_CONFIG=/some/other/path.sh` to redirect the override pat
 ## Files
 
 - `SKILL.md` — triggering description and usage patterns Claude reads.
-- `scripts/delegate.sh <tier> "<prompt>"` — wraps `pick-model.sh` + `ollama run`, strips spinner ANSI from output, and appends one JSON line per invocation to `~/.claude/skills/delegate-to-ollama/metrics.jsonl`. Use this in place of bare `ollama run`.
+- `scripts/delegate.sh <tier> "<prompt>"` — wraps `pick-model.sh` + Ollama's `POST /api/generate` (with `think:false` and `temperature:0` defaults), and appends one JSON line per invocation to `~/.claude/skills/delegate-to-ollama/metrics.jsonl`. Use this in place of bare `ollama run` or hand-rolled `curl` calls. Honours `OLLAMA_HOST` (default `http://localhost:11434`).
 - `scripts/pick-model.sh <tier>` — resolves `code|prose|reasoning|long-context` to the best installed Ollama model via substring preference lists. Edit this file (not the skill body) when your installed set changes.
 - `scripts/audit-models.sh` — prints installed models, tier routing, and llmfit-driven upgrade suggestions filtered to first-party providers. Read-only; never pulls.
 - `scripts/metrics-summary.sh` — reads the metrics JSONL and prints volume per tier, p50/p95 latency, total tokens-avoided, and top models by frequency. Read-only.

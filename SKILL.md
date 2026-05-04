@@ -44,7 +44,7 @@ Three steps, in order, every time: **gather → delegate → verify**.
 2. **Delegate** with a constrained prompt that asks for an exact output shape.
 3. **Verify** every specific claim the model returns against the actual files before acting on it. Treat the model's output as a hypothesis, not a finding.
 
-Use `scripts/delegate.sh <tier> "<prompt>"` — it resolves the tier to a model, runs `ollama run` with thinking suppressed (`--think=false` by default; override with `DELEGATE_THINK=true` if reasoning chains genuinely help), strips spinner ANSI bytes from the captured output, and appends one JSON line per invocation to `~/.claude/skills/delegate-to-ollama/metrics.jsonl` for `scripts/metrics-summary.sh` to roll up later.
+Use `scripts/delegate.sh <tier> "<prompt>"` — it resolves the tier to a model, calls Ollama's `POST /api/generate` with thinking suppressed (`think:false` by default; override with `DELEGATE_THINK=true` if reasoning chains genuinely help) and `temperature:0`, and appends one JSON line per invocation to `~/.claude/skills/delegate-to-ollama/metrics.jsonl` for `scripts/metrics-summary.sh` to roll up later. The HTTP API returns clean text, so no ANSI stripping is needed downstream.
 
 ### Discipline for closed-format work
 
@@ -54,7 +54,7 @@ The 2026-05-03 retrospective (`experiments/sessions/2026-05-03-security-review-d
 - **Include a one-shot example in the prompt.** Local models infer the output shape much better from one concrete `Example: ... → output: ...` block than from prose description alone. The example must use a different finding/item from the actual input so it doesn't leak the answer.
 - **Make qualifier rules explicit.** When a finding text says "this is intentional in single-user dev contexts", local models tend to override that qualifier with prior beliefs (CVSS conventions, "code execution is always high"). Spell out in the prompt: *"if the input says behaviour X is intentional in context Y, severity reflects design intent, not vulnerability class"*.
 - **Use directive-shaped hard rules, not just examples, for closed-form classification with finite output enums.** The 2026-05-03 v4/v5 experiments showed that a single one-shot example does *not* shift the model's prior on what severity means (qwen3-coder-next stayed at 3/5). What did move the score to 5/5 (Opus parity) was an explicit hard-rule directive: *"if the finding text contains 'intentional', 'by design', 'documented as', or 'design choice', severity is capped at medium. This cap is non-negotiable."* The v7 follow-up confirmed this generalises: applying the same priority-ordered keyword-triggered "first match wins, non-negotiable" pattern to PR triage (REFACTOR/BUGFIX/FEATURE/DOCS/PERF) hit 5/5 on both deepseek-r1:32b and qwen3-coder-next:latest. The pattern is task-agnostic: spell out the rules as numbered priority-ordered hard directives with keyword triggers and a one-shot example, regardless of whether the rules are calibration caps, category mappings, or some other shape. Independent per-item classification works across a wider model range than cross-reference rule application (which v6 showed needs reasoning-architecture preservation to scale down).
-- **Thinking off is the default.** delegate.sh now passes `--think=false` automatically. The chain-of-thought tax for closed-format work showed up as both alarmist drift on classification and direct format failures (placeholder substitution).
+- **Thinking off is the default.** delegate.sh sends `think:false` in the API payload automatically. The chain-of-thought tax for closed-format work showed up as both alarmist drift on classification and direct format failures (placeholder substitution).
 
 ```bash
 git diff HEAD~5 | bash ~/.claude/skills/delegate-to-ollama/scripts/delegate.sh prose \
@@ -115,7 +115,7 @@ Preference order per tier lives in `scripts/pick-model.sh`. Edit that file (not 
 
 `code`, `prose`, `reasoning`, `long-context`, and `premium-general` all use the standard `delegate.sh <tier> "<prompt>"` wrapper — context on stdin, prompt as the argument, response on stdout, metrics appended to the JSONL.
 
-`vision` and `reasoning-vision` resolve a model name but go through the Ollama HTTP API (`POST /api/generate` with a base64-encoded `images` array) — Ollama 0.21's `ollama run` CLI does not expose an `--image` flag. The API runs on the same daemon as `ollama run`, so no extra setup is needed:
+`vision` and `reasoning-vision` resolve a model name but call `POST /api/generate` directly with a base64-encoded `images` array — `delegate.sh` sends only text, so vision call sites build their own payload until the wrapper grows an `images` parameter. The endpoint is the same daemon `delegate.sh` already uses, so no extra setup is needed:
 
 ```bash
 MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh vision)
@@ -135,7 +135,7 @@ curl -s -H "Content-Type: application/json" http://localhost:11434/api/embed \
   | jq '.embeddings[0]'
 ```
 
-Both bypass `delegate.sh` because the wrapper currently assumes text-in / text-out via `ollama run`. Folding image and embed call shapes into the wrapper is future work — track it on the roadmap before doing it, since both shapes need different metrics and different output handling than the current pipe.
+Both bypass `delegate.sh` because the wrapper currently assumes text-in / text-out — `delegate.sh` itself uses `POST /api/generate`, but with no `images` parameter and no `/api/embed` route. Folding image and embed call shapes into the wrapper is future work — track it on the roadmap before doing it, since both shapes need different metrics and different output handling than the current pipe.
 
 ## Failure modes — concrete examples
 
