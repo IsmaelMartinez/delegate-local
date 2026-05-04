@@ -10,6 +10,13 @@ For each cell:
 
 Prints per-cell verdicts, a per-(model, task) mean score (1.0 = all reps pass),
 and a per-model aggregate. Also writes a machine-readable v8-scores.tsv.
+
+Limitation: apply_blocks uses str.replace with count=1, so if a SEARCH section
+appears more than once in source.py only the first occurrence is patched. The
+t1-t3 fixtures have unique function bodies so this never bites here, but a
+future fixture with repeated structure would need either larger SEARCH contexts
+(per the prompt's "include more surrounding lines" rule) or a stricter
+multi-occurrence guard in this scorer.
 """
 from __future__ import annotations
 
@@ -131,5 +138,58 @@ def main():
     print(f"\n[scores written to {tsv.name}]")
 
 
+def self_test():
+    """Exercise parse_blocks and apply_blocks with synthetic inputs.
+
+    Not wired into CI; run with `scorer-v8.py --self-test` before trusting the
+    scorer on new fixtures. Covers the shapes that have actually shown up in
+    model output (single block, multiple blocks, surrounding prose, missing
+    SEARCH) plus the first-match documented limitation.
+    """
+    failures = []
+
+    def check(name, cond, detail=""):
+        if not cond:
+            failures.append(f"{name}: {detail}")
+
+    blocks = parse_blocks(
+        "<<<<<<< SEARCH\nfoo\n=======\nbar\n>>>>>>> REPLACE\n"
+    )
+    check("single block parses", blocks == [("foo", "bar")], repr(blocks))
+
+    blocks = parse_blocks(
+        "<<<<<<< SEARCH\na\n=======\nA\n>>>>>>> REPLACE\n"
+        "\n"
+        "<<<<<<< SEARCH\nb\n=======\nB\n>>>>>>> REPLACE\n"
+    )
+    check("two blocks parse", blocks == [("a", "A"), ("b", "B")], repr(blocks))
+
+    blocks = parse_blocks("hello world no blocks here")
+    check("no blocks returns empty", blocks == [], repr(blocks))
+
+    patched, err = apply_blocks("x = 1\ny = 2\n", [("y = 2", "y = 3")])
+    check("apply replaces match", patched == "x = 1\ny = 3\n" and err is None,
+          f"patched={patched!r} err={err!r}")
+
+    patched, err = apply_blocks("x = 1\n", [("z = 9", "z = 10")])
+    check("apply reports unmatched SEARCH",
+          patched is None and err is not None and "not found" in err,
+          f"patched={patched!r} err={err!r}")
+
+    patched, _ = apply_blocks("a\na\nb\n", [("a", "A")])
+    check("first-match-only limitation holds",
+          patched == "A\na\nb\n",
+          f"patched={patched!r} (expected first a replaced only)")
+
+    if failures:
+        for f in failures:
+            print(f"FAIL  {f}")
+        sys.exit(1)
+    print("self-test: all checks pass")
+
+
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        self_test()
+    else:
+        main()
