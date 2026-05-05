@@ -86,6 +86,14 @@ while IFS=: read -r line_no content; do
   report_hit "OBFUSC_UNICODE" "$line_no" "$content"
 done < <(perl -CSD -ne 'print "$.:$_" if /[\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{206F}]/' "$file" 2>/dev/null || true)
 
+# CONFLICT_MARKER: unresolved git merge markers. Structural prevention for
+# the class of regression PR #41 remediated (conflict markers landing on main
+# because CI didn't assert ROADMAP/SKILL parseability).
+while IFS=: read -r line_no content; do
+  [[ -z "$line_no" ]] && continue
+  report_hit "CONFLICT_MARKER" "$line_no" "$content"
+done < <(grep -nE '^(<<<<<<< |>>>>>>> |=======$)' "$file" 2>/dev/null || true)
+
 # URL_EXTERNAL: every http(s) URL not in the allowlist.
 while IFS=: read -r line_no content; do
   [[ -z "$line_no" ]] && continue
