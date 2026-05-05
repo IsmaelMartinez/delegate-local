@@ -51,6 +51,14 @@ npx skills add IsmaelMartinez/delegate-to-ollama
 
 Pass `-g` to install globally (`~/<agent>/skills/`) instead of per-project, `--copy` to make independent copies on systems without symlink support, or `-a claude-code` to limit to a specific agent.
 
+### Per-tool guides
+
+When the universal install is the wrong fit (per-machine routing, MCP-only consumers, AAIF-only setups), the per-tool docs cover the specifics:
+
+- [Claude Code](docs/install-claude-code.md)
+- [Codex](docs/install-codex.md)
+- [OpenCode](docs/install-opencode.md)
+
 ### Manual copy
 
 The skill is conformant with the [Agent Skills standard](https://agentskills.io/specification) — `SKILL.md` at the directory root with `name` and `description` frontmatter — so any tool that reads that format can use it. The repo is also AAIF-discoverable directly: a symlink at `.agents/skills/delegate-to-ollama` points at the repo root, so tools that scan the AAIF layout (Cursor, Copilot, OpenCode) find the skill without per-tool copying. For tools that do not support AAIF discovery, drop the directory into the tool's expected skills path:
