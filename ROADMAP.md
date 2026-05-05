@@ -7,13 +7,13 @@ The skill works today as a personal tool. To make it dependable for shared use, 
 The eight-PR session on 2026-05-03–04 closed Phase 10's discipline work and the HTTP-API switch. The next session should open directly on these items, in order.
 
 1. **Semantic-release pipeline + `CHANGELOG.md`.** Conventional-commit prefixes are already in use throughout the history; wiring up `semantic-release` closes the long-open Phase 2 item. Needs one workflow file and a release config. (When/if the repo flips to public, this also lifts the health tier in repo-butler's portfolio scan — Gold tier requires a release within 90 days, but repo-butler excludes private repos so the tier effect is dormant today.)
-2. **Director-side test-runner helper.** The v8 and adversarial chain both concluded with "director must verify by running the test" — but nothing in `scripts/` makes that easy. A `scripts/apply-and-test.sh <source-dir> <patch-file>` that applies SEARCH/REPLACE blocks, runs pytest, and returns a verdict would operationalise the pattern SKILL.md now documents and would simplify future adversarial-probe scorers (they all open-coded this logic). ~45 min of bash.
+2. **Director-side test-runner helper.** The v8 and adversarial chain both concluded with "director must verify by running the test" — but nothing in `scripts/` makes that easy. A `scripts/apply-and-test.sh <source-dir> <patch-file>` that applies SEARCH/REPLACE blocks, runs pytest, and returns a verdict would operationalise the pattern SKILL.md now documents and would simplify future adversarial-probe scorers (they all open-coded this logic). ~90 min of bash once the edge cases already reified in the session scorers (empty SEARCH, ambiguous multi-match, sandbox-or-not, pytest-python resolution) are ported.
 3. **Per-tool install docs.** Create `docs/install-claude-code.md`, `docs/install-codex.md`, `docs/install-opencode.md`. Closes the Phase 3 gap not covered by the README's universal install section. Low-urgency but mechanical.
 
 ```
 Done                                        Now                         Next
 ────────────────────────────────────────    ──────────────────────      ──────────────────────────
-v8 code-delegation probe            (#33)   → Semantic-release + CHANGELOG.md → Per-tool install docs
+v8 code-delegation probe            (#33)   → Semantic-release          → Per-tool install docs
 Phase 8 experiment telemetry        (#34)                               → Director test-runner helper
 Size-floor test (deepseek-r1:14b)   (#35)                               → (follow-up probes below)
 Adversarial test-file probe         (#36)

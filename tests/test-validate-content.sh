@@ -24,7 +24,7 @@ out=$(ALLOW_FILE="$EMPTY_ALLOW" bash "$SCRIPT" "$FIX/content-clean.md" 2>&1); ec
 assert_exit 0 "$ec" "clean fixture passes"
 
 # 2-8. Each bad category exits 1 and names the right tag.
-for cat in sec_disable sec_permissive cred_exfil obfusc_b64 obfusc_unicode tool_broad url_external; do
+for cat in sec_disable sec_permissive cred_exfil obfusc_b64 obfusc_unicode tool_broad url_external conflict_marker; do
   upper=$(echo "$cat" | tr 'a-z' 'A-Z')
   out=$(ALLOW_FILE="$EMPTY_ALLOW" bash "$SCRIPT" "$FIX/content-$cat.md" 2>&1); ec=$?
   assert_exit 1 "$ec" "$cat fixture exits 1"
