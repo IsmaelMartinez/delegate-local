@@ -10,19 +10,6 @@ The eight-PR session on 2026-05-03–04 closed Phase 10's discipline work and th
 2. **Director-side test-runner helper.** The v8 and adversarial chain both concluded with "director must verify by running the test" — but nothing in `scripts/` makes that easy. A `scripts/apply-and-test.sh <source-dir> <patch-file>` that applies SEARCH/REPLACE blocks, runs pytest, and returns a verdict would operationalise the pattern SKILL.md now documents and would simplify future adversarial-probe scorers (they all open-coded this logic). ~90 min of bash once the edge cases already reified in the session scorers (empty SEARCH, ambiguous multi-match, sandbox-or-not, pytest-python resolution) are ported.
 3. **Per-tool install docs.** Create `docs/install-claude-code.md`, `docs/install-codex.md`, `docs/install-opencode.md`. Closes the Phase 3 gap not covered by the README's universal install section. Low-urgency but mechanical.
 
-```
-Done                                        Now                         Next
-────────────────────────────────────────    ──────────────────────      ──────────────────────────
-v8 code-delegation probe            (#33)   → Semantic-release          → Per-tool install docs
-Phase 8 experiment telemetry        (#34)                               → Director test-runner helper
-Size-floor test (deepseek-r1:14b)   (#35)                               → (follow-up probes below)
-Adversarial test-file probe         (#36)
-Stealth re-run                      (#37)
-Multi-test-file adversarial         (#38)
-Smaller-model adversarial           (#39)
-SKILL.md + README cost section      (#40)
-```
-
 Recently completed:
 
 - **SKILL.md + README cost section** (2026-05-04, PR #40, merged): folded v8 + adversarial chain findings into SKILL.md (minimal-patch Fits bullet, REFUSE-hatch Discipline bullet, architecture-plus-scale reasoning-tier paragraph, phi4-reasoning warning, prose/code-contradiction failure mode) and added a "What you actually save" section to README with per-profile annual estimates so the "~250× cheaper than Opus" headline is contextualised rather than generalised.
