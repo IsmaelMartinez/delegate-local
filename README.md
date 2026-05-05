@@ -103,9 +103,9 @@ Three scripts gate every PR via GitHub Actions:
 
 - `scripts/validate-frontmatter.sh SKILL.md` — asserts the SKILL.md frontmatter has required fields, the `name` matches the directory, and `name` matches the Claude Skills regex.
 - `scripts/validate-skill-content.sh SKILL.md` — scans for seven categories of dangerous content (auth-disable, permissive flags, credential exfiltration, base64 obfuscation, zero-width / bidi unicode, broad tool grants, external URLs). Justified false positives go in `.content-check-allow`.
-- `scripts/eval-skill-triggers.sh` — validates `evals/eval-set.json` shape by default; with `--api` and `ANTHROPIC_API_KEY` set, runs each tagged query through Claude using only the SKILL.md frontmatter description as the trigger surface and asserts recall + negative-precision thresholds.
+- `scripts/eval-skill-triggers.sh` — validates `evals/eval-set.json` shape by default; with `--ollama [model]` runs each tagged query through a local Ollama model (free, on-device; defaults to `pick-model.sh code` which baselines at 1.000 / 1.000 against the current eval set on the reference host) using only the SKILL.md frontmatter description as the trigger surface and asserts recall + negative-precision thresholds. With `--api` and `ANTHROPIC_API_KEY` set, the same flow runs against Claude — kept for the rare case Claude-grade scoring is wanted.
 
-To enable the API-mode trigger eval in CI, configure `ANTHROPIC_API_KEY` in repo secrets (Settings → Secrets and variables → Actions). Without the secret the API step is skipped, not failed.
+The `--ollama` mode is the recommended local pre-merge gate for any frontmatter `description` edit: free, runs in 10–30 s on a mid-tier machine, and dogfoods the project's own routing. The `--api` mode is opt-in via the `ANTHROPIC_API_KEY` repo secret (Settings → Secrets and variables → Actions); without the secret the CI step is skipped, not failed.
 
 ## What you actually save
 

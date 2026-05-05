@@ -52,9 +52,17 @@ bash tests/test-delegate.sh
 bash tests/test-metrics-summary.sh
 bash tests/test-score-t3.sh
 bash tests/test-runner.sh
+bash tests/test-eval-skill-triggers.sh
 ```
 
-Run the trigger eval against the live Anthropic API (requires `ANTHROPIC_API_KEY`; gates whether a frontmatter `description` edit keeps recall ≥ 0.9 and negative-precision ≥ 0.9):
+Run the trigger eval against a local Ollama model (free, on-device; recommended pre-merge gate for any frontmatter `description` edit):
+
+```bash
+bash scripts/eval-skill-triggers.sh --ollama                        # default: pick-model.sh code
+bash scripts/eval-skill-triggers.sh --ollama qwen3-coder-next:latest  # explicit model
+```
+
+Run the trigger eval against the live Anthropic API (requires `ANTHROPIC_API_KEY`; kept for the rare case Claude-grade scoring is wanted):
 
 ```bash
 ANTHROPIC_API_KEY=… bash scripts/eval-skill-triggers.sh --api
@@ -78,7 +86,7 @@ Score a model's T3 output deterministically (citation-rate against the dated T3 
 bash experiments/score-t3.sh experiments/results/raw/<slug>.txt [--t3-snapshot DATE]
 ```
 
-There is no build step, no linter, no package manager. Runtime deps are `bash` (3.2+ — macOS-shipped is fine), `jq`, and `perl` (used in one validator because BSD grep on macOS lacks `-P`). `curl` is required only for `--api` mode of the trigger eval. Cross-platform portability is a real constraint: avoid associative arrays (bash 4-only), avoid `grep -P` (GNU-only), and prefer `perl -CSD` for unicode-aware regex.
+There is no build step, no linter, no package manager. Runtime deps are `bash` (3.2+ — macOS-shipped is fine), `jq`, and `perl` (used in one validator because BSD grep on macOS lacks `-P`). `curl` is required for `--api` and `--ollama` modes of the trigger eval. Cross-platform portability is a real constraint: avoid associative arrays (bash 4-only), avoid `grep -P` (GNU-only), and prefer `perl -CSD` for unicode-aware regex.
 
 Install for end users is `npx skills add IsmaelMartinez/delegate-to-ollama` (Vercel Labs' multi-agent CLI symlinks it into Claude Code, Codex, OpenCode, Cursor, Copilot, etc.) — see `README.md` for the manual `cp -r` fallback.
 
@@ -88,7 +96,7 @@ Install for end users is `npx skills add IsmaelMartinez/delegate-to-ollama` (Ver
 
 `scripts/delegate.sh` is the wrapper `SKILL.md` teaches Claude to invoke. It calls `pick-model.sh` to resolve the tier, then `POST /api/generate` on the Ollama daemon (default `http://localhost:11434`, override via `OLLAMA_HOST`) with `think:false`, `temperature:0`, and `stream:false`. The HTTP body is plain text — no ANSI stripping needed, unlike the `ollama run` CLI it replaced (the CLI mixed cursor-rewrites and spinner bytes into stdout). Each call appends one JSON line to `~/.claude/skills/delegate-to-ollama/metrics.jsonl`. Set `DELEGATE_TO_OLLAMA_NO_METRICS=1` to opt out for a single call. The metrics file is intentionally outside the repo so it survives `git clean -fdx` and isn't committed by accident. `scripts/metrics-summary.sh` reads that JSONL and prints volume/latency/tokens-avoided rollups; both scripts are idempotent and read-only with respect to the rest of the system.
 
-The validation pipeline is the gate every PR has to clear. Three scripts plus the unit suite, all wired into `.github/workflows/ci.yml` and runnable locally. `scripts/validate-frontmatter.sh` asserts SKILL.md has the required frontmatter fields, `name` matches the directory and the Claude Skills regex, and `description` ≤ 4096 chars. `scripts/validate-skill-content.sh` scans for seven categories of dangerous content (SEC_DISABLE, SEC_PERMISSIVE, CRED_EXFIL, OBFUSC_B64, OBFUSC_UNICODE, TOOL_BROAD, URL_EXTERNAL) using a bash-3-compatible newline-delimited allowlist (associative arrays unavailable on macOS) and `perl -CSD` for the unicode regex. Justified false positives go in `.content-check-allow` keyed by either repo-relative path-and-line or sha256 of the offending line. `scripts/eval-skill-triggers.sh` validates `evals/eval-set.json` shape by default; with `--api` it sends each query through Claude using only the SKILL.md frontmatter description as the trigger surface, scoring recall and negative-precision against the thresholds inside the eval set. The eval-set is the seed for catching trigger drift: 10 positive queries (tagged exact / paraphrase) and 13 negative queries (adjacent / unrelated). When you change preference order in `pick-model.sh`, expect tests in `tests/run-tests.sh` to need updating; when you change SKILL.md frontmatter, the API-mode trigger eval is what tells you whether recall held — the local hook in `.claude/hooks/post-edit-validate.sh` runs the shape-mode and content checks automatically on save but cannot run the API mode (no key in scope).
+The validation pipeline is the gate every PR has to clear. Three scripts plus the unit suite, all wired into `.github/workflows/ci.yml` and runnable locally. `scripts/validate-frontmatter.sh` asserts SKILL.md has the required frontmatter fields, `name` matches the directory and the Claude Skills regex, and `description` ≤ 4096 chars. `scripts/validate-skill-content.sh` scans for seven categories of dangerous content (SEC_DISABLE, SEC_PERMISSIVE, CRED_EXFIL, OBFUSC_B64, OBFUSC_UNICODE, TOOL_BROAD, URL_EXTERNAL) using a bash-3-compatible newline-delimited allowlist (associative arrays unavailable on macOS) and `perl -CSD` for the unicode regex. Justified false positives go in `.content-check-allow` keyed by either repo-relative path-and-line or sha256 of the offending line. `scripts/eval-skill-triggers.sh` validates `evals/eval-set.json` shape by default; with `--ollama [model]` it sends each query through a local Ollama model (free; defaults to `pick-model.sh code` which baselines at 1.000 / 1.000 against the current eval set on the reference host) using only the SKILL.md frontmatter description as the trigger surface, scoring recall and negative-precision against the thresholds inside the eval set. With `--api` and `ANTHROPIC_API_KEY` set, the same flow runs against Claude — kept for the rare case Claude-grade scoring is wanted. The eval-set is the seed for catching trigger drift: 10 positive queries (tagged exact / paraphrase) and 13 negative queries (adjacent / unrelated). When you change preference order in `pick-model.sh`, expect tests in `tests/run-tests.sh` to need updating; when you change SKILL.md frontmatter, run `--ollama` mode locally before merge — the local hook in `.claude/hooks/post-edit-validate.sh` runs the shape-mode and content checks automatically on save but does not run the trigger-accuracy gate.
 
 `tests/run-tests.sh` (50 assertions) covers `pick-model.sh`, `init.sh`, and `audit-models.sh`. Each validator and wrapper has its own test file (`test-validate-frontmatter.sh` 10, `test-validate-content.sh` 18, `test-delegate.sh` 23, `test-metrics-summary.sh` 13, `test-score-t3.sh` 23, `test-runner.sh` 8) using `tests/fixtures/` for both shape variants of SKILL.md and category-specific dangerous-content samples. Total 145 assertions run on every PR.
 
@@ -104,7 +112,7 @@ The validation pipeline is the gate every PR has to clear. Three scripts plus th
 
 ## Conventions
 
-`SKILL.md` frontmatter `description` field is load-bearing — it is the prompt Claude reads to decide whether to invoke this skill. The Phase 2 trigger evals (`scripts/eval-skill-triggers.sh --api` against `evals/eval-set.json`) gate changes to this field; in CI the step is gated on the `ANTHROPIC_API_KEY` repo secret. Run the API-mode eval before merging any frontmatter `description` edit and confirm recall ≥ 0.9 and negative-precision ≥ 0.9. Keep the MUST/MUST NOT structure intact when editing.
+`SKILL.md` frontmatter `description` field is load-bearing — it is the prompt Claude reads to decide whether to invoke this skill. The Phase 2 trigger evals (`scripts/eval-skill-triggers.sh` against `evals/eval-set.json`) gate changes to this field. The recommended pre-merge gate is `--ollama` mode (free, runs locally in 10–30 s, dogfoods the project's own routing); `--api` mode against Claude stays opt-in via the `ANTHROPIC_API_KEY` repo secret. Run the gate before merging any frontmatter `description` edit and confirm recall ≥ 0.9 and negative-precision ≥ 0.9. Keep the MUST/MUST NOT structure intact when editing.
 
 When reasoning about whether work belongs in this skill, the discriminator is the local-brain insight: local models are strong summarisers and weak agents. If a task needs multi-step reasoning, repo-wide context, or tool-calling, it does not belong here even if the surface looks textual. The "out of scope" section of `ROADMAP.md` enumerates the boundaries; honour them when adding capabilities.
 

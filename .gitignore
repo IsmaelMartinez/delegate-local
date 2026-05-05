@@ -17,3 +17,8 @@ metrics.jsonl
 # Regenerated on every scorer run; the raw model outputs in v*-runs/ are the
 # source of truth, the patched trees are an intermediate artefact.
 experiments/sessions/**/v*-patched/
+
+# Per-run trigger-eval result files (one JSONL per scoring run, timestamped).
+# The directory is kept for tooling discoverability via .gitkeep, but the
+# raw run outputs are local-only — re-runnable on demand.
+evals/results/*.jsonl

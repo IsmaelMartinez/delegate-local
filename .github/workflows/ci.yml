@@ -49,6 +49,9 @@ jobs:
       - name: Runner argument-parsing tests
         run: bash tests/test-runner.sh
 
+      - name: Eval-skill-triggers tests
+        run: bash tests/test-eval-skill-triggers.sh
+
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh
 
