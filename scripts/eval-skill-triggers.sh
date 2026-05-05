@@ -7,13 +7,14 @@
 #                     Requires ANTHROPIC_API_KEY.
 #   --ollama [model]: score each query with a local Ollama model (free).
 #                     Defaults to scripts/pick-model.sh code if no model is
-#                     given (trigger eval is closed-form binary classification
-#                     and the code tier ships with qwen3-coder-next on the
-#                     reference host, which baselines at 1.000 / 1.000 against
-#                     the current eval set; deepseek-r1:14b from the reasoning
-#                     tier scored 1.000 / 0.538, which is why code is the
-#                     default rather than reasoning). Requires the Ollama
-#                     daemon at OLLAMA_HOST (default http://localhost:11434).
+#                     given. Trigger eval is closed-form binary classification —
+#                     the same shape SKILL.md identifies as the code tier's
+#                     strength — so the code-tier resolution is more reliable
+#                     than the reasoning-tier resolution on this workload.
+#                     Override with an explicit model name when measuring a
+#                     different scorer; thresholds in the eval set are the
+#                     calibration target, not the chosen model. Requires the
+#                     Ollama daemon at OLLAMA_HOST (default http://localhost:11434).
 #
 # Both scoring modes use the same SKILL.md-frontmatter-as-trigger-surface
 # prompt and the same recall / negative-precision thresholds from the eval set.
@@ -84,6 +85,7 @@ if [[ -z "$description" ]]; then echo "could not parse description from $skill" 
 
 recall_threshold=$(jq -r '.thresholds.positive_recall // 0.9' "$eval_set")
 prec_threshold=$(jq -r '.thresholds.negative_precision // 0.9' "$eval_set")
+skill_name=$(jq -r '.skill // "delegate-to-ollama"' "$eval_set")
 
 # Resolve the scoring model per backend.
 case "$backend" in
@@ -109,7 +111,7 @@ mkdir -p "$results_dir"
 results_file="$results_dir/$run_id-$backend.jsonl"
 : > "$results_file"
 
-system_prompt="You are a trigger judge. The following description belongs to a skill called delegate-to-ollama. Read the user query and reply with EXACTLY one word - TRIGGER if the skill description should fire on this query, or NOTRIGGER otherwise. No reasoning, no punctuation, no explanation.
+system_prompt="You are a trigger judge. The following description belongs to a skill called $skill_name. Read the user query and reply with EXACTLY one word - TRIGGER if the skill description should fire on this query, or NOTRIGGER otherwise. No reasoning, no punctuation, no explanation.
 
 Skill description:
 $description"
@@ -141,7 +143,7 @@ score_query() {
         system: $sys,
         prompt: $user,
         think: false,
-        options: {temperature: 0},
+        options: {temperature: 0, num_predict: 8},
         stream: false
       }')
       resp=$(curl -fsS "$host/api/generate" \

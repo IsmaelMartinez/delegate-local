@@ -299,24 +299,25 @@ rm -rf "$tmp"
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
-# Wrap curl so the URL it received is logged.
-cat > "$tmp/curl" <<'EOF'
+# Wrap curl so the URL it received is logged. The sniff file lives inside
+# the per-test temp dir so concurrent runs of this test (or any other)
+# cannot collide on a shared /tmp path.
+cat > "$tmp/curl" <<EOF
 #!/usr/bin/env bash
 url=""
-for a in "$@"; do
-  case "$a" in
-    http*) url="$a" ;;
+for a in "\$@"; do
+  case "\$a" in
+    http*) url="\$a" ;;
   esac
 done
-echo "URL=$url" >> /tmp/curl-url-sniff.txt
+echo "URL=\$url" >> "$tmp/curl-url-sniff.txt"
 printf '%s' '{"response":"TRIGGER"}'
 EOF
 chmod +x "$tmp/curl"
-: > /tmp/curl-url-sniff.txt
+: > "$tmp/curl-url-sniff.txt"
 (cd "$tmp" && PATH="$tmp:$SAFE_PATH" OLLAMA_HOST=http://other.host:9999 bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || true
-url_line=$(head -1 /tmp/curl-url-sniff.txt)
+url_line=$(head -1 "$tmp/curl-url-sniff.txt")
 assert_contains "http://other.host:9999/api/generate" "$url_line" "--ollama: OLLAMA_HOST override honoured"
-rm -f /tmp/curl-url-sniff.txt
 rm -rf "$tmp"
 
 # 11. --api backend hits Anthropic endpoint with a perfect classifier and the key header.
