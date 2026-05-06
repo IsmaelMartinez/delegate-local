@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for taking the time to look. This repo is one Claude Code skill, two bash scripts of routing logic, and a validation pipeline. There is no build, no linter, and no package manager. The runtime is `bash` (3.2+ — macOS-shipped is fine), `jq`, and `perl`. `curl` is required for the `--api` and `--ollama` modes of the trigger eval.
+Thanks for taking the time to look. This repo is one Claude Code skill, two bash scripts of routing logic, and a validation pipeline. There is no build, no linter, and no package manager. The runtime is `bash` (3.2+ — macOS-shipped is fine), `jq`, `awk`, `perl`, and `curl` (used by `scripts/delegate.sh` against the Ollama HTTP API and by all three scoring modes of the trigger eval — `--api`, `--ollama`, `--github-models`).
 
 ## What lives where
 
@@ -52,7 +52,7 @@ A post-edit hook at `.claude/hooks/post-edit-validate.sh` runs the frontmatter a
 
 Conventional-commit prefixes (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`) are used throughout the history and will be required once `semantic-release` lands. Keep commit and PR messages concise. Reference an issue or roadmap item when the change is non-trivial.
 
-PRs run frontmatter validation, the content scan, the unit suite, the trigger eval against GitHub Models, and the MCP test suite. All four must pass. The trigger eval uses the auto-provisioned `GITHUB_TOKEN` so there is no secret to configure.
+PRs run frontmatter validation, the content scan, the unit suite, the trigger eval against GitHub Models, and the MCP test suite. All five must pass. The trigger eval uses the auto-provisioned `GITHUB_TOKEN` so there is no secret to configure.
 
 ## Cross-platform constraints
 
@@ -63,7 +63,7 @@ This skill runs on the macOS-shipped bash 3.2 and the GNU bash that most Linux d
 declare -A foo
 
 # Avoid: grep -P (GNU-only — breaks on macOS BSD grep)
-grep -P '\\d+' file
+grep -P '\d+' file
 ```
 
 Use newline-delimited allowlists keyed by either path-and-line or sha256, and use `perl -CSD` for unicode-aware regex. The validation scripts already follow this pattern; match their style when adding new ones.
