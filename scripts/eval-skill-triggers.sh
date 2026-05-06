@@ -15,17 +15,26 @@
 #                     different scorer; thresholds in the eval set are the
 #                     calibration target, not the chosen model. Requires the
 #                     Ollama daemon at OLLAMA_HOST (default http://localhost:11434).
+#   --github-models [model]:
+#                     score each query with a model on GitHub Models (free up
+#                     to the per-model rate-limit tier). Defaults to
+#                     openai/gpt-4o-mini, which is on the "low" rate-limit
+#                     tier and is sufficient for binary trigger classification.
+#                     Auth via the GITHUB_TOKEN env var, which GitHub Actions
+#                     workflows auto-provision when the job declares
+#                     `permissions: models: read`. Locally, `GITHUB_TOKEN=$(gh
+#                     auth token)` is the easiest way to run this mode.
 #
-# Both scoring modes use the same SKILL.md-frontmatter-as-trigger-surface
+# All three scoring modes use the same SKILL.md-frontmatter-as-trigger-surface
 # prompt and the same recall / negative-precision thresholds from the eval set.
-# The Ollama backend is a free dogfooded alternative for pre-merge gating;
-# the Anthropic backend remains for the rare case Claude-grade scoring is
-# wanted (and is what the eval-set's `model` field originally calibrated
-# against).
+# Ollama is the recommended local pre-merge gate (dogfooded routing); GitHub
+# Models is the recommended CI gate (free, no secret to configure); Anthropic
+# remains for the rare case Claude-grade scoring is wanted.
 #
-# Usage:  eval-skill-triggers.sh [--api | --ollama [model]] [--eval-set path] [--skill path]
+# Usage:  eval-skill-triggers.sh [--api | --ollama [model] | --github-models [model]] [--eval-set path] [--skill path]
 # Env:    ANTHROPIC_API_KEY (required for --api)
 #         OLLAMA_HOST       (optional for --ollama; default localhost:11434)
+#         GITHUB_TOKEN      (required for --github-models)
 # Exit:   0 pass, 1 threshold breach / shape error, 2 usage / config error.
 
 set -uo pipefail
@@ -33,6 +42,7 @@ set -uo pipefail
 mode="shape"
 backend=""
 ollama_model=""
+github_model=""
 eval_set="evals/eval-set.json"
 skill="SKILL.md"
 
@@ -45,9 +55,13 @@ while [[ $# -gt 0 ]]; do
       # with -- treat it as the next flag instead.
       if [[ $# -gt 0 && "$1" != --* ]]; then ollama_model="$1"; shift; fi
       ;;
+    --github-models)
+      mode="api"; backend="github_models"; shift
+      if [[ $# -gt 0 && "$1" != --* ]]; then github_model="$1"; shift; fi
+      ;;
     --eval-set) eval_set="$2"; shift 2 ;;
     --skill) skill="$2"; shift 2 ;;
-    *) echo "usage: eval-skill-triggers.sh [--api | --ollama [model]] [--eval-set path] [--skill path]" >&2; exit 2 ;;
+    *) echo "usage: eval-skill-triggers.sh [--api | --ollama [model] | --github-models [model]] [--eval-set path] [--skill path]" >&2; exit 2 ;;
   esac
 done
 
@@ -69,7 +83,7 @@ echo "shape: total=$total positive=$pos negative=$neg missing-fields=$missing_fi
 (( missing_fields == 0 )) || { echo "FAIL: $missing_fields queries missing fields" >&2; exit 1; }
 
 if [[ "$mode" == "shape" ]]; then
-  echo "OK shape mode (run with --api or --ollama for trigger-accuracy check)"
+  echo "OK shape mode (run with --api, --ollama, or --github-models for trigger-accuracy check)"
   exit 0
 fi
 
@@ -102,6 +116,10 @@ case "$backend" in
       scoring_model=$(bash "$pick" code 2>/dev/null) || true
       [[ -n "$scoring_model" ]] || { echo "pick-model.sh code returned empty (no installed model for the tier?)" >&2; exit 2; }
     fi
+    ;;
+  github_models)
+    [[ -n "${GITHUB_TOKEN:-}" ]] || { echo "GITHUB_TOKEN not set (run with GITHUB_TOKEN=\$(gh auth token) or in a workflow with permissions: models: read)" >&2; exit 2; }
+    scoring_model="${github_model:-openai/gpt-4o-mini}"
     ;;
 esac
 
@@ -151,16 +169,66 @@ score_query() {
         -d "$payload" 2>/dev/null) || return 1
       jq -r '.response // empty' <<<"$resp"
       ;;
+    github_models)
+      local host="${GITHUB_MODELS_HOST:-https://models.github.ai}"
+      local payload resp http_code retry_after attempt=0
+      payload=$(jq -nc --arg model "$scoring_model" --arg sys "$system_prompt" --arg user "$query" '{
+        model: $model,
+        messages: [{role:"system", content:$sys}, {role:"user", content:$user}],
+        temperature: 0,
+        max_tokens: 8
+      }')
+      # Free-tier limit is 15 RPM on low rate-limit-tier models. On a 429,
+      # honour the retry-after header and retry once. Cap retries at 3 so a
+      # persistently rate-limited run still terminates rather than spinning.
+      while (( attempt < 3 )); do
+        local headers_file body_file
+        headers_file=$(mktemp); body_file=$(mktemp)
+        http_code=$(curl -sS -o "$body_file" -D "$headers_file" -w '%{http_code}' \
+          "$host/inference/chat/completions" \
+          -H "Authorization: Bearer $GITHUB_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d "$payload" 2>/dev/null) || { rm -f "$headers_file" "$body_file"; return 1; }
+        if [[ "$http_code" == "429" ]]; then
+          retry_after=$(awk 'tolower($1) == "retry-after:" { gsub(/[^0-9]/, "", $2); print $2; exit }' "$headers_file")
+          rm -f "$headers_file" "$body_file"
+          [[ -z "$retry_after" || "$retry_after" -eq 0 ]] && retry_after=20
+          sleep "$retry_after"
+          attempt=$((attempt + 1))
+          continue
+        fi
+        if [[ "$http_code" != "200" ]]; then
+          rm -f "$headers_file" "$body_file"
+          return 1
+        fi
+        resp=$(cat "$body_file")
+        rm -f "$headers_file" "$body_file"
+        jq -r '.choices[0].message.content // empty' <<<"$resp"
+        return 0
+      done
+      return 1
+      ;;
   esac
 }
 
 echo "scoring: backend=$backend model=$scoring_model"
+
+# Per-request pacing for github_models to stay under the 15 RPM free-tier
+# limit on low-rate-limit-tier models. 4 seconds between requests = 15 RPM
+# exactly. Override with GITHUB_MODELS_DELAY=N (seconds; 0 disables). The
+# retry-after handler in score_query is the safety net; this is the throttle.
+gh_delay="${GITHUB_MODELS_DELAY:-4}"
+first=1
 
 tp=0; fn=0; tn=0; fp=0
 while read -r row; do
   id=$(jq -r '.id'     <<<"$row")
   expect=$(jq -r '.expect' <<<"$row")
   query=$(jq -r '.query'   <<<"$row")
+  if [[ "$backend" == "github_models" && "$first" == "0" && "$gh_delay" != "0" ]]; then
+    sleep "$gh_delay"
+  fi
+  first=0
   raw=$(score_query "$query") || { echo "$backend transport error on $id" >&2; exit 2; }
   # Normalise: trim whitespace, uppercase. The prefix-match below tolerates
   # any trailing punctuation the model emits despite the "no punctuation"

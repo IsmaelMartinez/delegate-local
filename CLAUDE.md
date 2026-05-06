@@ -62,6 +62,12 @@ bash scripts/eval-skill-triggers.sh --ollama                        # default: p
 bash scripts/eval-skill-triggers.sh --ollama qwen3-coder-next:latest  # explicit model
 ```
 
+Run the trigger eval against GitHub Models (free up to per-model rate-limit tier; this is what runs in CI on every PR):
+
+```bash
+GITHUB_TOKEN=$(gh auth token) bash scripts/eval-skill-triggers.sh --github-models  # default: openai/gpt-4o-mini
+```
+
 Run the trigger eval against the live Anthropic API (requires `ANTHROPIC_API_KEY`; kept for the rare case Claude-grade scoring is wanted):
 
 ```bash

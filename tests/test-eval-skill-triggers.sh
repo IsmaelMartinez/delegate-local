@@ -355,6 +355,173 @@ assert_eq 0 "$EC" "--ollama with later --skill flag -> exits 0"
 assert_contains "model=explicit-model:99b" "$out" "--ollama: explicit model parsed despite trailing flags"
 rm -rf "$tmp"
 
+# Mock curl for the github_models backend. The backend uses curl with
+# -o (body file), -D (headers file), -w '%{http_code}'. The mock writes a
+# fixed 200-status body, empty headers, prints "200" on stdout, and copies
+# the request body to $sniff for assertions. Verdict is decided by the same
+# perfect-classifier heuristic as the other backends — extract the user
+# message content, check for trigger keywords.
+make_mock_curl_github_perfect() {
+  local dir="$1" sniff="$2"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+body="" out_file="" headers_file=""
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -D) headers_file="\$2"; shift 2 ;;
+    -d) body="\$2"; shift 2 ;;
+    *)  shift ;;
+  esac
+done
+printf '%s\n' "\$body" >> "${sniff}"
+# Extract the user-role message content (last "content" field in the
+# messages array — system goes first, user goes second; greedy regex grabs
+# the last match).
+content_value=\$(printf '%s' "\$body" | sed -nE 's/.*"content":"([^"]*)".*/\1/p')
+if [[ "\$content_value" == *summarise* || "\$content_value" == *draft* || "\$content_value" == *triage* || "\$content_value" == *classify* ]]; then
+  printf '%s' '{"choices":[{"message":{"content":"TRIGGER"}}]}' > "\$out_file"
+else
+  printf '%s' '{"choices":[{"message":{"content":"NOTRIGGER"}}]}' > "\$out_file"
+fi
+: > "\$headers_file"
+printf '200'
+EOF
+  chmod +x "$dir/curl"
+}
+
+# 13. --github-models with no GITHUB_TOKEN -> exit 2.
+tmp=$(mktemp -d)
+make_eval_set "$tmp"
+make_skill "$tmp"
+EC=0
+out=$(cd "$tmp" && env -i PATH="$SAFE_PATH" bash "$SCRIPT" --github-models --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 2 "$EC" "--github-models without token -> exit 2"
+assert_contains "GITHUB_TOKEN not set" "$out" "--github-models without token -> error message"
+rm -rf "$tmp"
+
+# 14. --github-models with explicit model and a perfect mock curl -> 1.000 / 1.000 pass.
+tmp=$(mktemp -d)
+make_eval_set "$tmp"
+make_skill "$tmp"
+sniff="$tmp/sniff.txt"
+make_mock_curl_github_perfect "$tmp" "$sniff"
+EC=0
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_DELAY=0 bash "$SCRIPT" --github-models openai/gpt-4o-mini --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 0 "$EC" "--github-models perfect mock -> exits 0"
+assert_contains "scoring: backend=github_models model=openai/gpt-4o-mini" "$out" "--github-models: model header"
+assert_contains "recall=1.000 negative-precision=1.000" "$out" "--github-models perfect: 1.000/1.000"
+assert_contains "OK trigger evals (github_models)" "$out" "--github-models: OK message"
+rm -rf "$tmp"
+
+# 15. --github-models default model is openai/gpt-4o-mini.
+tmp=$(mktemp -d)
+make_eval_set "$tmp"
+make_skill "$tmp"
+sniff="$tmp/sniff.txt"
+make_mock_curl_github_perfect "$tmp" "$sniff"
+EC=0
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_DELAY=0 bash "$SCRIPT" --github-models --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 0 "$EC" "--github-models default -> exits 0"
+assert_contains "model=openai/gpt-4o-mini" "$out" "--github-models default: openai/gpt-4o-mini"
+rm -rf "$tmp"
+
+# 16. --github-models request body shape: model, messages array (system+user), temperature, max_tokens.
+tmp=$(mktemp -d)
+make_eval_set "$tmp"
+make_skill "$tmp"
+sniff="$tmp/sniff.txt"
+make_mock_curl_github_perfect "$tmp" "$sniff"
+EC=0
+(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_DELAY=0 bash "$SCRIPT" --github-models test-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || EC=$?
+first_body=$(head -1 "$sniff")
+assert_contains '"model":"test-model"' "$first_body" "--github-models body: model field"
+assert_contains '"role":"system"' "$first_body" "--github-models body: system role in messages"
+assert_contains '"role":"user"' "$first_body" "--github-models body: user role in messages"
+assert_contains '"temperature":0' "$first_body" "--github-models body: temperature:0"
+assert_contains '"max_tokens":8' "$first_body" "--github-models body: max_tokens:8"
+assert_contains "summarise this log" "$first_body" "--github-models body: query in user message"
+rm -rf "$tmp"
+
+# 17. --github-models honours GITHUB_MODELS_HOST override.
+tmp=$(mktemp -d)
+make_eval_set "$tmp"
+make_skill "$tmp"
+url_sniff_file="$tmp/url-sniff.txt"
+: > "$url_sniff_file"
+cat > "$tmp/curl" <<EOF
+#!/usr/bin/env bash
+url="" out_file="" headers_file=""
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -D) headers_file="\$2"; shift 2 ;;
+    http*) url="\$1"; shift ;;
+    *) shift ;;
+  esac
+done
+echo "URL=\$url" >> "$url_sniff_file"
+printf '%s' '{"choices":[{"message":{"content":"TRIGGER"}}]}' > "\$out_file"
+: > "\$headers_file"
+printf '200'
+EOF
+chmod +x "$tmp/curl"
+(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_HOST=https://other.host:8080 GITHUB_MODELS_DELAY=0 bash "$SCRIPT" --github-models test-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || true
+url_line=$(head -1 "$url_sniff_file" 2>/dev/null)
+assert_contains "https://other.host:8080/inference/chat/completions" "$url_line" "--github-models: GITHUB_MODELS_HOST override honoured"
+rm -rf "$tmp"
+
+# 18. --github-models retry-after handling: 429 once, then 200 -> succeeds.
+tmp=$(mktemp -d)
+make_eval_set "$tmp"
+make_skill "$tmp"
+counter="$tmp/call-counter"
+echo 0 > "$counter"
+cat > "$tmp/curl" <<EOF
+#!/usr/bin/env bash
+out_file="" headers_file=""
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -D) headers_file="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+n=\$(cat "$counter")
+echo \$((n+1)) > "$counter"
+if [[ "\$n" == "0" ]]; then
+  : > "\$out_file"
+  printf 'HTTP/2 429\r\nretry-after: 1\r\n\r\n' > "\$headers_file"
+  printf '429'
+else
+  printf '%s' '{"choices":[{"message":{"content":"TRIGGER"}}]}' > "\$out_file"
+  : > "\$headers_file"
+  printf '200'
+fi
+EOF
+chmod +x "$tmp/curl"
+EC=0
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_DELAY=0 bash "$SCRIPT" --github-models test-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+# First query 429s, retries after 1s, succeeds. All 16 queries score TRIGGER.
+# Recall=1.0 (8 positives all TRIGGER → tp=8); negative-precision=0.0 (8 negatives mismatched).
+# We only assert that the script reached the scoring stage and didn't crash on the 429.
+assert_contains "scoring: backend=github_models" "$out" "--github-models 429-then-200: reached scoring"
+final_count=$(cat "$counter")
+[[ "$final_count" -ge "17" ]] && pass=$((pass+1)) && echo "  PASS  --github-models 429: retried (counter >= 17 = 1 retry + 16 normal calls)" || { fail=$((fail+1)); echo "  FAIL  --github-models 429: counter=$final_count expected >=17"; }
+rm -rf "$tmp"
+
+# 19. --github-models with bad flag arrangement still parses model.
+tmp=$(mktemp -d)
+make_eval_set "$tmp"
+make_skill "$tmp"
+sniff="$tmp/sniff.txt"
+make_mock_curl_github_perfect "$tmp" "$sniff"
+EC=0
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_DELAY=0 bash "$SCRIPT" --github-models special/model:v9 --skill SKILL.md --eval-set eval-set.json 2>&1) || EC=$?
+assert_eq 0 "$EC" "--github-models with later --skill flag -> exits 0"
+assert_contains "model=special/model:v9" "$out" "--github-models: explicit model parsed despite trailing flags"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
