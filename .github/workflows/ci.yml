@@ -10,6 +10,9 @@ jobs:
   validate:
     name: validate skill
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      models: read
     steps:
       - uses: actions/checkout@v4
 
@@ -55,7 +58,12 @@ jobs:
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh
 
-      - name: Trigger eval (API mode)
+      - name: Trigger eval (GitHub Models)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/eval-skill-triggers.sh --github-models
+
+      - name: Trigger eval (Anthropic API, opt-in)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
