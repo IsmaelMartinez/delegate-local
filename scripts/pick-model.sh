@@ -48,7 +48,7 @@ fi
 case "$tier" in
   code)             prefs=("qwen3-coder-next" "qwen3-coder" "deepseek-r1" "qwen3.5") ;;
   prose)            prefs=("qwen3.6" "qwen3-next" "gemma4:latest" "gemma4" "llama4" "qwen3.5") ;;
-  reasoning)        prefs=("deepseek-r1" "phi4-reasoning" "qwq" "glm-4") ;;
+  reasoning)        prefs=("deepseek-r1:32b" "phi4-reasoning" "qwq" "glm-4") ;;
   long-context)     prefs=("qwen3.6" "qwen3-next" "llama4:scout" "qwen3-coder-next" "llama4" "glm-4") ;;
   vision)           prefs=("qwen3-vl:30b-a3b-thinking" "qwen3-vl") ;;
   embedding)        prefs=("nomic-embed-text" "bge-large") ;;
