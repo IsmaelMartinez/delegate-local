@@ -26,7 +26,7 @@ Recently completed:
 - **v8 code-delegation probe** (2026-05-04, PR #33, merged): Aider-style SEARCH/REPLACE on 3 fixtures × 2 models × 3 reps = 18/18 PASS, byte-identical. Electricity ~$0.001 vs ~$0.28 Opus for the suite — ~250× cheaper on this shape (caveats in README "What you actually save").
 - **Ollama issue #14645 triage** (2026-05-04, [comment](https://github.com/ollama/ollama/issues/14645#issuecomment-4372077348)): under `think:false + format:schema` on 0.21.1, qwen3.6:35b-a3b-q8_0 and qwen3-coder-next:latest both enforce schema correctly (disambiguated via a prose-prompt-with-unrelated-schema probe), suggesting the reported bug is narrower in scope than the title implies; endorsed upstream PR #15901 as the right fix for the qwen3.5 case.
 
-Deferred (not in the priority list, pending a concrete trigger): see Phase 10's "director-side severity reweighting pattern" bullet for the calibration-fallback rationale (still open until a real consumer reports a disagreement the directive-rule pattern can't capture); monthly scheduled `audit-models.sh` automation (Phase 6 recurring maintenance — no cadence yet).
+Deferred (not in the priority list, pending a concrete trigger): see Phase 10's "Director-side severity reweighting pattern" bullet for the calibration-fallback rationale; monthly scheduled `audit-models.sh` automation (Phase 6 recurring maintenance — no cadence yet).
 
 
 ## Phase 1 — Shipped
