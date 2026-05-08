@@ -8,7 +8,7 @@ Accepted.
 
 Routing a delegated task to a local model requires answering "given this tier, which installed model should run it?" Two designs were considered: a router process that holds a model of hardware, installed set, and historical performance and decides per call (the LiteLLM / OpenRouter shape, scaled down to local), versus a static preference list per tier matched against `ollama list` at call time.
 
-The router optimises for richer decisions — downshifting on short prompts, learning from failures. But none of those degrees of freedom were being used. The 4 tiers cover every observed delegation, and the right model per tier is stable on the order of weeks-to-months. A router would be a long-lived component solving a near-static problem.
+The router optimises for richer decisions — downshifting on short prompts, learning from failures. But none of those degrees of freedom were being used. The four active tiers (`code`, `prose`, `reasoning`, `long-context`) cover every observed delegation, with four more (`vision`, `embedding`, `premium-general`, `reasoning-vision`) scaffolded for capability expansion, and the right model per tier is stable on the order of weeks-to-months. A router would be a long-lived component solving a near-static problem.
 
 ## Decision
 

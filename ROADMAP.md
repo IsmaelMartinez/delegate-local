@@ -34,7 +34,7 @@ Deferred (not in the priority list, pending a concrete trigger): director-side s
 - [done] `SKILL.md` with YAML frontmatter (`name`, `description`).
 - [done] `scripts/pick-model.sh` for tier-based model resolution.
 - [done] `scripts/audit-models.sh` with `llmfit`-driven upgrade suggestions filtered to first-party providers.
-- [done] `tests/run-tests.sh` covering 14 unit cases against mocked `ollama` and `llmfit`. (Now 15 cases after the prose-ordering follow-up landed in #8.)
+- [done] `tests/run-tests.sh` covering unit cases against mocked `ollama` and `llmfit`.
 - [done] `README.md` and MIT `LICENSE`.
 
 ## Phase 2 — Hardening (borrowed from plg-agent-skills)
