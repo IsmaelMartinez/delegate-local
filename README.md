@@ -8,12 +8,14 @@ Claude reads the skill description and, when a user asks for something that fits
 
 By default the skill auto-delegates without asking. Saying "delegate where it fits" or "auto-delegate" once in a conversation locks in that behaviour for every subsequent matching task.
 
-Core pattern (from [local-brain](https://github.com/IsmaelMartinez/local-brain)):
+Core pattern (from [local-brain](https://github.com/IsmaelMartinez/local-brain)) — a delegated call resolves a tier (`prose` here; the full list is documented under [Files](#files) below) to the best installed local model, then pipes context into it:
 
 ```bash
 MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh prose)
 git diff HEAD~5 | ollama run "$MODEL" "Summarise in 3 bullets."
 ```
+
+The path shown is the default Claude Code skills location; `npx skills add` (recommended; see [Install](#install) below) symlinks the repo there for Claude Code, and at the equivalent default path for each other agent it detects. Other tools land at their own path — see the [Per-tool guides](#per-tool-guides).
 
 ### Capturing output non-interactively
 
