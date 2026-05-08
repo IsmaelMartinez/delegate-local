@@ -80,6 +80,16 @@ is_in_ollama() {
 # same name, so filter them out of pull suggestions.
 FIRST_PARTY_FILTER='["alibaba","qwen","google","meta","microsoft","deepseek","mistralai","mistral","zhipu","openai"]'
 
+# Cache the per-tier llmfit JSON once so the top-5 and pull-suggestion loops
+# below don't both call llmfit for the same tier (4 subprocesses instead of 8).
+cache_dir=$(mktemp -d)
+trap 'rm -rf "$cache_dir"' EXIT
+for tier in code prose reasoning long-context; do
+  uc=$(tier_to_usecase "$tier")
+  llmfit recommend --use-case "$uc" --min-fit good -n 20 --json > "$cache_dir/$tier.json" 2>/dev/null \
+    || echo '{"models":[]}' > "$cache_dir/$tier.json"
+done
+
 echo "=== Top llmfit recommendations per tier (for this hardware) ==="
 echo "Scores are llmfit composite (quality+speed+fit+context). Installed status"
 echo "checked against 'ollama list' (not llmfit's HF cache). Filtered to"
@@ -88,11 +98,10 @@ echo
 
 for tier in code prose reasoning long-context; do
   uc=$(tier_to_usecase "$tier")
-  json=$(llmfit recommend --use-case "$uc" --min-fit good -n 20 --json 2>/dev/null || echo '{"models":[]}')
-  filtered=$(echo "$json" | jq --argjson fp "$FIRST_PARTY_FILTER" '
+  filtered=$(jq --argjson fp "$FIRST_PARTY_FILTER" '
     .models | map(select((.provider | ascii_downcase) as $p | $fp | index($p)))
     | sort_by(-.score) | .[0:5]
-  ')
+  ' "$cache_dir/$tier.json")
   count=$(echo "$filtered" | jq 'length')
   if [[ "$count" -eq 0 ]]; then
     printf "  %-14s  (no first-party llmfit results)\n" "$tier"
@@ -110,14 +119,12 @@ echo "=== Suggested pulls ==="
 seen_suggestions=""
 found=0
 for tier in code prose reasoning long-context; do
-  uc=$(tier_to_usecase "$tier")
-  json=$(llmfit recommend --use-case "$uc" --min-fit good -n 20 --json 2>/dev/null || echo '{"models":[]}')
-  filtered=$(echo "$json" | jq --argjson fp "$FIRST_PARTY_FILTER" '
+  filtered=$(jq --argjson fp "$FIRST_PARTY_FILTER" '
     .models
     | map(select((.provider | ascii_downcase) as $p | $fp | index($p)))
     | map(select(.name | test("-(Base|FP8|FP16|BF16|AWQ|GPTQ|MLX|NVFP|speculator)"; "i") | not))
     | sort_by([.score, (.release_date // "0000-00-00")]) | reverse
-  ')
+  ' "$cache_dir/$tier.json")
 
   # Best installed score (among first-party models in llmfit top-20).
   best_installed=0

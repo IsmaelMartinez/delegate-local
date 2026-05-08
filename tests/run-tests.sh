@@ -77,10 +77,11 @@ run() {
   if [[ -n "${DELEGATE_TO_OLLAMA_CONFIG:-}" ]]; then
     extra=(DELEGATE_TO_OLLAMA_CONFIG="$DELEGATE_TO_OLLAMA_CONFIG")
   fi
-  OUT=$(env -i PATH="$custom_path" HOME="$sandbox_home" ${extra[@]+"${extra[@]}"} "$@" 2>/tmp/.delegate-ollama-test.err) || EC=$?
+  local err_file; err_file=$(mktemp)
+  OUT=$(env -i PATH="$custom_path" HOME="$sandbox_home" ${extra[@]+"${extra[@]}"} "$@" 2>"$err_file") || EC=$?
   EC=${EC:-0}
-  ERR=$(cat /tmp/.delegate-ollama-test.err)
-  rm -f /tmp/.delegate-ollama-test.err
+  ERR=$(cat "$err_file")
+  rm -f "$err_file"
   rm -rf "$sandbox_home"
 }
 
