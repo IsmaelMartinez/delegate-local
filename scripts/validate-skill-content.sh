@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Scan a SKILL.md (or any markdown) for dangerous content patterns.
 # Categories: SEC_DISABLE, SEC_PERMISSIVE, CRED_EXFIL, OBFUSC_B64,
-#             OBFUSC_UNICODE, TOOL_BROAD, URL_EXTERNAL.
+#             OBFUSC_UNICODE, TOOL_BROAD, CONFLICT_MARKER, URL_EXTERNAL.
 #
 # Usage: validate-skill-content.sh <file>
 # Env:   ALLOW_FILE  override path to .content-check-allow (default: repo root)

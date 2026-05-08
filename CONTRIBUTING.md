@@ -50,7 +50,7 @@ A post-edit hook at `.claude/hooks/post-edit-validate.sh` runs the frontmatter a
 
 ## Commits and PRs
 
-Conventional-commit prefixes (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`) are used throughout the history and will be required once `semantic-release` lands. Keep commit and PR messages concise. Reference an issue or roadmap item when the change is non-trivial.
+Conventional-commit prefixes (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`) are required by the release-please pipeline that drives versioning and CHANGELOG generation. Keep commit and PR messages concise. Reference an issue or roadmap item when the change is non-trivial.
 
 PRs run frontmatter validation, the content scan, the unit suite, the trigger eval against GitHub Models, and the MCP test suite. All five must pass. The trigger eval uses the auto-provisioned `GITHUB_TOKEN` so there is no secret to configure.
 
