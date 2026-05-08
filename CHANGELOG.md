@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.1](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.2.0...v0.2.1) (2026-05-08)
+
+
+### Documentation
+
+* drift corrections across README, CLAUDE.md, ADR-0003, CONTRIBUTING ([#53](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/53)) ([582b967](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/582b9677f84369579a9c283d245ca529b93f44a5))
+
+
+### Maintenance
+
+* add repo-butler consumer guide to CLAUDE.md ([#54](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/54)) ([39d2975](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/39d297551e2b19c13f290d112c871cda0681dd75))
+
 ## [0.2.0](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.1.0...v0.2.0) (2026-05-07)
 
 
