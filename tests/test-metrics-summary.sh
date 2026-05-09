@@ -81,6 +81,53 @@ assert_contains "2026-05-04-code-delegation-probe" "$out" "mixed: session label 
 assert_contains "Per-tier (delegate):" "$out" "mixed: per-tier header present for delegate rows"
 rm -f "$mixed"
 
+# 5. Feedback rollup: delegate events with hit/miss/untracked feedback rows.
+# Verifies that miss (kept:false) is counted, not silently dropped by the
+# jq // alternative-operator quirk.
+fb=$(mktemp)
+cat > "$fb" <<'EOF'
+{"ts":"2026-05-09T10:00:00Z","source":"delegate","tier":"prose","model":"q","prompt_chars":40,"context_chars":160,"output_chars":200,"duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-09T10:30:00Z","source":"delegate","tier":"prose","model":"q","prompt_chars":40,"context_chars":160,"output_chars":200,"duration_ms":4500,"exit_status":0,"estimated_tokens_avoided":120}
+{"ts":"2026-05-09T11:00:00Z","source":"delegate","tier":"reasoning","model":"d","prompt_chars":50,"context_chars":200,"output_chars":250,"duration_ms":7000,"exit_status":0,"estimated_tokens_avoided":150}
+{"ts":"2026-05-09T11:30:00Z","source":"delegate","tier":"reasoning","model":"d","prompt_chars":50,"context_chars":200,"output_chars":250,"duration_ms":7200,"exit_status":0,"estimated_tokens_avoided":160}
+{"ts":"2026-05-09T20:00:00Z","source":"feedback","ref_ts":"2026-05-09T10:00:00Z","kept":true}
+{"ts":"2026-05-09T20:01:00Z","source":"feedback","ref_ts":"2026-05-09T10:30:00Z","kept":false,"reason":"bullets"}
+{"ts":"2026-05-09T20:02:00Z","source":"feedback","ref_ts":"2026-05-09T11:00:00Z","kept":false}
+EOF
+
+EC=0
+out=$(bash "$SCRIPT" --file "$fb" 2>&1) || EC=$?
+assert_eq 0 "$EC" "feedback: exits 0"
+# Only delegate calls counted in invocations; feedback rows are zero-cost.
+assert_contains "delegate=4" "$out" "feedback: 4 delegate invocations counted"
+assert_contains "Delegation feedback (hit/miss):" "$out" "feedback: section header"
+assert_contains "prose" "$out" "feedback: prose row appears"
+assert_contains "reasoning" "$out" "feedback: reasoning row appears"
+# Specific counts: prose has 1 hit + 1 miss + 0 untracked.
+assert_contains "prose           n=2  hits=1  misses=1  untracked=0" "$out" "feedback: prose hit/miss exact counts"
+# Reasoning has 1 miss + 1 untracked (no feedback for the second reasoning call).
+assert_contains "reasoning       n=2  hits=0  misses=1  untracked=1" "$out" "feedback: reasoning miss not silently dropped"
+# Feedback rows must NOT inflate Tokens avoided (they have no token field).
+# Sum of delegate-only tokens: 100+120+150+160 = 530.
+assert_contains "Tokens avoided (≈):  530" "$out" "feedback: tokens not inflated by feedback rows"
+rm -f "$fb"
+
+# 6. Latest-feedback-wins: two feedback rows for the same delegate, recorded
+# in chronological order (hit, then miss). The later miss should win — the
+# user revised their verdict — and be counted as the miss.
+revised=$(mktemp)
+cat > "$revised" <<'EOF'
+{"ts":"2026-05-09T10:00:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":50}
+{"ts":"2026-05-09T20:00:00Z","source":"feedback","ref_ts":"2026-05-09T10:00:00Z","kept":true}
+{"ts":"2026-05-09T20:05:00Z","source":"feedback","ref_ts":"2026-05-09T10:00:00Z","kept":false,"reason":"second look — not actually used"}
+EOF
+
+EC=0
+out=$(bash "$SCRIPT" --file "$revised" 2>&1) || EC=$?
+assert_eq 0 "$EC" "revised: exits 0"
+assert_contains "prose           n=1  hits=0  misses=1  untracked=0" "$out" "revised: latest feedback wins (miss overrides earlier hit)"
+rm -f "$revised"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
