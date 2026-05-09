@@ -112,6 +112,22 @@ assert_contains "reasoning       n=2  hits=0  misses=1  untracked=1" "$out" "fee
 assert_contains "Tokens avoided (≈):  530" "$out" "feedback: tokens not inflated by feedback rows"
 rm -f "$fb"
 
+# 6. Latest-feedback-wins: two feedback rows for the same delegate, recorded
+# in chronological order (hit, then miss). The later miss should win — the
+# user revised their verdict — and be counted as the miss.
+revised=$(mktemp)
+cat > "$revised" <<'EOF'
+{"ts":"2026-05-09T10:00:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":50}
+{"ts":"2026-05-09T20:00:00Z","source":"feedback","ref_ts":"2026-05-09T10:00:00Z","kept":true}
+{"ts":"2026-05-09T20:05:00Z","source":"feedback","ref_ts":"2026-05-09T10:00:00Z","kept":false,"reason":"second look — not actually used"}
+EOF
+
+EC=0
+out=$(bash "$SCRIPT" --file "$revised" 2>&1) || EC=$?
+assert_eq 0 "$EC" "revised: exits 0"
+assert_contains "prose           n=1  hits=0  misses=1  untracked=0" "$out" "revised: latest feedback wins (miss overrides earlier hit)"
+rm -f "$revised"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

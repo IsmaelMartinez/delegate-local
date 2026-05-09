@@ -91,18 +91,15 @@ if (( n_feedback > 0 )); then
   echo "Delegation feedback (hit/miss):"
   jq -rs '
     def src: .source // "delegate";
-    . as $all
-    | (map(select(src == "feedback") | {ref_ts, kept})) as $fb
-    | (map(select(src == "delegate")) | map({ts, tier, model})) as $dels
-    | $dels
-    | map(
-        . as $d
-        | ($fb | map(select(.ref_ts == $d.ts)) | first) as $f
-        # Cannot use the // operator here: false // null evaluates to null
-        # because // treats false as "not present", which would silently drop
-        # every miss. Branch on whether $f is null instead.
-        | $d + {kept: (if $f == null then null else $f.kept end)}
-      )
+    # Build a ref_ts -> kept lookup map in a single reduce pass over the
+    # feedback rows. O(D + F) total; later feedback for the same delegate
+    # overwrites earlier feedback (latest-wins) which matches caller intent
+    # when a hit/miss verdict is revised. Direct map access via $fb_map[.ts]
+    # returns null for missing keys without triggering the // false-as-null
+    # pitfall (// would coerce a recorded false back to null and silently
+    # drop every miss).
+    (reduce (.[] | select(src == "feedback")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $fb_map
+    | map(select(src == "delegate") | {ts, tier, model, kept: $fb_map[.ts]})
     | group_by(.tier)
     | map({
         tier: .[0].tier,

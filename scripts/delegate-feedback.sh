@@ -36,16 +36,16 @@ reason="$*"
 [[ -f "$metrics_file" ]] || { echo "metrics file not found: $metrics_file" >&2; exit 1; }
 command -v jq >/dev/null || { echo "jq not on PATH" >&2; exit 2; }
 
-# Find the most recent delegate event ts. `jq -s` slurps the JSONL into an
-# array; we filter and pick the last (highest ts assumed equal to last-line
-# order, which holds for an append-only log). Portable across macOS/Linux —
-# avoids `tac` which BSD coreutils doesn't ship.
+# Find the most recent delegate event ts. Stream the JSONL through jq line
+# by line (no `-s` slurp — keeps memory flat for big logs) and pipe the
+# matching ts column through `tail -n 1` to grab the last one. Portable
+# across macOS/Linux; avoids `tac` (BSD coreutils doesn't ship it).
 #
 # Parens around `(.source // "delegate")` are load-bearing: jq's `//` binds
 # looser than `==`, so `.source // "delegate" == "delegate"` parses as
 # `.source // ("delegate" == "delegate")` = `.source // true`, which is
 # truthy for every event including experiments and feedback rows.
-ref_ts=$(jq -sr '[.[] | select((.source // "delegate") == "delegate") | .ts] | last // empty' "$metrics_file")
+ref_ts=$(jq -r 'select((.source // "delegate") == "delegate") | .ts' "$metrics_file" | tail -n 1)
 if [[ -z "$ref_ts" || "$ref_ts" == "null" ]]; then
   echo "no recent delegate event found in $metrics_file" >&2
   exit 1
