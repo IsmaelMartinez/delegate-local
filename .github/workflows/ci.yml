@@ -59,6 +59,14 @@ jobs:
         run: bash scripts/eval-skill-triggers.sh
 
       - name: Trigger eval (GitHub Models)
+        # Advisory, not blocking: GitHub Models free tier is 150 RPD on the
+        # low-rate-limit bucket and 23 queries per run, so ~6 PR runs/day
+        # exhaust the quota and the rest hang on long Retry-After. Until
+        # skip-when-unchanged + batched scoring lands (issue #62), let CI
+        # pass even when the gate can't run, and bound the wait so a hang
+        # surfaces fast instead of stalling the workflow.
+        continue-on-error: true
+        timeout-minutes: 5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/eval-skill-triggers.sh --github-models
