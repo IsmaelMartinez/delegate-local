@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Unit tests for scripts/eval-skill-triggers.sh.
-# Mocks `curl` (Ollama and Anthropic backends) and optionally `pick-model.sh`
-# on a restricted PATH so the test runs the same everywhere.
+# Mocks `curl` (Ollama, Anthropic, GitHub Models backends) and optionally
+# `pick-model.sh` on a restricted PATH so the test runs the same everywhere.
+#
+# The script under test issues exactly one batched scoring call per run
+# (issue #62 quota fix). Mocks therefore parse the queries out of the
+# request body and return a verdicts JSON object covering every id, rather
+# than answering per-query like the pre-batching version.
 
 set -u
 
@@ -23,10 +28,9 @@ assert_contains() {
   else echo "  FAIL  $name (missing '$needle' in '$haystack')"; fail=$((fail+1)); fi
 }
 
-# Build a minimal eval-set fixture in $1/eval-set.json with two positives and
-# two negatives. The shape check requires >=8 of each, so we override the
-# threshold gate by writing 8 of each (8 trigger, 8 no-trigger) but only the
-# verdict field matters for the per-query scoring tests.
+# Build a minimal eval-set fixture in $1/eval-set.json with 8 positives and
+# 8 negatives. Ids start with `p` for positives and `n` for negatives — mocks
+# rely on the prefix to classify in the perfect-classifier path.
 make_eval_set() {
   local dir="$1"
   cat > "$dir/eval-set.json" <<'JSON'
@@ -69,90 +73,109 @@ description: Use this skill to offload non-reasoning text work to local Ollama m
 MD
 }
 
-# Mock curl that returns a canned response. The mock writes the JSON body it
-# was given to $sniff for assertions.
-make_mock_curl_canned() {
-  local dir="$1" sniff="$2" backend="$3" verdict="$4"
-  case "$backend" in
-    ollama)
-      cat > "$dir/curl" <<EOF
+# Build a verdicts JSON object given the request body and a classifier rule.
+# The classifier is one of:
+#   "perfect"        — id prefix p → TRIGGER, n → NOTRIGGER
+#   "all-trigger"    — every id → TRIGGER
+#   "all-trigger-lc" — every id → "trigger.\n" (tests verdict normalisation)
+# Reads the body from stdin, prints the verdicts JSON object on stdout.
+# Uses jq + grep, both available on SAFE_PATH on Ubuntu and macOS.
+write_classifier_helper() {
+  local dir="$1"
+  cat > "$dir/build-verdicts.sh" <<'EOF'
 #!/usr/bin/env bash
-# Capture the last -d argument (request body) by walking argv.
-body=""
-while [[ \$# -gt 0 ]]; do
-  case "\$1" in
-    -d) body="\$2"; shift 2 ;;
-    *)  shift ;;
-  esac
-done
-printf '%s\n' "\$body" >> "${sniff}"
-printf '%s' '{"response":"${verdict}"}'
+# Reads request body on stdin, classifier rule as $1. Prints verdicts JSON.
+# Uses jq to walk the body shape (ollama, anthropic, github_models all carry
+# the user payload as a JSON-encoded string in a different field; we sniff
+# all three and union the ids found).
+rule="$1"
+body=$(cat)
+# Extract the user payload (a JSON-encoded array of {id, query}) from any of:
+#   ollama:        .prompt
+#   anthropic:     .messages[0].content
+#   github_models: .messages[1].content (user role, system is at [0])
+# Fall back to scanning all messages when shapes vary.
+payload=$(jq -r '
+  .prompt //
+  (.messages // [] | map(select(.role == "user") | .content) | first) //
+  empty
+' <<<"$body" 2>/dev/null)
+[[ -z "$payload" ]] && { echo "build-verdicts: could not find user payload in body" >&2; exit 1; }
+# Parse the payload as JSON and emit verdicts per id.
+case "$rule" in
+  perfect)
+    jq -c '{verdicts: (. | map({id: .id, verdict: (if (.id | startswith("p")) then "TRIGGER" else "NOTRIGGER" end)}))}' <<<"$payload"
+    ;;
+  all-trigger)
+    jq -c '{verdicts: (. | map({id: .id, verdict: "TRIGGER"}))}' <<<"$payload"
+    ;;
+  all-trigger-lc)
+    # Lowercase verdict with trailing punctuation+newline; the script must
+    # normalise it back to TRIGGER.
+    jq -c '{verdicts: (. | map({id: .id, verdict: "trigger.\n"}))}' <<<"$payload"
+    ;;
+  *)
+    echo "unknown classifier rule: $rule" >&2; exit 1 ;;
+esac
 EOF
-      ;;
-    anthropic)
-      cat > "$dir/curl" <<EOF
-#!/usr/bin/env bash
-body=""
-while [[ \$# -gt 0 ]]; do
-  case "\$1" in
-    -d) body="\$2"; shift 2 ;;
-    *)  shift ;;
-  esac
-done
-printf '%s\n' "\$body" >> "${sniff}"
-printf '%s' '{"content":[{"text":"${verdict}"}]}'
-EOF
-      ;;
-  esac
-  chmod +x "$dir/curl"
+  chmod +x "$dir/build-verdicts.sh"
 }
 
-# Mock curl that returns different verdict per query. The verdict logic
-# inspects the request body for the query string and picks "TRIGGER" or
-# "NOTRIGGER" based on whether the id starts with p (positive) or n (negative).
-# This lets us test recall/precision math with a perfect classifier.
-make_mock_curl_perfect() {
-  local dir="$1" backend="$2"
+# Mock curl that emits one batched response per invocation. Captures body to
+# $sniff and selects verdicts via the classifier rule.
+make_mock_curl_batched() {
+  local dir="$1" sniff="$2" backend="$3" rule="$4"
+  write_classifier_helper "$dir"
+  local helper="$dir/build-verdicts.sh"
   case "$backend" in
     ollama)
-      cat > "$dir/curl" <<'EOF'
+      cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
 body=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -d) body="$2"; shift 2 ;;
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -d) body="\$2"; shift 2 ;;
     *)  shift ;;
   esac
 done
-# Extract just the user's prompt field — the system prompt contains the
-# trigger keywords too, so matching the whole body would misclassify
-# negatives. Compact JSON shape: ..."prompt":"<query>"...
-prompt_value=$(printf '%s' "$body" | sed -nE 's/.*"prompt":"([^"]*)".*/\1/p')
-if [[ "$prompt_value" == *summarise* || "$prompt_value" == *draft* || "$prompt_value" == *triage* || "$prompt_value" == *classify* ]]; then
-  printf '%s' '{"response":"TRIGGER"}'
-else
-  printf '%s' '{"response":"NOTRIGGER"}'
-fi
+printf '%s\n' "\$body" >> "${sniff}"
+verdicts=\$(printf '%s' "\$body" | "${helper}" "${rule}")
+# Wrap as the model's text response inside the ollama envelope.
+jq -nc --arg r "\$verdicts" '{response: \$r}'
 EOF
       ;;
     anthropic)
-      cat > "$dir/curl" <<'EOF'
+      cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
 body=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -d) body="$2"; shift 2 ;;
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -d) body="\$2"; shift 2 ;;
     *)  shift ;;
   esac
 done
-# Anthropic body shape: ..."content":"<query>"... (the user's query rides
-# inside the messages array as the only user-role content).
-content_value=$(printf '%s' "$body" | sed -nE 's/.*"content":"([^"]*)".*/\1/p')
-if [[ "$content_value" == *summarise* || "$content_value" == *draft* || "$content_value" == *triage* || "$content_value" == *classify* ]]; then
-  printf '%s' '{"content":[{"text":"TRIGGER"}]}'
-else
-  printf '%s' '{"content":[{"text":"NOTRIGGER"}]}'
-fi
+printf '%s\n' "\$body" >> "${sniff}"
+verdicts=\$(printf '%s' "\$body" | "${helper}" "${rule}")
+jq -nc --arg t "\$verdicts" '{content:[{text:\$t}]}'
+EOF
+      ;;
+    github_models)
+      cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+body="" out_file="" headers_file=""
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -D) headers_file="\$2"; shift 2 ;;
+    -d) body="\$2"; shift 2 ;;
+    *)  shift ;;
+  esac
+done
+printf '%s\n' "\$body" >> "${sniff}"
+verdicts=\$(printf '%s' "\$body" | "${helper}" "${rule}")
+jq -nc --arg c "\$verdicts" '{choices:[{message:{content:\$c}}]}' > "\$out_file"
+: > "\$headers_file"
+printf '200'
 EOF
       ;;
   esac
@@ -170,10 +193,7 @@ EOF
   chmod +x "$dir/curl"
 }
 
-# Mock pick-model.sh that returns a canned model name. Used when testing
-# the default resolution path. The script lives outside the repo so the real
-# pick-model.sh is shadowed; we redirect the call inside the test by passing
-# --skill / --eval-set paths and exporting a wrapper script directory.
+# Mock pick-model.sh that returns a canned model name.
 make_mock_pick_model() {
   local dir="$1" model="$2"
   mkdir -p "$dir/scripts"
@@ -182,8 +202,6 @@ make_mock_pick_model() {
 echo "${model}"
 EOF
   chmod +x "$dir/scripts/pick-model.sh"
-  # eval-skill-triggers.sh resolves pick-model.sh relative to its own dirname,
-  # so we copy the script under test into the same dir.
   cp "$SCRIPT" "$dir/scripts/eval-skill-triggers.sh"
 }
 
@@ -218,13 +236,17 @@ rm -rf "$tmp"
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
-make_mock_curl_perfect "$tmp" ollama
+sniff="$tmp/sniff.txt"
+make_mock_curl_batched "$tmp" "$sniff" ollama perfect
 EC=0
 out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model:latest --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 assert_eq 0 "$EC" "--ollama perfect mock -> exits 0"
 assert_contains "scoring: backend=ollama model=mock-model:latest" "$out" "--ollama: model header"
 assert_contains "recall=1.000 negative-precision=1.000" "$out" "--ollama perfect: 1.000/1.000"
 assert_contains "OK trigger evals (ollama)" "$out" "--ollama: OK message"
+# Assert exactly one curl call was made (batching).
+calls=$(wc -l < "$sniff" | tr -d ' ')
+assert_eq 1 "$calls" "--ollama: exactly one batched call (was $calls)"
 rm -rf "$tmp"
 
 # 5. --ollama with default (pick-model.sh code) resolves a model.
@@ -232,7 +254,8 @@ tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 make_mock_pick_model "$tmp" "picked-by-tier:42b"
-make_mock_curl_perfect "$tmp" ollama
+sniff="$tmp/sniff.txt"
+make_mock_curl_batched "$tmp" "$sniff" ollama perfect
 EC=0
 out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$tmp/scripts/eval-skill-triggers.sh" --ollama --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 assert_eq 0 "$EC" "--ollama default -> exits 0"
@@ -255,7 +278,7 @@ tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 sniff="$tmp/sniff.txt"
-make_mock_curl_canned "$tmp" "$sniff" ollama "TRIGGER"
+make_mock_curl_batched "$tmp" "$sniff" ollama all-trigger
 EC=0
 out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 assert_eq 1 "$EC" "--ollama always-TRIGGER -> exit 1 (threshold breach)"
@@ -268,8 +291,7 @@ tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 sniff="$tmp/sniff.txt"
-# Lowercase trigger with trailing newline and punctuation; should still match.
-make_mock_curl_canned "$tmp" "$sniff" ollama "trigger.\n"
+make_mock_curl_batched "$tmp" "$sniff" ollama all-trigger-lc
 EC=0
 out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 # All 8 positives counted as TRIGGER (correct) but all 8 negatives also counted as
@@ -282,36 +304,39 @@ tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 sniff="$tmp/sniff.txt"
-make_mock_curl_canned "$tmp" "$sniff" ollama "TRIGGER"
+make_mock_curl_batched "$tmp" "$sniff" ollama all-trigger
 EC=0
 (cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || EC=$?
-# Sniff first request body and assert key fields.
 first_body=$(head -1 "$sniff")
 assert_contains '"model":"mock-model"' "$first_body" "--ollama body: model field"
 assert_contains '"think":false' "$first_body" "--ollama body: think:false"
+assert_contains '"format":"json"' "$first_body" "--ollama body: format:json (batched JSON output)"
 assert_contains '"temperature":0' "$first_body" "--ollama body: temperature:0"
 assert_contains '"stream":false' "$first_body" "--ollama body: stream:false"
 assert_contains "delegate-to-ollama" "$first_body" "--ollama body: skill description leaks through"
 assert_contains "summarise this log" "$first_body" "--ollama body: query in prompt"
+assert_contains '\"id\":\"p01\"' "$first_body" "--ollama body: ids in batched payload"
 rm -rf "$tmp"
 
 # 10. OLLAMA_HOST env override is honoured.
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
-# Wrap curl so the URL it received is logged. The sniff file lives inside
-# the per-test temp dir so concurrent runs of this test (or any other)
-# cannot collide on a shared /tmp path.
+write_classifier_helper "$tmp"
+helper="$tmp/build-verdicts.sh"
 cat > "$tmp/curl" <<EOF
 #!/usr/bin/env bash
-url=""
-for a in "\$@"; do
-  case "\$a" in
-    http*) url="\$a" ;;
+url="" body=""
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -d) body="\$2"; shift 2 ;;
+    http*) url="\$1"; shift ;;
+    *) shift ;;
   esac
 done
 echo "URL=\$url" >> "$tmp/curl-url-sniff.txt"
-printf '%s' '{"response":"TRIGGER"}'
+verdicts=\$(printf '%s' "\$body" | "$helper" all-trigger)
+jq -nc --arg r "\$verdicts" '{response: \$r}'
 EOF
 chmod +x "$tmp/curl"
 : > "$tmp/curl-url-sniff.txt"
@@ -324,8 +349,8 @@ rm -rf "$tmp"
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
-make_mock_curl_perfect "$tmp" anthropic
-# Wrap to capture URL alongside the perfect classifier.
+sniff="$tmp/sniff.txt"
+make_mock_curl_batched "$tmp" "$sniff" anthropic perfect
 mv "$tmp/curl" "$tmp/curl-real"
 cat > "$tmp/curl" <<EOF
 #!/usr/bin/env bash
@@ -348,47 +373,13 @@ rm -rf "$tmp"
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
-make_mock_curl_perfect "$tmp" ollama
+sniff="$tmp/sniff.txt"
+make_mock_curl_batched "$tmp" "$sniff" ollama perfect
 EC=0
 out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama explicit-model:99b --skill SKILL.md --eval-set eval-set.json 2>&1) || EC=$?
 assert_eq 0 "$EC" "--ollama with later --skill flag -> exits 0"
 assert_contains "model=explicit-model:99b" "$out" "--ollama: explicit model parsed despite trailing flags"
 rm -rf "$tmp"
-
-# Mock curl for the github_models backend. The backend uses curl with
-# -o (body file), -D (headers file), -w '%{http_code}'. The mock writes a
-# fixed 200-status body, empty headers, prints "200" on stdout, and copies
-# the request body to $sniff for assertions. Verdict is decided by the same
-# perfect-classifier heuristic as the other backends — extract the user
-# message content, check for trigger keywords.
-make_mock_curl_github_perfect() {
-  local dir="$1" sniff="$2"
-  cat > "$dir/curl" <<EOF
-#!/usr/bin/env bash
-body="" out_file="" headers_file=""
-while [[ \$# -gt 0 ]]; do
-  case "\$1" in
-    -o) out_file="\$2"; shift 2 ;;
-    -D) headers_file="\$2"; shift 2 ;;
-    -d) body="\$2"; shift 2 ;;
-    *)  shift ;;
-  esac
-done
-printf '%s\n' "\$body" >> "${sniff}"
-# Extract the user-role message content (last "content" field in the
-# messages array — system goes first, user goes second; greedy regex grabs
-# the last match).
-content_value=\$(printf '%s' "\$body" | sed -nE 's/.*"content":"([^"]*)".*/\1/p')
-if [[ "\$content_value" == *summarise* || "\$content_value" == *draft* || "\$content_value" == *triage* || "\$content_value" == *classify* ]]; then
-  printf '%s' '{"choices":[{"message":{"content":"TRIGGER"}}]}' > "\$out_file"
-else
-  printf '%s' '{"choices":[{"message":{"content":"NOTRIGGER"}}]}' > "\$out_file"
-fi
-: > "\$headers_file"
-printf '200'
-EOF
-  chmod +x "$dir/curl"
-}
 
 # 13. --github-models with no GITHUB_TOKEN -> exit 2.
 tmp=$(mktemp -d)
@@ -405,13 +396,15 @@ tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 sniff="$tmp/sniff.txt"
-make_mock_curl_github_perfect "$tmp" "$sniff"
+make_mock_curl_batched "$tmp" "$sniff" github_models perfect
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_DELAY=0 bash "$SCRIPT" --github-models openai/gpt-4o-mini --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test bash "$SCRIPT" --github-models openai/gpt-4o-mini --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 assert_eq 0 "$EC" "--github-models perfect mock -> exits 0"
 assert_contains "scoring: backend=github_models model=openai/gpt-4o-mini" "$out" "--github-models: model header"
 assert_contains "recall=1.000 negative-precision=1.000" "$out" "--github-models perfect: 1.000/1.000"
 assert_contains "OK trigger evals (github_models)" "$out" "--github-models: OK message"
+calls=$(wc -l < "$sniff" | tr -d ' ')
+assert_eq 1 "$calls" "--github-models: exactly one batched call (was $calls)"
 rm -rf "$tmp"
 
 # 15. --github-models default model is openai/gpt-4o-mini.
@@ -419,27 +412,29 @@ tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 sniff="$tmp/sniff.txt"
-make_mock_curl_github_perfect "$tmp" "$sniff"
+make_mock_curl_batched "$tmp" "$sniff" github_models perfect
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_DELAY=0 bash "$SCRIPT" --github-models --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test bash "$SCRIPT" --github-models --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 assert_eq 0 "$EC" "--github-models default -> exits 0"
 assert_contains "model=openai/gpt-4o-mini" "$out" "--github-models default: openai/gpt-4o-mini"
 rm -rf "$tmp"
 
-# 16. --github-models request body shape: model, messages array (system+user), temperature, max_tokens.
+# 16. --github-models request body shape: model, messages array (system+user), temperature, max_tokens scaled, response_format JSON.
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 sniff="$tmp/sniff.txt"
-make_mock_curl_github_perfect "$tmp" "$sniff"
+make_mock_curl_batched "$tmp" "$sniff" github_models perfect
 EC=0
-(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_DELAY=0 bash "$SCRIPT" --github-models test-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || EC=$?
+(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test bash "$SCRIPT" --github-models test-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || EC=$?
 first_body=$(head -1 "$sniff")
 assert_contains '"model":"test-model"' "$first_body" "--github-models body: model field"
 assert_contains '"role":"system"' "$first_body" "--github-models body: system role in messages"
 assert_contains '"role":"user"' "$first_body" "--github-models body: user role in messages"
 assert_contains '"temperature":0' "$first_body" "--github-models body: temperature:0"
-assert_contains '"max_tokens":8' "$first_body" "--github-models body: max_tokens:8"
+# Output budget for 16 queries is 16*30=480.
+assert_contains '"max_tokens":480' "$first_body" "--github-models body: max_tokens scaled to total*30"
+assert_contains '"response_format":{"type":"json_object"}' "$first_body" "--github-models body: JSON output mode"
 assert_contains "summarise this log" "$first_body" "--github-models body: query in user message"
 rm -rf "$tmp"
 
@@ -447,43 +442,50 @@ rm -rf "$tmp"
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
+write_classifier_helper "$tmp"
+helper="$tmp/build-verdicts.sh"
 url_sniff_file="$tmp/url-sniff.txt"
 : > "$url_sniff_file"
 cat > "$tmp/curl" <<EOF
 #!/usr/bin/env bash
-url="" out_file="" headers_file=""
+url="" out_file="" headers_file="" body=""
 while [[ \$# -gt 0 ]]; do
   case "\$1" in
     -o) out_file="\$2"; shift 2 ;;
     -D) headers_file="\$2"; shift 2 ;;
+    -d) body="\$2"; shift 2 ;;
     http*) url="\$1"; shift ;;
     *) shift ;;
   esac
 done
 echo "URL=\$url" >> "$url_sniff_file"
-printf '%s' '{"choices":[{"message":{"content":"TRIGGER"}}]}' > "\$out_file"
+verdicts=\$(printf '%s' "\$body" | "$helper" all-trigger)
+jq -nc --arg c "\$verdicts" '{choices:[{message:{content:\$c}}]}' > "\$out_file"
 : > "\$headers_file"
 printf '200'
 EOF
 chmod +x "$tmp/curl"
-(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_HOST=https://other.host:8080 GITHUB_MODELS_DELAY=0 bash "$SCRIPT" --github-models test-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || true
+(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_HOST=https://other.host:8080 bash "$SCRIPT" --github-models test-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || true
 url_line=$(head -1 "$url_sniff_file" 2>/dev/null)
 assert_contains "https://other.host:8080/inference/chat/completions" "$url_line" "--github-models: GITHUB_MODELS_HOST override honoured"
 rm -rf "$tmp"
 
-# 18. --github-models retry-after handling: 429 once, then 200 -> succeeds.
+# 18. --github-models retry-after handling: 429 once, then 200 -> succeeds. Counter goes to 2 (one retry + the one batched call).
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
+write_classifier_helper "$tmp"
+helper="$tmp/build-verdicts.sh"
 counter="$tmp/call-counter"
 echo 0 > "$counter"
 cat > "$tmp/curl" <<EOF
 #!/usr/bin/env bash
-out_file="" headers_file=""
+out_file="" headers_file="" body=""
 while [[ \$# -gt 0 ]]; do
   case "\$1" in
     -o) out_file="\$2"; shift 2 ;;
     -D) headers_file="\$2"; shift 2 ;;
+    -d) body="\$2"; shift 2 ;;
     *) shift ;;
   esac
 done
@@ -494,20 +496,18 @@ if [[ "\$n" == "0" ]]; then
   printf 'HTTP/2 429\r\nretry-after: 1\r\n\r\n' > "\$headers_file"
   printf '429'
 else
-  printf '%s' '{"choices":[{"message":{"content":"TRIGGER"}}]}' > "\$out_file"
+  verdicts=\$(printf '%s' "\$body" | "$helper" all-trigger)
+  jq -nc --arg c "\$verdicts" '{choices:[{message:{content:\$c}}]}' > "\$out_file"
   : > "\$headers_file"
   printf '200'
 fi
 EOF
 chmod +x "$tmp/curl"
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_DELAY=0 bash "$SCRIPT" --github-models test-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
-# First query 429s, retries after 1s, succeeds. All 16 queries score TRIGGER.
-# Recall=1.0 (8 positives all TRIGGER → tp=8); negative-precision=0.0 (8 negatives mismatched).
-# We only assert that the script reached the scoring stage and didn't crash on the 429.
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test bash "$SCRIPT" --github-models test-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 assert_contains "scoring: backend=github_models" "$out" "--github-models 429-then-200: reached scoring"
 final_count=$(cat "$counter")
-[[ "$final_count" -ge "17" ]] && pass=$((pass+1)) && echo "  PASS  --github-models 429: retried (counter >= 17 = 1 retry + 16 normal calls)" || { fail=$((fail+1)); echo "  FAIL  --github-models 429: counter=$final_count expected >=17"; }
+[[ "$final_count" -eq "2" ]] && pass=$((pass+1)) && echo "  PASS  --github-models 429: retried (counter == 2 = 1 retry + 1 batched call)" || { fail=$((fail+1)); echo "  FAIL  --github-models 429: counter=$final_count expected 2"; }
 rm -rf "$tmp"
 
 # 19. --github-models with bad flag arrangement still parses model.
@@ -515,11 +515,73 @@ tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 sniff="$tmp/sniff.txt"
-make_mock_curl_github_perfect "$tmp" "$sniff"
+make_mock_curl_batched "$tmp" "$sniff" github_models perfect
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_DELAY=0 bash "$SCRIPT" --github-models special/model:v9 --skill SKILL.md --eval-set eval-set.json 2>&1) || EC=$?
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test bash "$SCRIPT" --github-models special/model:v9 --skill SKILL.md --eval-set eval-set.json 2>&1) || EC=$?
 assert_eq 0 "$EC" "--github-models with later --skill flag -> exits 0"
 assert_contains "model=special/model:v9" "$out" "--github-models: explicit model parsed despite trailing flags"
+rm -rf "$tmp"
+
+# 20. Parse-error path: model emits non-JSON garbage -> exit 2.
+tmp=$(mktemp -d)
+make_eval_set "$tmp"
+make_skill "$tmp"
+cat > "$tmp/curl" <<'EOF'
+#!/usr/bin/env bash
+# Return a response with no JSON object at all.
+printf '%s' '{"response":"sorry, I cannot help with that."}'
+EOF
+chmod +x "$tmp/curl"
+EC=0
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 2 "$EC" "--ollama non-JSON response -> exit 2"
+assert_contains "did not contain a parseable verdicts array" "$out" "--ollama non-JSON: parse error message"
+rm -rf "$tmp"
+
+# 21. Markdown-fence stripping: model emits ```json ... ``` -> still parses.
+tmp=$(mktemp -d)
+make_eval_set "$tmp"
+make_skill "$tmp"
+write_classifier_helper "$tmp"
+helper="$tmp/build-verdicts.sh"
+cat > "$tmp/curl" <<EOF
+#!/usr/bin/env bash
+body=""
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -d) body="\$2"; shift 2 ;;
+    *)  shift ;;
+  esac
+done
+verdicts=\$(printf '%s' "\$body" | "$helper" perfect)
+fenced="\\\`\\\`\\\`json
+\${verdicts}
+\\\`\\\`\\\`"
+jq -nc --arg r "\$fenced" '{response: \$r}'
+EOF
+chmod +x "$tmp/curl"
+EC=0
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 0 "$EC" "--ollama fenced JSON -> exits 0"
+assert_contains "recall=1.000 negative-precision=1.000" "$out" "--ollama fenced: parses cleanly"
+rm -rf "$tmp"
+
+# 22. Missing-verdict path: model only verdicts a subset -> warning + counted as misses.
+tmp=$(mktemp -d)
+make_eval_set "$tmp"
+make_skill "$tmp"
+# Return only the first 8 (positives); the 8 negatives have no verdict and
+# count as fp (NOTRIGGER expected, no verdict received).
+cat > "$tmp/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s' '{"response":"{\"verdicts\":[{\"id\":\"p01\",\"verdict\":\"TRIGGER\"},{\"id\":\"p02\",\"verdict\":\"TRIGGER\"},{\"id\":\"p03\",\"verdict\":\"TRIGGER\"},{\"id\":\"p04\",\"verdict\":\"TRIGGER\"},{\"id\":\"p05\",\"verdict\":\"TRIGGER\"},{\"id\":\"p06\",\"verdict\":\"TRIGGER\"},{\"id\":\"p07\",\"verdict\":\"TRIGGER\"},{\"id\":\"p08\",\"verdict\":\"TRIGGER\"}]}"}'
+EOF
+chmod +x "$tmp/curl"
+EC=0
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+# 8 positives correctly TRIGGER (recall=1.0), 8 negatives missing → counted as fp (neg-precision=0).
+assert_contains "8 verdicts missing" "$out" "--ollama partial: warning surfaces missing count"
+assert_contains "recall=1.000 negative-precision=0.000" "$out" "--ollama partial: missing counted as misses"
 rm -rf "$tmp"
 
 echo
