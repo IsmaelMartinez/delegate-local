@@ -61,6 +61,9 @@ jobs:
       - name: Apply-and-test tests
         run: bash tests/test-apply-and-test.sh
 
+      - name: Prompts-library tests
+        run: bash tests/test-prompts-library.sh
+
       - name: Eval-skill-triggers tests
         run: bash tests/test-eval-skill-triggers.sh
 
