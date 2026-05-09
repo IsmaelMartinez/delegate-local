@@ -116,9 +116,13 @@ has_refuse=$(printf '%s' "$patch_text" | awk '
 # Extract SEARCH/REPLACE blocks via perl. Output format: each block emitted as
 # two NUL-terminated records (search, replace) on stdout. Using NUL avoids
 # collisions with newlines and equals signs inside the block content.
+# `-CSD` is the project-standard switch for unicode-aware regex (see
+# CLAUDE.md "Conventions"); model-emitted patches can contain non-ASCII
+# identifiers or comments and must round-trip verbatim.
 blocks_file=$(mktemp)
-trap 'rm -f "$blocks_file"' EXIT
-printf '%s' "$patch_text" | perl -0777 -ne '
+patched_file=$(mktemp)
+trap 'rm -f "$blocks_file" "$patched_file"' EXIT
+printf '%s' "$patch_text" | perl -CSD -0777 -ne '
   while (/<{5,}\s*SEARCH\s*\n(.*?)\n={5,}\s*\n(.*?)\n>{5,}\s*REPLACE/sg) {
     print $1, "\0", $2, "\0";
   }
@@ -140,7 +144,12 @@ fi
 # silently patching the first occurrence — the SEARCH/REPLACE format requires
 # unique surrounding context (output rules in build-prompt.sh), so >1 matches
 # is a prompt-compliance failure, not a thing this script papers over.
-patched=$(cat "$source_dir/$source_name")
+#
+# Source content lives in $patched_file across iterations rather than a
+# string variable; command substitution and here-strings both mangle trailing
+# newlines, which would lose the final newline of the source file every
+# iteration and could break SEARCH blocks whose context relies on it.
+cp "$source_dir/$source_name" "$patched_file"
 
 # Read NUL-delimited search/replace pairs. Bash's `read -d ''` reads up to NUL.
 exec 3< "$blocks_file"
@@ -153,8 +162,9 @@ while IFS= read -r -d '' search <&3 && IFS= read -r -d '' replace <&3; do
   fi
   # Count matches via perl's index() — substring (literal, not regex) match
   # that handles multi-line SEARCH content cleanly. BSD awk rejects literal
-  # newlines in -v variable values, so awk is unsuitable here.
-  count=$(SEARCH="$search" perl -0777 -e '
+  # newlines in -v variable values, so awk is unsuitable here. Reads the
+  # patched file directly to preserve trailing newlines verbatim.
+  count=$(SEARCH="$search" perl -CSD -0777 -e '
     my $text = do { local $/; <STDIN> };
     my $s = $ENV{SEARCH};
     my $c = 0;
@@ -165,7 +175,7 @@ while IFS= read -r -d '' search <&3 && IFS= read -r -d '' replace <&3; do
       last if length($s) == 0;
     }
     print $c;
-  ' <<<"$patched")
+  ' < "$patched_file")
   if [[ "$count" == "0" ]]; then
     snippet=$(printf '%s' "$search" | head -1 | cut -c1-60)
     emit APPLY "block $block_idx: SEARCH not found ($snippet)"
@@ -178,8 +188,11 @@ while IFS= read -r -d '' search <&3 && IFS= read -r -d '' replace <&3; do
   fi
   # Replace the single match. awk's gsub regex-escapes are too painful for
   # multi-line literal text; use perl with a literal-quoted substitution so
-  # regex metacharacters in the SEARCH content are not interpreted.
-  patched=$(SEARCH="$search" REPLACE="$replace" perl -0777 -e '
+  # regex metacharacters in the SEARCH content are not interpreted. Write
+  # to a sibling temp file and rotate to preserve byte-exactness across
+  # iterations (no command substitution, no here-string).
+  next_file=$(mktemp)
+  SEARCH="$search" REPLACE="$replace" perl -CSD -0777 -e '
     my $text = do { local $/; <STDIN> };
     my $s = $ENV{SEARCH};
     my $r = $ENV{REPLACE};
@@ -188,19 +201,24 @@ while IFS= read -r -d '' search <&3 && IFS= read -r -d '' replace <&3; do
       $text = substr($text, 0, $idx) . $r . substr($text, $idx + length($s));
     }
     print $text;
-  ' <<<"$patched")
+  ' < "$patched_file" > "$next_file"
+  mv "$next_file" "$patched_file"
 done
 exec 3<&-
 
 # Materialise the patched copy. If --out wasn't given, use a tempdir that the
 # caller can recover the patched files from later via stderr.
+#
+# Copies the entire source-dir so tests with sibling files (conftest.py,
+# data fixtures, helper modules, additional tests) keep their dependencies;
+# then overwrites <source_name> with the patched bytes from $patched_file.
 if [[ -z "$out_dir" ]]; then
   out_dir=$(mktemp -d)
   echo "patched-out: $out_dir" >&2
 fi
 mkdir -p "$out_dir"
-printf '%s' "$patched" > "$out_dir/$source_name"
-cp "$source_dir/$test_script" "$out_dir/$test_script"
+cp -R "$source_dir/." "$out_dir/"
+cp "$patched_file" "$out_dir/$source_name"
 
 # Run pytest with a timeout. `timeout` is on coreutils on Linux and on macOS
 # when installed via brew; not part of the BSD baseline. We invoke pytest as

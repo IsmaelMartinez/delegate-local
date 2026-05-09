@@ -352,7 +352,42 @@ stdout_only=$(bash "$SCRIPT" "$tmp" "$tmp/patch.txt" 2>/dev/null)
 assert_contains "VERDICT: PASS" "$stdout_only" "stdout: VERDICT printed to stdout"
 rm -rf "$tmp"
 
-# 20. APPLY_AND_TEST_PYTHON env var pins the interpreter.
+# 20. Sibling-file dependency: tests that import a helper module sitting next
+# to source.py must still find it after patching. Regression test for the
+# pre-fix behaviour where only test_source.py was copied to out_dir.
+tmp=$(mktemp -d)
+cat > "$tmp/source.py" <<'PY'
+from helper import bump
+
+def add(a, b):
+    return bump(a + b)
+PY
+cat > "$tmp/helper.py" <<'PY'
+def bump(x):
+    return x + 0
+PY
+cat > "$tmp/test_source.py" <<'PY'
+from source import add
+
+def test_add_uses_helper():
+    assert add(1, 2) == 3
+PY
+cat > "$tmp/patch.txt" <<'EOF'
+<<<<<<< SEARCH
+def add(a, b):
+    return bump(a + b)
+=======
+def add(a, b):
+    return bump(a + b)  # patched
+>>>>>>> REPLACE
+EOF
+EC=0
+out=$(bash "$SCRIPT" "$tmp" "$tmp/patch.txt" 2>&1) || EC=$?
+assert_eq 0 "$EC" "sibling-file: exit 0 (helper module copied alongside)"
+assert_contains "VERDICT: PASS" "$out" "sibling-file: PASS"
+rm -rf "$tmp"
+
+# 21. APPLY_AND_TEST_PYTHON env var pins the interpreter.
 tmp=$(mktemp -d)
 make_fixture "$tmp"
 cat > "$tmp/patch.txt" <<'EOF'
