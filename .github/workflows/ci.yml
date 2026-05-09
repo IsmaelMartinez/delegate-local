@@ -22,6 +22,9 @@ jobs:
           perl --version | head -2
           bash --version | head -1
 
+      - name: Install pytest (apply-and-test.sh fixture runner)
+        run: pip install --quiet pytest
+
       - name: Validate frontmatter
         run: bash scripts/validate-frontmatter.sh SKILL.md
 
@@ -51,6 +54,9 @@ jobs:
 
       - name: Runner argument-parsing tests
         run: bash tests/test-runner.sh
+
+      - name: Apply-and-test tests
+        run: bash tests/test-apply-and-test.sh
 
       - name: Eval-skill-triggers tests
         run: bash tests/test-eval-skill-triggers.sh
