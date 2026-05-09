@@ -15,6 +15,13 @@ jobs:
       models: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Need history vs the base ref so the trigger-eval step can decide
+          # whether SKILL.md or evals/eval-set.json actually changed and skip
+          # the GitHub Models call when they did not. fetch-depth: 0 grabs
+          # full history; the alternative (--depth=1 + git fetch base) is
+          # fiddlier on push events where there's no PR base.
+          fetch-depth: 0
 
       - name: Verify required tools
         run: |
@@ -71,25 +78,53 @@ jobs:
         run: bash scripts/eval-skill-triggers.sh
 
       - name: Trigger eval (GitHub Models)
-        # Advisory, not blocking: GitHub Models free tier is 150 RPD on the
-        # low-rate-limit bucket and 23 queries per run, so ~6 PR runs/day
-        # exhaust the quota and the rest hang on long Retry-After. Until
-        # skip-when-unchanged + batched scoring lands (issue #62), let CI
-        # pass even when the gate can't run, and bound the wait so a hang
-        # surfaces fast instead of stalling the workflow.
+        # Advisory, not blocking: a transport-error / quota hit doesn't fail
+        # the job. Batched scoring (PR #66) collapsed 23 requests/run to 1,
+        # but the safety net stays since one bad call still shouldn't stall
+        # CI when retry-after was the original silent-hang failure mode.
         continue-on-error: true
         timeout-minutes: 5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash scripts/eval-skill-triggers.sh --github-models
+          # Compare against the PR base (pull_request events) or the previous
+          # commit on the branch (push events). github.event.before is the
+          # SHA before the push; on the very first push to a branch it can
+          # be all-zeros, in which case the diff falls through to running
+          # the gate (safer default than skipping on an unknown base).
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # Skip the GitHub Models call entirely when neither the trigger-eval
+          # input (evals/eval-set.json) nor the trigger surface (SKILL.md) has
+          # changed since the base commit. Most PRs (docs, scripts, tests,
+          # ROADMAP, ADRs) don't touch either, so the gate skips the API call
+          # and stays well inside the 150 RPD free-tier bucket even with
+          # heavy iteration. SKILL.md is matched whole — body-only edits are
+          # rare and re-running the gate when one slips through costs nothing
+          # post-batching.
+          if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            if git diff --quiet "$BASE_SHA" -- SKILL.md evals/eval-set.json; then
+              echo "SKILL.md and evals/eval-set.json unchanged vs $BASE_SHA — skipping GitHub Models trigger eval"
+              exit 0
+            fi
+          fi
+          bash scripts/eval-skill-triggers.sh --github-models
 
       - name: Trigger eval (Anthropic API, opt-in)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "ANTHROPIC_API_KEY not configured; skipping API-mode trigger eval"
             exit 0
+          fi
+          # Same skip-when-unchanged guard as the GitHub Models step — the
+          # trigger surface is identical so the gate is identical.
+          if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            if git diff --quiet "$BASE_SHA" -- SKILL.md evals/eval-set.json; then
+              echo "SKILL.md and evals/eval-set.json unchanged vs $BASE_SHA — skipping Anthropic trigger eval"
+              exit 0
+            fi
           fi
           bash scripts/eval-skill-triggers.sh --api
 
