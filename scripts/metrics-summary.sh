@@ -37,18 +37,22 @@ if (( total == 0 )); then
 fi
 
 # Headline + existence checks in a single jq pass so big metrics files are
-# read once, not three times.
-IFS=$'\t' read -r ts_first ts_last total_avoided errors n_delegate n_experiment n_tier n_session < <(jq -rs '
+# read once, not three times. Feedback events (`source:"feedback"`) are
+# excluded from token / latency / model rollups — they're zero-cost
+# annotations on prior delegate events, surfaced separately below.
+IFS=$'\t' read -r ts_first ts_last total_avoided errors n_delegate n_experiment n_tier n_session n_feedback < <(jq -rs '
   def src: .source // "delegate";
+  def call: select(src != "feedback");
   [
-    (min_by(.ts) | .ts),
-    (max_by(.ts) | .ts),
-    (map(.estimated_tokens_avoided) | add),
-    (map(select(.exit_status != 0)) | length),
-    (map(select(src == "delegate")) | length),
-    (map(select(src == "experiment")) | length),
-    (map(select(.tier != null)) | length),
-    (map(select(.session != null)) | length)
+    (map(call) | min_by(.ts) | .ts),
+    (map(call) | max_by(.ts) | .ts),
+    (map(call | .estimated_tokens_avoided) | add),
+    (map(call | select(.exit_status != 0)) | length),
+    (map(call | select(src == "delegate")) | length),
+    (map(call | select(src == "experiment")) | length),
+    (map(call | select(.tier != null)) | length),
+    (map(call | select(.session != null)) | length),
+    (map(select(src == "feedback")) | length)
   ] | @tsv' "$metrics_file")
 
 echo "=== delegate-to-ollama metrics ==="
@@ -59,11 +63,14 @@ echo "Errors (non-zero):   $errors"
 echo "Tokens avoided (≈):  $total_avoided"
 echo
 
-# Per-source breakdown: count, tokens avoided, p50/p95 latency.
+# Per-source breakdown: count, tokens avoided, p50/p95 latency. Feedback
+# events are excluded — they have no duration / token cost and are reported
+# in their own section below.
 echo "Per-source:"
 jq -rs '
   def src: .source // "delegate";
-  group_by(src)
+  map(select(src != "feedback"))
+  | group_by(src)
   | map({
       source: (.[0] | src),
       n: length,
@@ -77,11 +84,45 @@ jq -rs '
 ' "$metrics_file"
 echo
 
+# Feedback rollup: hit-rate per delegate-tier across delegate events that
+# have a feedback row referring to them. Untracked = delegate events with
+# no feedback recorded yet.
+if (( n_feedback > 0 )); then
+  echo "Delegation feedback (hit/miss):"
+  jq -rs '
+    def src: .source // "delegate";
+    . as $all
+    | (map(select(src == "feedback") | {ref_ts, kept})) as $fb
+    | (map(select(src == "delegate")) | map({ts, tier, model})) as $dels
+    | $dels
+    | map(
+        . as $d
+        | ($fb | map(select(.ref_ts == $d.ts)) | first) as $f
+        # Cannot use the // operator here: false // null evaluates to null
+        # because // treats false as "not present", which would silently drop
+        # every miss. Branch on whether $f is null instead.
+        | $d + {kept: (if $f == null then null else $f.kept end)}
+      )
+    | group_by(.tier)
+    | map({
+        tier: .[0].tier,
+        n: length,
+        hits: (map(select(.kept == true)) | length),
+        misses: (map(select(.kept == false)) | length),
+        untracked: (map(select(.kept == null)) | length)
+      })
+    | sort_by(-.n)
+    | .[]
+    | "  \(.tier | . + (" " * (14 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)  untracked=\(.untracked)"
+  ' "$metrics_file"
+  echo
+fi
+
 # Per-tier (delegate entries only have tier; experiment entries have session).
 if (( n_tier > 0 )); then
   echo "Per-tier (delegate):"
   jq -rs '
-    map(select(.tier != null))
+    map(select((.source // "delegate") != "feedback" and .tier != null))
     | group_by(.tier)
     | map({
         tier: .[0].tier,
@@ -111,7 +152,8 @@ fi
 
 echo "Top models:"
 jq -rs '
-  group_by(.model)
+  map(select((.source // "delegate") != "feedback"))
+  | group_by(.model)
   | map({model: .[0].model, n: length})
   | sort_by(-.n)
   | .[0:5]

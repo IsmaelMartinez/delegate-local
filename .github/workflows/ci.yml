@@ -46,6 +46,9 @@ jobs:
       - name: Metrics-summary tests
         run: bash tests/test-metrics-summary.sh
 
+      - name: Delegate-feedback tests
+        run: bash tests/test-delegate-feedback.sh
+
       - name: Run-api-cell tests
         run: bash tests/test-run-api-cell.sh
 
