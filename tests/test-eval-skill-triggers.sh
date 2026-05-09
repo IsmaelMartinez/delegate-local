@@ -260,7 +260,7 @@ EC=0
 out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 assert_eq 1 "$EC" "--ollama always-TRIGGER -> exit 1 (threshold breach)"
 assert_contains "negative-precision=0.000" "$out" "--ollama always-TRIGGER -> 0 precision"
-assert_contains "FAIL: recall<" "$out" "--ollama always-TRIGGER -> FAIL message"
+assert_contains "negative-precision<" "$out" "--ollama always-TRIGGER -> FAIL precision-side message"
 rm -rf "$tmp"
 
 # 8. --ollama: verdict normalisation (lowercase, trailing newline) still scores.
