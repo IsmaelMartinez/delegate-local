@@ -7,14 +7,16 @@ The user has a branch with one or more commits and wants a GitHub PR description
 ## Context to gather first
 
 ```bash
-gh pr list --repo <owner>/<repo> --state merged --limit 2 \
+gh pr list --repo <owner>/<repo> --state merged --limit 1 \
   --json title,body,number \
   --jq '.[] | "<<<EXAMPLE_BEGIN PR #\(.number)>>>\nTITLE: \(.title)\nBODY:\n\(.body)\n<<<EXAMPLE_END>>>\n"'
 git diff <base-branch> --stat                    # what changed
 git log <base-branch>..HEAD --pretty=oneline    # commit-by-commit shape
 ```
 
-The two recent merged-PR bodies are the load-bearing context. The model learns the project's bullet-vs-prose shape, the standard subsection headings, and the test-plan-checkbox convention from these literals, not from descriptors.
+The recent merged-PR body is the load-bearing context. The model learns the project's bullet-vs-prose shape, the standard subsection headings, and the test-plan-checkbox convention from the literal, not from descriptors.
+
+**`--limit 1` is the default for a reason** — see the calibration note below on the 2026-05-10 timeout: two full PR bodies (~5 KB combined) is enough to push the prose-tier model past the wall-clock budget on a 35B host. If a single example doesn't give the model enough shape (rare; most repos have a stable PR shape), bump to `--limit 2` and route to the `long-context` tier rather than `prose`.
 
 The `<<<EXAMPLE_BEGIN ... EXAMPLE_END>>>` envelope around each example is intentional — without explicit delimiters the model bleeds content from one example into the next or treats the whole block as one example with confused shape.
 
@@ -47,12 +49,12 @@ Output ONLY the markdown body, nothing else.
 
 ```bash
 bash scripts/delegate.sh --recipe pr-description \
-  --var recent_prs="$(gh pr list --repo OWNER/REPO --state merged --limit 2 \
+  --var recent_prs="$(gh pr list --repo OWNER/REPO --state merged --limit 1 \
     --json title,body,number \
     --jq '.[] | "<<<EXAMPLE_BEGIN PR #\(.number)>>>\nTITLE: \(.title)\nBODY:\n\(.body)\n<<<EXAMPLE_END>>>\n"')" \
   --var diff_stat="$(git diff main --stat)" \
   --var context="<3-5 sentences>" \
-  prose "Match the example PR descriptions exactly in shape and tone. NO invented example output."
+  prose "Match the example PR description exactly in shape and tone. NO invented example output."
 ```
 
 ## Anti-hallucination guards (each line addresses a real past MISS)
@@ -96,5 +98,9 @@ Distilled from session 2026-05-09 across two attempts:
 - **HIT verbatim** (ts=2026-05-09T20:23:58Z) — same recent-examples anchor plus explicit "NO invented example output" guard added in response to the previous MISS. Output used with zero edits.
 
 The "no invented tool output" guard is the recipe's most important addition over the bare anchoring pattern. Recent-examples anchoring alone produces well-shaped HALLUCINATIONS for any concrete-output section; the explicit ban moves narrative into prose where the model has license to summarise but blocks fabricated CLI snippets.
+
+### 2026-05-10 — single-example default after timeout
+
+Attempted on the reference host (`qwen3.6:35b-a3b-q8_0`, prose tier) with `gh pr list --limit 2` producing two full merged-PR bodies (~5 KB combined plus the diff-stat and context vars). The delegation hung past 16 minutes and was killed per SKILL.md's "kill if hung >30 s" rule. The recipe now defaults to `--limit 1`, and the "Context to gather first" section documents the `long-context` tier as the escape hatch when one example doesn't anchor the shape strongly enough. The earlier 2026-05-09 HIT used `--limit 2` and worked; the difference is that this PR's combined inputs were ~2× larger (the `context` paragraph alone was ~1.5 KB). The recipe's load-bearing claim is "one well-delimited example anchors shape" — the 2× input budget for a second example is rarely worth it on the 35B host.
 
 Provenance also lives in the `feedback_delegate_prose_prompt_anchoring.md` memory file.
