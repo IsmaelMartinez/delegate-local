@@ -436,6 +436,114 @@ assert_eq 2 "$EC" "--var without '=' -> exit 2"
 assert_contains "key=value" "$out" "--var: error mentions key=value form"
 rm -rf "$tmp" "$metrics"
 
+# 15. --var value containing {{...}} (Vue/Angular bindings, Go templates,
+# logs with curly braces) must NOT trigger the unsubstituted-placeholder
+# guard. The guard checks the original template's placeholders, not the
+# post-substitution string, so substituted content can contain anything.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/curly-content.md" <<'EOF'
+# curly-content
+
+## When to use
+Test.
+
+## Prompt template
+
+```
+Render: {{template}}
+```
+
+## Calibration notes
+n/a
+EOF
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe curly-content --var "template=Hello {{name}}, your value is {{value}}" prose "render this" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "--var with {{...}} content: exits 0 (no false-positive on substituted braces)"
+assert_contains 'Hello {{name}}, your value is {{value}}' "$(cat "$sniff")" "--var with curly content: payload preserved verbatim"
+rm -rf "$tmp" "$metrics"
+
+# 16. Recipe with a markdown heading inside the fenced block must extract
+# the full block — the awk section-end check should not fire while inside
+# a code block.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/heading-in-block.md" <<'EOF'
+# heading-in-block
+
+## When to use
+Test.
+
+## Prompt template
+
+```
+Render this with embedded headings:
+## Inner heading one
+content one
+## Inner heading two
+END_OF_TEMPLATE
+```
+
+## Calibration notes
+n/a
+EOF
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe heading-in-block prose "go" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "--recipe with ## inside fence: exits 0"
+payload=$(cat "$sniff")
+assert_contains 'Inner heading one' "$payload" "--recipe: heading inside fence preserved"
+assert_contains 'END_OF_TEMPLATE' "$payload" "--recipe: full block extracted past inner headings"
+rm -rf "$tmp" "$metrics"
+
+# 17. Recipe metric: prompt_chars includes the recipe template length so a
+# 2-char prompt arg doesn't under-report a multi-line recipe template.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/sized.md" <<'EOF'
+# sized
+
+## When to use
+Test.
+
+## Prompt template
+
+```
+AAAAAAAAAA
+```
+
+## Calibration notes
+n/a
+EOF
+# Template body is "AAAAAAAAAA" (10 chars; bash command substitution
+# strips the trailing newline from awk's output).
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe sized prose "go" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "--recipe metric: exits 0"
+line=$(cat "$metrics")
+# 10 (template "AAAAAAAAAA") + 2 (prompt "go") = 12
+assert_contains '"prompt_chars":12' "$line" "--recipe metric: prompt_chars includes template length"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
