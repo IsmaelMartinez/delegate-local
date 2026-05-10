@@ -137,11 +137,13 @@ if [[ -n "$recipe" ]]; then
     exit 2
   fi
   # Extract the first ``` fenced code block under the '## Prompt template'
-  # heading. awk-based — bash 3 / BSD awk safe; the first `^## ` line that
-  # is not 'Prompt template' ends the section, the closing ``` ends the block.
+  # heading. awk-based — bash 3 / BSD awk safe. The section-end check
+  # `/^## /` is gated on `!in_block` so a markdown heading inside the
+  # fenced block (legitimate prompt content) doesn't prematurely close the
+  # section before the closing ``` is reached.
   recipe_template=$(awk '
     /^## Prompt template[[:space:]]*$/ { in_section=1; next }
-    /^## / && in_section { in_section=0 }
+    /^## / && in_section && !in_block { in_section=0 }
     in_section && /^```/ {
       if (in_block) { exit }
       in_block=1; next
@@ -153,10 +155,17 @@ if [[ -n "$recipe" ]]; then
     exit 2
   fi
 
+  # Identify the placeholders the *original* template requires. Validating
+  # against this list — not the post-substitution string — means substituted
+  # values that legitimately contain `{{...}}` (Vue/Angular bindings, Go
+  # templates, logs with curly braces) don't trigger a false positive.
+  required_placeholders=$(printf '%s' "$recipe_template" | grep -oE '\{\{[a-zA-Z_][a-zA-Z0-9_]*\}\}' | sort -u)
+
   # Substitute --var key=value pairs into {{key}} placeholders. Bash
   # parameter substitution handles the literal {{ }} braces fine since they
   # are not glob metacharacters; values may contain newlines and arbitrary
   # punctuation because they came in via argv (no shell re-evaluation).
+  satisfied_keys=""
   for kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
     if [[ "$kv" != *"="* ]]; then
       echo "delegate: --var must be key=value, got '$kv'" >&2
@@ -169,20 +178,29 @@ if [[ -n "$recipe" ]]; then
       exit 2
     fi
     recipe_template="${recipe_template//\{\{$key\}\}/$value}"
+    satisfied_keys="${satisfied_keys}{{${key}}}"$'\n'
   done
 
   # {{stdin}} is the implicit placeholder for the piped context.
-  if [[ "$recipe_template" == *"{{stdin}}"* ]]; then
+  if printf '%s' "$required_placeholders" | grep -qx '{{stdin}}'; then
     recipe_had_stdin_marker=1
     recipe_template="${recipe_template//\{\{stdin\}\}/$context}"
+    satisfied_keys="${satisfied_keys}{{stdin}}"$'\n'
   fi
 
-  # Refuse to send a partly-substituted template to the model — the
-  # placeholder names that remain are almost certainly missing --var flags
-  # and silently passing them through would produce a low-quality answer.
-  remaining=$(printf '%s' "$recipe_template" | grep -oE '\{\{[a-zA-Z_][a-zA-Z0-9_]*\}\}' | sort -u | tr '\n' ' ')
-  if [[ -n "${remaining// /}" ]]; then
-    echo "delegate: recipe '$recipe' has unsubstituted placeholders: $remaining" >&2
+  # Refuse to invoke the model with required placeholders the caller didn't
+  # supply — the partly-substituted template almost certainly isn't what
+  # they meant. Compare against the original-template placeholder set, not
+  # the post-substitution string, so legit `{{...}}` content survives.
+  missing=""
+  while IFS= read -r ph; do
+    [[ -z "$ph" ]] && continue
+    if ! printf '%s' "$satisfied_keys" | grep -Fxq "$ph"; then
+      missing="${missing}${ph} "
+    fi
+  done <<< "$required_placeholders"
+  if [[ -n "${missing// /}" ]]; then
+    echo "delegate: recipe '$recipe' has unsubstituted placeholders: $missing" >&2
     echo "         pass them via --var key=value (or {{stdin}} via piped context)" >&2
     exit 2
   fi
@@ -190,7 +208,7 @@ fi
 
 if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
   end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
-  log_metric "$ts_start" "$tier" "(none)" "${#prompt}" "${#context}" 0 $((end_epoch_ms - start_epoch_ms)) 1 "$recipe"
+  log_metric "$ts_start" "$tier" "(none)" "$(( ${#recipe_template} + ${#prompt} ))" "${#context}" 0 $((end_epoch_ms - start_epoch_ms)) 1 "$recipe"
   echo "delegate: pick-model failed for tier '$tier'" >&2
   exit 1
 fi
@@ -248,7 +266,7 @@ fi
 end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 duration_ms=$((end_epoch_ms - start_epoch_ms))
 
-log_metric "$ts_start" "$tier" "$model" "${#prompt}" "${#context}" "${#output}" "$duration_ms" "$status" "$recipe"
+log_metric "$ts_start" "$tier" "$model" "$(( ${#recipe_template} + ${#prompt} ))" "${#context}" "${#output}" "$duration_ms" "$status" "$recipe"
 
 printf '%s\n' "$output"
 exit $status
