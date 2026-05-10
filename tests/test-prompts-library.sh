@@ -61,6 +61,38 @@ for recipe in "$PROMPTS_DIR"/*.md; do
   for section in "${required_sections[@]}"; do
     assert_contains "$section" "$body" "$base: contains '$section'"
   done
+  # Every {{placeholder}} in the prompt template must be documented in the
+  # '## Variables' section so future agents know what each --var expects.
+  # `{{stdin}}` is the implicit pipe slot and does not need explicit doc.
+  template=$(awk '
+    /^## Prompt template[[:space:]]*$/ { in_section=1; next }
+    /^## / && in_section { in_section=0 }
+    in_section && /^```/ {
+      if (in_block) { exit }
+      in_block=1; next
+    }
+    in_section && in_block { print }
+  ' "$recipe")
+  if [[ -z "$template" ]]; then
+    echo "  FAIL  $base: '## Prompt template' has no fenced code block"; fail=$((fail+1))
+  fi
+  placeholders=$(printf '%s' "$template" | grep -oE '\{\{[a-zA-Z_][a-zA-Z0-9_]*\}\}' | sort -u || true)
+  for ph in $placeholders; do
+    name="${ph#\{\{}"; name="${name%\}\}}"
+    [[ "$name" == "stdin" ]] && continue
+    if [[ "$body" == *"\`{{$name}}\`"* ]]; then
+      echo "  PASS  $base: {{$name}} documented under Variables"; pass=$((pass+1))
+    else
+      echo "  FAIL  $base: {{$name}} used in template but not listed in '## Variables'"; fail=$((fail+1))
+    fi
+  done
+  # Catch the legacy `<paste X here>` style — every such marker should now be
+  # a {{name}} placeholder so --recipe can substitute it programmatically.
+  if printf '%s' "$template" | grep -qE '<paste .* here>'; then
+    echo "  FAIL  $base: legacy '<paste ... here>' marker found in template (use {{name}})"; fail=$((fail+1))
+  else
+    echo "  PASS  $base: no legacy '<paste ... here>' markers"; pass=$((pass+1))
+  fi
   # README must list this recipe in the "Current recipes" section so future
   # agents can discover it. Match by filename anywhere in the README.
   if [[ "$readme" == *"$base"* ]]; then

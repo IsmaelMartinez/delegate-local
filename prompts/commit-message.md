@@ -27,16 +27,32 @@ Do NOT indent the body lines — output should be flush-left.
 Output ONLY the commit message itself, nothing else.
 
 === Recent commit examples to match ===
-<paste git log --pretty=fuller -3 output here>
+{{recent_commits}}
 
 === This commit (changes) ===
-<paste git diff --cached --stat output here>
+{{diff_stat}}
 
 === Context for the WHY paragraph ===
-<one or two sentences explaining the motivation: what bug, what user-visible change, what reviewer feedback>
+{{why}}
 ```
 
-Then pipe to `bash scripts/delegate.sh prose "Match the example commit messages exactly in shape and tone."`.
+## Variables
+
+- `{{recent_commits}}` — output of `git log <main-branch> --pretty=fuller -3`. Load-bearing shape anchor.
+- `{{diff_stat}}` — output of `git diff --cached --stat` (and optionally the full `git diff --cached` if small).
+- `{{why}}` — one or two sentences explaining the motivation: what bug, what user-visible change, what reviewer feedback. Authored by the agent, not gathered from a command.
+
+## Invocation
+
+```bash
+bash scripts/delegate.sh --recipe commit-message \
+  --var recent_commits="$(git log main --pretty=fuller -3)" \
+  --var diff_stat="$(git diff --cached --stat)" \
+  --var why="<one or two sentences>" \
+  prose "Match the example commit messages exactly in shape and tone."
+```
+
+The trailing prompt arg is the reinforcement instruction; the recipe template carries the structural directives.
 
 ## Anti-hallucination guards (each line addresses a real past MISS)
 
