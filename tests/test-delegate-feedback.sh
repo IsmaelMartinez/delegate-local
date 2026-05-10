@@ -222,6 +222,15 @@ out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts hit 2>&1) || EC=$
 [[ "$EC" -ne 0 ]] && pass=$((pass+1)) && echo "  PASS  --ts without value -> non-zero exit" || { fail=$((fail+1)); echo "  FAIL  --ts without value should fail (got $EC)"; }
 rm -rf "$tmp"
 
+# 16b. --ts= (equals-attached, empty value) rejected with the same wording
+# as `--ts` with no value — consistency between the two flag forms.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" "--ts=" hit 2>&1) || EC=$?
+assert_eq 2 "$EC" "--ts= (empty value) -> exit 2"
+assert_contains "requires a value" "$out" "--ts= empty: error mentions requires a value"
+rm -rf "$tmp"
+
 # 17. --ts=value form (equals-attached) also works.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 EC=0
