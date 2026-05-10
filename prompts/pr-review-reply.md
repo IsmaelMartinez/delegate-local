@@ -26,7 +26,7 @@ The reply MUST start with EXACTLY one of these three openers, chosen by the verd
   - "Applied in `{{hash}}`."           when verdict = applied
   - "Partially applied in `{{hash}}` — " when verdict = partial
   - "Not applied — "                    when verdict = not_applied
-After the opener, add at most one short clause naming what was actually done (for applied/partial) or why it wasn't (for not_applied). No second sentence. No PR-author flattery ("Great catch!", "Thanks for the suggestion"). No restating the reviewer's comment back to them.
+After the opener, add at most one short clause naming what was actually done (for applied/partial) or why it wasn't (for not_applied). No additional sentences beyond the opener and that single clause. No PR-author flattery ("Great catch!", "Thanks for the suggestion"). No restating the reviewer's comment back to them.
 Output ONLY the reply text, no markdown wrapper, no quoting.
 
 === Verdict ===
@@ -78,7 +78,7 @@ Partially applied in `2865835` — flush-left the contrastive example; left the 
 Not applied — the suggested `mktemp -t` is BSD-only and breaks on GNU coreutils where `-t` takes a different argument shape.
 ```
 
-Verify before recording verdict: starts with the exact opener for the verdict, exactly one sentence (or one sentence with a single dash-clause), no flattery, no echo of the reviewer's wording.
+Verify before recording verdict: starts with the exact opener for the verdict, no additional sentences beyond the opener and the descriptive clause, no flattery, no echo of the reviewer's wording.
 
 ## Calibration notes
 

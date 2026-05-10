@@ -77,7 +77,7 @@ git diff main | bash scripts/delegate.sh --recipe summarise-diff \
 - Refactors <thing> in `<path>` (no user-visible change).
 ```
 
-Verify before recording verdict: each bullet starts with a verb from the list, every file mentioned actually appears in the diff stat, no trailing summary sentence, count matches the requested `count`.
+Verify before recording verdict: each bullet starts with a verb (ideally from the illustrative list — Adds / Fixes / Removes / Renames / Restructures / Changes / Updates), every file mentioned actually appears in the diff stat, no trailing summary sentence, bullet count is at most the requested `count` (fewer is acceptable when there are fewer distinct changes).
 
 ## Calibration notes
 
