@@ -26,8 +26,8 @@ Then a blank line, then 1-2 short flowing-prose paragraphs (NO bullet lists, NO 
 Subjects ending in (#NN) are REJECTED. The (#NN) suffix in every recent
 example below was appended by GitHub's squash merge AFTER the commit was
 written. Your subject MUST NOT include (#NN). This rule is non-negotiable.
-  Wrong:   feat: delegate.sh recipe loading and placeholder validation (#73)
-  Correct: feat: delegate.sh recipe loading and placeholder validation
+Wrong: feat: delegate.sh recipe loading and placeholder validation (#73)
+Correct: feat: delegate.sh recipe loading and placeholder validation
 
 Do NOT indent the body lines — output should be flush-left.
 Output ONLY the commit message itself, nothing else.
@@ -65,7 +65,12 @@ The trailing prompt arg is the reinforcement instruction; the recipe template ca
 - "EXACTLY the same shape" — generic "match the style" produces bullets.
 - "Subject ≤ 72 chars starting with '<TYPE>:'" — without this, the model inflates subjects past 100 chars or invents non-conventional prefixes.
 - "NO bullet lists, NO indentation" — required because `git log --pretty=fuller` outputs bodies indented 4 spaces; the model copies the indentation literally if not told otherwise.
-- "Subjects ending in (#NN) are REJECTED ... non-negotiable" with a Wrong/Correct contrastive example — the bare negation `Do NOT append any (#NN)` did not hold across sessions: the model pattern-matched on the `(#NN)` suffix in every recent-commits anchor and inferred the next number. Strengthened on 2026-05-10 (issue #74) after a 3/3 MISS reproduction; the contrastive Wrong/Correct one-shot plus the "non-negotiable" directive flipped it to 5/5 HIT on the same input.
+- "Subjects ending in (#NN) are REJECTED ... non-negotiable" with a Wrong/Correct contrastive
+  example — the bare negation `Do NOT append any (#NN)` did not hold across sessions: the
+  model pattern-matched on the `(#NN)` suffix in every recent-commits anchor and inferred
+  the next number. Strengthened on 2026-05-10 (issue #74) after a 3/3 MISS reproduction;
+  the contrastive Wrong/Correct one-shot plus the "non-negotiable" directive flipped it
+  to 5/5 HIT on the same input.
 - "Output ONLY the commit message" — without this, the model wraps in prose like "Here's the commit message:" which has to be stripped.
 
 ## Expected output shape
