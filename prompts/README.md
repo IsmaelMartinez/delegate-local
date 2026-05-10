@@ -68,6 +68,8 @@ When you spot a recurring task pattern that doesn't have a recipe yet:
 - `pr-description.md` — drafting a GitHub PR description from a diff stat and a recent merged-PR body.
 - `summarise-diff.md` — short bullet summary of a git diff focused on user-visible changes.
 - `pr-review-reply.md` — one-sentence reply under a PR/MR inline comment after applying or declining the fix.
+- `release-note.md` — drafting one CHANGELOG / release-body bullet for a merged PR.
+- `summarise-issue.md` — timeline-style summary of a long GitHub issue, MR thread, or CI log.
 
 ## Related
 
