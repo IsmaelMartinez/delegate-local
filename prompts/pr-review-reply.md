@@ -87,3 +87,7 @@ Initial recipe drafted 2026-05-10 from the address-pr-comments skill's per-comme
 ### 2026-05-10 dogfood: HIT verbatim on first attempt
 
 First-pass against `qwen3.6:35b-a3b-q8_0` (prose tier) on a real reviewer comment from PR #73 (the unsubstituted-placeholder finding). Reply produced was: `Applied in \`8b3424a\`. The check now records which placeholder names the original template required and compares against the set of names satisfied by --var (and {{stdin}} when applicable), instead of grepping the post-substitution string.` — exact opener, one sentence, no flattery, no echo. Posted-by-hand equivalent was nearly identical wording. HIT, no edits needed.
+
+### 2026-05-10 dogfood: graceful degradation when {{comment}} is empty
+
+Second batch on PR #80 used a buggy `gh api` invocation that passed an empty string for `{{comment}}` on two of three replies. The recipe correctly produced opener-only output (`Applied in \`2b7308d\`.`) rather than fabricating a descriptive clause from the verdict alone. The third reply, with all vars populated, produced the full "Applied in `<hash>`. <clause>" shape. This is a useful fail-safe property: when context is missing, the recipe degrades to the minimum-information valid reply rather than inventing context. The opener-only form is technically allowed by the spec ("at most one short clause") even though the descriptive clause is the more useful default.
