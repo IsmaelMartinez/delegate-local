@@ -45,7 +45,11 @@ while (($# > 0)); do
       fi
       override_ts="$2"; shift 2;;
     --ts=*)
-      override_ts="${1#--ts=}"; shift;;
+      override_ts="${1#--ts=}"
+      if [[ -z "$override_ts" ]]; then
+        echo 'delegate-feedback: --ts requires a value' >&2; exit 2
+      fi
+      shift;;
     -h|--help) usage;;
     --) shift; break;;
     *) break;;
@@ -109,7 +113,7 @@ else
   # DELEGATE_FEEDBACK_STALE_SECONDS=0 to disable for back-compat scripts.
   if [[ "$stale_seconds" -gt 0 ]]; then
     ref_epoch=$(iso_to_epoch "$ref_ts" 2>/dev/null || true)
-    now_epoch=$(date -u +%s)
+    now_epoch=$(perl -e 'print time')
     if [[ -n "$ref_epoch" ]] && (( now_epoch - ref_epoch > stale_seconds )); then
       age=$(( now_epoch - ref_epoch ))
       cat >&2 <<MSG
