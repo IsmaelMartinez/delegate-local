@@ -65,7 +65,9 @@ When you spot a recurring task pattern that doesn't have a recipe yet:
 ## Current recipes
 
 - `commit-message.md` — drafting a git commit message from a staged diff and recent log examples.
-- `pr-description.md` — drafting a GitHub PR description from a diff stat and recent merged-PR bodies.
+- `pr-description.md` — drafting a GitHub PR description from a diff stat and a recent merged-PR body.
+- `summarise-diff.md` — short bullet summary of a git diff focused on user-visible changes.
+- `pr-review-reply.md` — one-sentence reply under a PR/MR inline comment after applying or declining the fix.
 
 ## Related
 
