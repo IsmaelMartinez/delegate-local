@@ -28,16 +28,32 @@ Do NOT prefix the title with 'PR #NN —' or any PR number reference.
 Output ONLY the markdown body, nothing else.
 
 === Recent merged-PR examples (shape anchors) ===
-<paste the gh pr list output from "Context to gather first" here>
+{{recent_prs}}
 
 === This PR's stats ===
-<paste git diff --stat output here>
+{{diff_stat}}
 
 === Context ===
-<3-5 sentences naming: branch, what was added/changed at the script-or-feature level, motivation, edge cases the reader should know about, any cross-PR relationships ("ships alongside #NN"). Do NOT include code; just describe.>
+{{context}}
 ```
 
-Then pipe to `bash scripts/delegate.sh prose "Match the example PR descriptions exactly in shape and tone. NO invented example output."`.
+## Variables
+
+- `{{recent_prs}}` — output of the `gh pr list ... --jq '...'` command in "Context to gather first", with the `<<<EXAMPLE_BEGIN ... EXAMPLE_END>>>` envelopes intact.
+- `{{diff_stat}}` — output of `git diff <base-branch> --stat`.
+- `{{context}}` — 3–5 sentences naming branch, what was added/changed at the script-or-feature level, motivation, edge cases the reader should know about, any cross-PR relationships ("ships alongside #NN"). Authored by the agent — describe, do not include code.
+
+## Invocation
+
+```bash
+bash scripts/delegate.sh --recipe pr-description \
+  --var recent_prs="$(gh pr list --repo OWNER/REPO --state merged --limit 2 \
+    --json title,body,number \
+    --jq '.[] | "<<<EXAMPLE_BEGIN PR #\(.number)>>>\nTITLE: \(.title)\nBODY:\n\(.body)\n<<<EXAMPLE_END>>>\n"')" \
+  --var diff_stat="$(git diff main --stat)" \
+  --var context="<3-5 sentences>" \
+  prose "Match the example PR descriptions exactly in shape and tone. NO invented example output."
+```
 
 ## Anti-hallucination guards (each line addresses a real past MISS)
 

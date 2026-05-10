@@ -205,6 +205,237 @@ fi
 assert_contains '"exit_status":7' "$(cat "$metrics")" "metrics: HTTP failure exit_status logged"
 rm -rf "$tmp" "$metrics"
 
+# 8. --recipe NAME loads prompts/NAME.md, extracts the '## Prompt template'
+# fenced block, and prepends it to the model input. Variable values
+# substituted via --var land inside {{key}} placeholders; the metrics line
+# carries a "recipe":"NAME" field for layer-2 telemetry.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+prompts="$tmp/prompts"
+mkdir -p "$prompts"
+cat > "$prompts/sample.md" <<'EOF'
+# sample
+
+## When to use
+Test recipe.
+
+## Prompt template
+
+```
+HEADER LINE
+
+=== Block A ===
+{{a}}
+
+=== Block B ===
+{{b}}
+```
+
+## Calibration notes
+n/a
+EOF
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe sample --var a=alpha --var b=beta prose "trailing instruction" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "--recipe: exits 0"
+assert_contains "mock-model-output: ok" "$out" "--recipe: model output forwarded"
+payload=$(cat "$sniff")
+assert_contains 'HEADER LINE' "$payload" "--recipe: template prepended to payload"
+assert_contains '=== Block A ===\nalpha' "$payload" "--recipe: {{a}} substituted with alpha"
+assert_contains '=== Block B ===\nbeta' "$payload" "--recipe: {{b}} substituted with beta"
+assert_contains 'trailing instruction' "$payload" "--recipe: trailing prompt appended"
+assert_contains '"recipe":"sample"' "$(cat "$metrics")" "metrics: recipe field present"
+rm -rf "$tmp" "$metrics"
+
+# 9. --recipe with an unknown name fails with a clear error and exit 2.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); : > "$metrics"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe missing prose "p" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "--recipe missing -> exit 2"
+assert_contains "not found" "$out" "--recipe missing: error mentions not found"
+rm -rf "$tmp" "$metrics"
+
+# 10. Unsubstituted placeholders are a hard error (exit 2, names listed).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); : > "$metrics"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/incomplete.md" <<'EOF'
+# incomplete
+
+## When to use
+Test.
+
+## Prompt template
+
+```
+hello {{name}} and {{other}}
+```
+
+## Calibration notes
+n/a
+EOF
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe incomplete --var name=alice prose "p" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "--recipe with missing vars -> exit 2"
+assert_contains "{{other}}" "$out" "--recipe: missing placeholder named in error"
+rm -rf "$tmp" "$metrics"
+
+# 11. {{stdin}} placeholder is substituted with piped stdin content; the
+# stdin is NOT also appended after the recipe (would otherwise duplicate).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/stdin-recipe.md" <<'EOF'
+# stdin-recipe
+
+## When to use
+Test.
+
+## Prompt template
+
+```
+LOG FOLLOWS:
+{{stdin}}
+END.
+```
+
+## Calibration notes
+n/a
+EOF
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash -c 'printf "first\nsecond\n" | bash "$0" --recipe stdin-recipe prose "tail"' "$SCRIPT" 2>&1) || EC=$?
+assert_eq 0 "$EC" "--recipe with {{stdin}}: exits 0"
+payload=$(cat "$sniff")
+assert_contains 'LOG FOLLOWS:\nfirst\nsecond' "$payload" "--recipe: {{stdin}} substituted from pipe"
+# Count occurrences of "first" — should appear once, not duplicated.
+n=$(grep -o '"prompt":' "$sniff" | wc -l | tr -d ' ')
+firsts=$(awk -v RS='' '{print}' "$sniff" | grep -o 'first' | wc -l | tr -d ' ')
+if [[ "$firsts" == "1" ]]; then
+  echo "  PASS  --recipe: stdin not duplicated when {{stdin}} marker used"; pass=$((pass+1))
+else
+  echo "  FAIL  --recipe: stdin appears $firsts times in payload (expected 1)"; fail=$((fail+1))
+fi
+rm -rf "$tmp" "$metrics"
+
+# 12. --recipe makes the prompt arg optional (recipe carries the instruction).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/no-prompt.md" <<'EOF'
+# no-prompt
+
+## When to use
+Test.
+
+## Prompt template
+
+```
+SELF-CONTAINED INSTRUCTION
+```
+
+## Calibration notes
+n/a
+EOF
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe no-prompt prose </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "--recipe without prompt arg: exits 0"
+assert_contains 'SELF-CONTAINED INSTRUCTION' "$(cat "$sniff")" "--recipe: template still in payload"
+rm -rf "$tmp" "$metrics"
+
+# 13. --var value containing newlines and special punctuation survives
+# substitution intact (argv-driven, not shell-re-evaluated).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/multiline.md" <<'EOF'
+# multiline
+
+## When to use
+Test.
+
+## Prompt template
+
+```
+DATA:
+{{data}}
+END.
+```
+
+## Calibration notes
+n/a
+EOF
+val=$'line1\nline2 with $special "chars"'
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe multiline --var "data=$val" prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "--recipe with multiline --var: exits 0"
+assert_contains 'line1\nline2 with $special' "$(cat "$sniff")" "--recipe: multiline value preserved"
+rm -rf "$tmp" "$metrics"
+
+# 14. --var without '=' is rejected.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); : > "$metrics"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/x.md" <<'EOF'
+# x
+
+## When to use
+t
+
+## Prompt template
+
+```
+hello {{a}}
+```
+
+## Calibration notes
+n/a
+EOF
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe x --var noequals prose "p" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "--var without '=' -> exit 2"
+assert_contains "key=value" "$out" "--var: error mentions key=value form"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
