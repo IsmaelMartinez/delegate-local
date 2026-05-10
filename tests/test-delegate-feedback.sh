@@ -24,12 +24,23 @@ assert_contains() {
 }
 
 # Seed a metrics JSONL with two delegate calls and one experiment call.
+# Timestamps are derived from `date` so the rows are within the default
+# stale window (300 s) — the existing assertions about ref_ts equality
+# need stable values, so we capture them in TS_OLDEST / TS_LATEST.
+TS_OLDEST=""
+TS_LATEST=""
 seed_metrics() {
   local file="$1"
-  cat > "$file" <<'EOF'
-{"ts":"2026-05-09T10:00:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
-{"ts":"2026-05-09T10:05:00Z","source":"experiment","session":"foo","model":"q","duration_ms":1000,"exit_status":0,"estimated_tokens_avoided":10}
-{"ts":"2026-05-09T10:10:00Z","source":"delegate","tier":"reasoning","model":"d","duration_ms":7000,"exit_status":0,"estimated_tokens_avoided":60}
+  # Two fresh timestamps 2 min apart — both inside the default 300 s
+  # stale window, yet distinct so "picks latest delegate" assertions are
+  # meaningful. Generated via perl so the format is consistent across BSD
+  # and GNU date.
+  TS_OLDEST=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-120))')
+  TS_LATEST=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  cat > "$file" <<EOF
+{"ts":"$TS_OLDEST","source":"delegate","tier":"prose","model":"q","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
+{"ts":"$TS_OLDEST","source":"experiment","session":"foo","model":"q","duration_ms":1000,"exit_status":0,"estimated_tokens_avoided":10}
+{"ts":"$TS_LATEST","source":"delegate","tier":"reasoning","model":"d","duration_ms":7000,"exit_status":0,"estimated_tokens_avoided":60}
 EOF
 }
 
@@ -75,7 +86,7 @@ after=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
 last=$(tail -1 "$tmp/m.jsonl")
 assert_contains '"source":"feedback"' "$last" "hit: source field"
 assert_contains '"kept":true' "$last" "hit: kept=true"
-assert_contains '"ref_ts":"2026-05-09T10:10:00Z"' "$last" "hit: ref_ts is latest delegate"
+assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "hit: ref_ts is latest delegate"
 [[ "$last" == *'"reason"'* ]] && { fail=$((fail+1)); echo "  FAIL  hit (no reason): reason field absent"; } || { pass=$((pass+1)); echo "  PASS  hit (no reason): reason field absent"; }
 rm -rf "$tmp"
 
@@ -92,14 +103,16 @@ rm -rf "$tmp"
 
 # 7. ref_ts picks the LATEST delegate event when multiple exist.
 tmp=$(mktemp -d)
-cat > "$tmp/m.jsonl" <<'EOF'
-{"ts":"2026-05-09T09:00:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
-{"ts":"2026-05-09T11:00:00Z","source":"experiment","session":"foo","model":"q","duration_ms":1000,"exit_status":0,"estimated_tokens_avoided":10}
-{"ts":"2026-05-09T12:30:00Z","source":"delegate","tier":"long-context","model":"q","duration_ms":9000,"exit_status":0,"estimated_tokens_avoided":80}
+T_EARLY=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-200))')
+T_LATE=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-10))')
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$T_EARLY","source":"delegate","tier":"prose","model":"q","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
+{"ts":"$T_EARLY","source":"experiment","session":"foo","model":"q","duration_ms":1000,"exit_status":0,"estimated_tokens_avoided":10}
+{"ts":"$T_LATE","source":"delegate","tier":"long-context","model":"q","duration_ms":9000,"exit_status":0,"estimated_tokens_avoided":80}
 EOF
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit >/dev/null
 last=$(tail -1 "$tmp/m.jsonl")
-assert_contains '"ref_ts":"2026-05-09T12:30:00Z"' "$last" "ref_ts: picks latest delegate, not earliest"
+assert_contains "\"ref_ts\":\"$T_LATE\"" "$last" "ref_ts: picks latest delegate, not earliest"
 rm -rf "$tmp"
 
 # 8. Output is valid JSON (jq can parse it back).
@@ -117,7 +130,7 @@ tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit >/dev/null
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "actually no" >/dev/null
 last=$(tail -1 "$tmp/m.jsonl")
-assert_contains '"ref_ts":"2026-05-09T10:10:00Z"' "$last" "back-to-back feedback: still refers to delegate, not previous feedback"
+assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "back-to-back feedback: still refers to delegate, not previous feedback"
 rm -rf "$tmp"
 
 # 10. Custom DELEGATE_METRICS_FILE path is honoured.
@@ -126,6 +139,105 @@ EC=0
 DELEGATE_METRICS_FILE="$custom" bash "$SCRIPT" hit >/dev/null 2>&1 || EC=$?
 assert_eq 0 "$EC" "custom DELEGATE_METRICS_FILE: exit 0"
 [[ $(wc -l < "$custom" | tr -d ' ') -eq 4 ]] && pass=$((pass+1)) && echo "  PASS  custom path: feedback appended there" || { fail=$((fail+1)); echo "  FAIL  custom path: line count wrong"; }
+rm -rf "$tmp"
+
+# 11. Stale-window: refuse when most recent delegate row is older than the
+# configured window (default 300 s). Seed an old row and assert exit 1
+# with a message mentioning the threshold.
+tmp=$(mktemp -d)
+T_OLD=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-3600))')
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$T_OLD","source":"delegate","tier":"prose","model":"q","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
+EOF
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit 2>&1) || EC=$?
+assert_eq 1 "$EC" "stale window: exit 1 when delegate row is too old"
+assert_contains "DELEGATE_FEEDBACK_STALE_SECONDS" "$out" "stale window: error mentions env override"
+# Confirm no row was appended.
+[[ $(wc -l < "$tmp/m.jsonl" | tr -d ' ') -eq 1 ]] && pass=$((pass+1)) && echo "  PASS  stale window: no row appended on refuse" || { fail=$((fail+1)); echo "  FAIL  stale window: row appended despite refuse"; }
+rm -rf "$tmp"
+
+# 12. DELEGATE_FEEDBACK_STALE_SECONDS=0 disables the check (back-compat).
+tmp=$(mktemp -d)
+T_OLD=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-3600))')
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$T_OLD","source":"delegate","tier":"prose","model":"q","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
+EOF
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_STALE_SECONDS=0 bash "$SCRIPT" hit 2>&1) || EC=$?
+assert_eq 0 "$EC" "stale window disabled (=0): exit 0 even on old row"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains "\"ref_ts\":\"$T_OLD\"" "$last" "stale window disabled: feedback attached"
+rm -rf "$tmp"
+
+# 13. --ts pinning: caller can attach a verdict to a specific stale row.
+tmp=$(mktemp -d)
+T_OLD=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-3600))')
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$T_OLD","source":"delegate","tier":"prose","model":"q","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
+EOF
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts "$T_OLD" miss "killed before metrics" 2>&1) || EC=$?
+assert_eq 0 "$EC" "--ts: exit 0 when ts matches a delegate row even if stale"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains "\"ref_ts\":\"$T_OLD\"" "$last" "--ts: feedback attached to pinned ts"
+assert_contains '"kept":false' "$last" "--ts: kept=false carried through"
+rm -rf "$tmp"
+
+# 14. --ts pinning: bogus ts that doesn't match any delegate row -> exit 1.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts "1999-01-01T00:00:00Z" hit 2>&1) || EC=$?
+assert_eq 1 "$EC" "--ts: bogus ts -> exit 1"
+assert_contains "does not match any delegate row" "$out" "--ts: error names the unmatched ts"
+# No new row appended.
+[[ $(wc -l < "$tmp/m.jsonl" | tr -d ' ') -eq 3 ]] && pass=$((pass+1)) && echo "  PASS  --ts bogus: no row appended" || { fail=$((fail+1)); echo "  FAIL  --ts bogus: row appended despite refuse"; }
+rm -rf "$tmp"
+
+# 15. --ts pinning: ts that matches a feedback row (not a delegate row) -> exit 1.
+# Prevents the case where a typoed --ts accidentally pins to a prior feedback.
+# Construct distinct, non-colliding timestamps to avoid wall-clock races
+# between the seeded delegate ts and the feedback ts that delegate-
+# feedback.sh would write itself.
+tmp=$(mktemp -d)
+T_DEL=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-200))')
+T_FB=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-100))')
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$T_DEL","source":"delegate","tier":"prose","model":"q","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
+{"ts":"$T_FB","source":"feedback","ref_ts":"$T_DEL","kept":true}
+EOF
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts "$T_FB" miss 2>&1) || EC=$?
+assert_eq 1 "$EC" "--ts pointing to a feedback row -> exit 1"
+assert_contains "does not match any delegate row" "$out" "--ts feedback row: error refers to no-match"
+rm -rf "$tmp"
+
+# 16. --ts requires a value.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts hit 2>&1) || EC=$?
+# Either the parser rejects --ts with no value (exit 2), or it consumes
+# 'hit' as the ts and then fails to find a verdict. Both are acceptable
+# rejections — the test asserts non-zero exit and no row appended.
+[[ "$EC" -ne 0 ]] && pass=$((pass+1)) && echo "  PASS  --ts without value -> non-zero exit" || { fail=$((fail+1)); echo "  FAIL  --ts without value should fail (got $EC)"; }
+rm -rf "$tmp"
+
+# 16b. --ts= (equals-attached, empty value) rejected with the same wording
+# as `--ts` with no value — consistency between the two flag forms.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" "--ts=" hit 2>&1) || EC=$?
+assert_eq 2 "$EC" "--ts= (empty value) -> exit 2"
+assert_contains "requires a value" "$out" "--ts= empty: error mentions requires a value"
+rm -rf "$tmp"
+
+# 17. --ts=value form (equals-attached) also works.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" "--ts=$TS_LATEST" hit 2>&1) || EC=$?
+assert_eq 0 "$EC" "--ts=value form: exit 0"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "--ts=value form: feedback attached to pinned ts"
 rm -rf "$tmp"
 
 echo
