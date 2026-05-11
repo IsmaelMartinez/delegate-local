@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the 4 fixture tasks against a single Ollama model and emit timing + output.
 #
-# Usage: runner.sh [--reps N] [--t3-snapshot YYYY-MM-DD] [--t4-snapshot YYYY-MM-DD] <model-name>
+# Usage: runner.sh [--reps N] [--t3-snapshot YYYY-MM-DD] [--t4-snapshot YYYY-MM-DD] [--t5-snapshot YYYY-MM-DD] <model-name>
 #
 # --reps N            (default 1) repeats every task N times in the same file,
 #                     each block prefixed with `===== <task_id> rep <i> =====`.
@@ -15,15 +15,20 @@
 #                     structural checks (subject length, conventional-commit
 #                     prefix, no (#NN) suffix, flush-left body, no bullets,
 #                     no participial-padding tails).
+# --t5-snapshot DATE  (default 2026-05-11) selects which dated T5 fixture
+#                     under experiments/fixtures/task-5-json-shape-<DATE>.txt
+#                     to use. T5 benchmarks structured-extraction-into-JSON
+#                     against an explicit schema with owner-filter rules.
 #
 # Output: writes experiments/results/raw/<model-slug>.txt
-# Header: MODEL, DATE, REPS, T3_SNAPSHOT, T4_SNAPSHOT for reproducibility.
+# Header: MODEL, DATE, REPS, T3_SNAPSHOT, T4_SNAPSHOT, T5_SNAPSHOT for reproducibility.
 
 set -euo pipefail
 
 reps=1
 t3_snapshot="2026-04-28"
 t4_snapshot="2026-05-11"
+t5_snapshot="2026-05-11"
 
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
@@ -40,6 +45,11 @@ while [[ "${1:-}" == --* ]]; do
     --t4-snapshot)
       t4_snapshot="${2:-}"
       [[ -n "$t4_snapshot" ]] || { echo "--t4-snapshot requires a date" >&2; exit 2; }
+      shift 2
+      ;;
+    --t5-snapshot)
+      t5_snapshot="${2:-}"
+      [[ -n "$t5_snapshot" ]] || { echo "--t5-snapshot requires a date" >&2; exit 2; }
       shift 2
       ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -70,6 +80,14 @@ if [[ ! -f "$t4_fixture" ]]; then
   echo "T4 snapshot not found: $t4_fixture" >&2
   echo "available snapshots:" >&2
   ls "$fixtures"/task-4-commit-message-*.txt 2>/dev/null | sed 's/^/  /' >&2
+  exit 1
+fi
+
+t5_fixture="$fixtures/task-5-json-shape-${t5_snapshot}.txt"
+if [[ ! -f "$t5_fixture" ]]; then
+  echo "T5 snapshot not found: $t5_fixture" >&2
+  echo "available snapshots:" >&2
+  ls "$fixtures"/task-5-json-shape-*.txt 2>/dev/null | sed 's/^/  /' >&2
   exit 1
 fi
 
@@ -158,6 +176,7 @@ echo "DATE: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$out"
 echo "REPS: $reps" >> "$out"
 echo "T3_SNAPSHOT: $t3_snapshot" >> "$out"
 echo "T4_SNAPSHOT: $t4_snapshot" >> "$out"
+echo "T5_SNAPSHOT: $t5_snapshot" >> "$out"
 echo "" >> "$out"
 
 for (( rep=1; rep<=reps; rep++ )); do
@@ -184,6 +203,16 @@ for (( rep=1; rep<=reps; rep++ )); do
   # measurement reflects how delegate.sh routes the recipe in production.
   run_task_api "T4-commit-message" "$t4_fixture" \
     "Follow the instructions in the message above. Match the example commit messages exactly in shape and tone." \
+    "$rep"
+
+  # T5: structured-extraction-into-JSON — schema-conformance benchmark.
+  # The fixture carries the directive, the schema, the owner-filter rules,
+  # and the source email; the model's job is to emit ONLY the JSON object
+  # with the three Ismael items at YYYY-MM-DD dates. Uses run_task_api
+  # so think:false suppresses chain-of-thought that would otherwise wrap
+  # the JSON in commentary and break parseability.
+  run_task_api "T5-json-shape" "$t5_fixture" \
+    "Follow the instructions in the message above. Output ONLY the JSON object, no preamble or markdown fence." \
     "$rep"
 done
 
