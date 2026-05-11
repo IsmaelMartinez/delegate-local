@@ -16,7 +16,7 @@ git log <base-branch>..HEAD --pretty=oneline    # commit-by-commit shape
 
 The recent merged-PR body is the load-bearing context. The model learns the project's bullet-vs-prose shape, the standard subsection headings, and the test-plan-checkbox convention from the literal, not from descriptors.
 
-**`--limit 1` is the default for a reason** — see the calibration note below on the 2026-05-10 timeout: two full PR bodies (~5 KB combined) is enough to push the prose-tier model past the wall-clock budget on a 35B host. If a single example doesn't give the model enough shape (rare; most repos have a stable PR shape), bump to `--limit 2` and route to the `long-context` tier rather than `prose`.
+**The failure axis is bytes of prompt, not count of examples.** The 2026-05-10 timeout was triggered at `--limit 2` (~5 KB of combined PR bodies); the 2026-05-11 follow-up at `--limit 1` against a single ~1.5 KB body still stalled past 30 s on the same 35B prose-tier host. Treat `--limit 1` as a starting point and check the chosen example PR's body size before delegating — if the body alone is > 1 KB, expect a stall and write the PR description by hand instead. Routing to the `long-context` tier (Qwen3-Next 80B-A3B on the reference host) does not rescue this: the 2026-05-11 calibration note records an 8-minute hang on the same shape via that tier too.
 
 The `<<<EXAMPLE_BEGIN ... EXAMPLE_END>>>` envelope around each example is intentional — without explicit delimiters the model bleeds content from one example into the next or treats the whole block as one example with confused shape.
 
@@ -116,5 +116,11 @@ The 2026-05-10 calibration note above speculated that the `long-context` tier (Q
 The discriminating factor is still output size (PR descriptions target 2–3 KB of structured markdown), not input size, and the bottleneck moves with the host rather than the model family. Until a tier is found that completes this shape reliably, the recipe's de facto default is: write the PR description by hand. Possible next experiments — try splitting the recipe into two atomic calls (Summary bullets + Test plan separately, then concatenate; both outputs are < 800 B individually so should clear the apparent wall-clock budget), or try the `code` tier on a smaller deepseek-r1 distill (the v6 reasoning-architecture finding suggests structured-output work scales down better there). Neither was tried in this session — left as the next iteration's empirical question.
 
 Provisional recommendation: when this recipe is needed, attempt the prose tier with a hard 60-second wall-clock budget enforced by the caller; if it does not return, do not retry on `long-context` — fall back to hand-writing immediately.
+
+### 2026-05-11 — issue #87: framing is size, not count
+
+A separate session against repo-butler PR #210 reproduced the stall at `--limit 1` with a single ~1.5 KB PR body (`diff_stat` ~200 B, `context` ~600 B; ~3–4 KB total prompt) — past 30 s wall-clock, killed by the orchestrator, MISS recorded at ts=2026-05-11T08:44:32Z. Issue #87 argued that the recipe's "Context to gather first" section underplayed the failure by framing `--limit 1` as a safe default and the `--limit 2` stall as the bound. The 2026-05-10 and 2026-05-11 notes above show the discriminating axis is bytes of prompt-plus-output, not count of examples — and the `long-context` escape hatch does not rescue this either.
+
+The "Context to gather first" section is updated to make the size framing explicit: check the chosen example PR's body size before delegating, and if the body alone is > 1 KB, expect a stall and write the PR description by hand from the start. The earlier "rare; most repos have a stable PR shape" caveat is dropped — the observed failure on a typical repo-butler PR body shows it isn't rare.
 
 Provenance also lives in the `feedback_delegate_prose_prompt_anchoring.md` memory file.
