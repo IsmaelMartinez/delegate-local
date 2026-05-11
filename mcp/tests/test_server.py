@@ -8,6 +8,7 @@ own suite under ../../tests/).
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -213,8 +214,8 @@ def test_list_related_projects_returns_copies():
     assert server.list_related_projects()[0]["name"] == "local-brain"
 
 
-def test_app_registers_four_tools():
-    """Smoke-test that all four tool names are registered on the FastMCP app.
+def test_app_registers_five_tools():
+    """Smoke-test that all five tool names are registered on the FastMCP app.
 
     Uses asyncio to drive the async list_tools() coroutine without
     requiring pytest-asyncio.
@@ -228,4 +229,310 @@ def test_app_registers_four_tools():
         "audit_models",
         "list_tiers",
         "list_related_projects",
+        "recommend_prompt",
     }
+
+
+# --- recommend_prompt --------------------------------------------------------
+
+
+RECIPE_TEMPLATE = """# {name}
+
+## When to use
+
+{when}
+
+## Context to gather first
+
+```bash
+git diff --cached
+```
+
+## Prompt template
+
+```
+Do the thing in the project's voice.
+Input:
+{{{{stdin}}}}
+```
+
+## Variables
+
+- `{{{{stdin}}}}` — piped context.
+
+## Invocation
+
+```bash
+bash scripts/delegate.sh --recipe {name} {tier} "match the shape"
+```
+
+## Expected output shape
+
+```
+<one paragraph>
+```
+
+## Calibration notes
+
+Source session: 2026-05-09.
+"""
+
+
+def _write_recipe(tmp_path, name, when, tier):
+    (tmp_path / f"{name}.md").write_text(
+        RECIPE_TEMPLATE.format(name=name, when=when, tier=tier),
+        encoding="utf-8",
+    )
+
+
+@pytest.fixture
+def fake_prompts(tmp_path, monkeypatch):
+    """Stand up an isolated prompts dir with two recipes and a README sentinel.
+
+    The README must be ignored by the matcher, otherwise an innocuous file
+    next to recipes would skew matching.
+    """
+    _write_recipe(tmp_path, "commit-message", "Draft a git commit message.", "prose")
+    _write_recipe(tmp_path, "summarise-diff", "Bullet summary of a diff.", "prose")
+    (tmp_path / "README.md").write_text("# Prompts library\n", encoding="utf-8")
+    monkeypatch.setenv("DELEGATE_PROMPTS_DIR", str(tmp_path))
+    return tmp_path
+
+
+@pytest.fixture
+def empty_metrics(tmp_path, monkeypatch):
+    """Point DELEGATE_METRICS_FILE at a path that does not exist.
+
+    Tests the cold-start path where the agent has never delegated yet, which
+    must not error.
+    """
+    monkeypatch.setenv("DELEGATE_METRICS_FILE", str(tmp_path / "missing.jsonl"))
+
+
+def test_recommend_prompt_happy_path(fake_prompts, empty_metrics):
+    out = server.recommend_prompt("draft a commit message")
+    assert out["recipe"] == "commit-message"
+    assert out["task"] == "draft a commit message"
+    assert out["tier"] == "prose"
+    assert "Draft a git commit message." in out["when_to_use"]
+    assert "{{stdin}}" in out["template"]
+    assert "delegate.sh --recipe commit-message" in out["invocation"]
+    assert out["path"].endswith("commit-message.md")
+    assert out["hit_count"] == 0
+    assert out["miss_count"] == 0
+    assert out["recent_hits"] == []
+
+
+def test_recommend_prompt_matches_summarise_diff(fake_prompts, empty_metrics):
+    out = server.recommend_prompt("please summarise this diff")
+    assert out["recipe"] == "summarise-diff"
+
+
+def test_recommend_prompt_normalises_summarize_to_summarise(fake_prompts, empty_metrics):
+    """US spelling must reach the British-spelled recipe stem.
+
+    Without the alias, "summarize this diff" only overlaps on `diff` against
+    `summarise-diff` (score=1), same as a hypothetical `diff-foo` recipe —
+    the alias guarantees the more-specific match.
+    """
+    out = server.recommend_prompt("summarize this diff for me")
+    assert out["recipe"] == "summarise-diff"
+
+
+def test_recommend_prompt_unknown_task_raises(fake_prompts, empty_metrics):
+    with pytest.raises(RuntimeError, match="no recipe matched"):
+        server.recommend_prompt("rewrite the kubernetes manifest")
+
+
+def test_recommend_prompt_lists_available_recipes_in_error(fake_prompts, empty_metrics):
+    with pytest.raises(RuntimeError) as exc:
+        server.recommend_prompt("totally unrelated request")
+    msg = str(exc.value)
+    assert "commit-message" in msg
+    assert "summarise-diff" in msg
+
+
+def test_recommend_prompt_empty_prompts_dir_raises(tmp_path, monkeypatch, empty_metrics):
+    monkeypatch.setenv("DELEGATE_PROMPTS_DIR", str(tmp_path))
+    with pytest.raises(RuntimeError, match="no recipes found"):
+        server.recommend_prompt("draft a commit message")
+
+
+def test_recommend_prompt_counts_hits_and_misses(fake_prompts, tmp_path, monkeypatch):
+    """A delegate row paired with a kept-true feedback row counts as a HIT.
+
+    The metrics JSONL is append-only; the latest feedback for a given ref_ts
+    wins. Delegate rows without a matching feedback row are not counted at
+    all (neither hit nor miss).
+    """
+    metrics_path = tmp_path / "metrics.jsonl"
+    rows = [
+        # HIT: delegate + feedback kept=true
+        {"ts": "2026-05-09T20:23:04Z", "source": "delegate",
+         "tier": "prose", "model": "qwen3.6:35b-a3b-q8_0",
+         "recipe": "commit-message"},
+        {"ts": "2026-05-09T20:23:37Z", "source": "feedback",
+         "ref_ts": "2026-05-09T20:23:04Z", "kept": True,
+         "reason": "anchored prompt produced verbatim-usable output"},
+        # MISS: delegate + feedback kept=false
+        {"ts": "2026-05-09T18:56:22Z", "source": "delegate",
+         "tier": "prose", "model": "qwen3.6:35b-a3b-q8_0",
+         "recipe": "commit-message"},
+        {"ts": "2026-05-09T20:17:28Z", "source": "feedback",
+         "ref_ts": "2026-05-09T18:56:22Z", "kept": False,
+         "reason": "bullets when project style is flowing prose"},
+        # No-verdict delegate row: not counted
+        {"ts": "2026-05-09T22:00:00Z", "source": "delegate",
+         "tier": "prose", "model": "qwen3.6:35b-a3b-q8_0",
+         "recipe": "commit-message"},
+        # Different recipe: filtered out
+        {"ts": "2026-05-10T01:00:00Z", "source": "delegate",
+         "tier": "prose", "model": "qwen3.6:35b-a3b-q8_0",
+         "recipe": "summarise-diff"},
+        {"ts": "2026-05-10T01:01:00Z", "source": "feedback",
+         "ref_ts": "2026-05-10T01:00:00Z", "kept": True,
+         "reason": "different recipe — must not bleed across"},
+    ]
+    metrics_path.write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("DELEGATE_METRICS_FILE", str(metrics_path))
+
+    out = server.recommend_prompt("draft a commit message")
+    assert out["hit_count"] == 1
+    assert out["miss_count"] == 1
+    assert len(out["recent_hits"]) == 1
+    assert out["recent_hits"][0]["ts"] == "2026-05-09T20:23:04Z"
+    assert out["recent_hits"][0]["model"] == "qwen3.6:35b-a3b-q8_0"
+    assert "anchored prompt" in out["recent_hits"][0]["reason"]
+
+
+def test_recommend_prompt_latest_feedback_wins(fake_prompts, tmp_path, monkeypatch):
+    """Two feedback rows for the same ref_ts: the latter must overwrite.
+
+    Real example from the metrics file: an initial HIT was downgraded to MISS
+    on a later session when a hallucinated suffix was discovered in the same
+    output. delegate-feedback.sh allows this; the rollup must mirror it.
+    """
+    metrics_path = tmp_path / "metrics.jsonl"
+    rows = [
+        {"ts": "2026-05-09T22:46:42Z", "source": "delegate",
+         "model": "qwen3.6:35b-a3b-q8_0", "recipe": "commit-message"},
+        {"ts": "2026-05-09T22:47:12Z", "source": "feedback",
+         "ref_ts": "2026-05-09T22:46:42Z", "kept": True,
+         "reason": "first-pass kept"},
+        {"ts": "2026-05-10T08:52:41Z", "source": "feedback",
+         "ref_ts": "2026-05-09T22:46:42Z", "kept": False,
+         "reason": "downgraded — hallucinated (#NN) suffix found later"},
+    ]
+    metrics_path.write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("DELEGATE_METRICS_FILE", str(metrics_path))
+
+    out = server.recommend_prompt("draft a commit message")
+    assert out["hit_count"] == 0
+    assert out["miss_count"] == 1
+
+
+def test_recommend_prompt_skips_malformed_jsonl(fake_prompts, tmp_path, monkeypatch):
+    metrics_path = tmp_path / "metrics.jsonl"
+    metrics_path.write_text(
+        '{"ts":"2026-05-09T20:23:04Z","source":"delegate","recipe":"commit-message","model":"m"}\n'
+        "this is not json at all\n"
+        "\n"
+        '{"ts":"2026-05-09T20:23:37Z","source":"feedback","ref_ts":"2026-05-09T20:23:04Z","kept":true,"reason":"ok"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DELEGATE_METRICS_FILE", str(metrics_path))
+    out = server.recommend_prompt("commit message")
+    assert out["hit_count"] == 1
+
+
+def test_recommend_prompt_include_examples_false_drops_reasons(fake_prompts, tmp_path, monkeypatch):
+    """Counts must still populate even when example bodies are suppressed.
+
+    The use case is a caller that only wants the recipe text and confidence
+    indicator (hit/miss totals) without paying the per-HIT prose tax.
+    """
+    metrics_path = tmp_path / "metrics.jsonl"
+    rows = [
+        {"ts": "2026-05-09T20:23:04Z", "source": "delegate",
+         "model": "m", "recipe": "commit-message"},
+        {"ts": "2026-05-09T20:23:37Z", "source": "feedback",
+         "ref_ts": "2026-05-09T20:23:04Z", "kept": True,
+         "reason": "kept"},
+    ]
+    metrics_path.write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("DELEGATE_METRICS_FILE", str(metrics_path))
+    out = server.recommend_prompt("commit message", include_examples=False)
+    assert out["hit_count"] == 1
+    assert out["recent_hits"] == []
+
+
+def test_recommend_prompt_max_examples_caps_recent_hits(fake_prompts, tmp_path, monkeypatch):
+    metrics_path = tmp_path / "metrics.jsonl"
+    rows = []
+    for i in range(5):
+        ts = f"2026-05-09T20:0{i}:00Z"
+        fb_ts = f"2026-05-09T20:0{i}:30Z"
+        rows.append({"ts": ts, "source": "delegate",
+                     "model": "m", "recipe": "commit-message"})
+        rows.append({"ts": fb_ts, "source": "feedback",
+                     "ref_ts": ts, "kept": True, "reason": f"hit {i}"})
+    metrics_path.write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("DELEGATE_METRICS_FILE", str(metrics_path))
+    out = server.recommend_prompt("commit message", max_examples=2)
+    assert out["hit_count"] == 5
+    assert len(out["recent_hits"]) == 2
+    # Newest first
+    assert out["recent_hits"][0]["ts"] > out["recent_hits"][1]["ts"]
+
+
+def test_recommend_prompt_against_real_prompts_dir(monkeypatch, tmp_path):
+    """Sanity-check against the real prompts/ in this repo.
+
+    Catches the case where a recipe gets renamed or its H2 sections drift in a
+    way the parser can't follow.
+    """
+    monkeypatch.delenv("DELEGATE_PROMPTS_DIR", raising=False)
+    monkeypatch.setenv("DELEGATE_METRICS_FILE", str(tmp_path / "missing.jsonl"))
+    out = server.recommend_prompt("draft a commit message")
+    assert out["recipe"] == "commit-message"
+    assert out["tier"] == "prose"
+    assert out["template"]
+    assert out["invocation"]
+
+
+def test_tokenise_task_normalises_aliases():
+    tokens = server._tokenise_task("Summarizing the Diffs")
+    assert "summarise" in tokens
+    assert "diff" in tokens
+
+
+def test_extract_tier_finds_long_context():
+    tier = server._extract_tier(
+        "```bash\nbash scripts/delegate.sh --recipe foo long-context \"x\"\n```"
+    )
+    assert tier == "long-context"
+
+
+def test_split_h2_sections_basic():
+    text = "# Title\n## A\nbody-a\n## B\nbody-b\n"
+    sections = server._split_h2_sections(text)
+    assert sections["A"] == "body-a"
+    assert sections["B"] == "body-b"
+
+
+def test_metrics_file_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("DELEGATE_METRICS_FILE", str(tmp_path / "x.jsonl"))
+    assert server.metrics_file() == tmp_path / "x.jsonl"
+
+
+def test_prompts_dir_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("DELEGATE_PROMPTS_DIR", str(tmp_path))
+    assert server.prompts_dir() == tmp_path
