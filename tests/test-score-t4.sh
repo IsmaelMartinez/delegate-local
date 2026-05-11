@@ -281,7 +281,7 @@ Added a substantive change. This $verb broader adoption of the calibration disci
 done
 
 # --- Test 14f: legitimate mid-sentence "this ensures" is NOT flagged. The
-# anchor `(^|\.[[:space:]]+)` keeps these patterns from firing when the
+# anchor `(^|[.!?,][[:space:]]+)` keeps these patterns from firing when the
 # token chain appears in the middle of a substantive sentence.
 sandbox=$(mktemp -d)
 raw="$sandbox/raw.txt"
@@ -290,6 +290,33 @@ build_raw "$raw" "feat: substantive mid-sentence usage stays clean
 The contract is that this ensures correct behaviour under concurrent writes by serialising the queue."
 out=$(run_score "$raw")
 assert_contains "rep 1: 6/6" "$out" "test 14f: mid-sentence 'this ensures' is not flagged"
+rm -rf "$sandbox"
+
+# --- Test 14f1: declarative pattern fires after non-period sentence
+# terminators (! and ?). PR #93 review pointed out that anchoring only on
+# `\.` would miss "Done! This ensures correctness." — the new anchor
+# `[.!?,]` covers all four sentence-ending characters.
+for term in "!" "?"; do
+  sandbox=$(mktemp -d)
+  raw="$sandbox/raw.txt"
+  build_raw "$raw" "feat: declarative tail after $term terminator
+
+The change landed cleanly${term} This ensures the framework holds together."
+  out=$(run_score "$raw")
+  assert_contains "BODY_NO_PADDING" "$out" "test 14f1: 'This ensures' after '${term}' is flagged"
+  rm -rf "$sandbox"
+done
+
+# --- Test 14f2: declarative pattern fires when followed immediately by
+# sentence-ending punctuation (no trailing space). Same shape as the
+# participial regression in test 14b, applied to the declarative form.
+sandbox=$(mktemp -d)
+raw="$sandbox/raw.txt"
+build_raw "$raw" "feat: declarative tail abuts punctuation
+
+Added a substantive change. This ensures."
+out=$(run_score "$raw")
+assert_contains "BODY_NO_PADDING" "$out" "test 14f2: 'This ensures.' (no trailing space) is flagged"
 rm -rf "$sandbox"
 
 # --- Test 14g: "closing the gap" / "closes the gap" / "closing the loop"
