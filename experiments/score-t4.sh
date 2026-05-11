@@ -38,17 +38,26 @@ if [[ -z "$infile" || ! -f "$infile" ]]; then
   exit 2
 fi
 
-# Participial-padding regexes — each one is a POSIX extended regex matched
-# against the lowercased body. The participial forms (`,[[:space:]]+
-# (ensuring|enabling|allowing|providing)`) require a leading comma so they
-# only fire on trailing clauses, never on legitimate sentence-initial use of
-# the same verb. The participle must then be followed by either whitespace
-# (continuing words) or sentence-terminating punctuation (`.!?,`) — that
-# anchor catches `, ensuring.` exactly as it would `, ensuring that …`,
-# while rejecting `,ensuringnot-a-real-word`. The declarative-form patterns
-# (`this is crucial`, etc.) match the restating-sentence padding shape that
-# the participial guard does not capture by itself (see ROADMAP.md T4
-# calibration finding).
+# Padding regexes — each one is a POSIX extended regex matched against the
+# lowercased body. Two shapes are covered.
+#
+# Participial padding: comma + verb-ing at the tail of a clause, e.g.
+#   "Added a guard, ensuring that …"
+# The leading comma keeps these from firing on legitimate sentence-initial
+# use of the same verb ("Ensuring data integrity is the goal."). The
+# participle is then followed by either whitespace (continuing words) or
+# sentence-terminating punctuation (`.!?,`) so `, ensuring.` is caught
+# exactly as `, ensuring that …` would be.
+#
+# Declarative-rephrase padding: sentence-initial "This <verb>" forms that
+# restate the prior paragraph rather than adding new substance, plus a
+# small set of high-signal phrases ("closing the gap", "going forward")
+# that are nearly always trailing-sentence filler in this project's
+# corpus. The "This <verb>" forms are anchored to `(^|\.[[:space:]]+)` so
+# mid-sentence uses like "this approach ensures correct rendering" do not
+# false-positive. Drawn from the PR #84 and PR #86 T4 dogfood outputs
+# where the participial guard held but the declarative restating slipped
+# through (see ROADMAP.md T4 calibration finding).
 PADDING_REGEXES=(
   ',[[:space:]]+ensuring([[:space:]]|[.!?,])'
   ',[[:space:]]+enabling([[:space:]]|[.!?,])'
@@ -58,6 +67,12 @@ PADDING_REGEXES=(
   'this[[:space:]]+is[[:space:]]+crucial'
   'this[[:space:]]+is[[:space:]]+essential'
   'across[[:space:]]+diverse[[:space:]]+environments'
+  '(^|[.!?,][[:space:]]+)this[[:space:]]+ensures([[:space:]]|[.!?,])'
+  '(^|[.!?,][[:space:]]+)this[[:space:]]+enables([[:space:]]|[.!?,])'
+  '(^|[.!?,][[:space:]]+)this[[:space:]]+guarantees([[:space:]]|[.!?,])'
+  '(^|[.!?,][[:space:]]+)this[[:space:]]+delivers([[:space:]]|[.!?,])'
+  'clos(es|ing)[[:space:]]+the[[:space:]]+(gap|loop)([[:space:]]|[.!?,])'
+  '(going|moving)[[:space:]]+forward([[:space:]]|[.!?,])'
 )
 
 # Conventional-commit type allowlist (subject prefix before the first ':').

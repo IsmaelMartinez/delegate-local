@@ -10,8 +10,11 @@ Correct: feat: delegate.sh recipe loading and placeholder validation
 
 Do NOT indent the body lines — output should be flush-left.
 Stop each paragraph after the substantive sentences. Do NOT add a trailing
-sentence that restates the point with a participial clause like "ensuring
-that…", "this distinction is crucial for…", or "…across diverse environments".
+sentence that restates the point. Restating happens in two shapes, both
+rejected: participial form (", ensuring that…", ", enabling…", ", allowing…")
+and declarative form ("This ensures…", "This enables…", "…closing the gap
+in X", "…going forward"). Both lengthen the body without adding new
+information about what the commit changed.
 Output ONLY the commit message itself, nothing else.
 
 === Recent commit examples to match ===

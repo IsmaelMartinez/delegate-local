@@ -31,8 +31,11 @@ Correct: feat: delegate.sh recipe loading and placeholder validation
 
 Do NOT indent the body lines — output should be flush-left.
 Stop each paragraph after the substantive sentences. Do NOT add a trailing
-sentence that restates the point with a participial clause like "ensuring
-that…", "this distinction is crucial for…", or "…across diverse environments".
+sentence that restates the point. Restating happens in two shapes, both
+rejected: participial form (", ensuring that…", ", enabling…", ", allowing…")
+and declarative form ("This ensures…", "This enables…", "…closing the gap
+in X", "…going forward"). Both lengthen the body without adding new
+information about what the commit changed.
 Output ONLY the commit message itself, nothing else.
 
 === Recent commit examples to match ===
@@ -76,13 +79,20 @@ The trailing prompt arg is the reinforcement instruction; the recipe template ca
   to 5/5 HIT on the same input.
 - "Output ONLY the commit message" — without this, the model wraps in prose like "Here's the commit message:" which has to be stripped.
 - "Stop each paragraph after the substantive sentences. Do NOT add a trailing
-  sentence that restates the point with a participial clause…" — addresses the
-  prose-tier participial-padding failure mode documented in SKILL.md's
-  Discipline section. Without this guard, qwen3.6:35b-a3b reliably ends body
-  paragraphs with sentences like "ensuring that every recurring miss has a clear
-  path…" or "…not just local development setups." Added 2026-05-11 from the
-  PR #84 commit-message HIT-with-edits (2 of 2 paragraphs exhibited the
-  pattern despite all earlier guards holding).
+  sentence that restates the point …" — addresses the prose-tier padding
+  failure mode documented in SKILL.md's Discipline section. The guard
+  names both participial form (", ensuring that…", ", enabling…") AND
+  declarative form ("This ensures…", "This enables…", "…closing the gap
+  in X", "…going forward"). The participial form was added 2026-05-11
+  from PR #84 commit-message HIT-with-edits where 2 of 2 paragraphs
+  exhibited the shape despite all earlier guards holding. The declarative
+  form was added later the same day after PR #86's T4 dogfood produced
+  a 6/6 score on the participial regexes yet still emitted "This ensures
+  the anti-padding hardening is measured rather than merely asserted."
+  and "…closing the gap in the empirical-accuracy framework." — the
+  recipe had told the model to drop participial tails but had not named
+  the declarative restating shape, and the model complied literally with
+  the rule it knew.
 
 ## Expected output shape
 
@@ -118,5 +128,13 @@ The fix promotes the guard from a bare negation to a directive-rule with a contr
 The recipe shipped without the SKILL.md "anti-padding directive on prose-tier prompts" line from the Discipline section. Dogfooding the recipe to draft the commit message for PR #84 (Layer 4 issue template) produced a HIT-with-edits: all earlier guards held (no `(#NN)` suffix, no bullets, flush-left), but both body paragraphs ended with the classic participial-padding tails — "ensuring that every recurring miss has a clear path…" and "…not just local development setups." Recorded as HIT in the metrics with the reason naming the missing directive (ts=2026-05-11T08:01:34Z).
 
 The fix mirrors the SKILL.md guidance: an explicit "Stop each paragraph after the substantive sentences. Do NOT add a trailing sentence that restates the point with a participial clause…" line in the prompt template, plus three concrete bad-pattern examples drawn from this session's MISS output. The pattern follows the v5/v7 directive-rule-plus-example approach that closed the `(#NN)` gap above. Re-measurement against PR #84's commit body shape is the next iteration's job — not blocking on a re-run because the guard is the same shape that worked for `(#NN)` and SKILL.md already records the directive as established practice across other recipes.
+
+### 2026-05-11 — declarative-rephrase form added after PR #86 T4 dogfood
+
+The first T4 dogfood (PR #86 against `qwen3.6:35b-a3b-q8_0`, prose tier, via the HTTP API path with `think:false`) scored 6/6 against the participial-only `PADDING_REGEXES` yet still emitted two declarative-form restating sentences: "This ensures the anti-padding hardening is measured rather than merely asserted." (paragraph 1 tail) and "…closing the gap in the empirical-accuracy framework." (paragraph 2 tail). The recipe had told the model to drop participial tails but had not named the declarative restating shape, and the model complied literally with the rule it knew. The participial-only directive was strictly weaker than the failure modes the project's prose style rejects.
+
+The fix extends the directive text to name both shapes: participial (`, ensuring that…`, `, enabling…`) AND declarative (`This ensures…`, `This enables…`, `…closing the gap in X`, `…going forward`). The fixture is updated in-place (still dated 2026-05-11 because today is still 2026-05-11; incremental directive extension rather than a fresh baseline) and `experiments/score-t4.sh` `PADDING_REGEXES` is extended with the corresponding patterns — sentence-anchored `(^|[.!?,][[:space:]]+)this[[:space:]]+(ensures|enables|guarantees|delivers)([[:space:]]|[.!?,])` so mid-sentence legitimate use ("this approach ensures correct rendering") doesn't false-positive, while still firing after `!` and `?` terminators and on the no-trailing-space form `This ensures.`; `clos(es|ing)[[:space:]]+the[[:space:]]+(gap|loop)` for the high-signal restating-tail shape; `(going|moving)[[:space:]]+forward` for the closing-flourish form. 13 new test assertions cover each pattern's positive case (including the `!`/`?` and trailing-punctuation edge cases gemini-code-assist flagged on PR #93) plus the legitimate-mid-sentence-not-flagged negative case.
+
+Second dogfood against the same model on the extended fixture: 6/6 under the extended scorer, no padding shapes detected in either form. The model produced "but without a fixture, that hardening remains asserted rather than measured" — the same "asserted vs measured" concept the first dogfood put in a restating tail, this time woven into a substantive descriptive sentence inside paragraph 1 instead of dangling at the end. Two consecutive dogfoods are enough to declare the declarative-rephrase pattern consistent rather than session-specific; the recipe + scorer are locked in at this state.
 
 Provenance for this recipe also lives in the `feedback_delegate_prose_prompt_anchoring.md` memory file.

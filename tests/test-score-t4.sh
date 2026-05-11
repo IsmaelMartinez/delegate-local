@@ -255,6 +255,98 @@ out=$(run_score "$raw")
 assert_contains "rep 1: 6/6" "$out" "test 14c: mid-sentence 'ensuring' without comma is not flagged"
 rm -rf "$sandbox"
 
+# --- Test 14d: declarative "This ensures" sentence-starter is caught.
+# Drawn from the PR #86 T4 dogfood that scored 6/6 on the old participial-
+# only regex set while still emitting this exact shape.
+sandbox=$(mktemp -d)
+raw="$sandbox/raw.txt"
+build_raw "$raw" "feat: declarative restating tail
+
+Added a guard against trailing participial padding. This ensures the anti-padding hardening is measured rather than merely asserted."
+out=$(run_score "$raw")
+assert_contains "BODY_NO_PADDING" "$out" "test 14d: 'This ensures' sentence-starter flagged as padding"
+rm -rf "$sandbox"
+
+# --- Test 14e: declarative "This enables / This guarantees / This delivers"
+# variants are caught — same restating-sentence shape as test 14d.
+for verb in enables guarantees delivers; do
+  sandbox=$(mktemp -d)
+  raw="$sandbox/raw.txt"
+  build_raw "$raw" "feat: declarative $verb variant
+
+Added a substantive change. This $verb broader adoption of the calibration discipline across future sessions."
+  out=$(run_score "$raw")
+  assert_contains "BODY_NO_PADDING" "$out" "test 14e: 'This $verb' sentence-starter flagged"
+  rm -rf "$sandbox"
+done
+
+# --- Test 14f: legitimate mid-sentence "this ensures" is NOT flagged. The
+# anchor `(^|[.!?,][[:space:]]+)` keeps these patterns from firing when the
+# token chain appears in the middle of a substantive sentence.
+sandbox=$(mktemp -d)
+raw="$sandbox/raw.txt"
+build_raw "$raw" "feat: substantive mid-sentence usage stays clean
+
+The contract is that this ensures correct behaviour under concurrent writes by serialising the queue."
+out=$(run_score "$raw")
+assert_contains "rep 1: 6/6" "$out" "test 14f: mid-sentence 'this ensures' is not flagged"
+rm -rf "$sandbox"
+
+# --- Test 14f1: declarative pattern fires after non-period sentence
+# terminators (! and ?). PR #93 review pointed out that anchoring only on
+# `\.` would miss "Done! This ensures correctness." — the new anchor
+# `[.!?,]` covers all four sentence-ending characters.
+for term in "!" "?"; do
+  sandbox=$(mktemp -d)
+  raw="$sandbox/raw.txt"
+  build_raw "$raw" "feat: declarative tail after $term terminator
+
+The change landed cleanly${term} This ensures the framework holds together."
+  out=$(run_score "$raw")
+  assert_contains "BODY_NO_PADDING" "$out" "test 14f1: 'This ensures' after '${term}' is flagged"
+  rm -rf "$sandbox"
+done
+
+# --- Test 14f2: declarative pattern fires when followed immediately by
+# sentence-ending punctuation (no trailing space). Same shape as the
+# participial regression in test 14b, applied to the declarative form.
+sandbox=$(mktemp -d)
+raw="$sandbox/raw.txt"
+build_raw "$raw" "feat: declarative tail abuts punctuation
+
+Added a substantive change. This ensures."
+out=$(run_score "$raw")
+assert_contains "BODY_NO_PADDING" "$out" "test 14f2: 'This ensures.' (no trailing space) is flagged"
+rm -rf "$sandbox"
+
+# --- Test 14g: "closing the gap" / "closes the gap" / "closing the loop"
+# are caught as high-signal restating-tail filler.
+for phrase in "closing the gap in the framework" \
+              "closes the gap between modules" \
+              "closing the loop on the calibration"; do
+  sandbox=$(mktemp -d)
+  raw="$sandbox/raw.txt"
+  build_raw "$raw" "feat: gap-or-loop padding variant
+
+Added a substantive change, $phrase."
+  out=$(run_score "$raw")
+  assert_contains "BODY_NO_PADDING" "$out" "test 14g: '$phrase' flagged as padding"
+  rm -rf "$sandbox"
+done
+
+# --- Test 14h: "going forward" and "moving forward" as trailing-sentence
+# filler are caught.
+for phrase in "going forward" "moving forward"; do
+  sandbox=$(mktemp -d)
+  raw="$sandbox/raw.txt"
+  build_raw "$raw" "feat: forward-looking filler
+
+Added a substantive change. The team will iterate on this $phrase."
+  out=$(run_score "$raw")
+  assert_contains "BODY_NO_PADDING" "$out" "test 14h: '$phrase' flagged as padding"
+  rm -rf "$sandbox"
+done
+
 # --- Test 15: machine-parseable T4_SUMMARY line shape ---
 sandbox=$(mktemp -d)
 raw="$sandbox/raw.txt"
