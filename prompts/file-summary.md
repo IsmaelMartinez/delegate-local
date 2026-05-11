@@ -72,7 +72,7 @@ The 3-axis grid surfaces one new regime cell missed by the 2-axis grid because s
 ```
 
 ```
-Accepted CloudWAN over Transit Gateway because the global routing model handles cross-region intent at the policy layer instead of in per-attachment route tables.
+CloudWAN was accepted over Transit Gateway because the global routing model handles cross-region intent at the policy layer instead of in per-attachment route tables.
 ```
 
 Verify before recording verdict: one line only, includes both a subject noun phrase and a `because`/`by` mechanism clause, no leading verb-fragment opener, no title or date, no trailing restatement, ≤25 words.
