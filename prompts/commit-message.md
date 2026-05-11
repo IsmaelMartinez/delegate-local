@@ -30,6 +30,9 @@ Wrong: feat: delegate.sh recipe loading and placeholder validation (#73)
 Correct: feat: delegate.sh recipe loading and placeholder validation
 
 Do NOT indent the body lines — output should be flush-left.
+Stop each paragraph after the substantive sentences. Do NOT add a trailing
+sentence that restates the point with a participial clause like "ensuring
+that…", "this distinction is crucial for…", or "…across diverse environments".
 Output ONLY the commit message itself, nothing else.
 
 === Recent commit examples to match ===
@@ -72,6 +75,14 @@ The trailing prompt arg is the reinforcement instruction; the recipe template ca
   the contrastive Wrong/Correct one-shot plus the "non-negotiable" directive flipped it
   to 5/5 HIT on the same input.
 - "Output ONLY the commit message" — without this, the model wraps in prose like "Here's the commit message:" which has to be stripped.
+- "Stop each paragraph after the substantive sentences. Do NOT add a trailing
+  sentence that restates the point with a participial clause…" — addresses the
+  prose-tier participial-padding failure mode documented in SKILL.md's
+  Discipline section. Without this guard, qwen3.6:35b-a3b reliably ends body
+  paragraphs with sentences like "ensuring that every recurring miss has a clear
+  path…" or "…not just local development setups." Added 2026-05-11 from the
+  PR #84 commit-message HIT-with-edits (2 of 2 paragraphs exhibited the
+  pattern despite all earlier guards holding).
 
 ## Expected output shape
 
@@ -101,5 +112,11 @@ The progression from MISS → HIT-with-edits → HIT-verbatim is the empirical e
 The 2026-05-09 verbatim-HIT proved fragile. PR #73's commit message regenerated with the same recipe shape produced `feat: ... (#73)` on the subject despite the `Do NOT append any (#NN)` line. Reproducing on the same host with a multi-file diff stat (matching PR #73's 9-file shape) produced 3 of 3 MISS deterministically — the model pattern-matched on the `(#NN)` suffix in the recent-commits anchors and inferred the next number, treating the bare-negation guard as advisory. The trigger is the diff-stat shape: a "real-PR-sized" diff strengthens the model's prior that the commit will land via squash merge.
 
 The fix promotes the guard from a bare negation to a directive-rule with a contrastive Wrong/Correct one-shot example, following the v5/v7 retrospective pattern measured at Opus parity in `experiments/sessions/2026-05-03-*`. The new wording is `Subjects ending in (#NN) are REJECTED ... non-negotiable` plus an explicit `Wrong: feat: ... (#73)` / `Correct: feat: ...` pair. Re-measured on the same input post-fix: 5 of 5 HIT (`feat: delegate.sh recipe loading and placeholder validation`, no suffix), deterministic at temperature 0.
+
+### 2026-05-11 — anti-padding directive added after PR #84 commit message
+
+The recipe shipped without the SKILL.md "anti-padding directive on prose-tier prompts" line from the Discipline section. Dogfooding the recipe to draft the commit message for PR #84 (Layer 4 issue template) produced a HIT-with-edits: all earlier guards held (no `(#NN)` suffix, no bullets, flush-left), but both body paragraphs ended with the classic participial-padding tails — "ensuring that every recurring miss has a clear path…" and "…not just local development setups." Recorded as HIT in the metrics with the reason naming the missing directive (ts=2026-05-11T08:01:34Z).
+
+The fix mirrors the SKILL.md guidance: an explicit "Stop each paragraph after the substantive sentences. Do NOT add a trailing sentence that restates the point with a participial clause…" line in the prompt template, plus three concrete bad-pattern examples drawn from this session's MISS output. The pattern follows the v5/v7 directive-rule-plus-example approach that closed the `(#NN)` gap above. Re-measurement against PR #84's commit body shape is the next iteration's job — not blocking on a re-run because the guard is the same shape that worked for `(#NN)` and SKILL.md already records the directive as established practice across other recipes.
 
 Provenance for this recipe also lives in the `feedback_delegate_prose_prompt_anchoring.md` memory file.
