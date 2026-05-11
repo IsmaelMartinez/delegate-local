@@ -62,6 +62,12 @@ When you spot a recurring task pattern that doesn't have a recipe yet:
 3. Add an entry to the SKILL.md "Recipes" pointer so the agent knows the recipe exists.
 4. Where it makes sense, mirror the task shape into `evals/eval-set.json` as a positive paraphrase so the trigger eval ensures the description still fires on the pattern.
 
+## Cross-machine signal: graduating an issue into a recipe
+
+The hit/miss log is single-machine. When a MISS surfaces a task shape this library does not yet cover, the cross-machine path is a `prompt-pattern` issue (`.github/ISSUE_TEMPLATE/prompt-pattern.md`). The template captures the task shape, tier and resolved model, the verbatim prompt and model output, and — when known — the prompt that turned the MISS into a HIT. The diff between broken and working prompt is the calibration signal a maintainer needs to draft a recipe without re-running the original session.
+
+The maintainer (or a future PR-bot) graduates a `prompt-pattern` issue by drafting `prompts/<new>.md` from the working prompt, paired with an `evals/eval-set.json` positive that asserts the trigger surface still fires on the task shape, then closing the issue with a link to the merging PR. Every recurring miss becomes both a test case and a fix, instead of evaporating after one conversation. Issues that name an existing recipe but flag a new failure mode update that recipe's `## Calibration notes` rather than spawning a new file.
+
 ## Current recipes
 
 - `commit-message.md` — drafting a git commit message from a staged diff and recent log examples.
