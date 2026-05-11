@@ -28,6 +28,20 @@ tier X" or "show me the audit summary" without shelling out.
   `repo-butler`) as `[{"name", "url", "summary"}, ...]`. Mirrors the
   README's "Related projects" section so MCP clients can surface
   clickable links without parsing prose.
+- `recommend_prompt(task, include_examples=True, max_examples=3)` —
+  returns the best-known recipe for a task plus local hit/miss telemetry.
+  Matches `task` against the `prompts/*.md` recipe stems by token
+  overlap (with British/US-spelling aliases), parses the recipe's
+  `Prompt template`, `Variables`, and `Invocation` sections, then
+  walks the metrics JSONL to attach `hit_count`, `miss_count`, and
+  (when `include_examples` is true) the most recent successful
+  delegations with their feedback reason. This is Layer 3 of the
+  training-loop initiative: it turns the local hit/miss log from a
+  passive scoreboard into active routing signal — non-Claude MCP
+  clients (Codex, OpenCode, Cursor) get the same calibration the
+  Claude Code skill consumes via `delegate.sh --recipe`. Overrides
+  honour `DELEGATE_PROMPTS_DIR` and `DELEGATE_METRICS_FILE` so the
+  tool stays testable and host-portable.
 
 ## Install
 
