@@ -76,6 +76,8 @@ The maintainer (or a future PR-bot) graduates a `prompt-pattern` issue by drafti
 - `pr-review-reply.md` — one-sentence reply under a PR/MR inline comment after applying or declining the fix.
 - `release-note.md` — drafting one CHANGELOG / release-body bullet for a merged PR.
 - `summarise-issue.md` — timeline-style summary of a long GitHub issue, MR thread, or CI log.
+- `file-summary.md` — one-sentence summary of a single document (ADR, analysis, design doc) for a link-index or digest.
+- `polish-reply.md` — tighten a multi-paragraph maintainer reply for concision while preserving the opener, closer, and every technical claim verbatim.
 
 ## Related
 
