@@ -1,0 +1,28 @@
+Write a regular expression that matches a US ZIP+4 postal code.
+
+A ZIP+4 is either:
+- exactly 5 digits (e.g. "12345"), OR
+- 5 digits, a hyphen, and exactly 4 more digits (e.g. "12345-6789").
+
+The regex must match the WHOLE string. Leading or trailing whitespace
+must not be allowed.
+
+The following strings MUST match the regex:
+- "12345"
+- "90210"
+- "00000"
+- "12345-6789"
+- "99999-0001"
+
+The following strings MUST NOT match the regex:
+- "1234"            (only 4 digits)
+- "123456"          (6 digits, no hyphen)
+- "12345-678"       (hyphen but only 3 digits after)
+- "12345 6789"      (space instead of hyphen)
+- "1234-5678"       (4-4 instead of 5-4)
+- "12345-"          (hyphen but no extension digits)
+- " 12345"          (leading space)
+
+Output ONLY the regex pattern itself. One line. No surrounding prose, no
+markdown code fence, no slash delimiters, no preamble like "Here is the
+regex:". Just the pattern characters and nothing else.
