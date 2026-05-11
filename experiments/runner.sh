@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the 4 fixture tasks against a single Ollama model and emit timing + output.
 #
-# Usage: runner.sh [--reps N] [--t3-snapshot YYYY-MM-DD] [--t4-snapshot YYYY-MM-DD] [--t5-snapshot YYYY-MM-DD] <model-name>
+# Usage: runner.sh [--reps N] [--t3-snapshot YYYY-MM-DD] [--t4-snapshot YYYY-MM-DD] [--t5-snapshot YYYY-MM-DD] [--t6-snapshot YYYY-MM-DD] <model-name>
 #
 # --reps N            (default 1) repeats every task N times in the same file,
 #                     each block prefixed with `===== <task_id> rep <i> =====`.
@@ -19,9 +19,13 @@
 #                     under experiments/fixtures/task-5-json-shape-<DATE>.txt
 #                     to use. T5 benchmarks structured-extraction-into-JSON
 #                     against an explicit schema with owner-filter rules.
+# --t6-snapshot DATE  (default 2026-05-11) selects which dated T6 fixture
+#                     under experiments/fixtures/task-6-regex-generation-<DATE>.txt
+#                     to use. T6 benchmarks regex-generation-from-description
+#                     against positive/negative acceptance tests.
 #
 # Output: writes experiments/results/raw/<model-slug>.txt
-# Header: MODEL, DATE, REPS, T3_SNAPSHOT, T4_SNAPSHOT, T5_SNAPSHOT for reproducibility.
+# Header: MODEL, DATE, REPS, T3_SNAPSHOT, T4_SNAPSHOT, T5_SNAPSHOT, T6_SNAPSHOT for reproducibility.
 
 set -euo pipefail
 
@@ -29,6 +33,7 @@ reps=1
 t3_snapshot="2026-04-28"
 t4_snapshot="2026-05-11"
 t5_snapshot="2026-05-11"
+t6_snapshot="2026-05-11"
 
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
@@ -50,6 +55,11 @@ while [[ "${1:-}" == --* ]]; do
     --t5-snapshot)
       t5_snapshot="${2:-}"
       [[ -n "$t5_snapshot" ]] || { echo "--t5-snapshot requires a date" >&2; exit 2; }
+      shift 2
+      ;;
+    --t6-snapshot)
+      t6_snapshot="${2:-}"
+      [[ -n "$t6_snapshot" ]] || { echo "--t6-snapshot requires a date" >&2; exit 2; }
       shift 2
       ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -88,6 +98,14 @@ if [[ ! -f "$t5_fixture" ]]; then
   echo "T5 snapshot not found: $t5_fixture" >&2
   echo "available snapshots:" >&2
   ls "$fixtures"/task-5-json-shape-*.txt 2>/dev/null | sed 's/^/  /' >&2
+  exit 1
+fi
+
+t6_fixture="$fixtures/task-6-regex-generation-${t6_snapshot}.txt"
+if [[ ! -f "$t6_fixture" ]]; then
+  echo "T6 snapshot not found: $t6_fixture" >&2
+  echo "available snapshots:" >&2
+  ls "$fixtures"/task-6-regex-generation-*.txt 2>/dev/null | sed 's/^/  /' >&2
   exit 1
 fi
 
@@ -177,6 +195,7 @@ echo "REPS: $reps" >> "$out"
 echo "T3_SNAPSHOT: $t3_snapshot" >> "$out"
 echo "T4_SNAPSHOT: $t4_snapshot" >> "$out"
 echo "T5_SNAPSHOT: $t5_snapshot" >> "$out"
+echo "T6_SNAPSHOT: $t6_snapshot" >> "$out"
 echo "" >> "$out"
 
 for (( rep=1; rep<=reps; rep++ )); do
@@ -213,6 +232,17 @@ for (( rep=1; rep<=reps; rep++ )); do
   # the JSON in commentary and break parseability.
   run_task_api "T5-json-shape" "$t5_fixture" \
     "Follow the instructions in the message above. Output ONLY the JSON object, no preamble or markdown fence." \
+    "$rep"
+
+  # T6: regex-generation — pattern-from-description benchmark with
+  # explicit positive/negative acceptance tests. The fixture spells out
+  # the task, the matching set, and the rejecting set; the model's job
+  # is to emit ONE line containing only the regex pattern. Uses
+  # run_task_api so think:false suppresses chain-of-thought that would
+  # otherwise produce explanation paragraphs surrounding the regex and
+  # break pattern extraction.
+  run_task_api "T6-regex-generation" "$t6_fixture" \
+    "Follow the instructions in the message above. Output ONLY the regex pattern on a single line. No fence, no slashes, no commentary." \
     "$rep"
 done
 
