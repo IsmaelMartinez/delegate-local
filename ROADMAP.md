@@ -80,7 +80,7 @@ All shipped. README "Related projects" cross-links the four sibling repos: `loca
 
 ## Phase 6 — Recurring maintenance
 
-- Monthly scheduled run of `audit-models.sh` to surface new first-party model options and PR a `pick-model.sh` update if anything beats the installed leader by 3+ llmfit points.
+- [done] Monthly scheduled run of `scripts/audit-models.sh` to surface new first-party model options and PR a `scripts/pick-model.sh` update if anything beats the installed leader by 3+ llmfit points. *(Shipped as a notification-only workflow at [`.github/workflows/monthly-audit-reminder.yml`](.github/workflows/monthly-audit-reminder.yml) — the audit needs `ollama list` plus the local model store and so can't run on a GitHub-hosted runner. The workflow opens a tracking issue on the 1st of each month (idempotency guard: skips when an open issue with the same title already exists) with a checklist covering the local audit run, the llmfit upgrade-suggestion review, the `ollama pull` + `scripts/pick-model.sh` PR if a model beats the installed leader, and re-running `experiments/runner.sh` + `experiments/score-t{3,4,5,6}.sh` to confirm the new model holds its own. `workflow_dispatch` is the manual escape hatch for re-running outside the monthly cadence.)*
 - Quarterly trigger-eval re-run to catch description drift if the skill set changes around it.
 - llmfit database refresh tracked: `llmfit update` should run before any audit pass so the catalogue reflects the latest HuggingFace state.
 

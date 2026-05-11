@@ -1,0 +1,67 @@
+name: monthly-audit-reminder
+
+# Notification-only workflow for Phase 6 recurring maintenance.
+#
+# `scripts/audit-models.sh` reads `ollama list` and the local model store, so
+# it can't actually run on a GitHub-hosted runner. Instead, this workflow opens
+# a tracking issue on the 1st of each month reminding the maintainer to run the
+# audit locally. Idempotent: if an open issue with the same title exists, the
+# job exits without opening a duplicate. `workflow_dispatch` is the manual
+# escape hatch for re-running the reminder outside the monthly cadence.
+
+on:
+  schedule:
+    # 09:00 UTC on the 1st of every month.
+    - cron: '0 9 1 * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  open-reminder:
+    name: open monthly audit reminder
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open reminder issue if none open
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_TITLE: 'Monthly: audit installed Ollama models'
+        run: |
+          set -euo pipefail
+
+          existing=$(gh issue list \
+            --repo "$GH_REPO" \
+            --state open \
+            --search "in:title \"$ISSUE_TITLE\"" \
+            --json number,title \
+            --jq "[.[] | select(.title == \"$ISSUE_TITLE\")] | .[0].number // empty")
+
+          if [ -n "$existing" ]; then
+            echo "Open reminder issue already exists (#$existing) — skipping."
+            exit 0
+          fi
+
+          # Build the issue body with printf so we don't fight heredoc-vs-
+          # YAML-indent rules (a plain heredoc terminator must sit at column 0,
+          # which clashes with the YAML script block's leading indent).
+          body=$(printf '%s\n' \
+            'Monthly reminder to run `scripts/audit-models.sh` locally and review the llmfit-driven upgrade suggestions. This workflow is notification-only because the audit needs `ollama list` + the local model store, which the GitHub-hosted runner does not have.' \
+            '' \
+            '### Checklist' \
+            '' \
+            '- [ ] Run `bash scripts/audit-models.sh` locally.' \
+            '- [ ] Review llmfit-driven upgrade suggestions (3+ point delta threshold).' \
+            '- [ ] If a model beats the installed leader, `ollama pull` it and open a PR updating `scripts/pick-model.sh`.' \
+            '- [ ] Re-run `bash experiments/runner.sh <new-model>` and `bash experiments/score-t{3,4,5,6}.sh experiments/results/raw/<slug>.txt` to confirm the new model holds its own on the empirical fixtures.' \
+            '- [ ] Close this issue once the audit is complete (next month'"'"'s run will open a fresh one).' \
+            '' \
+            'See ROADMAP.md "Phase 6 — Recurring maintenance" for context.')
+
+          gh issue create \
+            --repo "$GH_REPO" \
+            --title "$ISSUE_TITLE" \
+            --body "$body" \
+            --label enhancement
