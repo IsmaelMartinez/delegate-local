@@ -368,6 +368,21 @@ assert_eq 0 "$EC" "nudge names matches: exit 0"
 assert_contains "pr-description prose tier stalled" "$out" "nudge names matches: reason text rendered"
 rm -rf "$tmp"
 
+# n27: stopword-only reason → matcher must short-circuit cleanly (regression
+# for the `return outside subroutine` bug gemini-code-assist caught on PR #91:
+# the earlier draft used `return print ... unless @new_t` at Perl top level,
+# which would crash the Perl process. With the fix in place this test
+# exercises the empty-tokens path WITHOUT going through the bash-side
+# empty-reason short-circuit (the reason has length, just no content tokens).
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 3
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "on the to a an" 2>&1) || EC=$?
+assert_eq 0 "$EC" "stopword-only reason: exit 0 (no Perl crash)"
+assert_contains "MISS recorded" "$out" "stopword-only reason: still records the verdict"
+if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  stopword-only reason: nudge silent (no tokens to match)"; pass=$((pass+1))
+else echo "  FAIL  stopword-only reason: nudge fired"; fail=$((fail+1)); fi
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

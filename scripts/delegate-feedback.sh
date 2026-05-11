@@ -197,7 +197,7 @@ if [[ "$kept" == "false" && "${DELEGATE_FEEDBACK_NO_NUDGE:-0}" != "1" && -n "$re
     }
     my @new_t = toks($new_reason);
     my %new_set = map { $_ => 1 } @new_t;
-    return print "SIMILAR_COUNT=0\n" unless @new_t;
+    if (!@new_t) { print "SIMILAR_COUNT=0\n"; exit 0; }
 
     my $similar = 0;
     my @rows;
@@ -214,9 +214,11 @@ if [[ "$kept" == "false" && "${DELEGATE_FEEDBACK_NO_NUDGE:-0}" != "1" && -n "$re
       }
       my @h_t = toks($j->{reason} // "");
       next unless @h_t;
-      my %h_set = map { $_ => 1 } @h_t;
+      # Inclusion-exclusion: |A ∪ B| = |A| + |B| - |A ∩ B|. Avoids the
+      # per-row anonymous-hash merge the earlier draft used; both @new_t
+      # and @h_t are already deduped by toks().
       my $inter = 0; for my $t (@h_t) { $inter++ if $new_set{$t} }
-      my $union = scalar keys %{{ %new_set, %h_set }};
+      my $union = scalar(@new_t) + scalar(@h_t) - $inter;
       next if $union == 0;
       my $jac = $inter / $union;
       if ($jac >= $threshold) {
