@@ -117,6 +117,37 @@ Three scripts gate every PR via GitHub Actions:
 
 The `--ollama` mode is the recommended local pre-merge gate (10–30 s on a mid-tier machine, dogfoods the project's own routing). The `--github-models` mode is the recommended CI gate — uses the auto-provisioned `GITHUB_TOKEN` so there is no secret to configure; the workflow declares `permissions: models: read` to grant scope. The `--api` mode is opt-in via the `ANTHROPIC_API_KEY` repo secret (Settings → Secrets and variables → Actions); without the secret the CI step is skipped, not failed.
 
+## Calibration feedback loop
+
+Recipes evolve from real session feedback. The loop is end-to-end on-device until you decide to share a finding:
+
+```
+delegate.sh run                metrics.jsonl                delegate-feedback.sh
+  ↓                              (append-only,                miss "<reason>"
+  appends one row                 gitignored)                   ↓
+  per call                                                    appends one row
+                                                              ↓
+                                                              matches reason
+                                                              against historical
+                                                              MISS rows (Jaccard
+                                                              over content tokens)
+                                                                ↓
+                                                              if N≥3 similars in
+                                                              last 30d → nudge
+                                                              prints draft gh
+                                                              issue command
+                                                                ↓
+                                                          you decide whether to
+                                                          file a prompt-pattern
+                                                          issue → maintainer
+                                                          graduates it into
+                                                          prompts/<new>.md
+```
+
+The single-machine metrics JSONL has no scheduled job behind it; the nudge is the runtime signal. After the third similar MISS in the rolling window, `delegate-feedback.sh` prints the matched reasons and a draft `gh issue create` command pre-targeted at the `prompt-pattern` label. The nudge is advisory — it never opens the issue on its own — so each filing stays a deliberate call. Silence one invocation with `DELEGATE_FEEDBACK_NO_NUDGE=1`; tune the trigger via `DELEGATE_FEEDBACK_NUDGE_AT` (default 3), `DELEGATE_FEEDBACK_NUDGE_WINDOW_DAYS` (default 30), and `DELEGATE_FEEDBACK_SIMILAR_THRESHOLD` (default 0.4 Jaccard over stopword-stripped content tokens).
+
+A `prompt-pattern` issue captures the task shape, tier and resolved model, verbatim prompt and model output, and (when known) the prompt that turned the MISS into a HIT. `prompts/README.md` documents how the maintainer graduates an issue into a `prompts/<new>.md` recipe paired with an `evals/eval-set.json` positive — closing the loop empirically rather than evaporating after one conversation.
+
 ## What you actually save
 
 Worth being explicit about this because the skill could easily be oversold.
