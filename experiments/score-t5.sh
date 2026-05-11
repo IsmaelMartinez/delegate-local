@@ -13,14 +13,18 @@
 #                          JSON per `jq -e .`
 #   2. TOP_LEVEL_OBJECT — top-level value is a JSON object (not array,
 #                          string, number, null, or bool)
-#   3. OWNER_FIELD      — `.owner` is the literal string "ismael"
-#                          (lowercase, per the fixture's directive)
+#   3. OWNER_FIELD      — `.owner == "ismael"` exactly (strict lowercase,
+#                          per the fixture's rule 18 "the literal
+#                          lowercase string")
 #   4. ITEMS_ARRAY      — `.items` is an array
 #   5. ITEM_COUNT       — `.items | length == 3` (the three Ismael items
 #                          in the fixture's email)
 #   6. ITEM_SHAPE       — every element has `.task` (non-empty string)
-#                          and `.due` (ISO YYYY-MM-DD string); date format
-#                          checked by regex against `^\d{4}-\d{2}-\d{2}$`
+#                          and `.due` (ISO YYYY-MM-DD string), AND the
+#                          sorted set of `.due` dates equals the ground
+#                          truth ["2026-04-22", "2026-04-30", "2026-05-08"]
+#                          (a model that emits well-formatted but invented
+#                          dates fails this check)
 #
 # Per-rep output: rep N: pass=N/6 fails=[check_name,...]
 # Aggregate: mean, min, max, stdev across reps + machine-parseable
@@ -81,7 +85,10 @@ fi
 strip_fence() {
   local body="$1"
   body=$(printf '%s' "$body" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
-  body=$(printf '%s' "$body" | perl -0777 -pe 's/^```(?:json|JSON)?\s*\n//; s/\n```\s*$//')
+  # `\n?` on both ends — some models emit `...}\`\`\`` without a preceding
+  # newline, others emit `\`\`\`json\n{...` with the newline present. Making
+  # the newline optional keeps the scorer robust across both shapes.
+  body=$(printf '%s' "$body" | perl -0777 -pe 's/^```(?:json|JSON)?\s*\n?//; s/\n?```\s*$//')
   printf '%s' "$body"
 }
 
@@ -121,8 +128,12 @@ score_one() {
     fails+=("TOP_LEVEL_OBJECT")
   fi
 
-  # Check 3: owner field is the literal lowercase "ismael".
-  if printf '%s' "$body" | jq -e '(.owner // "") | ascii_downcase == "ismael"' >/dev/null 2>&1; then
+  # Check 3: owner field is the literal lowercase "ismael". The fixture's
+  # rule 18 says "The 'owner' field is the literal lowercase string
+  # 'ismael'" — strict comparison measures compliance with the directive
+  # as written rather than tolerating uppercase variants the directive
+  # rejects.
+  if printf '%s' "$body" | jq -e '.owner == "ismael"' >/dev/null 2>&1; then
     p_owner=1
   else
     fails+=("OWNER_FIELD")
@@ -142,14 +153,19 @@ score_one() {
     fails+=("ITEM_COUNT")
   fi
 
-  # Check 6: every item has `task` (non-empty string) and `due` (ISO YYYY-MM-DD).
-  # Use `all` + a regex match on `due`. If `.items` isn't an array the prior
-  # check failed; jq returns false here too (any-of-empty is true, but we
-  # require non-empty array).
+  # Check 6: ITEM_SHAPE — both format and content. Every item must have
+  # `task` (non-empty string) and `due` (ISO YYYY-MM-DD string), AND the
+  # three `due` dates must sort to the ground-truth set from the fixture
+  # (April 22 / 30, May 8 — the three Ismael items in the email). The
+  # ground-truth date set is hard-coded here the same way `length == 3` is
+  # in check 5: it's part of the fixture-specific rubric, and a future
+  # `task-5-json-shape-<DATE>.txt` snapshot with different dates would
+  # need a scorer update in lock-step.
   if printf '%s' "$body" | jq -e '
       .items
       | type == "array"
       and length > 0
+      and (map(.due) | sort == ["2026-04-22", "2026-04-30", "2026-05-08"])
       and all(
           (.task | type == "string" and (length > 0))
           and (.due | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))

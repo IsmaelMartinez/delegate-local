@@ -113,8 +113,10 @@ out=$(run_score "$raw")
 assert_contains "OWNER_FIELD" "$out" "test 5: wrong owner → OWNER_FIELD fail"
 rm -rf "$sandbox"
 
-# Test 6: capitalised "Ismael" still passes OWNER_FIELD — case-insensitive
-# comparison is documented in the rubric.
+# Test 6: uppercase "ISMAEL" fails OWNER_FIELD — the fixture's rule 18
+# requires the literal lowercase string, so case-mismatched compliance is
+# a real MISS. Updated after PR #94 review feedback that the original
+# `ascii_downcase` was too lenient relative to the directive.
 sandbox=$(mktemp -d); raw="$sandbox/raw.txt"
 build_raw "$raw" '{"owner":"ISMAEL","items":[
   {"task":"a","due":"2026-04-22"},
@@ -122,7 +124,8 @@ build_raw "$raw" '{"owner":"ISMAEL","items":[
   {"task":"c","due":"2026-04-30"}
 ]}'
 out=$(run_score "$raw")
-assert_contains "rep 1: 6/6" "$out" "test 6: ISMAEL (uppercase) still 6/6 (case-insensitive owner)"
+assert_contains "rep 1: 5/6" "$out" "test 6: ISMAEL (uppercase) fails OWNER_FIELD (strict lowercase)"
+assert_contains "OWNER_FIELD" "$out" "test 6: fails list names OWNER_FIELD"
 rm -rf "$sandbox"
 
 # Test 7: items as an object (not array) fails ITEMS_ARRAY and ITEM_COUNT
@@ -223,6 +226,31 @@ $CLEAN_JSON
 Let me know if you need anything else."
 out=$(run_score "$raw")
 assert_contains "JSON_PARSEABLE" "$out" "test 16: preamble+postamble around JSON → JSON_PARSEABLE fail"
+rm -rf "$sandbox"
+
+# Test 17: closing fence with no preceding newline still gets stripped
+# (gemini-code-assist regression on PR #94 — some models emit `...}\`\`\``
+# without the newline, and the original regex required `\n` before the
+# fence). Tests that the optional-newline regex fix accepts both shapes.
+sandbox=$(mktemp -d); raw="$sandbox/raw.txt"
+build_raw "$raw" "\`\`\`json
+$CLEAN_JSON\`\`\`"
+out=$(run_score "$raw")
+assert_contains "rep 1: 6/6" "$out" "test 17: fence with no newline before closing still scores 6/6"
+rm -rf "$sandbox"
+
+# Test 18: invented/wrong dates fail ITEM_SHAPE even though format is
+# correct. Catches models that emit well-formatted but hallucinated dates.
+# Added after PR #94 review folded date-content verification into
+# ITEM_SHAPE (sort == ground-truth set).
+sandbox=$(mktemp -d); raw="$sandbox/raw.txt"
+build_raw "$raw" '{"owner":"ismael","items":[
+  {"task":"a","due":"2026-04-23"},
+  {"task":"b","due":"2026-05-09"},
+  {"task":"c","due":"2026-04-29"}
+]}'
+out=$(run_score "$raw")
+assert_contains "ITEM_SHAPE" "$out" "test 18: invented dates (off-by-one) fail ITEM_SHAPE"
 rm -rf "$sandbox"
 
 echo ""
