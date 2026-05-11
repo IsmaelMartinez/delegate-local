@@ -11,11 +11,22 @@
 #
 # Usage:  delegate-feedback.sh [--ts <iso8601>] hit|miss [reason words...]
 # Env:
-#   DELEGATE_METRICS_FILE             override default metrics path
-#   DELEGATE_FEEDBACK_STALE_SECONDS   max age of the implicit "most recent
-#                                     delegate row" before this script
-#                                     refuses to attach without --ts
-#                                     (default 300; set 0 to disable).
+#   DELEGATE_METRICS_FILE                 override default metrics path
+#   DELEGATE_FEEDBACK_STALE_SECONDS       max age of the implicit "most recent
+#                                         delegate row" before this script
+#                                         refuses to attach without --ts
+#                                         (default 300; set 0 to disable).
+#   DELEGATE_FEEDBACK_NO_NUDGE            set to 1 to silence the trigger-on-
+#                                         MISS recurrence nudge.
+#   DELEGATE_FEEDBACK_NUDGE_AT            minimum total similar MISSes (this
+#                                         one included) to trigger the nudge
+#                                         (default 3).
+#   DELEGATE_FEEDBACK_NUDGE_WINDOW_DAYS   lookback for similar MISS counting
+#                                         (default 30).
+#   DELEGATE_FEEDBACK_SIMILAR_THRESHOLD   Jaccard similarity (over content
+#                                         tokens, stopwords removed) at which
+#                                         two MISS reasons are considered
+#                                         similar (default 0.4).
 # Exit:   0 OK, 1 file/event missing or stale, 2 usage error.
 
 set -uo pipefail
@@ -143,3 +154,103 @@ fi
 
 verdict_word=$([[ "$kept" == "true" ]] && echo "HIT" || echo "MISS")
 echo "$verdict_word recorded against delegate ts=$ref_ts${reason:+ ($reason)}"
+
+# Trigger-on-MISS nudge — when a MISS is recorded and the reason has token
+# overlap with N-1 or more recent MISSes already in the JSONL, surface a
+# draft `prompt-pattern` issue command so the calibration discipline the
+# README documents has a runtime nudge to back it. Issue #88. The matcher
+# scores Jaccard similarity over content tokens (lowercased, stopwords
+# stripped, length ≥ 3) and only runs on MISS so HIT recording stays quiet.
+# The just-appended row is excluded from the count by ts so the matcher
+# does not see itself.
+if [[ "$kept" == "false" && "${DELEGATE_FEEDBACK_NO_NUDGE:-0}" != "1" && -n "$reason" ]]; then
+  nudge_at="${DELEGATE_FEEDBACK_NUDGE_AT:-3}"
+  window_days="${DELEGATE_FEEDBACK_NUDGE_WINDOW_DAYS:-30}"
+  similar_threshold="${DELEGATE_FEEDBACK_SIMILAR_THRESHOLD:-0.4}"
+  window_secs=$((window_days * 86400))
+
+  # Perl rather than awk because the matcher needs JSON parsing, set
+  # arithmetic, and floating-point Jaccard — all messy in awk and clean
+  # in Perl, which is already a project runtime dep (see iso_to_epoch
+  # above, scripts/delegate.sh, the score-t3.sh stdev calc). Inputs on
+  # the command line; the JSONL streams in on stdin. Output is one
+  # `SIMILAR_COUNT=<n>` line plus one `<ts>\t<reason>` line per match.
+  matcher_out=$(perl -MJSON::PP -MTime::Local=timegm -e '
+    use strict; use warnings;
+    my ($new_reason, $threshold, $window_secs, $self_ts) = @ARGV;
+    my $now = time;
+    my %STOP = map { $_ => 1 } qw(
+      the a an and or but is was were be been being am are
+      for to from with on in of at by into onto out up down
+      this that these those it its also too just only very
+      has have had do does did can could should would shall
+      will may might must about against some any all most
+      more less few many much over under above below than then
+      not no nor so yet still already even either neither
+      such same other another own here there where when how why
+    );
+    sub toks {
+      my $s = lc(shift // "");
+      my %seen;
+      grep { length >= 3 && !$STOP{$_} && !$seen{$_}++ }
+        grep { length } split /\W+/, $s;
+    }
+    my @new_t = toks($new_reason);
+    my %new_set = map { $_ => 1 } @new_t;
+    return print "SIMILAR_COUNT=0\n" unless @new_t;
+
+    my $similar = 0;
+    my @rows;
+    while (my $line = <STDIN>) {
+      my $j = eval { decode_json($line) };
+      next unless ref $j eq "HASH";
+      next unless ($j->{source} // "") eq "feedback";
+      next if  $j->{kept};                      # only MISS rows
+      next unless $j->{ts};
+      next if $j->{ts} eq $self_ts;             # skip the just-appended row
+      if ($window_secs > 0 && $j->{ts} =~ /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/) {
+        my $epoch = timegm($6, $5, $4, $3, $2-1, $1);
+        next if ($now - $epoch) > $window_secs;
+      }
+      my @h_t = toks($j->{reason} // "");
+      next unless @h_t;
+      my %h_set = map { $_ => 1 } @h_t;
+      my $inter = 0; for my $t (@h_t) { $inter++ if $new_set{$t} }
+      my $union = scalar keys %{{ %new_set, %h_set }};
+      next if $union == 0;
+      my $jac = $inter / $union;
+      if ($jac >= $threshold) {
+        $similar++;
+        my $r = $j->{reason} // "";
+        $r =~ s/\s+/ /g;
+        $r = substr($r, 0, 100) . (length($r) > 100 ? "…" : "");
+        push @rows, sprintf("%s\t%s", $j->{ts}, $r);
+      }
+    }
+    print "SIMILAR_COUNT=$similar\n";
+    for (@rows) { print "$_\n" }
+  ' "$reason" "$similar_threshold" "$window_secs" "$ts" < "$metrics_file" 2>/dev/null) || matcher_out=""
+
+  if [[ -n "$matcher_out" ]]; then
+    similar_count=$(echo "$matcher_out" | awk -F= '/^SIMILAR_COUNT=/ {print $2}')
+    # The nudge triggers when this MISS plus prior similars hits nudge_at:
+    #   similar_count is "prior similar MISSes" (excludes self)
+    #   total including this one = similar_count + 1
+    if [[ -n "$similar_count" ]] && (( similar_count + 1 >= nudge_at )); then
+      total=$((similar_count + 1))
+      cat >&2 <<NUDGE_HEADER
+NOTE: this MISS plus ${similar_count} prior similar one(s) in the last ${window_days}d = ${total} total.
+Recent matches (most recent first):
+NUDGE_HEADER
+      echo "$matcher_out" | awk -F'\t' 'NF==2 {printf "  - %s: %s\n", $1, $2}' >&2
+      cat >&2 <<NUDGE_FOOTER
+Consider filing a prompt-pattern issue so the recipe library tracks the gap:
+  gh issue create --repo IsmaelMartinez/delegate-to-ollama \\
+    --label prompt-pattern \\
+    --title "<recipe-name>: <one-line pattern summary>" \\
+    --body "See .github/ISSUE_TEMPLATE/prompt-pattern.md — paste the matched MISS reasons above, the prompt, the model output, and a suggested fix if known."
+Silence this nudge for one call with DELEGATE_FEEDBACK_NO_NUDGE=1.
+NUDGE_FOOTER
+    fi
+  fi
+fi

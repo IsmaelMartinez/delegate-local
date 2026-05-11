@@ -240,6 +240,134 @@ last=$(tail -1 "$tmp/m.jsonl")
 assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "--ts=value form: feedback attached to pinned ts"
 rm -rf "$tmp"
 
+# ---------------------------------------------------------------------------
+# Trigger-on-MISS recurrence nudge (issue #88)
+# Helpers seed a metrics file with N historical similar MISS rows, all
+# placed inside the default 30-day window unless an explicit older
+# timestamp is requested. Each test then appends a fresh MISS via the
+# script and asserts the nudge fires (or stays quiet) as documented.
+# ---------------------------------------------------------------------------
+
+# seed_history <file> <N_similar> [<extra_reason>]
+#   Writes one delegate + one MISS feedback row per similar entry, all
+#   stamped within the last hour so they fall well inside any reasonable
+#   window. Then writes a fresh delegate row that the new feedback can
+#   attach to. <extra_reason>, when set, becomes the historical reason
+#   text — defaults to a stable "pr-description prose tier stalled" shape.
+seed_history() {
+  local file="$1" n="$2"
+  local reason_template="${3:-pr-description recipe stalled past 30s on prose tier body}"
+  : > "$file"
+  local i
+  for (( i=1; i<=n; i++ )); do
+    local hist_ts
+    hist_ts=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-1800+'"$i"'*60))')
+    echo "{\"ts\":\"$hist_ts\",\"source\":\"delegate\",\"tier\":\"prose\",\"model\":\"q\",\"duration_ms\":1000,\"exit_status\":0,\"estimated_tokens_avoided\":50}" >> "$file"
+    echo "{\"ts\":\"$hist_ts\",\"source\":\"feedback\",\"ref_ts\":\"$hist_ts\",\"kept\":false,\"reason\":\"$reason_template ($i)\"}" >> "$file"
+  done
+  # Fresh delegate row for the new feedback to attach to.
+  TS_LATEST=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  echo "{\"ts\":\"$TS_LATEST\",\"source\":\"delegate\",\"tier\":\"prose\",\"model\":\"q\",\"duration_ms\":1000,\"exit_status\":0,\"estimated_tokens_avoided\":40}" >> "$file"
+}
+
+# n18: single MISS with no prior history → no nudge.
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 0
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "first time pr-description tier stalled" 2>&1) || EC=$?
+assert_eq 0 "$EC" "no-history MISS: exit 0"
+assert_contains "MISS recorded" "$out" "no-history MISS: recorded line present"
+if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  no-history MISS: nudge silent"; pass=$((pass+1))
+else echo "  FAIL  no-history MISS: nudge fired unexpectedly ($out)"; fail=$((fail+1)); fi
+rm -rf "$tmp"
+
+# n19: HIT with N prior similar MISSes → no nudge (HITs never nudge).
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 5
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
+assert_eq 0 "$EC" "HIT with similar MISSes: exit 0"
+if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  HIT with similar MISSes: nudge silent"; pass=$((pass+1))
+else echo "  FAIL  HIT with similar MISSes: nudge fired (HITs should not nudge)"; fail=$((fail+1)); fi
+rm -rf "$tmp"
+
+# n20: 2 prior similar MISSes + this MISS = 3 total → default nudge fires.
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 2
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
+assert_eq 0 "$EC" "2-prior MISS: exit 0"
+assert_contains "NOTE: this MISS plus 2 prior similar" "$out" "2-prior MISS: nudge header"
+assert_contains "= 3 total" "$out" "2-prior MISS: nudge counts to 3"
+assert_contains "prompt-pattern issue" "$out" "2-prior MISS: nudge mentions issue label"
+assert_contains "gh issue create" "$out" "2-prior MISS: nudge prints gh command"
+rm -rf "$tmp"
+
+# n21: dissimilar prior MISSes do not count toward the nudge.
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 3 "completely different recipe failure unrelated tokens"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
+assert_eq 0 "$EC" "dissimilar prior MISSes: exit 0"
+if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  dissimilar prior MISSes: nudge silent"; pass=$((pass+1))
+else echo "  FAIL  dissimilar prior MISSes: nudge fired (Jaccard should have filtered)"; fail=$((fail+1)); fi
+rm -rf "$tmp"
+
+# n22: DELEGATE_FEEDBACK_NUDGE_AT=2 fires with one prior similar.
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 1
+EC=0
+out=$(DELEGATE_FEEDBACK_NUDGE_AT=2 DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+      bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
+assert_eq 0 "$EC" "NUDGE_AT=2: exit 0"
+assert_contains "NOTE: this MISS plus 1 prior similar" "$out" "NUDGE_AT=2: fires with 1 prior"
+rm -rf "$tmp"
+
+# n23: DELEGATE_FEEDBACK_NO_NUDGE=1 silences the nudge even when triggered.
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 3
+EC=0
+out=$(DELEGATE_FEEDBACK_NO_NUDGE=1 DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+      bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
+assert_eq 0 "$EC" "NO_NUDGE=1: exit 0"
+if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  NO_NUDGE=1: nudge silenced"; pass=$((pass+1))
+else echo "  FAIL  NO_NUDGE=1: nudge still printed"; fail=$((fail+1)); fi
+rm -rf "$tmp"
+
+# n24: MISS with empty reason → no nudge (no tokens to match against).
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 5
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss 2>&1) || EC=$?
+assert_eq 0 "$EC" "empty-reason MISS: exit 0"
+if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  empty-reason MISS: nudge silent"; pass=$((pass+1))
+else echo "  FAIL  empty-reason MISS: nudge fired"; fail=$((fail+1)); fi
+rm -rf "$tmp"
+
+# n25: MISSes outside the window (35 days old) don't count toward nudge.
+tmp=$(mktemp -d)
+: > "$tmp/m.jsonl"
+# Write 4 historical similar MISSes 35 days old — outside the 30-day default.
+for i in 1 2 3 4; do
+  old_ts=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 35*86400 + '"$i"' * 60))')
+  echo "{\"ts\":\"$old_ts\",\"source\":\"feedback\",\"ref_ts\":\"$old_ts\",\"kept\":false,\"reason\":\"pr-description recipe stalled past 30s on prose tier body ($i)\"}" >> "$tmp/m.jsonl"
+done
+fresh_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+echo "{\"ts\":\"$fresh_ts\",\"source\":\"delegate\",\"tier\":\"prose\",\"model\":\"q\",\"duration_ms\":1000,\"exit_status\":0,\"estimated_tokens_avoided\":40}" >> "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
+assert_eq 0 "$EC" "old-MISS window: exit 0"
+if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  old MISSes outside window: nudge silent"; pass=$((pass+1))
+else echo "  FAIL  old MISSes outside window: nudge fired (window filter not working)"; fail=$((fail+1)); fi
+# And confirm the same data DOES fire when the window is widened.
+EC=0
+out=$(DELEGATE_FEEDBACK_NUDGE_WINDOW_DAYS=60 DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+      bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
+assert_eq 0 "$EC" "old-MISS window widened: exit 0"
+assert_contains "NOTE: this MISS plus" "$out" "old-MISS window widened: nudge fires"
+rm -rf "$tmp"
+
+# n26: nudge body names the matched reasons so the user can recognise them.
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 2 "pr-description prose tier stalled past 30 seconds body"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
+assert_eq 0 "$EC" "nudge names matches: exit 0"
+assert_contains "pr-description prose tier stalled" "$out" "nudge names matches: reason text rendered"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
