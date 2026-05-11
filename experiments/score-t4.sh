@@ -38,21 +38,26 @@ if [[ -z "$infile" || ! -f "$infile" ]]; then
   exit 2
 fi
 
-# Participial-padding patterns — each one is a substring that, when found
-# at the tail of a body sentence, indicates the prose-tier padding failure
-# mode documented in SKILL.md's Discipline section. Anchored to the end of
-# a sentence (`.`, `?`, `!`) or end of line.
-PADDING_PATTERNS=(
-  ', ensuring '
-  ', enabling '
-  ', allowing '
-  ', providing '
-  ', ensuring that '
-  'this distinction is crucial'
-  'this is crucial'
-  'this is essential'
-  'across diverse environments'
-  'not just '
+# Participial-padding regexes — each one is a POSIX extended regex matched
+# against the lowercased body. The participial forms (`,[[:space:]]+
+# (ensuring|enabling|allowing|providing)`) require a leading comma so they
+# only fire on trailing clauses, never on legitimate sentence-initial use of
+# the same verb. The participle must then be followed by either whitespace
+# (continuing words) or sentence-terminating punctuation (`.!?,`) — that
+# anchor catches `, ensuring.` exactly as it would `, ensuring that …`,
+# while rejecting `,ensuringnot-a-real-word`. The declarative-form patterns
+# (`this is crucial`, etc.) match the restating-sentence padding shape that
+# the participial guard does not capture by itself (see ROADMAP.md T4
+# calibration finding).
+PADDING_REGEXES=(
+  ',[[:space:]]+ensuring([[:space:]]|[.!?,])'
+  ',[[:space:]]+enabling([[:space:]]|[.!?,])'
+  ',[[:space:]]+allowing([[:space:]]|[.!?,])'
+  ',[[:space:]]+providing([[:space:]]|[.!?,])'
+  'this[[:space:]]+distinction[[:space:]]+is[[:space:]]+crucial'
+  'this[[:space:]]+is[[:space:]]+crucial'
+  'this[[:space:]]+is[[:space:]]+essential'
+  'across[[:space:]]+diverse[[:space:]]+environments'
 )
 
 # Conventional-commit type allowlist (subject prefix before the first ':').
@@ -168,15 +173,18 @@ score_one() {
   fi
   (( body_no_bullets_pass == 0 )) && fails+=("BODY_NO_BULLETS")
 
-  # Check 6: body has no participial-padding patterns (case-insensitive
-  # substring match — these are the documented prose-tier MISS patterns).
+  # Check 6: body has no participial-padding patterns. Lowercase the body
+  # once, then test each PADDING_REGEXES entry as a POSIX ERE so the
+  # participial trigger is anchored to a comma + whitespace + verb-ing +
+  # whitespace-or-punctuation boundary. This catches `, ensuring.` (the
+  # trailing-space substring approach used to miss it) and rejects bare
+  # `ensuring` mid-sentence (which the substring approach used to flag as
+  # a false positive when the trailing space was dropped).
   if [[ -n "$body" ]]; then
     local lower_body
     lower_body=$(printf '%s' "$body" | tr '[:upper:]' '[:lower:]')
-    for pat in "${PADDING_PATTERNS[@]}"; do
-      local lower_pat
-      lower_pat=$(printf '%s' "$pat" | tr '[:upper:]' '[:lower:]')
-      if [[ "$lower_body" == *"$lower_pat"* ]]; then
+    for pat in "${PADDING_REGEXES[@]}"; do
+      if [[ "$lower_body" =~ $pat ]]; then
         body_no_padding_pass=0
         break
       fi

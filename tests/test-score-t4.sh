@@ -229,6 +229,32 @@ out=$(run_score "$raw")
 assert_contains "BODY_NO_PADDING" "$out" "test 14: padding match is case-insensitive"
 rm -rf "$sandbox"
 
+# --- Test 14b: padding immediately followed by punctuation (gemini-code-assist
+# finding) — the older substring approach with trailing-space patterns missed
+# `, ensuring.` because there was no space after the participle. The regex
+# alternative `[[:space:]]|[.!?,]` should catch it.
+sandbox=$(mktemp -d)
+raw="$sandbox/raw.txt"
+build_raw "$raw" "feat: punctuation-anchored padding
+
+Body sentence trailing with the classic padding shape, ensuring."
+out=$(run_score "$raw")
+assert_contains "BODY_NO_PADDING" "$out" "test 14b: padding followed by '.' is caught"
+rm -rf "$sandbox"
+
+# --- Test 14c: legitimate mid-sentence participial use does NOT false-positive
+# — without the leading comma the regex does not match, so prose that uses
+# `ensuring` as a substantive verb (rather than a trailing-clause participle)
+# stays clean.
+sandbox=$(mktemp -d)
+raw="$sandbox/raw.txt"
+build_raw "$raw" "feat: mid-sentence ensuring is not padding
+
+This change is about ensuring data integrity across writes."
+out=$(run_score "$raw")
+assert_contains "rep 1: 6/6" "$out" "test 14c: mid-sentence 'ensuring' without comma is not flagged"
+rm -rf "$sandbox"
+
 # --- Test 15: machine-parseable T4_SUMMARY line shape ---
 sandbox=$(mktemp -d)
 raw="$sandbox/raw.txt"
