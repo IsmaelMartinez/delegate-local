@@ -75,7 +75,7 @@ bash scripts/delegate.sh --recipe release-note \
 ```
 
 ```
-- Fixed a silent verdict-misfiling bug in `delegate-feedback.sh` where the implicit "most recent delegate row" lookup would attach to an unrelated row when metrics were off or the delegation was killed before its row was written (#79).
+- Fixed a bug in `delegate-feedback.sh` where the "most recent delegate row" lookup could attach to an unrelated row if metrics were off or the delegation was killed before the row was written (#79).
 ```
 
 Verify before recording verdict: starts with `- ` + past-tense verb, describes user-visible behaviour (not implementation), ≤ 200 chars for the first sentence, PR number in trailing parentheses, no merge-hash, no preamble.

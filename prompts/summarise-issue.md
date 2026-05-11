@@ -41,7 +41,7 @@ At most 3 bullets naming concrete next actions stated by participants in the thr
 
 Rules:
 - Every claim must point back to a specific comment, date, or log line. If you cannot, drop the claim.
-- OMIT-EMPTY-SECTION (priority 1, non-negotiable): If the thread does NOT explicitly state at least one blocker, the heading `## What's blocking` MUST be absent from your output entirely — no heading, no bullets. Same for `## What's next` if the thread does not explicitly state at least one next action. Placeholder bullets like "No blockers stated" / "Nothing to do" / "TBD" are FORBIDDEN. Either there is a real bullet under the heading, or both the heading and its body are gone.
+- OMIT-EMPTY-SECTION (priority 1, non-negotiable): If the thread does NOT explicitly state at least one blocker, the heading `## What's blocking` MUST be absent from your output entirely — no heading, no bullets. Same for `## What's next` if the thread does not explicitly state at least one next action. Placeholder bullets like "No blockers stated" / "Nothing to do" / "TBD" are FORBIDDEN. **Your output MUST NOT contain the substrings "No blockers", "no blockers", "no specific blockers", "Nothing to do", "TBD", "N/A", or any other phrase indicating absence — if you would write one of those, delete the entire section (heading included) instead.** Either there is a real bullet under the heading, or both the heading and its body are gone.
   - Wrong (input has no blockers): `## What's blocking\n- No blockers stated in the thread.`
   - Correct (input has no blockers): the `## What's blocking` heading does NOT appear; the next heading after `## What happened` is `## What's next` (or end of output if next is also empty).
 - Do NOT summarise comments as a group ("several people agreed that ...") — name the comment.
@@ -126,4 +126,20 @@ The other content was correct on all three runs: `## What happened` bullets cite
 
 Useful empirical finding: the v5/v7 directive-rule + contrastive-example pattern that closed the severity-capping gap (5/5 Opus parity on the same model) does NOT fully bind on this task shape. Hypothesis: the model interprets "explicit empty marker" as compliant with the rule because it is being honest about absence, not fabricating presence. The Phase 10 retrospective's "directive-rule with hard-coded keyword triggers" pattern was tested against closed-form classification, not output-structure conditional rules; the latter may need a different discipline (perhaps a string-level prohibition like "your output must not contain the substring 'No blockers'").
 
-Recipe ships with HIT-with-edits status: the output is usable after deleting "No X stated" placeholder lines by hand. A follow-up calibration iteration could try the string-level prohibition or accept the placeholder as a known artefact users strip. The 4-bullet "What happened" + 3-bullet "What's next" content was used verbatim from the third attempt to verify-then-act on the issue's recommendations.
+Recipe ships with HIT-with-edits status: the output is usable after deleting "No X stated" placeholder lines by hand.
+
+### 2026-05-11 — string-level prohibition also fails to bind
+
+Fourth attempt with the explicit substring prohibition gemini-code-assist suggested on PR #81 (and which the calibration note above hypothesised would work): the rule was extended to `Your output MUST NOT contain the substrings "No blockers", "no blockers", "no specific blockers", "Nothing to do", "TBD", "N/A", or any other phrase indicating absence`. Re-tested against the same issue #75 on `deepseek-r1:32b` (reasoning tier).
+
+Result: the model produced `## What's blocking\n- No explicit blockers stated in the thread.` — an unlisted synonym for the prohibited set. The "or any other phrase indicating absence" catch-all did not bind either.
+
+This is a sharper empirical finding than the previous iteration. The model is not just ignoring a directive; it is actively pattern-matching for unlisted synonyms when its preferred behaviour (explicit-absence-marker) is forbidden. The world-model is "honest acknowledgement of absence is informative output", and prompt-only calibration up to and including substring blocklists cannot override that on this task shape on this model.
+
+Concrete next options for a future calibration iteration:
+1. Restructure the template so optional sections are described as conditional-include rather than conditional-omit (positive rule, not negative).
+2. Route to a different tier (the `code` tier with `qwen3-coder-next:latest` may bind the rule differently; the v6 retro found same-family scale-down loses cross-reference capability, but the cross-reference being lost here is about output structure, not severity calibration).
+3. Add a post-processing step in the recipe documentation: `sed -i '/^- No .* stated.*$/d; /^## What.s blocking$/d' <<< output` as a known artefact strip.
+4. Accept the placeholder as a HIT-with-edits artefact and let users strip by hand (current state).
+
+Option 1 or 2 are the empirical experiments worth running next.
