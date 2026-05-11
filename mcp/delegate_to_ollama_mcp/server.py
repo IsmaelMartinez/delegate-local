@@ -344,29 +344,31 @@ def _read_recipe_metrics(recipe_name: str, max_examples: int) -> dict:
 
     delegate_rows: list[dict] = []
     feedback_by_ref: dict[str, dict] = {}
+    # Stream line-by-line rather than read_text().splitlines() so memory stays
+    # flat as the JSONL grows — the metrics file is append-only and unbounded.
     try:
-        raw = path.read_text(encoding="utf-8")
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                # Old delegate rows pre-date the `source` field; treat as delegate.
+                source = row.get("source", "delegate")
+                if source == "delegate" and row.get("recipe") == recipe_name:
+                    delegate_rows.append(row)
+                elif source == "feedback":
+                    ref = row.get("ref_ts")
+                    if ref:
+                        # Latest verdict for a given ref_ts wins. File is
+                        # append-only so plain overwrite gives the right
+                        # semantics.
+                        feedback_by_ref[ref] = row
     except OSError:
         return {"hit_count": 0, "miss_count": 0, "recent_hits": []}
-
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        # Old delegate rows pre-date the `source` field; treat them as delegate.
-        source = row.get("source", "delegate")
-        if source == "delegate" and row.get("recipe") == recipe_name:
-            delegate_rows.append(row)
-        elif source == "feedback":
-            ref = row.get("ref_ts")
-            if ref:
-                # Latest verdict for a given ref_ts wins. File is append-only
-                # so plain overwrite gives the correct semantics.
-                feedback_by_ref[ref] = row
 
     hits = 0
     misses = 0
