@@ -146,6 +146,8 @@ delegate.sh run                metrics.jsonl                delegate-feedback.sh
 
 The single-machine metrics JSONL has no scheduled job behind it; the nudge is the runtime signal. After the third similar MISS in the rolling window, `delegate-feedback.sh` prints the matched reasons and a draft `gh issue create` command pre-targeted at the `prompt-pattern` label. The nudge is advisory — it never opens the issue on its own — so each filing stays a deliberate call. Silence one invocation with `DELEGATE_FEEDBACK_NO_NUDGE=1`; tune the trigger via `DELEGATE_FEEDBACK_NUDGE_AT` (default 3), `DELEGATE_FEEDBACK_NUDGE_WINDOW_DAYS` (default 30), and `DELEGATE_FEEDBACK_SIMILAR_THRESHOLD` (default 0.4 Jaccard over stopword-stripped content tokens).
 
+`scripts/audit-metrics.sh` is the on-demand counterpart to that runtime nudge — the same matcher applied many-vs-many across the whole JSONL instead of one-vs-many at MISS time. Run it for periodic review, or to scan a cross-machine JSONL the per-MISS nudge would never see (the JSONL is gitignored, so each host has its own). The script reads `DELEGATE_METRICS_FILE` and honours the same `DELEGATE_FEEDBACK_NUDGE_AT` / `_WINDOW_DAYS` / `_SIMILAR_THRESHOLD` envs, prints one draft `gh issue create` command per recurring bucket, and never writes to the JSONL itself.
+
 A `prompt-pattern` issue captures the task shape, tier and resolved model, verbatim prompt and model output, and (when known) the prompt that turned the MISS into a HIT. `prompts/README.md` documents how the maintainer graduates an issue into a `prompts/<new>.md` recipe paired with an `evals/eval-set.json` positive — closing the loop empirically rather than evaporating after one conversation.
 
 ## What you actually save
