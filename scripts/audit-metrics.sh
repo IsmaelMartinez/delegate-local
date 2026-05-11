@@ -56,7 +56,7 @@ command -v perl >/dev/null || { echo "perl not on PATH" >&2; exit 1; }
 # Bucket output is plain text with field delimiters that the bash layer
 # below parses — keeping the Perl portable (no JSON encode dep on stdout).
 out=$(perl -MJSON::PP -MTime::Local=timegm -e '
-  use strict; use warnings;
+  use strict; use warnings; binmode(STDOUT, ":utf8");
   my ($threshold, $window_secs, $nudge_at) = @ARGV;
   my $now = time;
   my %STOP = map { $_ => 1 } qw(
@@ -141,15 +141,15 @@ out=$(perl -MJSON::PP -MTime::Local=timegm -e '
     }
     print "BUCKET_END\n";
   }
-' "$similar_threshold" "$window_secs" "$nudge_at" < "$metrics_file" 2>/dev/null) || out=""
-
-if [[ -z "$out" ]]; then
-  echo "audit-metrics: no MISS rows in $metrics_file (or perl parse failed)" >&2
-  exit 0
+' "$similar_threshold" "$window_secs" "$nudge_at" < "$metrics_file")
+perl_status=$?
+if (( perl_status != 0 )); then
+  echo "audit-metrics: perl processing failed (exit $perl_status)" >&2
+  exit 1
 fi
 
-total_misses=$(echo "$out" | awk -F= '/^TOTAL_MISSES=/ {print $2}')
-bucket_count=$(echo "$out" | awk -F= '/^BUCKETS=/ {print $2}')
+total_misses=$(printf '%s\n' "$out" | awk -F= '/^TOTAL_MISSES=/ {print $2}')
+bucket_count=$(printf '%s\n' "$out" | awk -F= '/^BUCKETS=/ {print $2}')
 
 if [[ "${total_misses:-0}" -eq 0 ]]; then
   echo "No MISS feedback rows found in the last ${window_days}d window."
@@ -167,7 +167,7 @@ echo
 # Stream the buckets back out as human-readable summaries plus a draft
 # `gh issue create` command per bucket. The body is built with printf so
 # embedded newlines survive into the gh --body argument unmolested.
-echo "$out" | awk -F'\t' '
+printf '%s\n' "$out" | awk -F'\t' '
   /^BUCKET_START/ {
     # Strip the leading "id=" / "count=" / "rep=" prefixes.
     id=$2; sub(/^id=/, "", id)
