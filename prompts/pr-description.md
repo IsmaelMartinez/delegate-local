@@ -115,6 +115,6 @@ The 2026-05-10 calibration note above speculated that the `long-context` tier (Q
 
 The discriminating factor is still output size (PR descriptions target 2–3 KB of structured markdown), not input size, and the bottleneck moves with the host rather than the model family. Until a tier is found that completes this shape reliably, the recipe's de facto default is: write the PR description by hand. Possible next experiments — try splitting the recipe into two atomic calls (Summary bullets + Test plan separately, then concatenate; both outputs are < 800 B individually so should clear the apparent wall-clock budget), or try the `code` tier on a smaller deepseek-r1 distill (the v6 reasoning-architecture finding suggests structured-output work scales down better there). Neither was tried in this session — left as the next iteration's empirical question.
 
-Provisional recommendation: when this recipe is needed, attempt the prose tier with `--reps 1` and a hard 60-second wall-clock budget enforced by the caller; if it does not return, do not retry on `long-context` — fall back to hand-writing immediately.
+Provisional recommendation: when this recipe is needed, attempt the prose tier with a hard 60-second wall-clock budget enforced by the caller; if it does not return, do not retry on `long-context` — fall back to hand-writing immediately.
 
 Provenance also lives in the `feedback_delegate_prose_prompt_anchoring.md` memory file.
