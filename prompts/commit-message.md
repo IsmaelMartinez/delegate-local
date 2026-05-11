@@ -61,7 +61,7 @@ bash scripts/delegate.sh --recipe commit-message \
   --var recent_commits="$(git log main --pretty=fuller -3)" \
   --var diff_stat="$(git diff --cached --stat)" \
   --var why="<one or two sentences>" \
-  prose "Match the example commit messages exactly in shape and tone."
+  prose "Match the example commit messages exactly in shape and tone. Keep subject ≤ 72 chars."
 ```
 
 The trailing prompt arg is the reinforcement instruction; the recipe template carries the structural directives.
@@ -136,5 +136,11 @@ The first T4 dogfood (PR #86 against `qwen3.6:35b-a3b-q8_0`, prose tier, via the
 The fix extends the directive text to name both shapes: participial (`, ensuring that…`, `, enabling…`) AND declarative (`This ensures…`, `This enables…`, `…closing the gap in X`, `…going forward`). The fixture is updated in-place (still dated 2026-05-11 because today is still 2026-05-11; incremental directive extension rather than a fresh baseline) and `experiments/score-t4.sh` `PADDING_REGEXES` is extended with the corresponding patterns — sentence-anchored `(^|[.!?,][[:space:]]+)this[[:space:]]+(ensures|enables|guarantees|delivers)([[:space:]]|[.!?,])` so mid-sentence legitimate use ("this approach ensures correct rendering") doesn't false-positive, while still firing after `!` and `?` terminators and on the no-trailing-space form `This ensures.`; `clos(es|ing)[[:space:]]+the[[:space:]]+(gap|loop)` for the high-signal restating-tail shape; `(going|moving)[[:space:]]+forward` for the closing-flourish form. 13 new test assertions cover each pattern's positive case (including the `!`/`?` and trailing-punctuation edge cases gemini-code-assist flagged on PR #93) plus the legitimate-mid-sentence-not-flagged negative case.
 
 Second dogfood against the same model on the extended fixture: 6/6 under the extended scorer, no padding shapes detected in either form. The model produced "but without a fixture, that hardening remains asserted rather than measured" — the same "asserted vs measured" concept the first dogfood put in a restating tail, this time woven into a substantive descriptive sentence inside paragraph 1 instead of dangling at the end. Two consecutive dogfoods are enough to declare the declarative-rephrase pattern consistent rather than session-specific; the recipe + scorer are locked in at this state.
+
+### 2026-05-11 — invocation-example reinforcement for subject length (SUBJECT_LEN)
+
+Three data points from this session showed the recipe's `Subject ≤ 72 chars` template directive not binding consistently in real PRs. PR #85 (`fix: commit-message anti-padding + pr-description long-context note`) produced an 80-char subject that required manual trimming. PR #94 (`feat: T5 structured-extraction-into-JSON benchmark with scorer and fixture`) produced a 74-char subject, also manually trimmed. PR #96 (`feat: T6 regex-generation fixture + scorer (Phase 7 follow-up)`) produced a 62-char HIT verbatim — the only difference being that the trailing reinforcement prompt appended `"Keep subject ≤ 72 chars"` to the existing shape-and-tone reminder.
+
+The fix updates only the `## Invocation` example's trailing prompt arg to include the explicit length reinforcement (`"Match the example commit messages exactly in shape and tone. Keep subject ≤ 72 chars."`). The recipe-level directive in the template body was NOT changed — the rule `Subject ≤ 72 chars starting with '<TYPE>:'` remains the load-bearing structural anchor that fixture-based T4 scoring pins against. This is a confidence-building data-point, not a final fix: one HIT under the new invocation is encouraging but doesn't yet prove the trailing reinforcement is necessary or sufficient. If a future session re-shows a SUBJECT_LEN miss despite the new invocation example, the next step is to promote the length reminder into a directive inside the template body (alongside the existing `≤ 72 chars` rule, perhaps with the v5/v7 contrastive Wrong/Correct one-shot pattern that closed the `(#NN)` gap).
 
 Provenance for this recipe also lives in the `feedback_delegate_prose_prompt_anchoring.md` memory file.
