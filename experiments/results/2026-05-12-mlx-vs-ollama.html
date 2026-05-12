@@ -5,9 +5,9 @@
 <title>MLX vs Ollama — Qwen3.6-35B-A3B-8bit — 2026-05-12</title>
 <style>
   :root {
-    --ollama: #d97706;
+    --ollama: #b86000;
     --ollama-soft: #fed7aa;
-    --mlx: #2563eb;
+    --mlx: #0052d9;
     --mlx-soft: #bfdbfe;
     --ink: #0f172a;
     --muted: #64748b;
@@ -326,6 +326,26 @@
   <div style="font-size: 12px; color: var(--muted); margin-top: 12px;">
     Bars share a single scale (max ≈ 65 s = 100% width). T1–T3 on Ollama use <code>ollama run</code> CLI with reasoning <em>enabled</em>; same tasks on MLX use <code>/v1/chat/completions</code> with <code>enable_thinking:false</code>. T4–T6 use the API path with reasoning off on both backends — those bars <em>are</em> directly comparable.
   </div>
+  <table class="table" style="margin-top: 16px;">
+    <caption style="font-size: 12px; color: var(--muted); text-align: left; padding-bottom: 6px;">Same per-task latency in tabular form for screen readers.</caption>
+    <thead>
+      <tr>
+        <th scope="col">Task</th>
+        <th scope="col">Ollama (s, mean of 3)</th>
+        <th scope="col">MLX (s, mean of 3)</th>
+        <th scope="col">MLX speedup</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><th scope="row">T1 doc-drift</th>     <td class="num">47.0</td><td class="num">1.0</td><td class="num">47×</td></tr>
+      <tr><th scope="row">T2 party-config</th>  <td class="num">49.7</td><td class="num">2.0</td><td class="num">25×</td></tr>
+      <tr><th scope="row">T3 merge-patterns</th><td class="num">65.3</td><td class="num">2.0</td><td class="num">33×</td></tr>
+      <tr><th scope="row">T4 commit-message</th><td class="num">5.7</td> <td class="num">3.0</td><td class="num">1.9×</td></tr>
+      <tr><th scope="row">T5 JSON shape</th>    <td class="num">3.7</td> <td class="num">2.0</td><td class="num">1.8×</td></tr>
+      <tr><th scope="row">T6 regex</th>         <td class="num">1.0</td> <td class="num">0.7</td><td class="num">1.5×</td></tr>
+      <tr><th scope="row">Total wall (18 reps)</th><td class="num">519 s</td><td class="num">34 s</td><td class="num">15×</td></tr>
+    </tbody>
+  </table>
 </div>
 
 <!-- Pass rate chart -->
