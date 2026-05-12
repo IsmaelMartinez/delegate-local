@@ -37,9 +37,21 @@ Both keep the model output and drop the cursor-control bytes. `--hidethinking` d
 
 ## Requirements
 
-- [Ollama](https://ollama.com) with at least one model pulled
+- [Ollama](https://ollama.com) with at least one model pulled (the default backend), or [`mlx-lm`](https://github.com/ml-explore/mlx-lm) on Apple Silicon (see [Backends](#backends) below)
 - `jq` (for `audit-models.sh`)
 - `llmfit` (optional, enables upgrade suggestions based on your hardware)
+
+## Backends
+
+`delegate.sh` and `pick-model.sh` route through Ollama by default. Set `DELEGATE_BACKEND=mlx` to use [`mlx-lm`](https://github.com/ml-explore/mlx-lm) instead — Apple's native Metal-backed runtime on Apple Silicon, typically 10–30 % lighter on memory and faster on prefill for the same Q8 model. The trade-off is install effort (one `pipx install mlx-lm`, plus a separate `mlx_lm.server --port 8080` you keep running) and a smaller model registry (`mlx-community` on HuggingFace covers the major Qwen/DeepSeek/Phi lines but lags Ollama's catalog).
+
+```bash
+pipx install mlx-lm
+mlx_lm.server --port 8080 &        # keep this running
+DELEGATE_BACKEND=mlx bash scripts/delegate.sh prose "..."
+```
+
+`pick-model.sh` scans `~/.cache/huggingface/hub` (or `$HF_HOME/hub`) for installed MLX models and matches the same tier preferences case-insensitively. The metrics JSONL tags each call with a `backend` field so per-backend latency and accuracy can be rolled up. Override the URL via `MLX_HOST` (default `http://localhost:8080`).
 
 ## Install
 

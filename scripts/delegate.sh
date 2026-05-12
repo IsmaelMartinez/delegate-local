@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Wrap Ollama's /api/generate HTTP endpoint with tier-based model selection
-# and per-invocation metrics. Use this instead of bare `ollama run` so every
-# delegation is observable and the response is parser-clean (no CLI cursor
-# rewrites or spinner ANSI mixed into stdout).
+# Wrap a local-LLM HTTP endpoint (Ollama by default, MLX optional) with
+# tier-based model selection and per-invocation metrics. Use this instead of
+# bare `ollama run` so every delegation is observable and the response is
+# parser-clean (no CLI cursor rewrites or spinner ANSI mixed into stdout).
 #
 # Usage:
 #   delegate.sh <tier> "<prompt>"                            # context comes from stdin
@@ -25,6 +25,9 @@
 #   when --recipe is set (the recipe carries the instruction).
 #
 # Env:
+#   DELEGATE_BACKEND=ollama|mlx             # default ollama. mlx routes the
+#                                           #   call through an MLX server
+#                                           #   (run `mlx_lm.server` before).
 #   DELEGATE_TO_OLLAMA_NO_METRICS=1         # opt out of metrics logging
 #   DELEGATE_METRICS_FILE=<path>            # override metrics destination
 #   DELEGATE_PROMPTS_DIR=<path>             # override prompts/ directory
@@ -32,7 +35,15 @@
 #   DELEGATE_THINK=true|false               # default false; set true if the
 #                                           #   model's chain-of-thought
 #                                           #   genuinely helps for the task.
+#                                           #   (Ollama-only; MLX honours the
+#                                           #   model's chat-template flags.)
 #   OLLAMA_HOST=<url>                       # default http://localhost:11434
+#   MLX_HOST=<url>                          # default http://localhost:8080
+#   DELEGATE_MAX_TOKENS=<int>               # default 4096. MLX-only — the
+#                                           #   OpenAI completions shape
+#                                           #   requires max_tokens. Raise
+#                                           #   for long-context tier or
+#                                           #   verbose models.
 #
 # Output:  model response on stdout (no ANSI; HTTP body is plain text)
 # Errors:  pick-model failures and HTTP errors propagate as non-zero exit.
@@ -86,7 +97,13 @@ pick="$script_dir/pick-model.sh"
 prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 
 metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}"
-host="${OLLAMA_HOST:-http://localhost:11434}"
+backend="${DELEGATE_BACKEND:-ollama}"
+case "$backend" in
+  ollama|mlx) ;;
+  *) echo "delegate: unknown DELEGATE_BACKEND='$backend' (valid: ollama|mlx)" >&2; exit 2 ;;
+esac
+ollama_host="${OLLAMA_HOST:-http://localhost:11434}"
+mlx_host="${MLX_HOST:-http://localhost:8080}"
 
 # Normalise DELEGATE_THINK to a strict JSON boolean ("true"/"false") before
 # it reaches jq --argjson, so a stray value like "yes" / "True" / " true "
@@ -104,14 +121,27 @@ log_metric() {
   local tokens_avoided=$((total / 4))
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
   # source:"delegate" discriminates this from experiment-runner traffic that
-  # writes to the same file via experiments/lib/run_api_cell.sh.
+  # writes to the same file via experiments/lib/run_api_cell.sh. backend
+  # discriminates ollama vs mlx traffic — pre-2026-05 rows lack the field and
+  # metrics-summary.sh treats their absence as backend=ollama for back-compat.
+  # jq builds the line so any quote, backslash, or newline in $model or
+  # $recipe_name (recipe names are filename-safe today but model names come
+  # from `ollama list` parsing and are not under our control) escapes
+  # correctly rather than producing invalid JSON.
   if [[ -n "$recipe_name" ]]; then
-    printf '{"ts":"%s","source":"delegate","tier":"%s","model":"%s","recipe":"%s","prompt_chars":%d,"context_chars":%d,"output_chars":%d,"duration_ms":%d,"exit_status":%d,"estimated_tokens_avoided":%d}\n' \
-      "$ts" "$tier" "$model" "$recipe_name" "$pchars" "$cchars" "$ochars" "$dur_ms" "$status" "$tokens_avoided" \
+    jq -nc \
+      --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" \
+      --arg model "$model" --arg recipe "$recipe_name" \
+      --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
+      --argjson dur_ms "$dur_ms" --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
+      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, recipe:$recipe, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}' \
       >> "$metrics_file" 2>/dev/null || true
   else
-    printf '{"ts":"%s","source":"delegate","tier":"%s","model":"%s","prompt_chars":%d,"context_chars":%d,"output_chars":%d,"duration_ms":%d,"exit_status":%d,"estimated_tokens_avoided":%d}\n' \
-      "$ts" "$tier" "$model" "$pchars" "$cchars" "$ochars" "$dur_ms" "$status" "$tokens_avoided" \
+    jq -nc \
+      --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" --arg model "$model" \
+      --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
+      --argjson dur_ms "$dur_ms" --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
+      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}' \
       >> "$metrics_file" 2>/dev/null || true
   fi
 }
@@ -249,18 +279,37 @@ ${p}"
 done
 
 # Build the JSON payload via jq so prompts containing quotes / backslashes /
-# newlines are escaped correctly. think:false suppresses chain-of-thought
-# tokens for thinking-capable models — see DELEGATE_THINK above.
-payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson th "$think" \
-  '{model:$m, prompt:$p, stream:false, think:$th, options:{temperature:0}}')
-
-response=$(curl -sS --fail -X POST "$host/api/generate" -d @- <<< "$payload")
-status=$?
-
-if [[ "$status" -eq 0 ]]; then
-  output=$(jq -r '.response // ""' <<< "$response")
+# newlines are escaped correctly. Each backend has its own request and
+# response envelope — Ollama's /api/generate returns .response, MLX's
+# OpenAI-compatible /v1/completions returns .choices[0].text.
+if [[ "$backend" == "ollama" ]]; then
+  # think:false suppresses chain-of-thought for thinking-capable models —
+  # see DELEGATE_THINK above. MLX honours the model's chat-template flags
+  # instead, so the think field is Ollama-only.
+  payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson th "$think" \
+    '{model:$m, prompt:$p, stream:false, think:$th, options:{temperature:0}}')
+  response=$(curl -sS --fail -X POST "$ollama_host/api/generate" -d @- <<< "$payload")
+  status=$?
+  if [[ "$status" -eq 0 ]]; then
+    output=$(jq -r '.response // ""' <<< "$response")
+  else
+    output=""
+  fi
 else
-  output=""
+  # MLX server (mlx_lm.server) speaks the OpenAI completions shape. The
+  # response carries .choices[0].text; .choices[0].finish_reason will be
+  # "length" if the model hit max_tokens — we leave that signal in the
+  # metrics duration rather than re-shaping the error here.
+  max_tokens="${DELEGATE_MAX_TOKENS:-4096}"
+  payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson mt "$max_tokens" \
+    '{model:$m, prompt:$p, stream:false, temperature:0, max_tokens:$mt}')
+  response=$(curl -sS --fail -X POST "$mlx_host/v1/completions" -d @- <<< "$payload")
+  status=$?
+  if [[ "$status" -eq 0 ]]; then
+    output=$(jq -r '.choices[0].text // ""' <<< "$response")
+  else
+    output=""
+  fi
 fi
 
 end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')

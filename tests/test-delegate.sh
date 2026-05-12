@@ -544,6 +544,152 @@ line=$(cat "$metrics")
 assert_contains '"prompt_chars":12' "$line" "--recipe metric: prompt_chars includes template length"
 rm -rf "$tmp" "$metrics"
 
+# 12. DELEGATE_BACKEND=mlx dispatches to /v1/completions, parses
+# .choices[0].text, and tags the metrics line with backend:"mlx".
+make_mock_curl_mlx_ok() {
+  local dir="$1" payload_sniff="${2:-/dev/null}" argv_sniff="${3:-/dev/null}"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "${argv_sniff}"
+cat > "${payload_sniff}"
+printf '%s' '{"choices":[{"text":"mlx-output-ok","finish_reason":"stop"}]}'
+EOF
+  chmod +x "$dir/curl"
+}
+
+# 12a. Happy path with MLX backend: fake HF hub, fake curl, assert dispatch.
+tmp=$(mktemp -d)
+# Fake hub with a Qwen3.6 MLX model so prose tier resolves.
+snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
+mkdir -p "$snap"
+touch "$snap/weights.safetensors"
+payload_sniff="$tmp/payload.json"
+argv_sniff="$tmp/argv.txt"
+make_mock_curl_mlx_ok "$tmp" "$payload_sniff" "$argv_sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "MLX happy path exits 0"
+assert_contains "mlx-output-ok" "$out" "MLX output parsed from .choices[0].text"
+line=$(cat "$metrics")
+assert_contains '"backend":"mlx"' "$line" "MLX metrics: backend field"
+assert_contains '"model":"mlx-community/Qwen3.6-35B-A3B-Instruct-4bit"' "$line" "MLX metrics: model field"
+assert_contains '"tier":"prose"' "$line" "MLX metrics: tier field"
+# Sniffed argv must contain the MLX endpoint, not /api/generate.
+argv=$(cat "$argv_sniff")
+assert_contains "/v1/completions" "$argv" "MLX dispatch hits /v1/completions"
+case "$argv" in
+  *"/api/generate"*) echo "  FAIL  MLX dispatch must not hit /api/generate"; fail=$((fail+1));;
+  *) echo "  PASS  MLX dispatch does not hit /api/generate"; pass=$((pass+1));;
+esac
+# Sniffed payload uses max_tokens (OpenAI shape), not options.num_predict.
+payload=$(cat "$payload_sniff")
+assert_contains '"model":"mlx-community/Qwen3.6-35B-A3B-Instruct-4bit"' "$payload" "MLX payload: model field"
+assert_contains '"max_tokens":' "$payload" "MLX payload: max_tokens (OpenAI shape)"
+assert_contains '"temperature":0' "$payload" "MLX payload: temperature:0"
+case "$payload" in
+  *'"think":'*) echo "  FAIL  MLX payload must not carry think field"; fail=$((fail+1));;
+  *) echo "  PASS  MLX payload omits Ollama-only think field"; pass=$((pass+1));;
+esac
+rm -rf "$tmp" "$metrics"
+
+# 12b. Default backend is ollama: metrics line carries backend:"ollama" even
+# when DELEGATE_BACKEND is unset.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "default backend: exits 0"
+assert_contains '"backend":"ollama"' "$(cat "$metrics")" "default backend tagged ollama in metrics"
+rm -rf "$tmp" "$metrics"
+
+# 12c. Unknown DELEGATE_BACKEND value -> exit 2 with informative stderr.
+EC=0
+out=$(env -i PATH="$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=bogus \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "DELEGATE_BACKEND=bogus -> exit 2"
+assert_contains "unknown DELEGATE_BACKEND" "$out" "DELEGATE_BACKEND=bogus -> informative stderr"
+
+# 12d. MLX_HOST override is honoured by the dispatch URL.
+tmp=$(mktemp -d)
+snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
+mkdir -p "$snap"
+touch "$snap/weights.safetensors"
+argv_sniff="$tmp/argv.txt"
+make_mock_curl_mlx_ok "$tmp" "/dev/null" "$argv_sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
+  MLX_HOST="http://10.0.0.5:9999" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "MLX_HOST override: exits 0"
+assert_contains "http://10.0.0.5:9999/v1/completions" "$(cat "$argv_sniff")" "MLX_HOST override applied to curl URL"
+rm -rf "$tmp" "$metrics"
+
+# 12e. DELEGATE_MAX_TOKENS overrides the MLX max_tokens default.
+tmp=$(mktemp -d)
+snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
+mkdir -p "$snap"
+touch "$snap/weights.safetensors"
+payload_sniff="$tmp/payload.json"
+make_mock_curl_mlx_ok "$tmp" "$payload_sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
+  DELEGATE_MAX_TOKENS=16384 \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "DELEGATE_MAX_TOKENS override: exits 0"
+assert_contains '"max_tokens":16384' "$(cat "$payload_sniff")" "DELEGATE_MAX_TOKENS override flows into payload"
+rm -rf "$tmp" "$metrics"
+
+# 13. jq-based metrics line correctly escapes a model name with embedded
+# double quotes (regression: the prior printf %s implementation would have
+# emitted invalid JSON for such names). Ollama tag rules don't permit
+# quotes today, but pick-model returns whatever ollama list prints, so
+# defending against future schema changes is cheap.
+tmp=$(mktemp -d)
+cat > "$tmp/ollama" <<'EOF'
+#!/usr/bin/env bash
+[[ "${1:-}" == "list" ]] && cat <<'LIST'
+NAME                  ID SIZE   MODIFIED
+qwen3.6:35b"weird-name aa 30 GB  1 day ago
+LIST
+EOF
+chmod +x "$tmp/ollama"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "jq-metrics: weird model name still exits 0"
+line=$(cat "$metrics")
+# The line must be valid JSON (jq -e would have failed under the old printf path).
+if echo "$line" | jq -e . >/dev/null 2>&1; then
+  echo "  PASS  jq-metrics: line is valid JSON despite embedded quote in model"
+  pass=$((pass+1))
+else
+  echo "  FAIL  jq-metrics: produced invalid JSON for weird model name"
+  echo "        line: $line"
+  fail=$((fail+1))
+fi
+# The decoded model field round-trips exactly.
+decoded_model=$(echo "$line" | jq -r '.model')
+assert_eq 'qwen3.6:35b"weird-name' "$decoded_model" "jq-metrics: model field decodes to original string"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
