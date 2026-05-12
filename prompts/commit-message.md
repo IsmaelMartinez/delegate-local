@@ -33,9 +33,13 @@ Do NOT indent the body lines — output should be flush-left.
 Stop each paragraph after the substantive sentences. Do NOT add a trailing
 sentence that restates the point. Restating happens in two shapes, both
 rejected: participial form (", ensuring that…", ", enabling…", ", allowing…")
-and declarative form ("This ensures…", "This enables…", "…closing the gap
-in X", "…going forward"). Both lengthen the body without adding new
-information about what the commit changed.
+and declarative form ("This ensures…", "This enables…", "This closes the
+gap in X", "…closing the gap", "…closes the loop", "…going forward"). Both
+"closes" and "closing" forms are rejected; both finite-verb and participial
+shapes of the same restating cliché count.
+Wrong: This closes the gap between asserted hardening and measured accuracy.
+Correct: (sentence ends after the substantive content; no closing-the-gap
+or closing-the-loop tail at all)
 Output ONLY the commit message itself, nothing else.
 
 === Recent commit examples to match ===
@@ -128,6 +132,12 @@ The fix promotes the guard from a bare negation to a directive-rule with a contr
 The recipe shipped without the SKILL.md "anti-padding directive on prose-tier prompts" line from the Discipline section. Dogfooding the recipe to draft the commit message for PR #84 (Layer 4 issue template) produced a HIT-with-edits: all earlier guards held (no `(#NN)` suffix, no bullets, flush-left), but both body paragraphs ended with the classic participial-padding tails — "ensuring that every recurring miss has a clear path…" and "…not just local development setups." Recorded as HIT in the metrics with the reason naming the missing directive (ts=2026-05-11T08:01:34Z).
 
 The fix mirrors the SKILL.md guidance: an explicit "Stop each paragraph after the substantive sentences. Do NOT add a trailing sentence that restates the point with a participial clause…" line in the prompt template, plus three concrete bad-pattern examples drawn from this session's MISS output. The pattern follows the v5/v7 directive-rule-plus-example approach that closed the `(#NN)` gap above. Re-measurement against PR #84's commit body shape is the next iteration's job — not blocking on a re-run because the guard is the same shape that worked for `(#NN)` and SKILL.md already records the directive as established practice across other recipes.
+
+### 2026-05-12 — finite-verb closes-the-gap form caught by T4 in MLX baseline
+
+The 2026-05-12 MLX-vs-Ollama baseline (`experiments/results/2026-05-12-mlx-vs-ollama.md`) scored `qwen3.6` 18/18 on Ollama T4 but 15/18 on MLX — and every MLX miss was the same shape: `This closes the gap between asserted hardening and measured accuracy.` as the body's final sentence. The scorer's regex `clos(es|ing)[[:space:]]+the[[:space:]]+(gap|loop)` catches both finite-verb (`closes`) and participial (`closing`) forms; the recipe directive only named `closing the gap in X`. The model complied with the rule it could see and emitted the finite-verb variant, an unambiguous declarative restating tail that the directive intended to prohibit but did not literally enumerate.
+
+The fix extends the rejected-shapes list to name both `closing the gap` AND `closes the gap` / `closes the loop`, and adds a Wrong/Correct one-shot using the exact MLX miss sentence so the contrastive anchor is grounded in the failure shape rather than a paraphrase. Same v5/v7 directive-rule-plus-example pattern that closed the `(#NN)` and declarative-rephrase gaps before it. Re-measurement against the same T4 fixture on MLX is the next iteration's job — the scorer already fires correctly, so the question is whether the extended directive flips the 3/3 MISS to HIT under MLX's chat-template regime.
 
 ### 2026-05-11 — declarative-rephrase form added after PR #86 T4 dogfood
 

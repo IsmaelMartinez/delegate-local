@@ -193,7 +193,43 @@ out=$(run_score "$sandbox" "$raw")
 assert_contains "mean=1.0000" "$out" "lowercase none scores 1.0"
 rm -rf "$sandbox"
 
-# 14. 10+ reps: numeric iteration, rep-10 not sorted before rep-2.
+# 14a. Backtick span with trailing explanation: the span is extracted and
+# matched against the fixture; explanatory text after the closing backtick
+# does not break the match. Mirrors the MLX 2026-05-12 baseline pattern.
+sandbox=$(mktemp -d); make_sandbox "$sandbox" 2026-04-28
+raw="$sandbox/raw14a.txt"
+build_raw "$raw" "concern | \`src/pages/index.astro\` (grep for region card rendering)"
+out=$(run_score "$sandbox" "$raw")
+assert_contains "total_cited=1 total_claimed=1" "$out" "backtick span: extracted past trailing explanation"
+rm -rf "$sandbox"
+
+# 14b. Multiple backtick spans on one claim line — supported if ANY matches
+# the fixture as a literal substring.
+sandbox=$(mktemp -d); make_sandbox "$sandbox" 2026-04-28
+raw="$sandbox/raw14b.txt"
+build_raw "$raw" "concern | first \`nope/missing.ts\`, fallback \`src/pages/index.astro\` for the real one"
+out=$(run_score "$sandbox" "$raw")
+assert_contains "total_cited=1 total_claimed=1" "$out" "backtick spans: any-of match"
+rm -rf "$sandbox"
+
+# 14c. Backtick span where every span is fabricated — claim is unsupported.
+sandbox=$(mktemp -d); make_sandbox "$sandbox" 2026-04-28
+raw="$sandbox/raw14c.txt"
+build_raw "$raw" "concern | \`nope/one.ts\` and also \`nope/two.ts\` neither exist"
+out=$(run_score "$sandbox" "$raw")
+assert_contains "total_cited=0 total_claimed=1" "$out" "backtick spans: all-fake -> unsupported"
+rm -rf "$sandbox"
+
+# 14d. Bare path with no backticks still falls through to the legacy
+# substring path (the original behaviour is preserved for back-compat).
+sandbox=$(mktemp -d); make_sandbox "$sandbox" 2026-04-28
+raw="$sandbox/raw14d.txt"
+build_raw "$raw" "concern | src/pages/index.astro"
+out=$(run_score "$sandbox" "$raw")
+assert_contains "total_cited=1 total_claimed=1" "$out" "bare path: back-compat substring match"
+rm -rf "$sandbox"
+
+# 15. 10+ reps: numeric iteration, rep-10 not sorted before rep-2.
 # Build 10 reps where odd ones cite a real path and even ones cite a fake.
 # Mean should be 5/10 = 0.5 regardless of glob ordering.
 sandbox=$(mktemp -d); make_sandbox "$sandbox" 2026-04-28

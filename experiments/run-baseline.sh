@@ -33,6 +33,7 @@
 set -euo pipefail
 
 backend="ollama"
+ollama_api=0
 reps=3
 t3_snapshot="2026-04-28"
 do_stop=1
@@ -47,6 +48,7 @@ while [[ "${1:-}" == --* ]]; do
       esac
       shift 2
       ;;
+    --ollama-api) ollama_api=1; shift ;;
     --reps) reps="${2:-}"; shift 2 ;;
     --t3-snapshot) t3_snapshot="${2:-}"; shift 2 ;;
     --no-stop) do_stop=0; shift ;;
@@ -55,7 +57,7 @@ while [[ "${1:-}" == --* ]]; do
 done
 
 if (( $# < 1 )); then
-  echo "usage: run-baseline.sh [--backend ollama|mlx] [--reps N] [--t3-snapshot DATE] [--no-stop] <model> [<model>...]" >&2
+  echo "usage: run-baseline.sh [--backend ollama|mlx] [--ollama-api] [--reps N] [--t3-snapshot DATE] [--no-stop] <model> [<model>...]" >&2
   exit 2
 fi
 
@@ -90,7 +92,9 @@ for model in "$@"; do
   fi
 
   echo "=== running $model ==="
-  bash "$runner" --backend "$backend" --reps "$reps" --t3-snapshot "$t3_snapshot" "$model"
+  runner_args=(--backend "$backend" --reps "$reps" --t3-snapshot "$t3_snapshot")
+  (( ollama_api )) && runner_args+=(--ollama-api)
+  bash "$runner" "${runner_args[@]}" "$model"
 
   if [[ "$backend" == "ollama" ]] && (( do_stop )); then
     echo "stopping $model to clear VRAM before next model..."

@@ -2,7 +2,7 @@
 # Run the 6 fixture tasks against a single local-LLM backend and emit timing
 # + output.
 #
-# Usage: runner.sh [--backend ollama|mlx] [--reps N] [--t3-snapshot YYYY-MM-DD] [--t4-snapshot YYYY-MM-DD] [--t5-snapshot YYYY-MM-DD] [--t6-snapshot YYYY-MM-DD] <model-name>
+# Usage: runner.sh [--backend ollama|mlx] [--ollama-api] [--reps N] [--t3-snapshot YYYY-MM-DD] [--t4-snapshot YYYY-MM-DD] [--t5-snapshot YYYY-MM-DD] [--t6-snapshot YYYY-MM-DD] <model-name>
 #
 # --backend ollama|mlx (default ollama) selects which local HTTP backend to
 #                     post to. ollama -> POST /api/generate with think:false
@@ -16,6 +16,14 @@
 #                     instruction-tuned models follow the chat template (the
 #                     raw /v1/completions endpoint bypasses it and emits
 #                     whitespace).
+# --ollama-api        (default off) opts Ollama T1–T3 into the API path with
+#                     think:false instead of `ollama run` CLI with reasoning
+#                     on. The CLI path is kept as the default to preserve
+#                     comparability with the 2026-04-28 and 2026-05-01
+#                     baselines; --ollama-api gives an apples-to-apples
+#                     cross-backend comparison against --backend mlx (same
+#                     request shape, same reasoning-suppression knob on
+#                     both sides). No-op when --backend mlx.
 # --reps N            (default 1) repeats every task N times in the same file,
 #                     each block prefixed with `===== <task_id> rep <i> =====`.
 #                     Lets a downstream scorer compute mean ± stdev per cell.
@@ -44,6 +52,7 @@ set -euo pipefail
 
 reps=1
 backend="ollama"
+ollama_api=0
 t3_snapshot="2026-04-28"
 t4_snapshot="2026-05-11"
 t5_snapshot="2026-05-11"
@@ -58,6 +67,10 @@ while [[ "${1:-}" == --* ]]; do
         *) echo "--backend requires ollama|mlx, got '$backend'" >&2; exit 2 ;;
       esac
       shift 2
+      ;;
+    --ollama-api)
+      ollama_api=1
+      shift
       ;;
     --reps)
       reps="${2:-}"
@@ -90,7 +103,7 @@ done
 
 model="${1:-}"
 if [[ -z "$model" ]]; then
-  echo "usage: runner.sh [--backend ollama|mlx] [--reps N] [--t3-snapshot DATE] <model-name>" >&2
+  echo "usage: runner.sh [--backend ollama|mlx] [--ollama-api] [--reps N] [--t3-snapshot DATE] <model-name>" >&2
   exit 2
 fi
 
@@ -200,8 +213,12 @@ run_task() {
   # compatibility with the 2026-04-28 baseline. The MLX backend has no CLI
   # equivalent, so when backend=mlx we route through run_task_api instead;
   # the prompt arg becomes the trailing directive concatenated to the
-  # fixture body, matching the chat-completions semantics.
-  if [[ "$backend" == "mlx" ]]; then
+  # fixture body, matching the chat-completions semantics. The --ollama-api
+  # flag opts Ollama into the same API + think:false regime so a cross-
+  # backend comparison is apples-to-apples (the CLI path leaks reasoning
+  # tokens and inflates T1–T3 latency by ~30×; see ROADMAP MLX track for
+  # the 2026-05-12 baseline notes).
+  if [[ "$backend" == "mlx" ]] || (( ollama_api )); then
     run_task_api "$@"
     return
   fi
@@ -240,6 +257,7 @@ run_task() {
 : > "$out"
 echo "MODEL: $model" >> "$out"
 echo "BACKEND: $backend" >> "$out"
+echo "OLLAMA_API: $ollama_api" >> "$out"
 echo "DATE: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$out"
 echo "REPS: $reps" >> "$out"
 echo "T3_SNAPSHOT: $t3_snapshot" >> "$out"
