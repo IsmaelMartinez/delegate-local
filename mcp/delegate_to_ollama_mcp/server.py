@@ -86,22 +86,46 @@ RELATED_PROJECTS = [
 ]
 
 
-def _run(cmd: list[str], timeout: int, label: str) -> subprocess.CompletedProcess:
+def _run(
+    cmd: list[str],
+    timeout: int,
+    label: str,
+    env_overlay: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
+    """Run a subprocess with optional env-var overlay.
+
+    When env_overlay is None the child inherits the parent process's env
+    via subprocess.run's default behaviour — env is not passed as a kwarg
+    so legacy test doubles with a 4-arg signature keep working. When
+    provided, the overlay is merged onto a copy of os.environ so only
+    the named keys are forced; every other inherited var stays intact.
+    """
+    kwargs: dict = dict(capture_output=True, text=True, timeout=timeout)
+    if env_overlay is not None:
+        env = os.environ.copy()
+        env.update(env_overlay)
+        kwargs["env"] = env
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(cmd, **kwargs)
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"{label} timed out after {timeout}s") from exc
 
 
-def _model_url(model: str) -> str:
-    """Map an Ollama model name to its library page URL.
+def _model_url(model: str, backend: str = "ollama") -> str:
+    """Map a model name to its registry page URL.
 
-    Library models (`qwen3.6:35b-a3b-q8_0`) map under `/library/`; user-
-    namespaced models (`someuser/foo:tag`) keep their namespace. Returns
-    empty string for empty input.
+    For the ollama backend: library models (`qwen3.6:35b-a3b-q8_0`) map
+    under `/library/`; user-namespaced models (`someuser/foo:tag`) keep
+    their namespace. For the mlx backend: the model name is already an
+    `org/name` HuggingFace stem (`mlx-community/Qwen3.6-...-4bit`) so it
+    maps directly to a HuggingFace model page. Returns empty string for
+    empty input.
     """
     if not model:
         return ""
+    if backend == "mlx":
+        # MLX names are HF stems verbatim — no tag suffix to strip.
+        return f"https://huggingface.co/{model}"
     base = model.split(":", 1)[0]
     if not base:
         return ""
@@ -111,34 +135,56 @@ def _model_url(model: str) -> str:
 
 
 @app.tool()
-def pick_model(tier: str, dry_run: bool = False) -> dict:
-    """Resolve a tier to the best installed Ollama model.
+def pick_model(
+    tier: str,
+    dry_run: bool = False,
+    backend: str | None = None,
+) -> dict:
+    """Resolve a tier to the best installed local-LLM model.
 
-    Returns {"model": str, "tier": str, "url": str, "trace": str}. `url`
-    is the resolved model's Ollama library page (or user-namespace page
-    if the model name is namespaced). `trace` is empty unless dry_run=True,
-    in which case it contains the resolution trace that pick-model.sh
-    writes to stderr.
+    Returns {"model": str, "tier": str, "backend": str, "url": str, "trace": str}.
+    `backend` is the resolved backend name ("ollama" or "mlx"); it reflects
+    the caller-supplied `backend` argument if set, otherwise the
+    DELEGATE_BACKEND env var, otherwise the script's default ("ollama").
+    `url` is the resolved model's Ollama library page (or user-namespace
+    page if the model name is namespaced) for ollama-backend results, and
+    the HuggingFace model page for mlx-backend results. `trace` is empty
+    unless dry_run=True, in which case it contains the resolution trace
+    that pick-model.sh writes to stderr.
 
-    Raises RuntimeError if the tier is unknown, ollama isn't on PATH,
-    no installed model matches the tier's preferences, or the script
-    exceeds PICK_MODEL_TIMEOUT_S.
+    Pass `backend="mlx"` to query the MLX hub cache instead of `ollama
+    list` for this single call. `backend="ollama"` is the default. The
+    parameter wins over any DELEGATE_BACKEND env var set when the MCP
+    server was launched, so an MCP client can mix backends inside one
+    session.
+
+    Raises RuntimeError if the tier is unknown, the resolver isn't
+    available (ollama not on PATH for ollama backend, or HF cache absent
+    for mlx backend), no installed model matches the tier's preferences,
+    the backend value is invalid, or the script exceeds PICK_MODEL_TIMEOUT_S.
     """
+    if backend is not None and backend not in ("ollama", "mlx"):
+        raise RuntimeError(
+            f"unknown backend '{backend}' (valid: ollama, mlx)"
+        )
     script = scripts_dir() / "pick-model.sh"
     cmd = ["bash", str(script)]
     if dry_run:
         cmd.append("--dry-run")
     cmd.append(tier)
-    result = _run(cmd, PICK_MODEL_TIMEOUT_S, "pick-model.sh")
+    env_overlay = {"DELEGATE_BACKEND": backend} if backend is not None else None
+    result = _run(cmd, PICK_MODEL_TIMEOUT_S, "pick-model.sh", env_overlay=env_overlay)
     if result.returncode != 0:
         raise RuntimeError(
             f"pick-model.sh exited {result.returncode}: {result.stderr.strip()}"
         )
     model = result.stdout.strip()
+    resolved_backend = backend or os.environ.get("DELEGATE_BACKEND") or "ollama"
     return {
         "model": model,
         "tier": tier,
-        "url": _model_url(model),
+        "backend": resolved_backend,
+        "url": _model_url(model, resolved_backend),
         "trace": result.stderr.strip() if dry_run else "",
     }
 
