@@ -171,9 +171,10 @@ run_task_api() {
     # template — instruction-tuned models emit whitespace there. See
     # ROADMAP MLX backend track 2026-05-12 for the empirical write-up.
     local host="${MLX_HOST:-http://localhost:8080}"
+    local max_tokens="${DELEGATE_MAX_TOKENS:-4096}"
     local payload
-    payload=$(jq -nc --arg m "$model" --arg p "$full_input" \
-      '{model:$m, messages:[{role:"user", content:$p}], stream:false, temperature:0, max_tokens:4096, chat_template_kwargs:{enable_thinking:false}}')
+    payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson mt "$max_tokens" \
+      '{model:$m, messages:[{role:"user", content:$p}], stream:false, temperature:0, max_tokens:$mt, chat_template_kwargs:{enable_thinking:false}}')
     response=$(curl -sS --fail -X POST "$host/v1/chat/completions" -d @- <<<"$payload") || status=$?
     if (( status == 0 )); then
       body=$(jq -r '.choices[0].message.content // ""' <<<"$response")

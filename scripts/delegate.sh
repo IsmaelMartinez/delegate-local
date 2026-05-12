@@ -306,9 +306,11 @@ else
   # chat_template_kwargs.enable_thinking=false so the content field carries
   # the answer rather than the reasoning trace.
   max_tokens="${DELEGATE_MAX_TOKENS:-4096}"
-  # MLX think flag is the inverse of enable_thinking: think=true -> reasoning on.
-  if [[ "$think" == "true" ]]; then enable_thinking="true"; else enable_thinking="false"; fi
-  payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson mt "$max_tokens" --argjson et "$enable_thinking" \
+  # $think is already the normalised "true"/"false" string from lines
+  # 111-115; enable_thinking maps to it directly (think:true -> reasoning
+  # on, same semantic as Ollama's think field, just expressed through the
+  # chat-template kwarg).
+  payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson mt "$max_tokens" --argjson et "$think" \
     '{model:$m, messages:[{role:"user", content:$p}], stream:false, temperature:0, max_tokens:$mt, chat_template_kwargs:{enable_thinking:$et}}')
   response=$(curl -sS --fail -X POST "$mlx_host/v1/chat/completions" -d @- <<< "$payload")
   status=$?
