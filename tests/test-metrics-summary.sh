@@ -128,6 +128,59 @@ assert_eq 0 "$EC" "revised: exits 0"
 assert_contains "prose           n=1  hits=0  misses=1  untracked=0" "$out" "revised: latest feedback wins (miss overrides earlier hit)"
 rm -f "$revised"
 
+# 7. Per-backend section: only shown when 2+ distinct backends appear.
+# Single-backend fixture (only ollama-tagged rows) -> no Per-backend section.
+single=$(mktemp)
+cat > "$single" <<'EOF'
+{"ts":"2026-05-12T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-12T10:05:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4500,"exit_status":0,"estimated_tokens_avoided":110}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$single" 2>&1) || EC=$?
+assert_eq 0 "$EC" "single-backend: exits 0"
+case "$out" in
+  *"Per-backend"*) echo "  FAIL  single-backend: Per-backend section should be hidden"; fail=$((fail+1));;
+  *) echo "  PASS  single-backend: Per-backend section hidden when only one backend"; pass=$((pass+1));;
+esac
+rm -f "$single"
+
+# 8. Mixed-backend fixture: rows from both ollama and mlx -> Per-backend
+# section appears with per-backend n/tokens/p50/p95.
+mixed=$(mktemp)
+cat > "$mixed" <<'EOF'
+{"ts":"2026-05-12T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-12T10:05:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4500,"exit_status":0,"estimated_tokens_avoided":110}
+{"ts":"2026-05-12T10:10:00Z","source":"delegate","backend":"mlx","tier":"prose","model":"mlx-community/Qwen3.6-35B-A3B-Instruct-8bit","duration_ms":3200,"exit_status":0,"estimated_tokens_avoided":105}
+{"ts":"2026-05-12T10:15:00Z","source":"delegate","backend":"mlx","tier":"prose","model":"mlx-community/Qwen3.6-35B-A3B-Instruct-8bit","duration_ms":3400,"exit_status":0,"estimated_tokens_avoided":115}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$mixed" 2>&1) || EC=$?
+assert_eq 0 "$EC" "mixed-backend: exits 0"
+assert_contains "Per-backend (delegate):" "$out" "mixed-backend: section header present"
+assert_contains "ollama" "$out" "mixed-backend: ollama row present"
+assert_contains "mlx" "$out" "mixed-backend: mlx row present"
+rm -f "$mixed"
+
+# 9. Back-compat: rows missing the backend field (pre-2026-05) are bucketed
+# as 'ollama'. Combined with an mlx row, the Per-backend section should
+# show both with the unset rows counted under ollama.
+backcompat=$(mktemp)
+cat > "$backcompat" <<'EOF'
+{"ts":"2026-04-29T08:00:00Z","source":"delegate","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-04-29T08:30:00Z","source":"delegate","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4500,"exit_status":0,"estimated_tokens_avoided":110}
+{"ts":"2026-05-12T10:10:00Z","source":"delegate","backend":"mlx","tier":"prose","model":"mlx-community/Qwen3.6-35B-A3B-Instruct-8bit","duration_ms":3200,"exit_status":0,"estimated_tokens_avoided":105}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$backcompat" 2>&1) || EC=$?
+assert_eq 0 "$EC" "back-compat: exits 0"
+assert_contains "Per-backend (delegate):" "$out" "back-compat: section header present"
+# The two pre-backend rows should land under ollama (n=2 with tokens=210),
+# and the single mlx row stays under mlx (n=1).
+assert_contains "ollama" "$out" "back-compat: pre-2026-05 rows bucketed under ollama"
+assert_contains "n=2" "$out" "back-compat: ollama bucket gets the 2 unset-backend rows"
+assert_contains "n=1" "$out" "back-compat: mlx bucket gets its single row"
+rm -f "$backcompat"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

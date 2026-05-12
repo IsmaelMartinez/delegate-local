@@ -51,7 +51,7 @@ mlx_lm.server --port 8080 &        # keep this running
 DELEGATE_BACKEND=mlx bash scripts/delegate.sh prose "..."
 ```
 
-`pick-model.sh` scans `~/.cache/huggingface/hub` (or `$HF_HOME/hub`) for installed MLX models and matches the same tier preferences case-insensitively. The metrics JSONL tags each call with a `backend` field so per-backend latency and accuracy can be rolled up. Override the URL via `MLX_HOST` (default `http://localhost:8080`).
+`pick-model.sh` scans `~/.cache/huggingface/hub` (or `$HF_HOME/hub`) for installed MLX models and matches the same tier preferences case-insensitively. The metrics JSONL tags each call with a `backend` field, and `scripts/metrics-summary.sh` adds a `Per-backend (delegate)` section when 2+ backends are present so latency and token totals can be compared side by side. Override the URL via `MLX_HOST` (default `http://localhost:8080`); raise the OpenAI-shape token cap via `DELEGATE_MAX_TOKENS` (default 4096). Per-tool install steps for `mlx-lm` are in [docs/install-mlx.md](docs/install-mlx.md).
 
 ## Install
 
@@ -72,6 +72,7 @@ When the universal install is the wrong fit (per-machine routing, MCP-only consu
 - [Claude Code](docs/install-claude-code.md)
 - [Codex](docs/install-codex.md)
 - [OpenCode](docs/install-opencode.md)
+- [MLX backend (Apple Silicon, optional)](docs/install-mlx.md)
 
 ### Manual copy
 
