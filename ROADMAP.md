@@ -116,7 +116,7 @@ Correctness signals — gated in CI or scheduled, not realtime:
 Explicitly deferred until evidence demands it:
 
 - Agent-supplied verdict (worked/wrong/partial) appended after delegation. *(Closed indirectly — `scripts/delegate-feedback.sh hit|miss [reason]` shipped in #70 covers the verdict, and the Layer 5 trigger-on-MISS nudge (#91) made it actionable at the moment of insight. Cross-agent enforcement still depends on the agent invoking the script, which the SKILL.md "Recipes" section nudges via the `delegate.sh --recipe` flow.)*
-- [done] Periodic `scripts/audit-metrics.sh` that buckets MISS reasons by similarity across the full JSONL and emits one draft `gh issue create` command per recurring bucket. Issue #88 option B, shipped in #100. Complements the Layer 5 runtime nudge — the nudge catches recurring MISSes at the moment of insight, the audit catches patterns that span sessions or stay below the runtime nudge threshold. Same `DELEGATE_FEEDBACK_*` env vars tune both surfaces. Cross-host JSONL aggregation is still out of scope.
+- [done] Periodic `scripts/audit-metrics.sh` that buckets MISS reasons by similarity across the full JSONL and emits one draft `gh issue create` command per recurring bucket. Issue #88 option B, shipped in #100. Complements the Layer 5 runtime nudge — the nudge catches recurring MISSes at the moment of insight; the audit catches patterns that span sessions or stay below the runtime nudge threshold. Same `DELEGATE_FEEDBACK_*` env vars tune both surfaces. Cross-host JSONL aggregation is still out of scope.
 - Centralised metrics aggregation across machines. Single-machine JSONL is enough until there is a second machine running the skill. *(Still deferred.)*
 
 ## Phase 9 — First-run personalisation
