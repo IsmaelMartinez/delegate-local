@@ -400,6 +400,84 @@ rm -rf "$tmp"
 # code review instead.)
 
 echo
+echo "=== pick-model.sh: DELEGATE_BACKEND=mlx ==="
+
+# Helper: build a fake HuggingFace hub directory under $1/hub with snapshot
+# weights at models--$2--<name>/snapshots/<hash>/ for each <name> in $3..$N.
+make_fake_hub() {
+  local base="$1" org="$2"; shift 2
+  mkdir -p "$base/hub"
+  for name in "$@"; do
+    local snap="$base/hub/models--${org}--${name}/snapshots/abc123"
+    mkdir -p "$snap"
+    # An empty snapshot dir is treated as a half-downloaded model and skipped,
+    # so drop a sentinel file to signal a complete download.
+    touch "$snap/weights.safetensors"
+  done
+}
+
+# Unknown backend value -> exit 2.
+tmp=$(mktemp -d)
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=bogus bash "$PICK" prose 2>&1) || EC=$?
+assert_eq "2" "$EC" "DELEGATE_BACKEND=bogus -> exit 2"
+assert_contains "unknown backend" "$OUT" "DELEGATE_BACKEND=bogus -> informative stderr"
+rm -rf "$tmp"
+
+# MLX with no hub dir -> exit 1.
+tmp=$(mktemp -d)
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp/nope" bash "$PICK" prose 2>&1) || EC=$?
+assert_eq "1" "$EC" "DELEGATE_BACKEND=mlx + missing hub -> exit 1"
+assert_contains "MLX hub cache not found" "$OUT" "missing hub -> informative stderr"
+rm -rf "$tmp"
+
+# MLX hub with one Qwen3.6 model installed -> prose tier resolves to it.
+tmp=$(mktemp -d)
+make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit"
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" prose 2>&1) || EC=$?
+assert_eq "0" "$EC" "MLX prose with Qwen3.6 installed -> exit 0"
+assert_eq "mlx-community/Qwen3.6-35B-A3B-Instruct-4bit" "$OUT" "MLX prose -> Qwen3.6 model"
+rm -rf "$tmp"
+
+# Case-insensitive matching: prefs list uses lowercase 'qwen3.6' but the MLX
+# model name carries mixed case. The match should still succeed.
+tmp=$(mktemp -d)
+make_fake_hub "$tmp" "mlx-community" "Qwen3.6-Reasoner-30B-A3B-8bit"
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" prose 2>&1) || EC=$?
+assert_eq "mlx-community/Qwen3.6-Reasoner-30B-A3B-8bit" "$OUT" "MLX case-insensitive match"
+rm -rf "$tmp"
+
+# MLX hub with only a half-downloaded snapshot -> still treated as no models.
+tmp=$(mktemp -d)
+mkdir -p "$tmp/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
+# snapshot dir exists but is empty (interrupted pull) -> skipped.
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" prose 2>&1) || EC=$?
+assert_eq "1" "$EC" "MLX empty snapshot -> exit 1"
+assert_contains "no models installed" "$OUT" "MLX empty snapshot -> informative stderr"
+rm -rf "$tmp"
+
+# MLX hub with multiple models — tier preference order is respected.
+# code tier prefers qwen3-coder over qwen3.6, so install both and assert.
+tmp=$(mktemp -d)
+make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit" "Qwen3-Coder-30B-A3B-Instruct-4bit"
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" code 2>&1) || EC=$?
+assert_eq "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit" "$OUT" "MLX code tier prefers qwen3-coder over qwen3.6"
+rm -rf "$tmp"
+
+# Dry-run trace includes the backend line.
+tmp=$(mktemp -d)
+make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit"
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" --dry-run prose 2>&1) || EC=$?
+assert_contains "backend=mlx" "$OUT" "MLX --dry-run trace surfaces backend"
+rm -rf "$tmp"
+
+echo
 echo "=== AAIF symlink ==="
 
 # AAIF compliance: .agents/skills/delegate-to-ollama must be a symlink to the

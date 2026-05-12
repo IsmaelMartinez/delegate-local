@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
-# Pick the best installed Ollama model for a task tier.
+# Pick the best installed local-LLM model for a task tier.
 # Usage: pick-model.sh [--dry-run] <tier>
 #   tier ∈ {code, prose, reasoning, long-context,
 #           vision, embedding, premium-general, reasoning-vision}
 # Prints the model name on stdout, or exits 1 if no match and 2 on usage error.
-# With --dry-run, also prints the resolution trace (tier, preference list,
-# installed models, matched preference) to stderr so it can be inspected
+# With --dry-run, also prints the resolution trace (tier, backend, preference
+# list, installed models, matched preference) to stderr so it can be inspected
 # without affecting downstream pipes that consume stdout.
 #
 # Preference order per tier is a substring-matched list, highest capability first.
-# Edit the arrays below when your installed set changes. Run `ollama list` to see
-# what you have. Prefer the smallest model sufficient — bigger is not better.
+# Edit the arrays below when your installed set changes. Run `ollama list` (or
+# `ls ~/.cache/huggingface/hub` for MLX) to see what you have. Prefer the
+# smallest model sufficient — bigger is not better.
+#
+# Backend selection (env var DELEGATE_BACKEND, default "ollama"):
+#   ollama  — query `ollama list` for installed models. Default.
+#   mlx     — scan the HuggingFace hub cache (~/.cache/huggingface/hub or
+#             $HF_HOME/hub) for MLX-converted models. Apple Silicon only;
+#             needs `mlx-lm` installed for delegate.sh to actually call them.
+# Matching is case-insensitive so a single prefs list covers both backends
+# (Ollama uses lowercase tags, MLX uses HF-style mixed case).
 #
 # Note: vision and reasoning-vision tiers resolve a model name but do NOT go
 # through scripts/delegate.sh today (which lacks --image flag passthrough);
@@ -57,7 +66,14 @@ case "$tier" in
   *) echo "unknown tier: $tier (valid: $TIERS)" >&2; exit 2 ;;
 esac
 
+backend="${DELEGATE_BACKEND:-ollama}"
+case "$backend" in
+  ollama|mlx) ;;
+  *) echo "unknown backend: $backend (valid: ollama|mlx)" >&2; exit 2 ;;
+esac
+
 trace "tier=$tier"
+trace "backend=$backend"
 trace "preferences=${prefs[*]}"
 
 # Per-user override hook. The override file is plain bash sourced after the
@@ -98,21 +114,52 @@ if [[ -f "$config" ]]; then
   fi
 fi
 
-if ! command -v ollama >/dev/null 2>&1; then
-  echo "ollama not on PATH" >&2
-  exit 1
+if [[ "$backend" == "ollama" ]]; then
+  if ! command -v ollama >/dev/null 2>&1; then
+    echo "ollama not on PATH" >&2
+    exit 1
+  fi
+  installed=$(ollama list 2>/dev/null | awk 'NR>1 {print $1}')
+else
+  # MLX: list models in the HuggingFace hub cache. Each downloaded model
+  # lives at <hub>/models--<org>--<name>/snapshots/<hash>/. A directory with
+  # an empty snapshots/ (interrupted download) doesn't count as installed.
+  hub_dir="${HF_HOME:-$HOME/.cache/huggingface}/hub"
+  if [[ ! -d "$hub_dir" ]]; then
+    echo "MLX hub cache not found at $hub_dir" >&2
+    exit 1
+  fi
+  installed=""
+  for d in "$hub_dir"/models--*; do
+    [[ -d "$d" ]] || continue
+    [[ -d "$d/snapshots" ]] || continue
+    # Skip if every snapshot dir is empty (no weights actually present).
+    has_snap=0
+    for snap in "$d/snapshots"/*; do
+      [[ -d "$snap" ]] || continue
+      if [[ -n "$(ls -A "$snap" 2>/dev/null)" ]]; then has_snap=1; break; fi
+    done
+    (( has_snap )) || continue
+    stem="${d##*/models--}"
+    # models--mlx-community--Qwen3-0.6B-4bit -> mlx-community/Qwen3-0.6B-4bit
+    name="${stem//--//}"
+    installed+="${name}"$'\n'
+  done
+  installed="${installed%$'\n'}"
 fi
 
-installed=$(ollama list 2>/dev/null | awk 'NR>1 {print $1}')
 if [[ -z "$installed" ]]; then
-  echo "no models installed" >&2
+  echo "no models installed (backend=$backend)" >&2
   exit 1
 fi
 
 trace "installed=$(printf '%s' "$installed" | tr '\n' ' ')"
 
 for p in "${prefs[@]}"; do
-  match=$(printf '%s\n' "$installed" | grep -m1 -F -- "$p" || true)
+  # Case-insensitive fixed-string match so the single prefs list covers both
+  # Ollama's lowercase tags (qwen3.6:35b-a3b-q8_0) and MLX's HF-style mixed
+  # case (mlx-community/Qwen3.6-35B-A3B-Instruct-4bit).
+  match=$(printf '%s\n' "$installed" | grep -im1 -F -- "$p" || true)
   if [[ -n "$match" ]]; then
     trace "matched preference='$p' -> model='$match'"
     echo "$match"
