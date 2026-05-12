@@ -44,10 +44,12 @@ def test_pick_model_happy_path(monkeypatch):
         return _completed(stdout="qwen3.6:35b-a3b-q8_0\n", stderr="", returncode=0)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.delenv("DELEGATE_BACKEND", raising=False)
     out = server.pick_model("prose")
     assert out == {
         "model": "qwen3.6:35b-a3b-q8_0",
         "tier": "prose",
+        "backend": "ollama",
         "url": "https://ollama.com/library/qwen3.6",
         "trace": "",
     }
@@ -89,6 +91,103 @@ def test_pick_model_no_match_raises(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="exited 1"):
         server.pick_model("prose")
+
+
+def test_pick_model_mlx_backend_sets_env_and_url(monkeypatch):
+    """backend='mlx' overlays DELEGATE_BACKEND into the subprocess env and
+    routes the URL to HuggingFace instead of the Ollama library."""
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, timeout, env=None):
+        captured["cmd"] = cmd
+        captured["env"] = env
+        return _completed(
+            stdout="mlx-community/Qwen3.6-35B-A3B-Instruct-4bit\n",
+            stderr="",
+            returncode=0,
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.delenv("DELEGATE_BACKEND", raising=False)
+    out = server.pick_model("prose", backend="mlx")
+    assert out == {
+        "model": "mlx-community/Qwen3.6-35B-A3B-Instruct-4bit",
+        "tier": "prose",
+        "backend": "mlx",
+        "url": "https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-Instruct-4bit",
+        "trace": "",
+    }
+    # The overlay must contain DELEGATE_BACKEND=mlx and inherit the rest
+    # of the parent env (so PATH, HOME, HF_HOME etc. survive).
+    assert captured["env"] is not None
+    assert captured["env"].get("DELEGATE_BACKEND") == "mlx"
+
+
+def test_pick_model_backend_param_wins_over_env(monkeypatch):
+    """If the MCP server was launched with DELEGATE_BACKEND=ollama, an explicit
+    backend='mlx' on the tool call still overlays the call's env with mlx."""
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, timeout, env=None):
+        captured["env"] = env
+        return _completed(
+            stdout="mlx-community/Qwen3.6-35B-A3B-Instruct-4bit\n",
+            stderr="",
+            returncode=0,
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("DELEGATE_BACKEND", "ollama")
+    out = server.pick_model("prose", backend="mlx")
+    assert out["backend"] == "mlx"
+    assert captured["env"]["DELEGATE_BACKEND"] == "mlx"
+
+
+def test_pick_model_no_backend_arg_inherits_env(monkeypatch):
+    """When backend is omitted but DELEGATE_BACKEND is set in the parent env,
+    the resolved backend reflects the env. The subprocess inherits the env
+    via subprocess.run's default (no env= kwarg passed)."""
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, timeout):
+        # No env kwarg — _run does not pass it when env_overlay is None.
+        captured["cmd"] = cmd
+        return _completed(
+            stdout="mlx-community/Qwen3.6-35B-A3B-Instruct-4bit\n",
+            stderr="",
+            returncode=0,
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("DELEGATE_BACKEND", "mlx")
+    out = server.pick_model("prose")
+    assert out["backend"] == "mlx"
+    assert out["url"].startswith("https://huggingface.co/")
+
+
+def test_pick_model_invalid_backend_raises(monkeypatch):
+    def fake_run(cmd, capture_output, text, timeout, env=None):
+        # Should never be called — validation happens before subprocess dispatch.
+        raise AssertionError("subprocess.run must not be called for invalid backend")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="unknown backend 'bogus'"):
+        server.pick_model("prose", backend="bogus")
+
+
+def test_pick_model_url_mlx_for_mlx_backend(monkeypatch):
+    """Regression: the URL must point at HuggingFace, not the Ollama library,
+    when backend=mlx. The earlier _model_url implementation only knew about
+    the Ollama URL space."""
+    assert (
+        server._model_url("mlx-community/Qwen3.6-35B-A3B-Instruct-4bit", "mlx")
+        == "https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-Instruct-4bit"
+    )
+    # Default backend stays ollama for back-compat with existing callers.
+    assert (
+        server._model_url("qwen3.6:35b-a3b-q8_0")
+        == "https://ollama.com/library/qwen3.6"
+    )
 
 
 def test_audit_models_returns_stdout(monkeypatch):
