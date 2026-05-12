@@ -34,7 +34,7 @@ RULES:
 - Output the rewritten text only. No preamble, no "Here's the revised text:", no markdown fence around the output.
 
 Wrong: `the AI — CLAUDE.md, the loop, manual review — you're not using a tool`
-       → `the AI, CLAUDE.md, the loop, manual review, you're not using a tool`  (parenthetical collapsed into flat list, AND `you're` decontracted)
+       → `the AI, CLAUDE.md, the loop, manual review, you are not using a tool`  (parenthetical collapsed into flat list, AND `you're` decontracted)
 
 Correct: `the AI — CLAUDE.md, the loop, manual review — you're not using a tool`
        → `the AI (CLAUDE.md, the loop, manual review), you're not using a tool`  (parenthetical preserved with parens, contraction intact)
