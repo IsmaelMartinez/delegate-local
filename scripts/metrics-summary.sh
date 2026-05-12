@@ -84,6 +84,36 @@ jq -rs '
 ' "$metrics_file"
 echo
 
+# Per-backend rollup (delegate entries only). Only printed when 2+ distinct
+# backends appear in the file so single-backend users (the common case
+# today) don't see a redundant section. Rows missing the backend field —
+# pre-2026-05 delegate rows written before DELEGATE_BACKEND landed — are
+# bucketed as `ollama` because that was the only path then.
+n_backends=$(jq -rs '
+  map(select((.source // "delegate") == "delegate"))
+  | map(.backend // "ollama")
+  | unique
+  | length
+' "$metrics_file")
+if (( n_backends > 1 )); then
+  echo "Per-backend (delegate):"
+  jq -rs '
+    map(select((.source // "delegate") == "delegate"))
+    | group_by(.backend // "ollama")
+    | map({
+        backend: (.[0].backend // "ollama"),
+        n: length,
+        tokens: (map(.estimated_tokens_avoided // 0) | add),
+        p50: ((sort_by(.duration_ms) | .[(length / 2 | floor)] | .duration_ms // 0)),
+        p95: ((sort_by(.duration_ms) | .[((length * 95 / 100) | floor) | if . >= length then length - 1 else . end] | .duration_ms // 0))
+      })
+    | sort_by(-.n)
+    | .[]
+    | "  \(.backend | . + (" " * (10 - length)))  n=\(.n)  tokens≈\(.tokens)  p50=\(.p50)ms  p95=\(.p95)ms"
+  ' "$metrics_file"
+  echo
+fi
+
 # Feedback rollup: hit-rate per delegate-tier across delegate events that
 # have a feedback row referring to them. Untracked = delegate events with
 # no feedback recorded yet.
