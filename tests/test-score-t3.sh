@@ -229,6 +229,15 @@ out=$(run_score "$sandbox" "$raw")
 assert_contains "total_cited=1 total_claimed=1" "$out" "bare path: back-compat substring match"
 rm -rf "$sandbox"
 
+# 14e. Backtick span with internal padding whitespace — the span is trimmed
+# before the literal-substring check so the padded form still matches.
+sandbox=$(mktemp -d); make_sandbox "$sandbox" 2026-04-28
+raw="$sandbox/raw14e.txt"
+build_raw "$raw" "concern | \`  src/pages/index.astro  \` extra prose"
+out=$(run_score "$sandbox" "$raw")
+assert_contains "total_cited=1 total_claimed=1" "$out" "backtick span: internal whitespace trimmed"
+rm -rf "$sandbox"
+
 # 15. 10+ reps: numeric iteration, rep-10 not sorted before rep-2.
 # Build 10 reps where odd ones cite a real path and even ones cite a fake.
 # Mean should be 5/10 = 0.5 regardless of glob ordering.

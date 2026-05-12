@@ -145,18 +145,25 @@ score_one() {
     if [[ "$right" == *'`'* ]]; then
       span_supported=0
       while IFS= read -r span; do
+        # Trim incidental whitespace inside the backticks (some models emit
+        # `  src/foo.ts ` with padding) so the literal-substring check fires
+        # on the canonical path rather than the padded form.
+        span=$(printf -- '%s\n' "$span" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
         [[ -z "$span" ]] && continue
         if grep -F -q -- "$span" "$fixture" 2>/dev/null; then
           span_supported=1
           break
         fi
-      done < <(printf '%s' "$right" | perl -ne 'while (/`([^`]+)`/g) { print "$1\n"; }')
+      done < <(perl -ne 'while (/`([^`]+)`/g) { print "$1\n"; }' <<<"$right")
       if (( span_supported )); then
         supported=$((supported + 1))
       fi
     else
       # Strip surrounding quotes/backticks if the model wrapped the pattern.
-      right=$(printf '%s' "$right" | sed -E "s/^[\`'\"]+//; s/[\`'\"]+\$//")
+      # `printf --` guards against right-sides starting with a hyphen; the
+      # trailing newline keeps sed happy on systems where its last-line
+      # behaviour differs when no newline is present.
+      right=$(printf -- '%s\n' "$right" | sed -E "s/^[\`'\"]+//; s/[\`'\"]+\$//")
       if grep -F -q -- "$right" "$fixture" 2>/dev/null; then
         supported=$((supported + 1))
       fi
