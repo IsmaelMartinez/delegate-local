@@ -103,9 +103,9 @@ if (( n_backends > 1 )); then
     | map({
         backend: (.[0].backend // "ollama"),
         n: length,
-        tokens: (map(.estimated_tokens_avoided) | add),
-        p50: ((sort_by(.duration_ms) | .[(length / 2 | floor)] | .duration_ms)),
-        p95: ((sort_by(.duration_ms) | .[((length * 95 / 100) | floor) | if . >= length then length - 1 else . end] | .duration_ms))
+        tokens: (map(.estimated_tokens_avoided // 0) | add),
+        p50: ((sort_by(.duration_ms) | .[(length / 2 | floor)] | .duration_ms // 0)),
+        p95: ((sort_by(.duration_ms) | .[((length * 95 / 100) | floor) | if . >= length then length - 1 else . end] | .duration_ms // 0))
       })
     | sort_by(-.n)
     | .[]

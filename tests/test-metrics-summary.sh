@@ -181,6 +181,34 @@ assert_contains "n=2" "$out" "back-compat: ollama bucket gets the 2 unset-backen
 assert_contains "n=1" "$out" "back-compat: mlx bucket gets its single row"
 rm -f "$backcompat"
 
+# 10. Per-backend section is robust to missing estimated_tokens_avoided and
+# duration_ms fields. The gemini-code-assist PR #106 review flagged that
+# without // 0 defaults, an MLX bucket containing only rows with absent
+# fields would render "tokens≈null  p50=nullms  p95=nullms". The defaults
+# make sure the line stays numeric.
+sparse=$(mktemp)
+cat > "$sparse" <<'EOF'
+{"ts":"2026-05-12T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-12T10:05:00Z","source":"delegate","backend":"mlx","tier":"prose","model":"m"}
+{"ts":"2026-05-12T10:10:00Z","source":"delegate","backend":"mlx","tier":"prose","model":"m"}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$sparse" 2>&1) || EC=$?
+assert_eq 0 "$EC" "sparse: exits 0"
+# Extract only the Per-backend section's body so the assertion is scoped to
+# the new code introduced in this PR. (Per-tier and Per-source have the same
+# null-leak class but are pre-existing and out of scope here — fix when
+# evidence demands it, not speculatively.)
+per_backend=$(echo "$out" | awk '/^Per-backend \(delegate\):/{flag=1; next} /^$/{flag=0} flag')
+case "$per_backend" in
+  *"null"*) echo "  FAIL  sparse: 'null' leaked into Per-backend output ($per_backend)"; fail=$((fail+1));;
+  *) echo "  PASS  sparse: no 'null' in Per-backend output"; pass=$((pass+1));;
+esac
+assert_contains "tokens≈0" "$per_backend" "sparse: missing tokens default to 0 in Per-backend"
+assert_contains "p50=0ms" "$per_backend" "sparse: missing duration_ms defaults to 0 in Per-backend p50"
+
+rm -f "$sparse"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
