@@ -78,6 +78,7 @@ The maintainer (or a future PR-bot) graduates a `prompt-pattern` issue by drafti
 - `summarise-issue.md` — timeline-style summary of a long GitHub issue, MR thread, or CI log.
 - `file-summary.md` — one-sentence summary of a single document (ADR, analysis, design doc) for a link-index or digest.
 - `polish-reply.md` — tighten a multi-paragraph maintainer reply for concision while preserving the opener, closer, and every technical claim verbatim.
+- `em-dash-removal.md` — substitute every em-dash in prose with the most natural alternative (period, comma, semicolon, parens) without expanding contractions or collapsing parenthetical lists.
 
 ## Related
 
