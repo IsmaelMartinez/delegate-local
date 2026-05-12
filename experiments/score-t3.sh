@@ -131,11 +131,42 @@ score_one() {
     right=$(printf '%s' "$right" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
     [[ -z "$left" || -z "$right" ]] && continue
     claimed=$((claimed + 1))
-    # Strip surrounding quotes/backticks if the model wrapped the pattern.
-    right=$(printf '%s' "$right" | sed -E "s/^[\`'\"]+//; s/[\`'\"]+\$//")
-    # Look up the pattern as a literal substring in the fixture.
-    if grep -F -q -- "$right" "$fixture" 2>/dev/null; then
-      supported=$((supported + 1))
+    # Two parsing strategies, tried in order:
+    #
+    # 1. If the right-side contains markdown inline-code spans (text wrapped
+    #    in backticks), each span is treated as a candidate pattern and the
+    #    claim is supported if ANY span appears literally in the fixture.
+    #    Models often follow `path/to/file.ts` with explanatory text like
+    #    "(grep for X)" — the canonical reference is the backtick span, not
+    #    the whole right-side.
+    # 2. Otherwise: strip surrounding quotes/backticks and treat the bare
+    #    right-side as the pattern (back-compat with the original behaviour
+    #    where models emit bare paths without markdown formatting).
+    if [[ "$right" == *'`'* ]]; then
+      span_supported=0
+      while IFS= read -r span; do
+        # Trim incidental whitespace inside the backticks (some models emit
+        # `  src/foo.ts ` with padding) so the literal-substring check fires
+        # on the canonical path rather than the padded form.
+        span=$(printf -- '%s\n' "$span" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+        [[ -z "$span" ]] && continue
+        if grep -F -q -- "$span" "$fixture" 2>/dev/null; then
+          span_supported=1
+          break
+        fi
+      done < <(perl -ne 'while (/`([^`]+)`/g) { print "$1\n"; }' <<<"$right")
+      if (( span_supported )); then
+        supported=$((supported + 1))
+      fi
+    else
+      # Strip surrounding quotes/backticks if the model wrapped the pattern.
+      # `printf --` guards against right-sides starting with a hyphen; the
+      # trailing newline keeps sed happy on systems where its last-line
+      # behaviour differs when no newline is present.
+      right=$(printf -- '%s\n' "$right" | sed -E "s/^[\`'\"]+//; s/[\`'\"]+\$//")
+      if grep -F -q -- "$right" "$fixture" 2>/dev/null; then
+        supported=$((supported + 1))
+      fi
     fi
   done <<<"$body"
 
