@@ -544,15 +544,15 @@ line=$(cat "$metrics")
 assert_contains '"prompt_chars":12' "$line" "--recipe metric: prompt_chars includes template length"
 rm -rf "$tmp" "$metrics"
 
-# 12. DELEGATE_BACKEND=mlx dispatches to /v1/completions, parses
-# .choices[0].text, and tags the metrics line with backend:"mlx".
+# 12. DELEGATE_BACKEND=mlx dispatches to /v1/chat/completions, parses
+# .choices[0].message.content, and tags the metrics line with backend:"mlx".
 make_mock_curl_mlx_ok() {
   local dir="$1" payload_sniff="${2:-/dev/null}" argv_sniff="${3:-/dev/null}"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" > "${argv_sniff}"
 cat > "${payload_sniff}"
-printf '%s' '{"choices":[{"text":"mlx-output-ok","finish_reason":"stop"}]}'
+printf '%s' '{"choices":[{"message":{"role":"assistant","content":"mlx-output-ok"},"finish_reason":"stop"}]}'
 EOF
   chmod +x "$dir/curl"
 }
@@ -573,26 +573,44 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "MLX happy path exits 0"
-assert_contains "mlx-output-ok" "$out" "MLX output parsed from .choices[0].text"
+assert_contains "mlx-output-ok" "$out" "MLX output parsed from .choices[0].message.content"
 line=$(cat "$metrics")
 assert_contains '"backend":"mlx"' "$line" "MLX metrics: backend field"
 assert_contains '"model":"mlx-community/Qwen3.6-35B-A3B-Instruct-4bit"' "$line" "MLX metrics: model field"
 assert_contains '"tier":"prose"' "$line" "MLX metrics: tier field"
-# Sniffed argv must contain the MLX endpoint, not /api/generate.
+# Sniffed argv must contain the chat-completions endpoint, not /api/generate
+# or the raw /v1/completions endpoint (which bypasses the chat template and
+# produces whitespace-only output on instruction-tuned models — see ROADMAP
+# MLX backend track 2026-05-12).
 argv=$(cat "$argv_sniff")
-assert_contains "/v1/completions" "$argv" "MLX dispatch hits /v1/completions"
+assert_contains "/v1/chat/completions" "$argv" "MLX dispatch hits /v1/chat/completions"
 case "$argv" in
   *"/api/generate"*) echo "  FAIL  MLX dispatch must not hit /api/generate"; fail=$((fail+1));;
   *) echo "  PASS  MLX dispatch does not hit /api/generate"; pass=$((pass+1));;
 esac
-# Sniffed payload uses max_tokens (OpenAI shape), not options.num_predict.
+case "$argv" in
+  *"/v1/completions"*) echo "  FAIL  MLX dispatch must not hit raw /v1/completions"; fail=$((fail+1));;
+  *) echo "  PASS  MLX dispatch does not hit raw /v1/completions"; pass=$((pass+1));;
+esac
+# Sniffed payload uses the chat-completions shape: a messages array with a
+# user-role entry, plus max_tokens, temperature:0, and
+# chat_template_kwargs.enable_thinking:false (mirroring Ollama's think:false
+# default so the response carries the answer in .content rather than the
+# reasoning trace in .reasoning).
 payload=$(cat "$payload_sniff")
 assert_contains '"model":"mlx-community/Qwen3.6-35B-A3B-Instruct-4bit"' "$payload" "MLX payload: model field"
 assert_contains '"max_tokens":' "$payload" "MLX payload: max_tokens (OpenAI shape)"
 assert_contains '"temperature":0' "$payload" "MLX payload: temperature:0"
+assert_contains '"messages":' "$payload" "MLX payload: messages array (chat-completions shape)"
+assert_contains '"role":"user"' "$payload" "MLX payload: user-role message"
+assert_contains '"enable_thinking":false' "$payload" "MLX payload: enable_thinking:false by default (mirrors Ollama think:false)"
 case "$payload" in
-  *'"think":'*) echo "  FAIL  MLX payload must not carry think field"; fail=$((fail+1));;
+  *'"think":'*) echo "  FAIL  MLX payload must not carry Ollama-only think field"; fail=$((fail+1));;
   *) echo "  PASS  MLX payload omits Ollama-only think field"; pass=$((pass+1));;
+esac
+case "$payload" in
+  *'"prompt":'*) echo "  FAIL  MLX payload must not carry raw prompt field"; fail=$((fail+1));;
+  *) echo "  PASS  MLX payload omits raw prompt field"; pass=$((pass+1));;
 esac
 rm -rf "$tmp" "$metrics"
 
@@ -633,7 +651,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "MLX_HOST override: exits 0"
-assert_contains "http://10.0.0.5:9999/v1/completions" "$(cat "$argv_sniff")" "MLX_HOST override applied to curl URL"
+assert_contains "http://10.0.0.5:9999/v1/chat/completions" "$(cat "$argv_sniff")" "MLX_HOST override applied to curl URL"
 rm -rf "$tmp" "$metrics"
 
 # 12e. DELEGATE_MAX_TOKENS overrides the MLX max_tokens default.
@@ -652,6 +670,27 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "DELEGATE_MAX_TOKENS override: exits 0"
 assert_contains '"max_tokens":16384' "$(cat "$payload_sniff")" "DELEGATE_MAX_TOKENS override flows into payload"
+rm -rf "$tmp" "$metrics"
+
+# 12f. DELEGATE_THINK=true on MLX flips chat_template_kwargs.enable_thinking
+# to true (the inverse mapping of Ollama's think field — Ollama's think:true
+# enables reasoning; MLX's enable_thinking:true does the same via the chat
+# template).
+tmp=$(mktemp -d)
+snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
+mkdir -p "$snap"
+touch "$snap/weights.safetensors"
+payload_sniff="$tmp/payload.json"
+make_mock_curl_mlx_ok "$tmp" "$payload_sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
+  DELEGATE_THINK=true \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "DELEGATE_THINK=true on MLX: exits 0"
+assert_contains '"enable_thinking":true' "$(cat "$payload_sniff")" "DELEGATE_THINK=true flips enable_thinking on for MLX"
 rm -rf "$tmp" "$metrics"
 
 # 13. jq-based metrics line correctly escapes a model name with embedded

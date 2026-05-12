@@ -35,8 +35,9 @@
 #   DELEGATE_THINK=true|false               # default false; set true if the
 #                                           #   model's chain-of-thought
 #                                           #   genuinely helps for the task.
-#                                           #   (Ollama-only; MLX honours the
-#                                           #   model's chat-template flags.)
+#                                           #   Maps to Ollama's `think` field
+#                                           #   and to MLX's
+#                                           #   `chat_template_kwargs.enable_thinking`.
 #   OLLAMA_HOST=<url>                       # default http://localhost:11434
 #   MLX_HOST=<url>                          # default http://localhost:8080
 #   DELEGATE_MAX_TOKENS=<int>               # default 4096. MLX-only — the
@@ -281,11 +282,10 @@ done
 # Build the JSON payload via jq so prompts containing quotes / backslashes /
 # newlines are escaped correctly. Each backend has its own request and
 # response envelope — Ollama's /api/generate returns .response, MLX's
-# OpenAI-compatible /v1/completions returns .choices[0].text.
+# OpenAI-compatible /v1/chat/completions returns .choices[0].message.content.
 if [[ "$backend" == "ollama" ]]; then
   # think:false suppresses chain-of-thought for thinking-capable models —
-  # see DELEGATE_THINK above. MLX honours the model's chat-template flags
-  # instead, so the think field is Ollama-only.
+  # see DELEGATE_THINK above.
   payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson th "$think" \
     '{model:$m, prompt:$p, stream:false, think:$th, options:{temperature:0}}')
   response=$(curl -sS --fail -X POST "$ollama_host/api/generate" -d @- <<< "$payload")
@@ -296,17 +296,26 @@ if [[ "$backend" == "ollama" ]]; then
     output=""
   fi
 else
-  # MLX server (mlx_lm.server) speaks the OpenAI completions shape. The
-  # response carries .choices[0].text; .choices[0].finish_reason will be
-  # "length" if the model hit max_tokens — we leave that signal in the
-  # metrics duration rather than re-shaping the error here.
+  # MLX server (mlx_lm.server) speaks the OpenAI chat-completions shape.
+  # /v1/completions is the raw-prompt endpoint — it bypasses the model's
+  # chat template, so instruction-tuned models emit whitespace until
+  # max_tokens. /v1/chat/completions wraps the input via apply_chat_template
+  # and produces real instruction-following output. The response carries
+  # .choices[0].message.content (and .choices[0].message.reasoning when
+  # thinking is on — we mirror Ollama's think:false default by passing
+  # chat_template_kwargs.enable_thinking=false so the content field carries
+  # the answer rather than the reasoning trace.
   max_tokens="${DELEGATE_MAX_TOKENS:-4096}"
-  payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson mt "$max_tokens" \
-    '{model:$m, prompt:$p, stream:false, temperature:0, max_tokens:$mt}')
-  response=$(curl -sS --fail -X POST "$mlx_host/v1/completions" -d @- <<< "$payload")
+  # $think is already the normalised "true"/"false" string from lines
+  # 111-115; enable_thinking maps to it directly (think:true -> reasoning
+  # on, same semantic as Ollama's think field, just expressed through the
+  # chat-template kwarg).
+  payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson mt "$max_tokens" --argjson et "$think" \
+    '{model:$m, messages:[{role:"user", content:$p}], stream:false, temperature:0, max_tokens:$mt, chat_template_kwargs:{enable_thinking:$et}}')
+  response=$(curl -sS --fail -X POST "$mlx_host/v1/chat/completions" -d @- <<< "$payload")
   status=$?
   if [[ "$status" -eq 0 ]]; then
-    output=$(jq -r '.choices[0].text // ""' <<< "$response")
+    output=$(jq -r '.choices[0].message.content // ""' <<< "$response")
   else
     output=""
   fi
