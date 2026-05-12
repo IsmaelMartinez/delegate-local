@@ -39,6 +39,11 @@
 #                                           #   model's chat-template flags.)
 #   OLLAMA_HOST=<url>                       # default http://localhost:11434
 #   MLX_HOST=<url>                          # default http://localhost:8080
+#   DELEGATE_MAX_TOKENS=<int>               # default 4096. MLX-only — the
+#                                           #   OpenAI completions shape
+#                                           #   requires max_tokens. Raise
+#                                           #   for long-context tier or
+#                                           #   verbose models.
 #
 # Output:  model response on stdout (no ANSI; HTTP body is plain text)
 # Errors:  pick-model failures and HTTP errors propagate as non-zero exit.
@@ -119,13 +124,24 @@ log_metric() {
   # writes to the same file via experiments/lib/run_api_cell.sh. backend
   # discriminates ollama vs mlx traffic — pre-2026-05 rows lack the field and
   # metrics-summary.sh treats their absence as backend=ollama for back-compat.
+  # jq builds the line so any quote, backslash, or newline in $model or
+  # $recipe_name (recipe names are filename-safe today but model names come
+  # from `ollama list` parsing and are not under our control) escapes
+  # correctly rather than producing invalid JSON.
   if [[ -n "$recipe_name" ]]; then
-    printf '{"ts":"%s","source":"delegate","backend":"%s","tier":"%s","model":"%s","recipe":"%s","prompt_chars":%d,"context_chars":%d,"output_chars":%d,"duration_ms":%d,"exit_status":%d,"estimated_tokens_avoided":%d}\n' \
-      "$ts" "$backend" "$tier" "$model" "$recipe_name" "$pchars" "$cchars" "$ochars" "$dur_ms" "$status" "$tokens_avoided" \
+    jq -nc \
+      --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" \
+      --arg model "$model" --arg recipe "$recipe_name" \
+      --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
+      --argjson dur_ms "$dur_ms" --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
+      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, recipe:$recipe, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}' \
       >> "$metrics_file" 2>/dev/null || true
   else
-    printf '{"ts":"%s","source":"delegate","backend":"%s","tier":"%s","model":"%s","prompt_chars":%d,"context_chars":%d,"output_chars":%d,"duration_ms":%d,"exit_status":%d,"estimated_tokens_avoided":%d}\n' \
-      "$ts" "$backend" "$tier" "$model" "$pchars" "$cchars" "$ochars" "$dur_ms" "$status" "$tokens_avoided" \
+    jq -nc \
+      --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" --arg model "$model" \
+      --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
+      --argjson dur_ms "$dur_ms" --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
+      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}' \
       >> "$metrics_file" 2>/dev/null || true
   fi
 }
@@ -284,8 +300,9 @@ else
   # response carries .choices[0].text; .choices[0].finish_reason will be
   # "length" if the model hit max_tokens — we leave that signal in the
   # metrics duration rather than re-shaping the error here.
-  payload=$(jq -nc --arg m "$model" --arg p "$full_input" \
-    '{model:$m, prompt:$p, stream:false, temperature:0, max_tokens:4096}')
+  max_tokens="${DELEGATE_MAX_TOKENS:-4096}"
+  payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson mt "$max_tokens" \
+    '{model:$m, prompt:$p, stream:false, temperature:0, max_tokens:$mt}')
   response=$(curl -sS --fail -X POST "$mlx_host/v1/completions" -d @- <<< "$payload")
   status=$?
   if [[ "$status" -eq 0 ]]; then

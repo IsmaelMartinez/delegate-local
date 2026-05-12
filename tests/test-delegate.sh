@@ -636,6 +636,60 @@ assert_eq 0 "$EC" "MLX_HOST override: exits 0"
 assert_contains "http://10.0.0.5:9999/v1/completions" "$(cat "$argv_sniff")" "MLX_HOST override applied to curl URL"
 rm -rf "$tmp" "$metrics"
 
+# 12e. DELEGATE_MAX_TOKENS overrides the MLX max_tokens default.
+tmp=$(mktemp -d)
+snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
+mkdir -p "$snap"
+touch "$snap/weights.safetensors"
+payload_sniff="$tmp/payload.json"
+make_mock_curl_mlx_ok "$tmp" "$payload_sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
+  DELEGATE_MAX_TOKENS=16384 \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "DELEGATE_MAX_TOKENS override: exits 0"
+assert_contains '"max_tokens":16384' "$(cat "$payload_sniff")" "DELEGATE_MAX_TOKENS override flows into payload"
+rm -rf "$tmp" "$metrics"
+
+# 13. jq-based metrics line correctly escapes a model name with embedded
+# double quotes (regression: the prior printf %s implementation would have
+# emitted invalid JSON for such names). Ollama tag rules don't permit
+# quotes today, but pick-model returns whatever ollama list prints, so
+# defending against future schema changes is cheap.
+tmp=$(mktemp -d)
+cat > "$tmp/ollama" <<'EOF'
+#!/usr/bin/env bash
+[[ "${1:-}" == "list" ]] && cat <<'LIST'
+NAME                  ID SIZE   MODIFIED
+qwen3.6:35b"weird-name aa 30 GB  1 day ago
+LIST
+EOF
+chmod +x "$tmp/ollama"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "jq-metrics: weird model name still exits 0"
+line=$(cat "$metrics")
+# The line must be valid JSON (jq -e would have failed under the old printf path).
+if echo "$line" | jq -e . >/dev/null 2>&1; then
+  echo "  PASS  jq-metrics: line is valid JSON despite embedded quote in model"
+  pass=$((pass+1))
+else
+  echo "  FAIL  jq-metrics: produced invalid JSON for weird model name"
+  echo "        line: $line"
+  fail=$((fail+1))
+fi
+# The decoded model field round-trips exactly.
+decoded_model=$(echo "$line" | jq -r '.model')
+assert_eq 'qwen3.6:35b"weird-name' "$decoded_model" "jq-metrics: model field decodes to original string"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
