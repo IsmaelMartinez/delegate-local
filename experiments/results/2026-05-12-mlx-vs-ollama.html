@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MLX vs Ollama — Qwen3.6-35B-A3B-8bit — 2026-05-12</title>
+<style>
+  :root {
+    --ollama: #d97706;
+    --ollama-soft: #fed7aa;
+    --mlx: #2563eb;
+    --mlx-soft: #bfdbfe;
+    --ink: #0f172a;
+    --muted: #64748b;
+    --pass: #16a34a;
+    --fail: #dc2626;
+    --warn: #ca8a04;
+    --bg: #f8fafc;
+    --card: #ffffff;
+    --line: #e2e8f0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    margin: 0;
+    padding: 32px 16px 64px;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header { margin-bottom: 24px; }
+  h1 {
+    font-size: 26px;
+    margin: 0 0 4px;
+    letter-spacing: -0.02em;
+  }
+  h1 .sep { color: var(--muted); font-weight: 400; }
+  .sub {
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .badges { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+    background: #e2e8f0;
+    color: var(--ink);
+  }
+  .badge.ollama { background: var(--ollama-soft); color: #92400e; }
+  .badge.mlx { background: var(--mlx-soft); color: #1e3a8a; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .card h2 {
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 0 0 12px;
+    font-weight: 600;
+  }
+  .card h2 .hint {
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+    color: var(--muted);
+    font-size: 12px;
+    margin-left: 6px;
+  }
+  .big-num { font-size: 36px; font-weight: 700; letter-spacing: -0.02em; }
+  .big-num .unit { font-size: 16px; color: var(--muted); font-weight: 500; margin-left: 4px; }
+  .row-pair { display: flex; gap: 24px; align-items: flex-end; }
+  .row-pair > div { flex: 1; }
+  .pair-label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .pair-label.ollama { color: #92400e; }
+  .pair-label.mlx { color: #1e3a8a; }
+  .pair-value { font-size: 24px; font-weight: 700; }
+  .delta {
+    font-size: 12px;
+    color: var(--pass);
+    margin-top: 4px;
+    font-weight: 500;
+  }
+  .delta.bad { color: var(--fail); }
+  .table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  .table th, .table td {
+    padding: 8px 8px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+  }
+  .table th {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    background: #f1f5f9;
+  }
+  .table td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  .table td .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .pill.ok { background: #dcfce7; color: #166534; }
+  .pill.partial { background: #fef3c7; color: #92400e; }
+  .pill.scorer { background: #fee2e2; color: #991b1b; }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+  .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; }
+  .swatch.ollama { background: var(--ollama); }
+  .swatch.mlx { background: var(--mlx); }
+  .chart { margin: 0; }
+  .chart-row {
+    display: grid;
+    grid-template-columns: 70px 1fr 1fr;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 6px;
+    font-size: 13px;
+  }
+  .chart-row .name { color: var(--muted); }
+  .chart-row .bars { grid-column: 2 / 4; display: flex; flex-direction: column; gap: 2px; }
+  .bar {
+    height: 14px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    padding-right: 6px;
+    justify-content: flex-end;
+    min-width: 24px;
+  }
+  .bar.ollama { background: var(--ollama); }
+  .bar.mlx { background: var(--mlx); }
+  .findings {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 12px;
+    padding: 20px;
+    margin-top: 24px;
+  }
+  .findings h3 {
+    margin: 0 0 8px;
+    color: #92400e;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .findings p { margin: 0 0 10px; font-size: 14px; color: var(--ink); }
+  .findings p:last-child { margin-bottom: 0; }
+  .findings code {
+    background: #fef3c7;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 12px;
+  }
+  footer {
+    margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  footer code { background: #f1f5f9; padding: 1px 4px; border-radius: 3px; }
+  .pass-bar-wrap {
+    background: #f1f5f9;
+    border-radius: 4px;
+    height: 18px;
+    position: relative;
+    overflow: hidden;
+  }
+  .pass-bar {
+    height: 100%;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    padding-left: 8px;
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .pass-bar.ollama { background: var(--ollama); }
+  .pass-bar.mlx { background: var(--mlx); }
+  .pass-bar.zero { background: var(--muted); width: 6px !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>MLX <span class="sep">vs</span> Ollama</h1>
+  <div class="sub">Same model class — <code>Qwen3.6-35B-A3B</code> at 8-bit precision — six fixture tasks, three reps each, Apple M5 Max / 128 GB unified memory, 2026-05-12.</div>
+  <div class="badges">
+    <span class="badge ollama">Ollama 0.21.1 — <code>qwen3.6:35b-a3b-q8_0</code></span>
+    <span class="badge mlx">mlx-lm 0.31.3 — <code>mlx-community/Qwen3.6-35B-A3B-8bit</code></span>
+    <span class="badge">3 reps × 6 tasks = 18 inferences per backend</span>
+  </div>
+</header>
+
+<!-- Headline numbers -->
+<div class="grid">
+
+  <div class="card">
+    <h2>Total wall time <span class="hint">18 reps, cold start</span></h2>
+    <div class="row-pair">
+      <div>
+        <div class="pair-label ollama">Ollama</div>
+        <div class="pair-value">8 m 39 s</div>
+      </div>
+      <div>
+        <div class="pair-label mlx">MLX</div>
+        <div class="pair-value" style="color: var(--mlx);">34 s</div>
+        <div class="delta">15× faster end-to-end*</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Peak resident memory <span class="hint">model + KV cache</span></h2>
+    <div class="row-pair">
+      <div>
+        <div class="pair-label ollama">Ollama</div>
+        <div class="pair-value">49 GB</div>
+      </div>
+      <div>
+        <div class="pair-label mlx">MLX</div>
+        <div class="pair-value" style="color: var(--mlx);">36.5 GB</div>
+        <div class="delta">25% lighter</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>API-only latency mean <span class="hint">T4–T6, apples-to-apples</span></h2>
+    <div class="row-pair">
+      <div>
+        <div class="pair-label ollama">Ollama</div>
+        <div class="pair-value">3.5 s/rep</div>
+      </div>
+      <div>
+        <div class="pair-label mlx">MLX</div>
+        <div class="pair-value" style="color: var(--mlx);">1.9 s/rep</div>
+        <div class="delta">1.8× faster (the real comparison)</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Latency chart -->
+<div class="card" style="margin-top: 16px;">
+  <h2>Per-task latency <span class="hint">seconds per rep, mean of 3 — note T1–T3 is not apples-to-apples (see findings)</span></h2>
+  <div class="legend">
+    <span><span class="swatch ollama"></span>Ollama</span>
+    <span><span class="swatch mlx"></span>MLX</span>
+  </div>
+  <div class="chart">
+    <!-- T1 -->
+    <div class="chart-row">
+      <div class="name">T1 doc-drift</div>
+      <div class="bars">
+        <div class="bar ollama" style="width: 72%;">47.0 s</div>
+        <div class="bar mlx" style="width: 1.5%;">1.0 s</div>
+      </div>
+    </div>
+    <!-- T2 -->
+    <div class="chart-row">
+      <div class="name">T2 party-config</div>
+      <div class="bars">
+        <div class="bar ollama" style="width: 76%;">49.7 s</div>
+        <div class="bar mlx" style="width: 3%;">2.0 s</div>
+      </div>
+    </div>
+    <!-- T3 -->
+    <div class="chart-row">
+      <div class="name">T3 merge-patterns</div>
+      <div class="bars">
+        <div class="bar ollama" style="width: 100%;">65.3 s</div>
+        <div class="bar mlx" style="width: 3%;">2.0 s</div>
+      </div>
+    </div>
+    <!-- T4 -->
+    <div class="chart-row">
+      <div class="name">T4 commit-msg</div>
+      <div class="bars">
+        <div class="bar ollama" style="width: 8.7%;">5.7 s</div>
+        <div class="bar mlx" style="width: 4.6%;">3.0 s</div>
+      </div>
+    </div>
+    <!-- T5 -->
+    <div class="chart-row">
+      <div class="name">T5 JSON shape</div>
+      <div class="bars">
+        <div class="bar ollama" style="width: 5.7%;">3.7 s</div>
+        <div class="bar mlx" style="width: 3%;">2.0 s</div>
+      </div>
+    </div>
+    <!-- T6 -->
+    <div class="chart-row">
+      <div class="name">T6 regex</div>
+      <div class="bars">
+        <div class="bar ollama" style="width: 1.5%;">1.0 s</div>
+        <div class="bar mlx" style="width: 1.1%;">0.7 s</div>
+      </div>
+    </div>
+  </div>
+  <div style="font-size: 12px; color: var(--muted); margin-top: 12px;">
+    Bars share a single scale (max ≈ 65 s = 100% width). T1–T3 on Ollama use <code>ollama run</code> CLI with reasoning <em>enabled</em>; same tasks on MLX use <code>/v1/chat/completions</code> with <code>enable_thinking:false</code>. T4–T6 use the API path with reasoning off on both backends — those bars <em>are</em> directly comparable.
+  </div>
+</div>
+
+<!-- Pass rate chart -->
+<div class="card" style="margin-top: 16px;">
+  <h2>Pass rate per task <span class="hint">deterministic scorers, 3 reps</span></h2>
+  <div class="legend">
+    <span><span class="swatch ollama"></span>Ollama</span>
+    <span><span class="swatch mlx"></span>MLX</span>
+  </div>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Task</th>
+        <th>Scorer</th>
+        <th>Ollama</th>
+        <th>MLX</th>
+        <th>Verdict</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>T1 doc-drift</td>
+        <td>human, 4 claim verdicts</td>
+        <td class="num"><span class="pill ok">4/4 × 3</span></td>
+        <td class="num"><span class="pill ok">4/4 × 3</span></td>
+        <td>Tie</td>
+      </tr>
+      <tr>
+        <td>T2 party-config</td>
+        <td>human, CLEAN vs INCONSISTENT</td>
+        <td class="num"><span class="pill ok">3/3 CLEAN</span></td>
+        <td class="num"><span class="pill ok">3/3 CLEAN</span></td>
+        <td>Tie</td>
+      </tr>
+      <tr>
+        <td>T3 merge-patterns</td>
+        <td>literal-substring citation rate</td>
+        <td class="num"><span class="pill partial">0.47</span></td>
+        <td class="num"><span class="pill scorer">0.00</span></td>
+        <td>Scorer-format mismatch (see findings)</td>
+      </tr>
+      <tr>
+        <td>T4 commit-message</td>
+        <td>6 structural checks</td>
+        <td class="num"><span class="pill ok">18/18 (1.00)</span></td>
+        <td class="num"><span class="pill partial">15/18 (0.83)</span></td>
+        <td>MLX trips <code>BODY_NO_PADDING</code></td>
+      </tr>
+      <tr>
+        <td>T5 JSON shape</td>
+        <td>6 structural / content checks</td>
+        <td class="num"><span class="pill ok">18/18 (1.00)</span></td>
+        <td class="num"><span class="pill ok">18/18 (1.00)</span></td>
+        <td>Tie</td>
+      </tr>
+      <tr>
+        <td>T6 regex</td>
+        <td>6 behavioural checks</td>
+        <td class="num"><span class="pill ok">18/18 (1.00)</span></td>
+        <td class="num"><span class="pill ok">18/18 (1.00)</span></td>
+        <td>Tie</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div style="margin-top: 16px;">
+    <div class="chart-row" style="grid-template-columns: 90px 1fr; font-size: 12px;">
+      <div class="name">T1 ollama</div><div class="pass-bar-wrap"><div class="pass-bar ollama" style="width: 100%;">1.00</div></div>
+    </div>
+    <div class="chart-row" style="grid-template-columns: 90px 1fr; font-size: 12px;">
+      <div class="name">T1 mlx</div><div class="pass-bar-wrap"><div class="pass-bar mlx" style="width: 100%;">1.00</div></div>
+    </div>
+    <div class="chart-row" style="grid-template-columns: 90px 1fr; font-size: 12px;">
+      <div class="name">T2 ollama</div><div class="pass-bar-wrap"><div class="pass-bar ollama" style="width: 100%;">1.00</div></div>
+    </div>
+    <div class="chart-row" style="grid-template-columns: 90px 1fr; font-size: 12px;">
+      <div class="name">T2 mlx</div><div class="pass-bar-wrap"><div class="pass-bar mlx" style="width: 100%;">1.00</div></div>
+    </div>
+    <div class="chart-row" style="grid-template-columns: 90px 1fr; font-size: 12px;">
+      <div class="name">T3 ollama</div><div class="pass-bar-wrap"><div class="pass-bar ollama" style="width: 47%;">0.47</div></div>
+    </div>
+    <div class="chart-row" style="grid-template-columns: 90px 1fr; font-size: 12px;">
+      <div class="name">T3 mlx</div><div class="pass-bar-wrap"><div class="pass-bar mlx zero">0.00</div></div>
+    </div>
+    <div class="chart-row" style="grid-template-columns: 90px 1fr; font-size: 12px;">
+      <div class="name">T4 ollama</div><div class="pass-bar-wrap"><div class="pass-bar ollama" style="width: 100%;">1.00</div></div>
+    </div>
+    <div class="chart-row" style="grid-template-columns: 90px 1fr; font-size: 12px;">
+      <div class="name">T4 mlx</div><div class="pass-bar-wrap"><div class="pass-bar mlx" style="width: 83%;">0.83</div></div>
+    </div>
+    <div class="chart-row" style="grid-template-columns: 90px 1fr; font-size: 12px;">
+      <div class="name">T5 ollama</div><div class="pass-bar-wrap"><div class="pass-bar ollama" style="width: 100%;">1.00</div></div>
+    </div>
+    <div class="chart-row" style="grid-template-columns: 90px 1fr; font-size: 12px;">
+      <div class="name">T5 mlx</div><div class="pass-bar-wrap"><div class="pass-bar mlx" style="width: 100%;">1.00</div></div>
+    </div>
+    <div class="chart-row" style="grid-template-columns: 90px 1fr; font-size: 12px;">
+      <div class="name">T6 ollama</div><div class="pass-bar-wrap"><div class="pass-bar ollama" style="width: 100%;">1.00</div></div>
+    </div>
+    <div class="chart-row" style="grid-template-columns: 90px 1fr; font-size: 12px;">
+      <div class="name">T6 mlx</div><div class="pass-bar-wrap"><div class="pass-bar mlx" style="width: 100%;">1.00</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Findings -->
+<div class="findings">
+  <h3>Read this before drawing conclusions</h3>
+  <p><strong>The 15× headline speedup is mostly a methodology artifact.</strong> Ollama runs T1–T3 through the <code>ollama run</code> CLI with reasoning enabled, which streams the whole think-aloud trace. MLX runs every task through <code>/v1/chat/completions</code> with <code>enable_thinking:false</code>. The fair apples-to-apples comparison is the T4–T6 row: same API, same think-off — MLX wins by ~1.8×, not 15×.</p>
+  <p><strong>The T3 0.00 score on MLX is a scorer-format mismatch, not a hallucination gap.</strong> MLX produced exactly the 4 pattern lines the prompt requested, but wrapped each path in backticks (<code>`src/pages/index.astro`</code>). The deterministic scorer's literal-substring check fails on the wrapping characters even though the underlying paths are real. Ollama's 0.47 is partly real, partly artifact of reasoning leak inflating the claim count to 101 across 3 reps.</p>
+  <p><strong>T4's 5/6 on MLX is a real recipe miss.</strong> All three reps ended their commit body with the trailing cliché "<em>This closes the gap between asserted hardening and measured accuracy</em>", which the recipe's <code>BODY_NO_PADDING</code> regex catches. The fix belongs in <code>prompts/commit-message.md</code>: promote the "no closes-the-gap / closes-the-loop tail" guard from a scorer-only check into a directive in the template body with a contrastive Wrong/Correct one-shot.</p>
+  <p><strong>What this run actually validates.</strong> PR #112's <code>/v1/chat/completions</code> switch produces real, schema-correct, instruction-following output on the production prose-tier 35B model. T5 (JSON schema) and T6 (regex acceptance tests) — the two most rigid rubrics — score perfectly on both backends. MLX is the correct backend choice for memory-constrained Apple Silicon setups; the speed advantage is real but modest, not order-of-magnitude.</p>
+</div>
+
+<footer>
+  Source files: <code>experiments/results/2026-05-12-mlx-vs-ollama.md</code> · raw outputs under <code>experiments/results/raw/</code> · scorers under <code>experiments/score-*.sh</code>. *15× total is dominated by the CLI-vs-API regime asymmetry on T1–T3; T4–T6 apples-to-apples speedup is 1.8×.
+</footer>
+
+</div>
+</body>
+</html>
