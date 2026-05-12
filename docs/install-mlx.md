@@ -50,7 +50,7 @@ If you want a specific model pinned at startup pass `--model mlx-community/Qwen3
 DELEGATE_BACKEND=mlx bash scripts/delegate.sh prose "Summarise this paragraph in two sentences." </path/to/some.txt
 ```
 
-`pick-model.sh` resolves the tier against the MLX hub cache; `delegate.sh` posts to `http://localhost:8080/v1/completions` (override via `MLX_HOST`) and parses `.choices[0].text`. Every call appends a metrics row tagged `"backend":"mlx"` so `scripts/metrics-summary.sh` can break latency and token totals down per backend.
+`pick-model.sh` resolves the tier against the MLX hub cache; `delegate.sh` posts to `http://localhost:8080/v1/chat/completions` (override via `MLX_HOST`) and parses `.choices[0].message.content`. The payload includes `chat_template_kwargs: {enable_thinking: false}` so reasoning-capable models like Qwen3.6 emit their answer in `content` rather than the reasoning trace (set `DELEGATE_THINK=true` to flip it on per-call). The raw `/v1/completions` endpoint is deliberately avoided — it bypasses the model's chat template and produces whitespace-only output on instruction-tuned models. Every call appends a metrics row tagged `"backend":"mlx"` so `scripts/metrics-summary.sh` can break latency and token totals down per backend.
 
 ## Per-tier override
 

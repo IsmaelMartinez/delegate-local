@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
-# Run the 4 fixture tasks against a single Ollama model and emit timing + output.
+# Run the 6 fixture tasks against a single local-LLM backend and emit timing
+# + output.
 #
-# Usage: runner.sh [--reps N] [--t3-snapshot YYYY-MM-DD] [--t4-snapshot YYYY-MM-DD] [--t5-snapshot YYYY-MM-DD] [--t6-snapshot YYYY-MM-DD] <model-name>
+# Usage: runner.sh [--backend ollama|mlx] [--reps N] [--t3-snapshot YYYY-MM-DD] [--t4-snapshot YYYY-MM-DD] [--t5-snapshot YYYY-MM-DD] [--t6-snapshot YYYY-MM-DD] <model-name>
 #
+# --backend ollama|mlx (default ollama) selects which local HTTP backend to
+#                     post to. ollama -> POST /api/generate with think:false
+#                     on $OLLAMA_HOST (default http://localhost:11434). mlx ->
+#                     POST /v1/chat/completions with chat_template_kwargs.
+#                     enable_thinking:false on $MLX_HOST (default
+#                     http://localhost:8080). The MLX backend uses the API
+#                     path for every task (T1–T6) — there is no `ollama run`
+#                     CLI equivalent for mlx_lm.server, and the chat-
+#                     completions endpoint is the only way to make
+#                     instruction-tuned models follow the chat template (the
+#                     raw /v1/completions endpoint bypasses it and emits
+#                     whitespace).
 # --reps N            (default 1) repeats every task N times in the same file,
 #                     each block prefixed with `===== <task_id> rep <i> =====`.
 #                     Lets a downstream scorer compute mean ± stdev per cell.
@@ -25,11 +38,12 @@
 #                     against positive/negative acceptance tests.
 #
 # Output: writes experiments/results/raw/<model-slug>.txt
-# Header: MODEL, DATE, REPS, T3_SNAPSHOT, T4_SNAPSHOT, T5_SNAPSHOT, T6_SNAPSHOT for reproducibility.
+# Header: MODEL, BACKEND, DATE, REPS, T3_SNAPSHOT, T4_SNAPSHOT, T5_SNAPSHOT, T6_SNAPSHOT for reproducibility.
 
 set -euo pipefail
 
 reps=1
+backend="ollama"
 t3_snapshot="2026-04-28"
 t4_snapshot="2026-05-11"
 t5_snapshot="2026-05-11"
@@ -37,6 +51,14 @@ t6_snapshot="2026-05-11"
 
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
+    --backend)
+      backend="${2:-}"
+      case "$backend" in
+        ollama|mlx) ;;
+        *) echo "--backend requires ollama|mlx, got '$backend'" >&2; exit 2 ;;
+      esac
+      shift 2
+      ;;
     --reps)
       reps="${2:-}"
       [[ "$reps" =~ ^[1-9][0-9]*$ ]] || { echo "--reps requires a positive integer" >&2; exit 2; }
@@ -68,7 +90,7 @@ done
 
 model="${1:-}"
 if [[ -z "$model" ]]; then
-  echo "usage: runner.sh [--reps N] [--t3-snapshot DATE] <model-name>" >&2
+  echo "usage: runner.sh [--backend ollama|mlx] [--reps N] [--t3-snapshot DATE] <model-name>" >&2
   exit 2
 fi
 
@@ -113,13 +135,13 @@ slug="$(echo "$model" | tr '/:.' '___')"
 out="$out_dir/$slug.txt"
 
 run_task_api() {
-  # Same shape as run_task but routes via the Ollama HTTP /api/generate
-  # endpoint with think:false and temperature:0 — mirrors scripts/delegate.sh
-  # so the measurement reflects how the recipe is used in production rather
-  # than what raw `ollama run` (CLI) emits. Required for T4 because
-  # reasoning-capable models (qwen3.6, deepseek-r1) leak chain-of-thought
-  # tokens through the CLI path and trip every structural check on a
-  # commit-message rubric.
+  # Posts the (fixture || directive) input to the backend's instruction
+  # endpoint with reasoning disabled and temperature:0 — mirrors how
+  # scripts/delegate.sh routes recipes in production. Required for T4–T6
+  # because reasoning-capable models (qwen3.6, deepseek-r1) leak chain-of-
+  # thought into structural-check outputs (commit-message rubric, JSON
+  # parseability, single-line regex) when the CLI path is taken. The same
+  # helper handles both backends since the wire shape is the only difference.
   local task_id="$1"
   local fixture="$2"
   local directive="$3"
@@ -129,18 +151,35 @@ run_task_api() {
   local start
   start=$(date +%s)
 
-  local host="${OLLAMA_HOST:-http://localhost:11434}"
   local full_input
   full_input="$(cat "$fixture")"$'\n\n'"$directive"
-  local payload
-  payload=$(jq -nc --arg m "$model" --arg p "$full_input" \
-    '{model:$m, prompt:$p, stream:false, think:false, options:{temperature:0}}')
   local response status=0 body
-  response=$(curl -sS --fail -X POST "$host/api/generate" -d @- <<<"$payload") || status=$?
-  if (( status == 0 )); then
-    body=$(jq -r '.response // ""' <<<"$response")
+  if [[ "$backend" == "ollama" ]]; then
+    local host="${OLLAMA_HOST:-http://localhost:11434}"
+    local payload
+    payload=$(jq -nc --arg m "$model" --arg p "$full_input" \
+      '{model:$m, prompt:$p, stream:false, think:false, options:{temperature:0}}')
+    response=$(curl -sS --fail -X POST "$host/api/generate" -d @- <<<"$payload") || status=$?
+    if (( status == 0 )); then
+      body=$(jq -r '.response // ""' <<<"$response")
+    else
+      body="API_CALL_FAILED status=$status"
+    fi
   else
-    body="API_CALL_FAILED status=$status"
+    # MLX: chat-completions with chat_template_kwargs.enable_thinking:false.
+    # /v1/completions is the raw-prompt endpoint and bypasses the chat
+    # template — instruction-tuned models emit whitespace there. See
+    # ROADMAP MLX backend track 2026-05-12 for the empirical write-up.
+    local host="${MLX_HOST:-http://localhost:8080}"
+    local payload
+    payload=$(jq -nc --arg m "$model" --arg p "$full_input" \
+      '{model:$m, messages:[{role:"user", content:$p}], stream:false, temperature:0, max_tokens:4096, chat_template_kwargs:{enable_thinking:false}}')
+    response=$(curl -sS --fail -X POST "$host/v1/chat/completions" -d @- <<<"$payload") || status=$?
+    if (( status == 0 )); then
+      body=$(jq -r '.choices[0].message.content // ""' <<<"$response")
+    else
+      body="API_CALL_FAILED status=$status"
+    fi
   fi
   local end
   end=$(date +%s)
@@ -156,6 +195,15 @@ run_task_api() {
 }
 
 run_task() {
+  # T1–T3 historically used the `ollama run` CLI path for backwards-
+  # compatibility with the 2026-04-28 baseline. The MLX backend has no CLI
+  # equivalent, so when backend=mlx we route through run_task_api instead;
+  # the prompt arg becomes the trailing directive concatenated to the
+  # fixture body, matching the chat-completions semantics.
+  if [[ "$backend" == "mlx" ]]; then
+    run_task_api "$@"
+    return
+  fi
   local task_id="$1"
   local fixture="$2"
   local prompt="$3"
@@ -190,6 +238,7 @@ run_task() {
 
 : > "$out"
 echo "MODEL: $model" >> "$out"
+echo "BACKEND: $backend" >> "$out"
 echo "DATE: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$out"
 echo "REPS: $reps" >> "$out"
 echo "T3_SNAPSHOT: $t3_snapshot" >> "$out"
