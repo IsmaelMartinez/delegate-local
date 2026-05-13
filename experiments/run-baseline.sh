@@ -3,7 +3,7 @@
 # under a single regime — sequential, one model resident at a time, cold
 # between models so timing comparisons are FS-cache-fair.
 #
-# Usage: run-baseline.sh [--backend ollama|mlx] [--reps N] [--t3-snapshot DATE] [--no-stop] <model> [<model>...]
+# Usage: run-baseline.sh [--backend ollama|mlx] [--ollama-cli] [--reps N] [--t3-snapshot DATE] [--no-stop] <model> [<model>...]
 #
 # --backend ollama|mlx (default ollama) which local backend to target. Forwarded
 #                     to runner.sh. The cold-start mechanism differs per
@@ -12,6 +12,15 @@
 #                     time and re-loads on the first request to a new model
 #                     id, so the equivalent of `ollama stop` happens
 #                     implicitly via the next request's model field.
+# --ollama-cli        forward --ollama-cli to runner.sh, opting Ollama T1–T3
+#                     back into the legacy `ollama run` CLI path with
+#                     reasoning on. Default since 2026-05-13 is the HTTP API
+#                     path with think:false (~8× faster, what PR #115's v2
+#                     baseline used). Kept for reproducing the 2026-04-28
+#                     and 2026-05-01 baselines that pre-date the regime.
+# --ollama-api        deprecated no-op alias for back-compat with PR #114 /
+#                     #115 scripted invocations. The API path is now the
+#                     default.
 # --reps N            (default 3) reps per task per model.
 # --t3-snapshot DATE  (default 2026-04-28) which T3 fixture to use.
 # --no-stop           skip the `ollama stop` between models. Useful when one
@@ -33,7 +42,7 @@
 set -euo pipefail
 
 backend="ollama"
-ollama_api=0
+ollama_api=1
 reps=3
 t3_snapshot="2026-04-28"
 do_stop=1
@@ -49,6 +58,7 @@ while [[ "${1:-}" == --* ]]; do
       shift 2
       ;;
     --ollama-api) ollama_api=1; shift ;;
+    --ollama-cli) ollama_api=0; shift ;;
     --reps) reps="${2:-}"; shift 2 ;;
     --t3-snapshot) t3_snapshot="${2:-}"; shift 2 ;;
     --no-stop) do_stop=0; shift ;;
@@ -57,7 +67,7 @@ while [[ "${1:-}" == --* ]]; do
 done
 
 if (( $# < 1 )); then
-  echo "usage: run-baseline.sh [--backend ollama|mlx] [--ollama-api] [--reps N] [--t3-snapshot DATE] [--no-stop] <model> [<model>...]" >&2
+  echo "usage: run-baseline.sh [--backend ollama|mlx] [--ollama-cli] [--reps N] [--t3-snapshot DATE] [--no-stop] <model> [<model>...]" >&2
   exit 2
 fi
 
@@ -93,7 +103,7 @@ for model in "$@"; do
 
   echo "=== running $model ==="
   runner_args=(--backend "$backend" --reps "$reps" --t3-snapshot "$t3_snapshot")
-  (( ollama_api )) && runner_args+=(--ollama-api)
+  (( ollama_api )) || runner_args+=(--ollama-cli)
   bash "$runner" "${runner_args[@]}" "$model"
 
   if [[ "$backend" == "ollama" ]] && (( do_stop )); then
