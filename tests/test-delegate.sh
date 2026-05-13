@@ -43,9 +43,18 @@ EOF
 make_mock_curl_ok() {
   # Mock curl: drain stdin (so the pipeline closes cleanly), copy the JSON
   # payload to a sniff file if requested, then emit a canned JSON response.
+  # When invoked with the auto-mode MLX probe URL (/v1/models), exits 7 to
+  # simulate "no MLX server reachable" so the default auto backend falls
+  # back to ollama — that lets every existing ollama-shaped test keep
+  # working without explicitly setting DELEGATE_BACKEND=ollama.
   local dir="$1" sniff="${2:-/dev/null}"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
+for arg in "\$@"; do
+  case "\$arg" in
+    *"/v1/models"*) exit 7 ;;
+  esac
+done
 cat > "${sniff}"
 printf '%s' '{"response":"mock-model-output: ok\\n"}'
 EOF
@@ -547,9 +556,23 @@ rm -rf "$tmp" "$metrics"
 # 12. DELEGATE_BACKEND=mlx dispatches to /v1/chat/completions, parses
 # .choices[0].message.content, and tags the metrics line with backend:"mlx".
 make_mock_curl_mlx_ok() {
+  # Mock curl that succeeds on both the auto probe (/v1/models — returns
+  # an empty success body) and the dispatch call (/v1/chat/completions —
+  # returns the chat-completions shape). The argv sniff captures the LAST
+  # curl invocation, which is always the dispatch (probe runs first).
   local dir="$1" payload_sniff="${2:-/dev/null}" argv_sniff="${3:-/dev/null}"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
+for arg in "\$@"; do
+  case "\$arg" in
+    *"/v1/models"*)
+      # Probe: drain stdin, emit a minimal models-list response, exit 0.
+      cat > /dev/null
+      printf '%s' '{"object":"list","data":[]}'
+      exit 0
+      ;;
+  esac
+done
 printf '%s\n' "\$*" > "${argv_sniff}"
 cat > "${payload_sniff}"
 printf '%s' '{"choices":[{"message":{"role":"assistant","content":"mlx-output-ok"},"finish_reason":"stop"}]}'
@@ -614,8 +637,35 @@ case "$payload" in
 esac
 rm -rf "$tmp" "$metrics"
 
-# 12b. Default backend is ollama: metrics line carries backend:"ollama" even
-# when DELEGATE_BACKEND is unset.
+# 12b. Explicit DELEGATE_BACKEND=ollama tags the metrics line backend:"ollama"
+# and skips the auto probe entirely. (Default backend is now auto — see 12g
+# below for the unset-default test.)
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "explicit ollama: exits 0"
+assert_contains '"backend":"ollama"' "$(cat "$metrics")" "explicit ollama tagged in metrics"
+rm -rf "$tmp" "$metrics"
+
+# 12c. Unknown DELEGATE_BACKEND value -> exit 2 with informative stderr,
+# and the valid-set must mention auto alongside ollama and mlx.
+EC=0
+out=$(env -i PATH="$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=bogus \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "DELEGATE_BACKEND=bogus -> exit 2"
+assert_contains "unknown DELEGATE_BACKEND" "$out" "DELEGATE_BACKEND=bogus -> informative stderr"
+assert_contains "auto|ollama|mlx" "$out" "bogus error names auto in valid set"
+
+# 12g. Default (unset) backend is auto: probe runs and (when MLX is
+# unreachable in the test env) falls back to ollama. The mock's `/v1/models`
+# branch exits 7, so the metrics line should still carry backend:"ollama".
 tmp=$(mktemp -d)
 make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
@@ -624,17 +674,62 @@ EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "default backend: exits 0"
-assert_contains '"backend":"ollama"' "$(cat "$metrics")" "default backend tagged ollama in metrics"
+assert_eq 0 "$EC" "default (auto) backend: exits 0"
+assert_contains '"backend":"ollama"' "$(cat "$metrics")" "default auto + probe fails -> tagged ollama"
 rm -rf "$tmp" "$metrics"
 
-# 12c. Unknown DELEGATE_BACKEND value -> exit 2 with informative stderr.
+# 12h. Auto with reachable MLX server: probe succeeds, wrapper resolves
+# the prose tier against the HF hub cache, dispatches to /v1/chat/completions,
+# and the metrics line is tagged backend:"mlx".
+tmp=$(mktemp -d)
+snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
+mkdir -p "$snap"
+touch "$snap/weights.safetensors"
+argv_sniff="$tmp/argv.txt"
+make_mock_curl_mlx_ok "$tmp" "/dev/null" "$argv_sniff"
+metrics=$(mktemp)
 EC=0
-out=$(env -i PATH="$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=bogus \
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=auto HF_HOME="$tmp/hf" \
+  DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
-assert_eq 2 "$EC" "DELEGATE_BACKEND=bogus -> exit 2"
-assert_contains "unknown DELEGATE_BACKEND" "$out" "DELEGATE_BACKEND=bogus -> informative stderr"
+assert_eq 0 "$EC" "auto + reachable MLX: exits 0"
+assert_contains '"backend":"mlx"' "$(cat "$metrics")" "auto + reachable MLX: tagged mlx in metrics"
+assert_contains "/v1/chat/completions" "$(cat "$argv_sniff")" "auto + reachable MLX: dispatch hits chat-completions"
+rm -rf "$tmp" "$metrics"
+
+# 12i. DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT is honoured. The probe still
+# returns the canonical mock result (exit 7 from /v1/models in make_mock_curl_ok)
+# regardless of timeout, but the timeout flag must reach curl's argv. We
+# capture the probe's argv into a sniff file and assert --max-time appears
+# with the user's value.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+probe_argv="$tmp/probe-argv.txt"
+cat > "$tmp/curl" <<EOF
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  case "\$arg" in
+    *"/v1/models"*)
+      printf '%s\n' "\$*" > "${probe_argv}"
+      exit 7
+      ;;
+  esac
+done
+cat > /dev/null
+printf '%s' '{"response":"mock-model-output: ok\\n"}'
+EOF
+chmod +x "$tmp/curl"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=auto \
+  DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT=3 \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "AUTO_PROBE_TIMEOUT override: exits 0"
+assert_contains "--max-time 3" "$(cat "$probe_argv")" "AUTO_PROBE_TIMEOUT override flows into curl argv"
+rm -rf "$tmp" "$metrics"
 
 # 12d. MLX_HOST override is honoured by the dispatch URL.
 tmp=$(mktemp -d)

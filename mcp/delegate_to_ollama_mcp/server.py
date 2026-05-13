@@ -19,6 +19,8 @@ import json
 import os
 import re
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -111,6 +113,38 @@ def _run(
         raise RuntimeError(f"{label} timed out after {timeout}s") from exc
 
 
+_AUTO_PROBE_TIMEOUT_S = 1.0
+
+
+def _probe_mlx_reachable() -> str:
+    """Probe $MLX_HOST/v1/models to decide auto-mode resolution.
+
+    Returns "mlx" on a 2xx response, "ollama" otherwise (including
+    timeout, connection refused, DNS error, or non-2xx HTTP status). The
+    timeout (1 s) mirrors the bash-side probe in scripts/pick-model.sh
+    so behaviour matches whether the auto decision is made here or in
+    bash. Override the timeout via DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT
+    (float seconds).
+    """
+    mlx_host = os.environ.get("MLX_HOST", "http://localhost:8080")
+    timeout_env = os.environ.get("DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT")
+    timeout = _AUTO_PROBE_TIMEOUT_S
+    if timeout_env:
+        try:
+            timeout = float(timeout_env)
+        except ValueError:
+            pass
+    try:
+        with urllib.request.urlopen(  # noqa: S310 — localhost-by-default probe
+            f"{mlx_host}/v1/models", timeout=timeout
+        ) as resp:
+            if 200 <= resp.status < 300:
+                return "mlx"
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
+        pass
+    return "ollama"
+
+
 def _model_url(model: str, backend: str = "ollama") -> str:
     """Map a model name to its registry page URL.
 
@@ -144,42 +178,67 @@ def pick_model(
 
     Returns {"model": str, "tier": str, "backend": str, "url": str, "trace": str}.
     `backend` is the resolved backend name ("ollama" or "mlx"); it reflects
-    the caller-supplied `backend` argument if set, otherwise the
-    DELEGATE_BACKEND env var, otherwise the script's default ("ollama").
-    `url` is the resolved model's Ollama library page (or user-namespace
-    page if the model name is namespaced) for ollama-backend results, and
-    the HuggingFace model page for mlx-backend results. `trace` is empty
-    unless dry_run=True, in which case it contains the resolution trace
-    that pick-model.sh writes to stderr.
+    the caller-supplied `backend` argument if set to "ollama"|"mlx", or
+    the result of the auto probe (the same `${MLX_HOST}/v1/models`
+    reachability check that scripts/pick-model.sh runs in its own auto
+    path) when the argument is "auto", the DELEGATE_BACKEND env var is
+    "auto", or both are unset. The probe is authoritative — the returned
+    model name's shape is NOT consulted, because Ollama legitimately
+    supports namespaced model names like `user/foo:tag` that look like
+    HuggingFace stems. `url` is the resolved model's Ollama library page
+    (or user-namespace page if the model name is namespaced) for ollama-
+    backend results, and the HuggingFace model page for mlx-backend
+    results. `trace` is empty unless dry_run=True, in which case it
+    contains the resolution trace that pick-model.sh writes to stderr.
 
-    Pass `backend="mlx"` to query the MLX hub cache instead of `ollama
-    list` for this single call. `backend="ollama"` is the default. The
+    Pass `backend="mlx"` to force MLX, `backend="ollama"` to force Ollama,
+    or `backend="auto"` (the default since 2026-05-13) to probe
+    `$MLX_HOST/v1/models` and pick MLX if reachable, else Ollama. The
     parameter wins over any DELEGATE_BACKEND env var set when the MCP
     server was launched, so an MCP client can mix backends inside one
-    session.
+    session. Probe timeout override: DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT
+    (float seconds, default 1).
 
     Raises RuntimeError if the tier is unknown, the resolver isn't
     available (ollama not on PATH for ollama backend, or HF cache absent
     for mlx backend), no installed model matches the tier's preferences,
     the backend value is invalid, or the script exceeds PICK_MODEL_TIMEOUT_S.
     """
-    if backend is not None and backend not in ("ollama", "mlx"):
+    if backend is not None and backend not in ("auto", "ollama", "mlx"):
         raise RuntimeError(
-            f"unknown backend '{backend}' (valid: ollama, mlx)"
+            f"unknown backend '{backend}' (valid: auto, ollama, mlx)"
         )
+    # Resolve auto on the Python side so we can pass an explicit ollama|mlx
+    # to pick-model.sh and have an unambiguous label to report back. Doing
+    # the resolution here (rather than parsing pick-model.sh's stderr trace,
+    # or inferring from the model name's shape) is the only way to be
+    # correct in the face of namespaced Ollama models like `user/model:tag`
+    # — those legitimately contain a slash but are not MLX. The probe
+    # mirrors what scripts/pick-model.sh does in its own auto path: GET
+    # $MLX_HOST/v1/models with a short timeout; 2xx -> mlx, otherwise ollama.
+    requested = backend
+    if requested is None:
+        env_backend = os.environ.get("DELEGATE_BACKEND")
+        requested = env_backend if env_backend else "auto"
+    if requested == "auto":
+        resolved_backend = _probe_mlx_reachable()
+    else:
+        resolved_backend = requested
     script = scripts_dir() / "pick-model.sh"
     cmd = ["bash", str(script)]
     if dry_run:
         cmd.append("--dry-run")
     cmd.append(tier)
-    env_overlay = {"DELEGATE_BACKEND": backend} if backend is not None else None
+    # Always pass the resolved backend explicitly so the bash side skips
+    # its own probe — saves the duplicate network call and guarantees the
+    # bash and python sides agree.
+    env_overlay = {"DELEGATE_BACKEND": resolved_backend}
     result = _run(cmd, PICK_MODEL_TIMEOUT_S, "pick-model.sh", env_overlay=env_overlay)
     if result.returncode != 0:
         raise RuntimeError(
             f"pick-model.sh exited {result.returncode}: {result.stderr.strip()}"
         )
     model = result.stdout.strip()
-    resolved_backend = backend or os.environ.get("DELEGATE_BACKEND") or "ollama"
     return {
         "model": model,
         "tier": tier,

@@ -25,9 +25,16 @@
 #   when --recipe is set (the recipe carries the instruction).
 #
 # Env:
-#   DELEGATE_BACKEND=ollama|mlx             # default ollama. mlx routes the
-#                                           #   call through an MLX server
-#                                           #   (run `mlx_lm.server` before).
+#   DELEGATE_BACKEND=auto|ollama|mlx        # default auto. auto probes
+#                                           #   ${MLX_HOST:-http://localhost:8080}/v1/models
+#                                           #   with a 1 s timeout and picks
+#                                           #   mlx if reachable, otherwise
+#                                           #   ollama. Explicit ollama or
+#                                           #   mlx skips the probe. The
+#                                           #   metrics line always logs the
+#                                           #   resolved backend, never "auto".
+#   DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT=<s> # override the auto probe timeout
+#                                           #   (default 1, integer seconds).
 #   DELEGATE_TO_OLLAMA_NO_METRICS=1         # opt out of metrics logging
 #   DELEGATE_METRICS_FILE=<path>            # override metrics destination
 #   DELEGATE_PROMPTS_DIR=<path>             # override prompts/ directory
@@ -98,10 +105,24 @@ pick="$script_dir/pick-model.sh"
 prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 
 metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}"
-backend="${DELEGATE_BACKEND:-ollama}"
-case "$backend" in
-  ollama|mlx) ;;
-  *) echo "delegate: unknown DELEGATE_BACKEND='$backend' (valid: ollama|mlx)" >&2; exit 2 ;;
+# Resolve auto backend by probing the MLX server. Cheap (sub-second
+# timeout, single GET) and runs once per invocation. Explicit ollama|mlx
+# skip the probe. The metrics line records the resolved backend, never
+# "auto" — so downstream consumers (metrics-summary, audit-metrics) keep
+# seeing the same shape they did before the auto default.
+backend_requested="${DELEGATE_BACKEND:-auto}"
+case "$backend_requested" in
+  auto)
+    mlx_host_probe="${MLX_HOST:-http://localhost:8080}"
+    probe_timeout="${DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT:-1}"
+    if curl -sS --max-time "$probe_timeout" --fail "$mlx_host_probe/v1/models" >/dev/null 2>&1; then
+      backend="mlx"
+    else
+      backend="ollama"
+    fi
+    ;;
+  ollama|mlx) backend="$backend_requested" ;;
+  *) echo "delegate: unknown DELEGATE_BACKEND='$backend_requested' (valid: auto|ollama|mlx)" >&2; exit 2 ;;
 esac
 ollama_host="${OLLAMA_HOST:-http://localhost:11434}"
 mlx_host="${MLX_HOST:-http://localhost:8080}"

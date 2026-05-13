@@ -478,6 +478,89 @@ assert_contains "backend=mlx" "$OUT" "MLX --dry-run trace surfaces backend"
 rm -rf "$tmp"
 
 echo
+echo "=== pick-model.sh: DELEGATE_BACKEND=auto (probe) ==="
+
+# Mock-curl helper. Writes a script that exits with the requested status
+# regardless of argv — used to simulate "MLX server reachable" (exit 0) and
+# "MLX server unreachable" (non-zero). The real pick-model code never reads
+# curl's stdout for the probe, only its exit status, so the mock only needs
+# to set $?.
+make_mock_curl() {
+  local dir="$1" exit_code="$2"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+exit ${exit_code}
+EOF
+  chmod +x "$dir/curl"
+}
+
+# auto + reachable MLX -> resolves to mlx and uses the hub-cache resolver.
+tmp=$(mktemp -d)
+make_mock_curl "$tmp" 0
+make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit"
+EC=0
+OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BACKEND=auto HF_HOME="$tmp" \
+  bash "$PICK" --dry-run prose 2>&1) || EC=$?
+assert_eq "0" "$EC" "auto + curl-ok: exit 0"
+assert_contains "backend=auto -> probed MLX_HOST and resolved to 'mlx'" "$OUT" "auto + curl-ok: trace shows mlx resolution"
+assert_contains "mlx-community/Qwen3.6-35B-A3B-Instruct-4bit" "$OUT" "auto + curl-ok: uses MLX hub cache"
+rm -rf "$tmp"
+
+# auto + unreachable MLX -> resolves to ollama and uses ollama list.
+tmp=$(mktemp -d)
+make_mock_curl "$tmp" 7  # curl: 7 = couldn't connect
+make_mock_ollama "$tmp" "NAME                  ID  SIZE   MODIFIED
+qwen3.6:35b-a3b-q8_0  aa  30 GB  1 day ago"
+EC=0
+OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BACKEND=auto \
+  bash "$PICK" --dry-run prose 2>&1) || EC=$?
+assert_eq "0" "$EC" "auto + curl-fail: exit 0"
+assert_contains "backend=auto -> probed MLX_HOST and resolved to 'ollama'" "$OUT" "auto + curl-fail: trace shows ollama resolution"
+assert_contains "qwen3.6:35b-a3b-q8_0" "$OUT" "auto + curl-fail: uses ollama list"
+rm -rf "$tmp"
+
+# Default (env var unset) is now auto, not ollama — the trace surfaces the probe.
+tmp=$(mktemp -d)
+make_mock_curl "$tmp" 7
+make_mock_ollama "$tmp" "NAME                  ID  SIZE   MODIFIED
+qwen3.6:35b-a3b-q8_0  aa  30 GB  1 day ago"
+EC=0
+# Note: env -i clears DELEGATE_BACKEND, so this exercises the new auto default.
+OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  bash "$PICK" --dry-run prose 2>&1) || EC=$?
+assert_eq "0" "$EC" "default (unset) backend: exit 0"
+assert_contains "backend=auto -> probed MLX_HOST" "$OUT" "default backend triggers the auto probe"
+rm -rf "$tmp"
+
+# Explicit DELEGATE_BACKEND=ollama still skips the probe entirely — the
+# probe trace line must NOT appear when the user pinned the backend.
+tmp=$(mktemp -d)
+# Deliberately no mock curl — if the probe ran, this test would fail anyway
+# because curl wouldn't be on PATH. Explicit ollama must not invoke it.
+make_mock_ollama "$tmp" "NAME                  ID  SIZE   MODIFIED
+qwen3.6:35b-a3b-q8_0  aa  30 GB  1 day ago"
+EC=0
+OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BACKEND=ollama \
+  bash "$PICK" --dry-run prose 2>&1) || EC=$?
+assert_eq "0" "$EC" "explicit ollama: exit 0"
+case "$OUT" in
+  *"backend=auto"*) echo "  FAIL  explicit ollama should not show auto trace"; fail=$((fail+1));;
+  *) echo "  PASS  explicit ollama skips the auto probe"; pass=$((pass+1));;
+esac
+rm -rf "$tmp"
+
+# Updated error message: bogus value must mention auto in the valid set.
+tmp=$(mktemp -d)
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=bogus bash "$PICK" prose 2>&1) || EC=$?
+assert_eq "2" "$EC" "DELEGATE_BACKEND=bogus -> exit 2"
+assert_contains "valid: auto|ollama|mlx" "$OUT" "bogus error names auto in valid set"
+rm -rf "$tmp"
+
+echo
 echo "=== AAIF symlink ==="
 
 # AAIF compliance: .agents/skills/delegate-to-ollama must be a symlink to the

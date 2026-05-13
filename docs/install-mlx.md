@@ -1,6 +1,8 @@
 # Install — MLX backend (Apple Silicon)
 
-The skill routes through Ollama by default. On Apple Silicon, `mlx-lm` is an alternative inference runtime that uses Apple's native Metal kernels and unified-memory-aware KV cache. For the same Q8 model, MLX is typically 10–30 % lighter on memory and faster on prefill than Ollama's llama.cpp backend. This guide covers the install steps plus the lifecycle differences vs Ollama.
+The skill defaults to `DELEGATE_BACKEND=auto` (since 2026-05-13): on every invocation it probes `${MLX_HOST:-http://localhost:8080}/v1/models` with a 1-second timeout, picks MLX if reachable, and falls back to Ollama otherwise. Non-Apple-Silicon hosts and Apple Silicon hosts without `mlx_lm.server` running both fall through to Ollama transparently — the auto default is strictly an opt-in upgrade, not a behaviour change. To force one backend regardless of probe state, set `DELEGATE_BACKEND=ollama` or `DELEGATE_BACKEND=mlx` explicitly.
+
+On Apple Silicon, `mlx-lm` is an alternative inference runtime that uses Apple's native Metal kernels and unified-memory-aware KV cache. For the same Q8 model, MLX is typically 10–30% lighter on memory and faster on prefill than Ollama's llama.cpp backend (measured: 2× faster wall-clock, 25% lighter peak memory on `Qwen3.6-35B-A3B-8bit` — see `experiments/results/2026-05-12-mlx-vs-ollama-v2.md`). This guide covers the install steps plus the lifecycle differences vs Ollama.
 
 ## Requirements
 
@@ -46,6 +48,15 @@ If you want a specific model pinned at startup pass `--model mlx-community/Qwen3
 
 ## Route a delegation through MLX
 
+With the auto default in place, simply starting `mlx_lm.server` is enough — the next `delegate.sh` call will probe the server, find it reachable, and route through MLX without any env-var changes:
+
+```bash
+mlx_lm.server --port 8080 --model mlx-community/Qwen3.6-35B-A3B-Instruct-8bit &
+bash scripts/delegate.sh prose "Summarise this paragraph in two sentences." </path/to/some.txt
+```
+
+To force MLX even if the probe would have picked Ollama (e.g. for testing), pass `DELEGATE_BACKEND=mlx` explicitly:
+
 ```bash
 DELEGATE_BACKEND=mlx bash scripts/delegate.sh prose "Summarise this paragraph in two sentences." </path/to/some.txt
 ```
@@ -70,6 +81,16 @@ DELEGATE_BACKEND=mlx bash scripts/pick-model.sh --dry-run prose
 
 The trace shows the backend, the prefs list, the scanned hub directory, and which model matched. If "no preference matched any installed model" comes back, the model name doesn't contain any of the prefs substrings (case-insensitive) — check `huggingface-cli` finished the download and the snapshot directory has weight files.
 
+## Stop the server (reclaim memory)
+
+`mlx_lm.server` keeps the model weights resident in unified memory between requests — that is what makes the second-request latency a fraction of the first. For a 35B 8-bit model that's ~36 GB held resident. For occasional users with other memory-hungry apps running, kill the server between sessions:
+
+```bash
+pkill -f "mlx_lm.server"
+```
+
+The auto default will then probe, find nothing reachable, and route the next `delegate.sh` call through Ollama transparently. No env-var changes needed.
+
 ## Uninstall
 
 ```bash
@@ -77,4 +98,4 @@ pipx uninstall mlx-lm
 rm -rf ~/.cache/huggingface/hub/models--mlx-community--*
 ```
 
-The skill keeps working — `DELEGATE_BACKEND` defaults back to `ollama` and the existing Ollama path is untouched.
+The skill keeps working — auto-probing finds no MLX server, falls back to Ollama, and the existing Ollama path is untouched.

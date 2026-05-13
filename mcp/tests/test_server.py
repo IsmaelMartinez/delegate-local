@@ -39,11 +39,13 @@ def test_scripts_dir_respects_env_override(monkeypatch, tmp_path):
 def test_pick_model_happy_path(monkeypatch):
     captured = {}
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, env=None):
         captured["cmd"] = cmd
+        captured["env"] = env
         return _completed(stdout="qwen3.6:35b-a3b-q8_0\n", stderr="", returncode=0)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(server, "_probe_mlx_reachable", lambda: "ollama")
     monkeypatch.delenv("DELEGATE_BACKEND", raising=False)
     out = server.pick_model("prose")
     assert out == {
@@ -56,10 +58,13 @@ def test_pick_model_happy_path(monkeypatch):
     assert captured["cmd"][0] == "bash"
     assert captured["cmd"][-1] == "prose"
     assert "--dry-run" not in captured["cmd"]
+    # Explicit DELEGATE_BACKEND=ollama is passed to the bash side so it
+    # skips its own probe (the python probe already resolved auto).
+    assert captured["env"]["DELEGATE_BACKEND"] == "ollama"
 
 
 def test_pick_model_dry_run_captures_trace(monkeypatch):
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, env=None):
         assert "--dry-run" in cmd
         return _completed(
             stdout="qwen3.6:35b-a3b-q8_0\n",
@@ -68,6 +73,7 @@ def test_pick_model_dry_run_captures_trace(monkeypatch):
         )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(server, "_probe_mlx_reachable", lambda: "ollama")
     out = server.pick_model("prose", dry_run=True)
     assert out["model"] == "qwen3.6:35b-a3b-q8_0"
     assert out["url"] == "https://ollama.com/library/qwen3.6"
@@ -76,19 +82,21 @@ def test_pick_model_dry_run_captures_trace(monkeypatch):
 
 
 def test_pick_model_unknown_tier_raises(monkeypatch):
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, env=None):
         return _completed(stdout="", stderr="unknown tier: bogus", returncode=2)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(server, "_probe_mlx_reachable", lambda: "ollama")
     with pytest.raises(RuntimeError, match="pick-model.sh exited 2"):
         server.pick_model("bogus")
 
 
 def test_pick_model_no_match_raises(monkeypatch):
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, env=None):
         return _completed(stdout="", stderr="no models installed", returncode=1)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(server, "_probe_mlx_reachable", lambda: "ollama")
     with pytest.raises(RuntimeError, match="exited 1"):
         server.pick_model("prose")
 
@@ -145,13 +153,11 @@ def test_pick_model_backend_param_wins_over_env(monkeypatch):
 
 def test_pick_model_no_backend_arg_inherits_env(monkeypatch):
     """When backend is omitted but DELEGATE_BACKEND is set in the parent env,
-    the resolved backend reflects the env. The subprocess inherits the env
-    via subprocess.run's default (no env= kwarg passed)."""
+    the MCP resolves to that explicit value and forwards it to bash."""
     captured = {}
 
-    def fake_run(cmd, capture_output, text, timeout):
-        # No env kwarg — _run does not pass it when env_overlay is None.
-        captured["cmd"] = cmd
+    def fake_run(cmd, capture_output, text, timeout, env=None):
+        captured["env"] = env
         return _completed(
             stdout="mlx-community/Qwen3.6-35B-A3B-Instruct-4bit\n",
             stderr="",
@@ -163,6 +169,7 @@ def test_pick_model_no_backend_arg_inherits_env(monkeypatch):
     out = server.pick_model("prose")
     assert out["backend"] == "mlx"
     assert out["url"].startswith("https://huggingface.co/")
+    assert captured["env"]["DELEGATE_BACKEND"] == "mlx"
 
 
 def test_pick_model_invalid_backend_raises(monkeypatch):
@@ -173,6 +180,160 @@ def test_pick_model_invalid_backend_raises(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="unknown backend 'bogus'"):
         server.pick_model("prose", backend="bogus")
+
+
+def test_pick_model_auto_probe_resolves_to_mlx(monkeypatch):
+    """backend='auto' triggers the MCP-side probe. When the probe reports
+    mlx, the MCP forwards DELEGATE_BACKEND=mlx (not auto) to the bash
+    subprocess so the bash side skips its own probe."""
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, timeout, env=None):
+        captured["env"] = env
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0,
+            stdout="mlx-community/Qwen3.6-35B-A3B-Instruct-8bit\n", stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(server, "_probe_mlx_reachable", lambda: "mlx")
+    monkeypatch.delenv("DELEGATE_BACKEND", raising=False)
+    out = server.pick_model("prose", backend="auto")
+    assert out["backend"] == "mlx"
+    assert out["url"] == "https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-Instruct-8bit"
+    assert captured["env"]["DELEGATE_BACKEND"] == "mlx"
+
+
+def test_pick_model_auto_probe_falls_back_to_ollama(monkeypatch):
+    """backend='auto' + probe-fails -> ollama. The MCP forwards the resolved
+    DELEGATE_BACKEND=ollama to bash."""
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, timeout, env=None):
+        captured["env"] = env
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0,
+            stdout="qwen3.6:35b-a3b-q8_0\n", stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(server, "_probe_mlx_reachable", lambda: "ollama")
+    monkeypatch.delenv("DELEGATE_BACKEND", raising=False)
+    out = server.pick_model("prose", backend="auto")
+    assert out["backend"] == "ollama"
+    assert out["url"] == "https://ollama.com/library/qwen3.6"
+    assert captured["env"]["DELEGATE_BACKEND"] == "ollama"
+
+
+def test_pick_model_default_backend_probes_then_resolves(monkeypatch):
+    """When backend is omitted AND DELEGATE_BACKEND is unset, the MCP
+    treats it as auto, probes, and forwards the resolved value to bash."""
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, timeout, env=None):
+        captured["env"] = env
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0,
+            stdout="qwen3.6:35b-a3b-q8_0\n", stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(server, "_probe_mlx_reachable", lambda: "ollama")
+    monkeypatch.delenv("DELEGATE_BACKEND", raising=False)
+    out = server.pick_model("prose")
+    assert out["backend"] == "ollama"
+    assert captured["env"]["DELEGATE_BACKEND"] == "ollama"
+
+
+def test_pick_model_auto_with_namespaced_ollama_model_reports_ollama(monkeypatch):
+    """Regression for PR #116 review: an Ollama model with a slash in the
+    name (`user/foo:tag` — legal in Ollama) must NOT be misclassified as
+    MLX. The probe is authoritative; the model name does not feed into the
+    backend label."""
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, timeout, env=None):
+        captured["env"] = env
+        # Namespaced Ollama model — slash in the name but backend is ollama.
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0,
+            stdout="someuser/custom-model:latest\n", stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(server, "_probe_mlx_reachable", lambda: "ollama")
+    monkeypatch.delenv("DELEGATE_BACKEND", raising=False)
+    out = server.pick_model("prose", backend="auto")
+    assert out["backend"] == "ollama"
+    # The URL helper for ollama backend respects the user namespace.
+    assert out["url"] == "https://ollama.com/someuser/custom-model"
+    assert captured["env"]["DELEGATE_BACKEND"] == "ollama"
+
+
+def test_probe_mlx_reachable_returns_mlx_on_2xx(monkeypatch):
+    """_probe_mlx_reachable returns "mlx" when the server responds 2xx."""
+
+    class _FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(url, timeout):
+        assert "/v1/models" in url
+        return _FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.delenv("MLX_HOST", raising=False)
+    monkeypatch.delenv("DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT", raising=False)
+    assert server._probe_mlx_reachable() == "mlx"
+
+
+def test_probe_mlx_reachable_returns_ollama_on_connection_error(monkeypatch):
+    """_probe_mlx_reachable returns "ollama" when the server is unreachable."""
+    import urllib.error
+
+    def fake_urlopen(url, timeout):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    assert server._probe_mlx_reachable() == "ollama"
+
+
+def test_probe_mlx_reachable_returns_ollama_on_timeout(monkeypatch):
+    """A TimeoutError from the urlopen call collapses to ollama."""
+
+    def fake_urlopen(url, timeout):
+        raise TimeoutError("probe timed out")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    assert server._probe_mlx_reachable() == "ollama"
+
+
+def test_probe_mlx_reachable_honours_timeout_env(monkeypatch):
+    """DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT (float seconds) flows into the urlopen call."""
+    captured = {}
+
+    class _FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(url, timeout):
+        captured["timeout"] = timeout
+        return _FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setenv("DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT", "2.5")
+    assert server._probe_mlx_reachable() == "mlx"
+    assert captured["timeout"] == 2.5
 
 
 def test_pick_model_url_mlx_for_mlx_backend(monkeypatch):
@@ -250,10 +411,11 @@ def test_list_tiers_missing_marker_raises(monkeypatch, tmp_path):
 
 
 def test_pick_model_timeout_raises(monkeypatch):
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, env=None):
         raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(server, "_probe_mlx_reachable", lambda: "ollama")
     with pytest.raises(RuntimeError, match=r"pick-model\.sh timed out after \d+s"):
         server.pick_model("prose")
 
