@@ -175,6 +175,66 @@ def test_pick_model_invalid_backend_raises(monkeypatch):
         server.pick_model("prose", backend="bogus")
 
 
+def test_pick_model_auto_infers_backend_from_model_name(monkeypatch):
+    """backend='auto' lets pick-model.sh probe and resolve; the MCP layer
+    infers the resolved backend from the returned model name's shape so
+    callers see the actual backend, not the literal "auto"."""
+    captured = {}
+
+    def fake_run_mlx_resolution(cmd, capture_output, text, timeout, env=None):
+        captured["env"] = env
+        # Model name contains a slash → MLX HuggingFace stem.
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0,
+            stdout="mlx-community/Qwen3.6-35B-A3B-Instruct-8bit\n", stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run_mlx_resolution)
+    monkeypatch.delenv("DELEGATE_BACKEND", raising=False)
+    out = server.pick_model("prose", backend="auto")
+    assert out["backend"] == "mlx"
+    assert out["url"] == "https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-Instruct-8bit"
+    # The "auto" literal must have been forwarded into the subprocess env so
+    # pick-model.sh runs its own probe path.
+    assert captured["env"]["DELEGATE_BACKEND"] == "auto"
+
+
+def test_pick_model_auto_falls_back_to_ollama_when_resolved_to_ollama_tag(monkeypatch):
+    """Same auto path but the bash probe resolved to ollama (returned an
+    Ollama-style tag with no slash). The MCP layer must report backend=ollama."""
+
+    def fake_run(cmd, capture_output, text, timeout, env=None):
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0,
+            stdout="qwen3.6:35b-a3b-q8_0\n", stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.delenv("DELEGATE_BACKEND", raising=False)
+    out = server.pick_model("prose", backend="auto")
+    assert out["backend"] == "ollama"
+    assert out["url"] == "https://ollama.com/library/qwen3.6"
+
+
+def test_pick_model_default_backend_is_auto_now(monkeypatch):
+    """When backend is omitted AND DELEGATE_BACKEND is unset, the bash
+    default kicks in (auto). The MCP infers the resolved backend from the
+    model name; we exercise the ollama-tag case here (no slash)."""
+
+    def fake_run(cmd, capture_output, text, timeout, env=None):
+        # No DELEGATE_BACKEND overlay because backend arg is None.
+        assert env is None
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0,
+            stdout="qwen3.6:35b-a3b-q8_0\n", stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.delenv("DELEGATE_BACKEND", raising=False)
+    out = server.pick_model("prose")
+    assert out["backend"] == "ollama"
+
+
 def test_pick_model_url_mlx_for_mlx_backend(monkeypatch):
     """Regression: the URL must point at HuggingFace, not the Ollama library,
     when backend=mlx. The earlier _model_url implementation only knew about

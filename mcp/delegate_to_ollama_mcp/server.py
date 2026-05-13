@@ -144,16 +144,19 @@ def pick_model(
 
     Returns {"model": str, "tier": str, "backend": str, "url": str, "trace": str}.
     `backend` is the resolved backend name ("ollama" or "mlx"); it reflects
-    the caller-supplied `backend` argument if set, otherwise the
-    DELEGATE_BACKEND env var, otherwise the script's default ("ollama").
+    the caller-supplied `backend` argument if set to "ollama"|"mlx",
+    otherwise the DELEGATE_BACKEND env var (if "ollama"|"mlx"), otherwise
+    the actually-resolved backend inferred from the returned model's name
+    shape (HuggingFace `org/name` stem → "mlx", Ollama tag → "ollama").
     `url` is the resolved model's Ollama library page (or user-namespace
     page if the model name is namespaced) for ollama-backend results, and
     the HuggingFace model page for mlx-backend results. `trace` is empty
     unless dry_run=True, in which case it contains the resolution trace
     that pick-model.sh writes to stderr.
 
-    Pass `backend="mlx"` to query the MLX hub cache instead of `ollama
-    list` for this single call. `backend="ollama"` is the default. The
+    Pass `backend="mlx"` to force MLX, `backend="ollama"` to force Ollama,
+    or `backend="auto"` (the new default since 2026-05-13) to probe
+    `$MLX_HOST/v1/models` and pick MLX if reachable, else Ollama. The
     parameter wins over any DELEGATE_BACKEND env var set when the MCP
     server was launched, so an MCP client can mix backends inside one
     session.
@@ -163,9 +166,9 @@ def pick_model(
     for mlx backend), no installed model matches the tier's preferences,
     the backend value is invalid, or the script exceeds PICK_MODEL_TIMEOUT_S.
     """
-    if backend is not None and backend not in ("ollama", "mlx"):
+    if backend is not None and backend not in ("auto", "ollama", "mlx"):
         raise RuntimeError(
-            f"unknown backend '{backend}' (valid: ollama, mlx)"
+            f"unknown backend '{backend}' (valid: auto, ollama, mlx)"
         )
     script = scripts_dir() / "pick-model.sh"
     cmd = ["bash", str(script)]
@@ -179,7 +182,20 @@ def pick_model(
             f"pick-model.sh exited {result.returncode}: {result.stderr.strip()}"
         )
     model = result.stdout.strip()
-    resolved_backend = backend or os.environ.get("DELEGATE_BACKEND") or "ollama"
+    # Resolve the backend label that callers see. Explicit ollama|mlx wins.
+    # Anything else (auto, unset, or the legacy default) is inferred from
+    # the model name's shape — HuggingFace stems ("mlx-community/Foo-8bit")
+    # always contain a slash before any tag; Ollama tags ("qwen3.6:35b") do
+    # not. This matches the bash script's own routing decision without
+    # parsing the trace.
+    if backend in ("ollama", "mlx"):
+        resolved_backend = backend
+    else:
+        env_backend = os.environ.get("DELEGATE_BACKEND")
+        if env_backend in ("ollama", "mlx"):
+            resolved_backend = env_backend
+        else:
+            resolved_backend = "mlx" if "/" in model else "ollama"
     return {
         "model": model,
         "tier": tier,

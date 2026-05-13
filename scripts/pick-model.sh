@@ -13,8 +13,15 @@
 # `ls ~/.cache/huggingface/hub` for MLX) to see what you have. Prefer the
 # smallest model sufficient — bigger is not better.
 #
-# Backend selection (env var DELEGATE_BACKEND, default "ollama"):
-#   ollama  — query `ollama list` for installed models. Default.
+# Backend selection (env var DELEGATE_BACKEND, default "auto"):
+#   auto    — probe ${MLX_HOST:-http://localhost:8080}/v1/models with a 1 s
+#             timeout; if reachable, route through MLX, otherwise Ollama.
+#             Default. Non-Apple-Silicon hosts and Apple Silicon hosts
+#             without `mlx_lm.server` running both fall through to ollama
+#             transparently — same behaviour as before the auto default
+#             landed. Override the probe timeout via
+#             DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT.
+#   ollama  — query `ollama list` for installed models. Skips the probe.
 #   mlx     — scan the HuggingFace hub cache (~/.cache/huggingface/hub or
 #             $HF_HOME/hub) for MLX-converted models. Apple Silicon only;
 #             needs `mlx-lm` installed for delegate.sh to actually call them.
@@ -66,10 +73,29 @@ case "$tier" in
   *) echo "unknown tier: $tier (valid: $TIERS)" >&2; exit 2 ;;
 esac
 
-backend="${DELEGATE_BACKEND:-ollama}"
-case "$backend" in
-  ollama|mlx) ;;
-  *) echo "unknown backend: $backend (valid: ollama|mlx)" >&2; exit 2 ;;
+# Resolve auto backend by probing the MLX server. The probe is cheap
+# (sub-second timeout, single HEAD-equivalent GET) and runs once per
+# invocation. Explicit ollama|mlx skip the probe.
+auto_resolve_backend() {
+  local mlx_host="${MLX_HOST:-http://localhost:8080}"
+  local timeout="${DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT:-1}"
+  if curl -sS --max-time "$timeout" --fail "$mlx_host/v1/models" >/dev/null 2>&1; then
+    echo "mlx"
+  else
+    echo "ollama"
+  fi
+}
+
+backend_requested="${DELEGATE_BACKEND:-auto}"
+case "$backend_requested" in
+  auto)
+    backend=$(auto_resolve_backend)
+    trace "backend=auto -> probed MLX_HOST and resolved to '$backend'"
+    ;;
+  ollama|mlx)
+    backend="$backend_requested"
+    ;;
+  *) echo "unknown backend: $backend_requested (valid: auto|ollama|mlx)" >&2; exit 2 ;;
 esac
 
 trace "tier=$tier"
