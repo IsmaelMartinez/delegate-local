@@ -2,7 +2,7 @@
 # Run the 6 fixture tasks against a single local-LLM backend and emit timing
 # + output.
 #
-# Usage: runner.sh [--backend ollama|mlx] [--ollama-api] [--reps N] [--t3-snapshot YYYY-MM-DD] [--t4-snapshot YYYY-MM-DD] [--t5-snapshot YYYY-MM-DD] [--t6-snapshot YYYY-MM-DD] <model-name>
+# Usage: runner.sh [--backend ollama|mlx] [--ollama-cli] [--reps N] [--t3-snapshot YYYY-MM-DD] [--t4-snapshot YYYY-MM-DD] [--t5-snapshot YYYY-MM-DD] [--t6-snapshot YYYY-MM-DD] <model-name>
 #
 # --backend ollama|mlx (default ollama) selects which local HTTP backend to
 #                     post to. ollama -> POST /api/generate with think:false
@@ -16,14 +16,17 @@
 #                     instruction-tuned models follow the chat template (the
 #                     raw /v1/completions endpoint bypasses it and emits
 #                     whitespace).
-# --ollama-api        (default off) opts Ollama T1–T3 into the API path with
-#                     think:false instead of `ollama run` CLI with reasoning
-#                     on. The CLI path is kept as the default to preserve
-#                     comparability with the 2026-04-28 and 2026-05-01
-#                     baselines; --ollama-api gives an apples-to-apples
-#                     cross-backend comparison against --backend mlx (same
-#                     request shape, same reasoning-suppression knob on
-#                     both sides). No-op when --backend mlx.
+# --ollama-cli        (default off) opts Ollama T1–T3 back into the legacy
+#                     `ollama run` CLI path with reasoning on. Default since
+#                     2026-05-13 is the HTTP API path with think:false (what
+#                     used to require --ollama-api). The CLI path remains
+#                     available for reproducing the 2026-04-28 / 2026-05-01
+#                     baselines that pre-date the apples-to-apples regime
+#                     introduced in PR #114. No-op when --backend mlx.
+# --ollama-api        deprecated no-op alias kept so scripted invocations
+#                     from PRs #114 / #115 keep working. The API path is now
+#                     the default; pass --ollama-cli to opt into the legacy
+#                     CLI path.
 # --reps N            (default 1) repeats every task N times in the same file,
 #                     each block prefixed with `===== <task_id> rep <i> =====`.
 #                     Lets a downstream scorer compute mean ± stdev per cell.
@@ -52,7 +55,7 @@ set -euo pipefail
 
 reps=1
 backend="ollama"
-ollama_api=0
+ollama_api=1
 t3_snapshot="2026-04-28"
 t4_snapshot="2026-05-11"
 t5_snapshot="2026-05-11"
@@ -69,7 +72,13 @@ while [[ "${1:-}" == --* ]]; do
       shift 2
       ;;
     --ollama-api)
+      # Deprecated no-op: the API path is now the default. Kept so older
+      # scripted invocations (PRs #114 / #115) continue to parse cleanly.
       ollama_api=1
+      shift
+      ;;
+    --ollama-cli)
+      ollama_api=0
       shift
       ;;
     --reps)
@@ -103,7 +112,7 @@ done
 
 model="${1:-}"
 if [[ -z "$model" ]]; then
-  echo "usage: runner.sh [--backend ollama|mlx] [--ollama-api] [--reps N] [--t3-snapshot DATE] <model-name>" >&2
+  echo "usage: runner.sh [--backend ollama|mlx] [--ollama-cli] [--reps N] [--t3-snapshot DATE] <model-name>" >&2
   exit 2
 fi
 
@@ -209,15 +218,13 @@ run_task_api() {
 }
 
 run_task() {
-  # T1–T3 historically used the `ollama run` CLI path for backwards-
-  # compatibility with the 2026-04-28 baseline. The MLX backend has no CLI
-  # equivalent, so when backend=mlx we route through run_task_api instead;
-  # the prompt arg becomes the trailing directive concatenated to the
-  # fixture body, matching the chat-completions semantics. The --ollama-api
-  # flag opts Ollama into the same API + think:false regime so a cross-
-  # backend comparison is apples-to-apples (the CLI path leaks reasoning
-  # tokens and inflates T1–T3 latency by ~30×; see ROADMAP MLX track for
-  # the 2026-05-12 baseline notes).
+  # T1–T3 default to the HTTP API path with think:false since 2026-05-13 — the
+  # apples-to-apples regime that PR #115 measured at ~8× faster than the legacy
+  # CLI path. --ollama-cli opts back into the `ollama run` CLI path with
+  # reasoning on for reproducing the 2026-04-28 / 2026-05-01 baselines. The
+  # MLX backend has no CLI equivalent, so backend=mlx always routes through
+  # run_task_api; the prompt arg becomes the trailing directive concatenated
+  # to the fixture body, matching the chat-completions semantics.
   if [[ "$backend" == "mlx" ]] || (( ollama_api )); then
     run_task_api "$@"
     return
