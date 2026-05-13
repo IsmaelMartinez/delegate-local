@@ -7,7 +7,7 @@ Two regime changes vs v1:
 1. Ollama T1–T3 now route through `/api/generate` with `think:false` — same regime as MLX, and same regime that `scripts/delegate.sh` uses in real production. The v1 CLI-with-reasoning-on path is no longer the comparison surface.
 2. The MLX run was taken with `Ollama.app` fully quit so MLX had unified memory and the host's idle daemon footprint to itself.
 
-The v1 headline of "MLX is 15× faster" was almost entirely a regime artefact — the CLI path streamed every reasoning token through stdout. With both backends on the same API and the same `think:false`/`enable_thinking:false`, **MLX is 2× faster** on the wall-clock total and **25 % lighter** on peak memory.
+The v1 headline of "MLX is 15× faster" was almost entirely a regime artefact — the CLI path streamed every reasoning token through stdout. With both backends on the same API and the same `think:false`/`enable_thinking:false`, **MLX is 2× faster** on the wall-clock total and **25% lighter** on peak memory.
 
 ## Setup
 
@@ -84,7 +84,7 @@ These are the load-bearing things this v2 run actually shows, in priority order:
 The case for switching `DELEGATE_BACKEND` default from `ollama` to `mlx` on Apple Silicon is now empirical, not theoretical:
 
 - 2× faster on the same workload (`scripts/delegate.sh` production routing).
-- 25 % less peak memory for the same weights.
+- 25% less peak memory for the same weights.
 - The chat-template wire-fix (PR #112) plus the dispatcher unification (PR #114) mean the failure modes that justified Ollama as default are gone.
 
 Concrete proposal: gate the default switch on a single condition — `mlx_lm.server` reachable on `MLX_HOST` AND at least one tier resolves via the HF hub cache. Add a `DELEGATE_BACKEND=auto` mode to `pick-model.sh` that picks MLX if reachable, else Ollama. The fallback is automatic and the user opt-out is one env var.
