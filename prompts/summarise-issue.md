@@ -23,7 +23,7 @@ gh run view <run-id> --log | head -500                   # full log, capped
 glab mr view <mr-iid> --comments --output json
 ```
 
-Pick the smallest input that captures what you want summarised. The 35B prose-tier model's practical ceiling is ~5 KB combined input on the reference host (see `pr-description.md` calibration notes for the empirical limit); the `reasoning` tier handles larger inputs because the output is shorter and more structured.
+Pick the smallest input that captures what you want summarised. The 35B prose-tier model's practical ceiling on the reference host is sharper than the original ~5 KB framing suggests: issue #110's 2026-05-13 follow-up shows the same model class stalls on recipe-shaped prompts of ~3-4 KB on both Ollama and MLX, while a 0.6B-class model handles the same shape in seconds — the discriminator is model parameter count at recipe-sized prompts, not bytes (see `pr-description.md` calibration history for the full evidence). The `reasoning` tier handles larger inputs because the output is shorter and more structured.
 
 ## Prompt template
 

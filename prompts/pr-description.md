@@ -123,4 +123,15 @@ A separate session against repo-butler PR #210 reproduced the stall at `--limit 
 
 The "Context to gather first" section is updated to make the size framing explicit: check the chosen example PR's body size before delegating, and if the body alone is > 1 KB, expect a stall and write the PR description by hand from the start. The earlier "rare; most repos have a stable PR shape" caveat is dropped — the observed failure on a typical repo-butler PR body shows it isn't rare.
 
+### 2026-05-13 — issue #110: discriminator is model parameter count, not body bytes
+
+The 2026-05-11 framing above ("if the body alone is > 1 KB, expect a stall") was empirically refined by issue [#110](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/110). Two follow-up reports sharpened the conclusion:
+
+- 2026-05-12: full recipe with a **612-byte** PR body (well under the 1 KB heuristic) hung past 6 minutes on `qwen3.6:35b-a3b-q8_0` (Ollama prose tier). Body-size alone is not the discriminator.
+- 2026-05-13 (cooler load, MLX backend tested): full recipe (~3-4 KB total prompt) hung past 10 minutes on `mlx-community/Qwen3.6-35B-A3B-8bit` (MLX prose tier — same weights, different runtime). The same recipe-shaped prompt against `mlx-community/Qwen3-0.6B-4bit` (0.6B params) returned clean output in **1 second**. A 200-byte non-recipe canary against the MLX 35B returned in 5 seconds.
+
+The discriminator is **model parameter count at recipe-sized prompts**, not the backend and not the body-size threshold. Both backends hang the 35B-class prose-tier model on the recipe's combined input + structured output budget; a 0.6B-class model handles the same prompt shape in seconds with quality good enough for the "summarise this PR" task. The 1 KB body framing in the 2026-05-11 note is retracted as not the right axis.
+
+Active mitigation on hosts where the 35B is the prose-tier leader: write PR descriptions by hand for anything under ~6 paragraphs. The setup-vs-payoff ratio is unfavourable until either a `small` tier is scaffolded into `pick-model.sh` (preferring 0.6B-class models) or a pre-flight canary is added to `delegate.sh --recipe` to fail loud before the user invests in gathering inputs. Both are listed in issue #110 as deferred suggestions; neither has shipped.
+
 Provenance also lives in the `feedback_delegate_prose_prompt_anchoring.md` memory file.
