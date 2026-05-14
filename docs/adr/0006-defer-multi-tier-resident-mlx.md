@@ -28,7 +28,7 @@ This decision does not retire path (a) or path (b) permanently. It defers them u
 
 The skill avoids two implementation paths that the empirical measurement showed to be over-engineered for the actual cost they would remove. Path (a)'s two-process design would have introduced a new env-var surface (`MLX_HOST_PROSE`, `MLX_HOST_PREMIUM`, etc.), a documented lifecycle for managing multiple server processes, and an untested assumption that macOS unified memory pressure between two `mlx_lm.server` processes does not silently page one of them out — which would buy back the cliff in disguise. Path (b)'s upstream contribution would have been a multi-week project against a moving target and lived outside this repo regardless. Neither is justified by a 1.6 s amortised cross-tier wait.
 
-The ROADMAP "Follow-ups from the MLX track" section can drop P1 from the priority list once this ADR lands and the install-mlx.md note follows. P2 (Ollama-style restraint as a prompt pattern) and P3 (`scripts/mlx-stop.sh` helper) move up.
+The ROADMAP "Follow-ups from the MLX track" section can drop P1 from the priority list once this ADR lands and the install-mlx.md note follows. The two remaining items move up to P1 and P2 respectively; the ROADMAP itself is the live source for the current numbering.
 
 What would justify revisiting the decision: the evidence shapes listed under "Decision" above. The probe itself is reproducible — the `vm_stat`-plus-`curl`-plus-`time` shape used on 2026-05-14 lives in this PR's session transcript and can be re-run by anyone with the two referenced MLX models in their HF hub cache. The numbers are reference-hardware-specific (M5 Max, 128 GB) and would need re-measurement on different hardware before generalising.
 
