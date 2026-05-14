@@ -71,6 +71,14 @@ The default `max_tokens` for MLX delegations is 4096. Raise it for the `long-con
 DELEGATE_BACKEND=mlx DELEGATE_MAX_TOKENS=16384 bash scripts/delegate.sh long-context "..."
 ```
 
+## What happens on a cross-tier request
+
+`mlx_lm.server` holds one model resident at a time. The first request after install or restart pays a cold-load cost (~4 s for a 35B 8-bit model on the reference M5 Max, measured 2026-05-14). Same-model follow-up requests are warm (~0.2 s setup + completion time). A request that names a different model triggers an eviction-and-reload: the resident model is dropped, the new one is loaded from disk. KV cache does NOT survive a swap.
+
+The reload is partly amortised by the macOS file cache. On the reference hardware, the second time a model is reloaded after eviction it costs roughly 1.6 s, down from ~4 s on the first cold-load. After that the cost stays in the ~1.6 s window as long as the OS file cache is not under pressure from other workloads. In practice this means a mixed-tier session pays a one-time ~4 s wait the first time it crosses each tier boundary, and ~1.6 s on every subsequent crossing. Linux MLX builds may produce different numbers — the file-cache amortisation observed here is macOS-specific.
+
+If your workload mixes tiers in fast succession and the cumulative wait is noticeable, the rationale for not running a second `mlx_lm.server` instance per tier (which would eliminate the swap cost entirely at the cost of holding two models in unified memory simultaneously) is in [`docs/adr/0006-defer-multi-tier-resident-mlx.md`](adr/0006-defer-multi-tier-resident-mlx.md). The numbers above are the empirical reason the multi-resident design was deferred; if your numbers differ materially on different hardware, the ADR names the conditions under which to revisit.
+
 ## Verify
 
 After install, the dry-run trace confirms routing:
