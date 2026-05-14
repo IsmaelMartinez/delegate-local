@@ -1,0 +1,32 @@
+BACKEND: ollama
+MODEL: qwen3.6:35b-a3b-q8_0
+PROMPT_LABEL: restraint
+REPS: 3
+FIXTURE: task-3-merge-patterns-2026-04-28.txt
+===== T3-merge-patterns rep 1 =====
+DURATION_SEC: 3
+RUN_STATUS: 0
+OUTPUT:
+1. Quiz tie-breaking logic and podium rendering may be incomplete or untested if the new components lack integration tests | `tests/quiz-helpers.test.ts`
+2. Regional candidate display counts on the homepage may still mismatch the destination page if the fix in `index.astro` was not comprehensive | `src/pages/index.astro`
+3. IGV branding and listPosition data normalization may have missed outliers if not all affected YAML files were updated | `data/regional-candidates/*.yaml`
+4. Simplification phase 1 removed several data processing scripts, so data enrichment pipelines may be broken or missing | `scripts/enrich-candidates.ts`, `scripts/reconcile-candidates.ts`
+
+===== T3-merge-patterns rep 2 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+1. Quiz tie-breaking logic and podium rendering may be incomplete or untested if the new components lack integration tests | `tests/quiz-helpers.test.ts`
+2. Regional candidate display counts on the homepage may still mismatch the destination page if the fix in `index.astro` was not comprehensive | `src/pages/index.astro`
+3. IGV branding and listPosition data normalization may have missed outliers if not all affected YAML files were updated | `data/regional-candidates/*.yaml`
+4. Simplification phase 1 removed several data processing scripts, so data enrichment pipelines may be broken or missing | `scripts/enrich-candidates.ts`, `scripts/reconcile-candidates.ts`
+
+===== T3-merge-patterns rep 3 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+1. Quiz tie-breaking logic and podium rendering may be incomplete or untested if the new components lack integration tests | `tests/quiz-helpers.test.ts`
+2. Regional candidate display counts on the homepage may still mismatch the destination page if the fix in `index.astro` was not comprehensive | `src/pages/index.astro`
+3. IGV branding and listPosition data normalization may have missed outliers if not all affected YAML files were updated | `data/regional-candidates/*.yaml`
+4. Simplification phase 1 removed several data processing scripts, so data enrichment pipelines may be broken or missing | `scripts/enrich-candidates.ts`, `scripts/reconcile-candidates.ts`
+
