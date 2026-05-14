@@ -1,0 +1,23 @@
+BACKEND: ollama
+MODEL: qwen3.6:35b-a3b-q8_0
+PROMPT_LABEL: base
+REPS: 3
+FIXTURE: task-3-merge-patterns-2026-04-28.txt
+===== T3-merge-patterns rep 1 =====
+DURATION_SEC: 11
+RUN_STATUS: 0
+OUTPUT:
+NONE
+
+===== T3-merge-patterns rep 2 =====
+DURATION_SEC: 1
+RUN_STATUS: 0
+OUTPUT:
+NONE
+
+===== T3-merge-patterns rep 3 =====
+DURATION_SEC: 1
+RUN_STATUS: 0
+OUTPUT:
+NONE
+
