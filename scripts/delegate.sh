@@ -36,6 +36,15 @@
 #   DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT=<s> # override the auto probe timeout
 #                                           #   (default 1, integer seconds).
 #   DELEGATE_TO_OLLAMA_NO_METRICS=1         # opt out of metrics logging
+#   DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1   # silence the one-line stderr
+#                                           #   reminder printed after each
+#                                           #   successful call pointing at
+#                                           #   delegate-feedback.sh. Off-by-
+#                                           #   default; the nudge is the
+#                                           #   intervention that closes the
+#                                           #   untracked-verdict gap (see the
+#                                           #   2026-05-18 calibration finding
+#                                           #   in ROADMAP).
 #   DELEGATE_METRICS_FILE=<path>            # override metrics destination
 #   DELEGATE_PROMPTS_DIR=<path>             # override prompts/ directory
 #                                           #   (default: <script_dir>/../prompts)
@@ -346,6 +355,17 @@ end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 duration_ms=$((end_epoch_ms - start_epoch_ms))
 
 log_metric "$ts_start" "$tier" "$model" "$(( ${#recipe_template} + ${#prompt} ))" "${#context}" "${#output}" "$duration_ms" "$status" "$recipe"
+
+# Verdict nudge — without it the metrics file accumulates "untracked" rows
+# (delegate row with no matching feedback row) and the recipe library can't
+# self-correct from production data. Conditions: only after a successful call
+# (status==0), only when a metrics row was actually written (NO_METRICS off),
+# and silenceable via NO_VERDICT_NUDGE for callers who want clean stderr.
+if [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" != "1" ]] \
+   && [[ "${DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE:-}" != "1" ]] \
+   && (( status == 0 )); then
+  echo "delegate: record verdict → bash scripts/delegate-feedback.sh hit  (or 'miss \"<reason>\"')" >&2
+fi
 
 printf '%s\n' "$output"
 exit $status
