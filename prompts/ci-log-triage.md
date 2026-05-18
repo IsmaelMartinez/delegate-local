@@ -32,7 +32,7 @@ Do NOT pipe the full unfiltered `--log` — the recipe ingests a slice. The skil
 ```
 Triage this CI failure log. Output the five fields below in this exact order and format. Each field is one line except ROOT_CAUSE which may span 1-3 lines (verbatim from the log).
 
-FAILURE_TYPE: <one of: test | build | lint | timeout | network | install | permission | missing-file | dependency | config | other>
+FAILURE_TYPE: <one of: test | build | lint | timeout | network | install | permission | missing-file | config | other>
 JOB: <the failing job name from the log>
 STEP: <the failing step name within the job>
 ROOT_CAUSE: <1-3 verbatim lines from the log that pinpoint the failure; do not paraphrase>
