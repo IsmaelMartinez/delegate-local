@@ -958,9 +958,10 @@ payload=\$(cat)
 if echo "\$payload" | grep -qE '"num_predict":1|"max_tokens":1[,}]'; then
   echo "canary url=\$url" >> "${invocations_log}"
   case "${canary_behaviour}" in
-    timeout) exit 28 ;;
-    refused) exit 7 ;;
-    *)       printf '%s' '{"response":"ok"}'; exit 0 ;;
+    timeout)    exit 28 ;;
+    refused)    exit 7 ;;
+    http_error) exit 22 ;;
+    *)          printf '%s' '{"response":"ok"}'; exit 0 ;;
   esac
 fi
 echo "dispatch url=\$url" >> "${invocations_log}"
@@ -1050,6 +1051,11 @@ else
 fi
 stderr_content=$(cat "$stderr_file")
 assert_contains "pre-flight canary" "$stderr_content" "canary timeout: stderr names the canary"
+# Cause-specific message — gemini-code-assist flagged that the original
+# wording attributed every failure to a timeout regardless of curl exit.
+# Exit 28 must now read "did not return within Ns (curl --max-time fired)".
+assert_contains "did not return within 10s" "$stderr_content" "canary timeout: stderr names the timeout duration"
+assert_contains "curl --max-time fired" "$stderr_content" "canary timeout: stderr names the curl flag that fired"
 assert_contains "recipe='canary-recipe'" "$stderr_content" "canary timeout: stderr names recipe"
 assert_contains "model='qwen3.6:35b-a3b'" "$stderr_content" "canary timeout: stderr names resolved model"
 assert_contains "DELEGATE_PREFLIGHT_TIMEOUT" "$stderr_content" "canary timeout: stderr suggests timeout override"
@@ -1270,6 +1276,74 @@ assert_contains '"num_predict":1' "$canary_payload" "Ollama canary: payload carr
 assert_contains '"prompt":"hi"' "$canary_payload" "Ollama canary: minimal 'hi' prompt"
 assert_contains '"think":false' "$canary_payload" "Ollama canary: think:false (mirrors dispatch default)"
 rm -rf "$tmp" "$metrics"
+
+# 18i. Canary connection-refused (curl exit 7) → exit 3 + stderr message
+# names the right cause (backend daemon may be down) rather than the
+# generic timeout copy. Addresses gemini-code-assist's PR #129 review
+# concern that --fail conflates non-timeout failures with timeouts.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"; : > "$sniff"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "refused"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 3 "$EC" "canary refused: exit 3"
+canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
+dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
+assert_eq 1 "$canary_count" "canary refused: probe was called"
+assert_eq 0 "$dispatch_count" "canary refused: dispatch was NOT called"
+stderr_content=$(cat "$stderr_file")
+assert_contains "could not reach" "$stderr_content" "canary refused: stderr names connection-refused cause"
+assert_contains "connection refused" "$stderr_content" "canary refused: stderr names the connection failure"
+case "$stderr_content" in
+  *"did not return within"*)
+    echo "  FAIL  canary refused: must not use timeout copy"; fail=$((fail+1));;
+  *)
+    echo "  PASS  canary refused: timeout copy not used"; pass=$((pass+1));;
+esac
+assert_contains '"exit_status":3' "$(cat "$metrics")" "canary refused: metrics row tagged status:3"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 18j. Canary HTTP-error (curl --fail on 4xx, exit 22) → exit 3 + stderr
+# names the right cause (HTTP error, bad model name / invalid payload)
+# rather than the generic timeout copy. Same gemini-code-assist concern.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"; : > "$sniff"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "http_error"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 3 "$EC" "canary http_error: exit 3"
+canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
+dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
+assert_eq 1 "$canary_count" "canary http_error: probe was called"
+assert_eq 0 "$dispatch_count" "canary http_error: dispatch was NOT called"
+stderr_content=$(cat "$stderr_file")
+assert_contains "HTTP error" "$stderr_content" "canary http_error: stderr names HTTP-error cause"
+case "$stderr_content" in
+  *"did not return within"*)
+    echo "  FAIL  canary http_error: must not use timeout copy"; fail=$((fail+1));;
+  *)
+    echo "  PASS  canary http_error: timeout copy not used"; pass=$((pass+1));;
+esac
+assert_contains '"exit_status":3' "$(cat "$metrics")" "canary http_error: metrics row tagged status:3"
+rm -rf "$tmp" "$metrics" "$stderr_file"
 
 echo
 echo "$pass passed, $fail failed"
