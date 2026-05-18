@@ -79,6 +79,7 @@ The maintainer (or a future PR-bot) graduates a `prompt-pattern` issue by drafti
 - `file-summary.md` — one-sentence summary of a single document (ADR, analysis, design doc) for a link-index or digest.
 - `polish-reply.md` — tighten a multi-paragraph maintainer reply for concision while preserving the opener, closer, and every technical claim verbatim.
 - `em-dash-removal.md` — substitute every em-dash in prose with the most natural alternative (period, comma, semicolon, parens) without expanding contractions or collapsing parenthetical lists.
+- `ci-log-triage.md` — five-field structured triage of a CI / build failure log (FAILURE_TYPE / JOB / STEP / ROOT_CAUSE / NEXT_STEP) from a pre-filtered `gh run view --log-failed` slice. The prototypical input-digestion recipe — per-call token savings dominate output-bounded recipes by 10-100×.
 
 ## Related
 
