@@ -45,6 +45,21 @@
 #                                           #   untracked-verdict gap (see the
 #                                           #   2026-05-18 calibration finding
 #                                           #   in ROADMAP).
+#   DELEGATE_PREFLIGHT_TIMEOUT=<s>          # default 10. Only consulted when
+#                                           #   --recipe is set. A 1-token
+#                                           #   canary probe hits the resolved
+#                                           #   model with --max-time S; if
+#                                           #   the probe does not return,
+#                                           #   exit 3 with a stderr message
+#                                           #   listing recovery options
+#                                           #   (raise timeout, smaller model,
+#                                           #   hand-write) before the full
+#                                           #   recipe-shaped request is sent.
+#                                           #   Set 0 to disable the canary.
+#                                           #   Closes the recipe-stall gap
+#                                           #   in issue #110.
+#   DELEGATE_NO_PREFLIGHT=1                 # alternate disable for the canary
+#                                           #   (equivalent to TIMEOUT=0).
 #   DELEGATE_METRICS_FILE=<path>            # override metrics destination
 #   DELEGATE_PROMPTS_DIR=<path>             # override prompts/ directory
 #                                           #   (default: <script_dir>/../prompts)
@@ -272,6 +287,45 @@ if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
   log_metric "$ts_start" "$tier" "(none)" "$(( ${#recipe_template} + ${#prompt} ))" "${#context}" 0 $((end_epoch_ms - start_epoch_ms)) 1 "$recipe"
   echo "delegate: pick-model failed for tier '$tier'" >&2
   exit 1
+fi
+
+# Pre-flight canary — only fires when --recipe is set. Issue #110 documented
+# recipe stalls of 6–10 minutes when a 35B-class prose-tier model was hit
+# with a recipe-shaped prompt; a 1-token probe with a bounded timeout
+# catches that case before the caller's input investment is sunk. The probe
+# uses the same backend, model, and think setting as the real dispatch will
+# — if the model can't return one token to "hi" within the timeout, the
+# real recipe-shaped call definitely won't succeed either. Skipped on bare
+# (non-recipe) calls, where the caller hasn't gathered inputs and the
+# probe overhead doesn't pay off.
+preflight_timeout="${DELEGATE_PREFLIGHT_TIMEOUT:-10}"
+if [[ -n "$recipe" ]] \
+   && [[ "${DELEGATE_NO_PREFLIGHT:-}" != "1" ]] \
+   && [[ "$preflight_timeout" =~ ^[0-9]+$ ]] \
+   && (( preflight_timeout > 0 )); then
+  if [[ "$backend" == "ollama" ]]; then
+    canary_payload=$(jq -nc --arg m "$model" --argjson th "$think" \
+      '{model:$m, prompt:"hi", stream:false, think:$th, options:{num_predict:1, temperature:0}}')
+    canary_url="$ollama_host/api/generate"
+  else
+    canary_payload=$(jq -nc --arg m "$model" --argjson et "$think" \
+      '{model:$m, messages:[{role:"user", content:"hi"}], stream:false, temperature:0, max_tokens:1, chat_template_kwargs:{enable_thinking:$et}}')
+    canary_url="$mlx_host/v1/chat/completions"
+  fi
+  if ! curl -sS --fail --max-time "$preflight_timeout" -X POST "$canary_url" -d @- >/dev/null 2>&1 <<< "$canary_payload"; then
+    end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
+    log_metric "$ts_start" "$tier" "$model" "$(( ${#recipe_template} + ${#prompt} ))" "${#context}" 0 $((end_epoch_ms - start_epoch_ms)) 3 "$recipe"
+    {
+      echo "delegate: pre-flight canary did not return within ${preflight_timeout}s"
+      echo "         recipe='$recipe' tier='$tier' model='$model' backend='$backend'"
+      echo "         The resolved model may be stuck, warming up, or unreachable. Options:"
+      echo "         - retry with DELEGATE_PREFLIGHT_TIMEOUT=30 if cold-load is suspected"
+      echo "         - re-route to a smaller-parameter model on this host"
+      echo "         - hand-write the output (recommended for 35B-class prose tiers on recipe-shaped prompts — see prompts/$recipe.md)"
+      echo "         - silence the probe with DELEGATE_NO_PREFLIGHT=1 (sends the full request and inherits the stall)"
+    } >&2
+    exit 3
+  fi
 fi
 
 # Compose the input. The recipe template (if any) carries its own
