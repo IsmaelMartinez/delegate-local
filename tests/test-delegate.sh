@@ -824,6 +824,104 @@ decoded_model=$(echo "$line" | jq -r '.model')
 assert_eq 'qwen3.6:35b"weird-name' "$decoded_model" "jq-metrics: model field decodes to original string"
 rm -rf "$tmp" "$metrics"
 
+# 14. Verdict nudge prints to stderr on a successful call. The nudge is the
+# 2026-05-18 intervention against the untracked-verdict gap (65% of prose
+# delegations carried no feedback row at that point). Captures stderr
+# separately from stdout so the assertion is unambiguous.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "verdict-nudge: happy path exits 0"
+stderr_content=$(cat "$stderr_file")
+assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge: prints to stderr on success"
+assert_contains "delegate-feedback.sh hit" "$stderr_content" "verdict-nudge: names hit"
+assert_contains "miss" "$stderr_content" "verdict-nudge: names miss"
+# Nudge stays on stderr — stdout should hold only the model output, so
+# downstream pipes (e.g. `delegate.sh prose "..." | jq ...`) keep working.
+if echo "$out" | grep -q "record verdict"; then
+  echo "  FAIL  verdict-nudge: leaked into stdout"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge: stdout unaffected"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 15. DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1 silences the nudge but keeps
+# the rest of the behaviour intact (metrics row still written, model
+# output still on stdout). For users who genuinely don't want the noise.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "verdict-nudge opt-out: still exits 0"
+stderr_content=$(cat "$stderr_file")
+if echo "$stderr_content" | grep -q "record verdict"; then
+  echo "  FAIL  verdict-nudge opt-out: nudge still printed"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge opt-out: silenced"; pass=$((pass+1))
+fi
+# Metrics row still written under opt-out (the opt-out targets nudge only,
+# not metrics — that's NO_METRICS).
+assert_eq 1 "$(grep -c '^' "$metrics")" "verdict-nudge opt-out: metrics row still written"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 16. NO_METRICS=1 also silences the nudge, because there's no metrics row
+# to point a verdict at. Without this guard the nudge would tell users to
+# record a verdict that delegate-feedback.sh would then reject as orphan.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); rm -f "$metrics"
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_NO_METRICS=1 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "verdict-nudge NO_METRICS: still exits 0"
+stderr_content=$(cat "$stderr_file")
+if echo "$stderr_content" | grep -q "record verdict"; then
+  echo "  FAIL  verdict-nudge NO_METRICS: nudge printed despite no metrics row"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge NO_METRICS: silenced"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$stderr_file"
+
+# 17. Non-zero exit (pick-model failure) also silences the nudge — verdicts
+# on failed calls are meaningless because there's no model output to judge.
+tmp=$(mktemp -d)
+cat > "$tmp/ollama" <<'EOF'
+#!/usr/bin/env bash
+[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
+unrelated:model  zz 5 GB   1 day ago"
+EOF
+chmod +x "$tmp/ollama"
+metrics=$(mktemp); : > "$metrics"
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 1 "$EC" "verdict-nudge on failure: still exits 1"
+stderr_content=$(cat "$stderr_file")
+if echo "$stderr_content" | grep -q "record verdict"; then
+  echo "  FAIL  verdict-nudge on failure: nudge printed despite non-zero exit"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge on failure: silenced"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
