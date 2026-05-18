@@ -364,7 +364,7 @@ log_metric "$ts_start" "$tier" "$model" "$(( ${#recipe_template} + ${#prompt} ))
 if [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" != "1" ]] \
    && [[ "${DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE:-}" != "1" ]] \
    && (( status == 0 )); then
-  echo "delegate: record verdict → bash scripts/delegate-feedback.sh hit  (or 'miss \"<reason>\"')" >&2
+  echo "delegate: record verdict → bash scripts/delegate-feedback.sh hit (or miss \"<reason>\")" >&2
 fi
 
 printf '%s\n' "$output"
