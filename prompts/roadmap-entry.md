@@ -14,6 +14,9 @@ Run both of these before invoking the recipe:
 # 1. Verbatim style anchor — the most recent shipped entry in the target plan file.
 #    Extract it as-is, including heading and prose. Do NOT paraphrase or trim;
 #    the verbatim shape is the calibration signal.
+#    The awk pattern below matches headings of the form `### YYYY-MM-DD — shipped …`;
+#    adjust the regex to your plan file's heading convention (e.g. `## Recently shipped`,
+#    `### Sprint N — done`) before running.
 awk '/^### .* — shipped /{flag=1} flag' docs/plans/current-plan.md | sed -n '1,40p'
 
 # 2. Structured fact list — one heading line plus per-PR shipped summary plus
@@ -100,7 +103,7 @@ The trailing prompt arg reinforces the two highest-signal rules (spelling mirror
 ```
 ### 2026-05-16 — feature-flag rollout sprint
 
-Shipped four PRs across two days closing out the staged-rollout migration.
+Shipped three PRs across two days closing out the staged-rollout migration.
 PR #372 (squash a4b7c1d, 2026-05-15) wired the flag-evaluation client into
 the request-handling middleware so per-tenant flags resolve once per request
 rather than per call site. PR #382 (squash e9c560c, 2026-05-16) ported the
