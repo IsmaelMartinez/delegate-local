@@ -14,15 +14,16 @@ Run both of these before invoking the recipe:
 # 1. Verbatim style anchor — the most recent shipped entry in the target plan file.
 #    Extract it as-is, including heading and prose. Do NOT paraphrase or trim;
 #    the verbatim shape is the calibration signal.
-#    The awk pattern below matches headings of the form `### YYYY-MM-DD — shipped …`;
+#    The awk pattern below matches `### …` headings containing the ` — shipped`
+#    marker and stops at the next `### ` heading so exactly one entry is captured;
 #    adjust the regex to your plan file's heading convention (e.g. `## Recently shipped`,
 #    `### Sprint N — done`) before running.
-awk '/^### .* — shipped /{flag=1} flag' docs/plans/current-plan.md | sed -n '1,40p'
+awk '/^### / { if (flag) exit; if ($0 ~ / — shipped/) flag=1 } flag' docs/plans/current-plan.md
 
 # 2. Structured fact list — one heading line plus per-PR shipped summary plus
 #    optional Up-Next pointer. Author this in a scratch file:
 cat <<'EOF' > /tmp/facts.md
-HEADING: <date> — <one-line sprint summary>
+HEADING: <date> — <one-line sprint summary> — shipped
 
 PRs:
 - #NNN (squash <hash>, merged <YYYY-MM-DD>): <one sentence on what shipped>
@@ -77,7 +78,7 @@ Output ONLY the entry itself, no preamble, no "Here's the entry:".
 
 ```bash
 PLAN_FILE=docs/plans/current-plan.md
-ANCHOR=$(awk '/^### .* — shipped /{flag=1} flag' "$PLAN_FILE" | sed -n '1,40p')
+ANCHOR=$(awk '/^### / { if (flag) exit; if ($0 ~ / — shipped/) flag=1 } flag' "$PLAN_FILE")
 bash scripts/delegate.sh --recipe roadmap-entry \
   --var style_anchor="$ANCHOR" \
   --var facts="$(cat /tmp/facts.md)" \
@@ -101,7 +102,7 @@ The trailing prompt arg reinforces the two highest-signal rules (spelling mirror
 ## Expected output shape
 
 ```
-### 2026-05-16 — feature-flag rollout sprint
+### 2026-05-16 — feature-flag rollout sprint — shipped
 
 Shipped three PRs across two days closing out the staged-rollout migration.
 PR #372 (squash a4b7c1d, 2026-05-15) wired the flag-evaluation client into
