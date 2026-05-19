@@ -45,6 +45,21 @@
 #                                           #   untracked-verdict gap (see the
 #                                           #   2026-05-18 calibration finding
 #                                           #   in ROADMAP).
+#   DELEGATE_PREFLIGHT_TIMEOUT=<s>          # default 10. Only consulted when
+#                                           #   --recipe is set. A 1-token
+#                                           #   canary probe hits the resolved
+#                                           #   model with --max-time S; if
+#                                           #   the probe does not return,
+#                                           #   exit 3 with a stderr message
+#                                           #   listing recovery options
+#                                           #   (raise timeout, smaller model,
+#                                           #   hand-write) before the full
+#                                           #   recipe-shaped request is sent.
+#                                           #   Set 0 to disable the canary.
+#                                           #   Closes the recipe-stall gap
+#                                           #   in issue #110.
+#   DELEGATE_NO_PREFLIGHT=1                 # alternate disable for the canary
+#                                           #   (equivalent to TIMEOUT=0).
 #   DELEGATE_METRICS_FILE=<path>            # override metrics destination
 #   DELEGATE_PROMPTS_DIR=<path>             # override prompts/ directory
 #                                           #   (default: <script_dir>/../prompts)
@@ -272,6 +287,61 @@ if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
   log_metric "$ts_start" "$tier" "(none)" "$(( ${#recipe_template} + ${#prompt} ))" "${#context}" 0 $((end_epoch_ms - start_epoch_ms)) 1 "$recipe"
   echo "delegate: pick-model failed for tier '$tier'" >&2
   exit 1
+fi
+
+# Pre-flight canary — only fires when --recipe is set. Issue #110 documented
+# recipe stalls of 6–10 minutes when a 35B-class prose-tier model was hit
+# with a recipe-shaped prompt; a 1-token probe with a bounded timeout
+# catches that case before the caller's input investment is sunk. The probe
+# uses the same backend, model, and think setting as the real dispatch will
+# — if the model can't return one token to "hi" within the timeout, the
+# real recipe-shaped call definitely won't succeed either. Skipped on bare
+# (non-recipe) calls, where the caller hasn't gathered inputs and the
+# probe overhead doesn't pay off.
+preflight_timeout="${DELEGATE_PREFLIGHT_TIMEOUT:-10}"
+if [[ -n "$recipe" ]] \
+   && [[ "${DELEGATE_NO_PREFLIGHT:-}" != "1" ]] \
+   && [[ "$preflight_timeout" =~ ^[0-9]+$ ]] \
+   && (( preflight_timeout > 0 )); then
+  if [[ "$backend" == "ollama" ]]; then
+    canary_payload=$(jq -nc --arg m "$model" --argjson th "$think" \
+      '{model:$m, prompt:"hi", stream:false, think:$th, options:{num_predict:1, temperature:0}}')
+    canary_url="$ollama_host/api/generate"
+  else
+    canary_payload=$(jq -nc --arg m "$model" --argjson et "$think" \
+      '{model:$m, messages:[{role:"user", content:"hi"}], stream:false, temperature:0, max_tokens:1, chat_template_kwargs:{enable_thinking:$et}}')
+    canary_url="$mlx_host/v1/chat/completions"
+  fi
+  curl -sS --fail --max-time "$preflight_timeout" -X POST "$canary_url" -d @- >/dev/null 2>&1 <<< "$canary_payload"
+  canary_status=$?
+  if (( canary_status != 0 )); then
+    end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
+    log_metric "$ts_start" "$tier" "$model" "$(( ${#recipe_template} + ${#prompt} ))" "${#context}" 0 $((end_epoch_ms - start_epoch_ms)) 3 "$recipe"
+    # Distinguish curl exit codes so the recovery advice points at the
+    # right knob. 28 is the --max-time-fired timeout (the case the canary
+    # was designed for); 7 is "can't reach host" (daemon down or wrong
+    # OLLAMA_HOST/MLX_HOST); 22 is curl --fail on a non-2xx response
+    # (e.g. an unknown model name returning 404). Anything else falls
+    # through to a generic curl-exit-N message that names the code so the
+    # caller can look it up.
+    case "$canary_status" in
+      28) canary_cause="did not return within ${preflight_timeout}s (curl --max-time fired)" ;;
+      7)  canary_cause="could not reach $canary_url (connection refused; backend daemon may be down)" ;;
+      22) canary_cause="received an HTTP error response (curl --fail; likely a bad model name or invalid payload)" ;;
+      *)  canary_cause="failed with curl exit $canary_status" ;;
+    esac
+    {
+      echo "delegate: pre-flight canary $canary_cause"
+      echo "         recipe='$recipe' tier='$tier' model='$model' backend='$backend'"
+      echo "         Options:"
+      echo "         - retry with DELEGATE_PREFLIGHT_TIMEOUT=30 if cold-load is suspected"
+      echo "         - start the backend daemon (ollama serve, or mlx_lm.server) and confirm OLLAMA_HOST / MLX_HOST"
+      echo "         - re-route to a smaller-parameter model on this host"
+      echo "         - hand-write the output (recommended for 35B-class prose tiers on recipe-shaped prompts — see prompts/$recipe.md)"
+      echo "         - silence the probe with DELEGATE_NO_PREFLIGHT=1 (sends the full request and inherits the failure)"
+    } >&2
+    exit 3
+  fi
 fi
 
 # Compose the input. The recipe template (if any) carries its own

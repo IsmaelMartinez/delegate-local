@@ -922,6 +922,429 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
+# 18. Pre-flight canary on --recipe. Issue #110 documented stalls of 6–10
+# minutes when a 35B-class prose-tier model was hit with a recipe-shaped
+# prompt; the canary is a 1-token probe that fails loud before the input
+# investment is sunk. The probe is identified inside the mock by its
+# `"num_predict":1` (Ollama) or `"max_tokens":1` (MLX) signature; the real
+# dispatch uses different values so the mock can route the two responses
+# independently. Each canary test sets up a `--recipe` invocation against
+# a tiny prompts/ dir and asserts (a) the probe ran, (b) the dispatch
+# either followed or was skipped based on the canary outcome, and (c) the
+# metrics row + exit code reflect the right state.
+#
+# Helper: a curl mock that distinguishes the auto-probe (/v1/models — exit
+# 7 to fall back to ollama), the pre-flight canary (1-token payload —
+# behaviour controlled by $4), and the real dispatch (everything else —
+# always returns the canned response). Each invocation logs `canary` or
+# `dispatch` to an invocations file so tests can count the dispatches.
+make_mock_curl_probe_aware() {
+  local dir="$1" sniff="${2:-/dev/null}" invocations_log="${3:-/dev/null}" canary_behaviour="${4:-ok}"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+url=""
+for arg in "\$@"; do
+  case "\$arg" in
+    http*|https*) url="\$arg" ;;
+  esac
+done
+case "\$url" in
+  *"/v1/models"*) exit 7 ;;
+esac
+payload=\$(cat)
+# Distinguish canary from dispatch by 1-token request signature. The
+# follow-on character ([,}]) ensures \`"max_tokens":1\` doesn't match a
+# prefix of a larger number like 1024 or 16384.
+if echo "\$payload" | grep -qE '"num_predict":1|"max_tokens":1[,}]'; then
+  echo "canary url=\$url" >> "${invocations_log}"
+  case "${canary_behaviour}" in
+    timeout)    exit 28 ;;
+    refused)    exit 7 ;;
+    http_error) exit 22 ;;
+    *)          printf '%s' '{"response":"ok"}'; exit 0 ;;
+  esac
+fi
+echo "dispatch url=\$url" >> "${invocations_log}"
+echo "\$payload" > "${sniff}"
+printf '%s' '{"response":"mock-model-output: ok\\n"}'
+EOF
+  chmod +x "$dir/curl"
+}
+
+setup_recipe_prompts() {
+  local dir="$1"
+  mkdir -p "$dir"
+  cat > "$dir/canary-recipe.md" <<'RECIPE'
+# canary-recipe
+
+## When to use
+test
+
+## Prompt template
+
+```
+CANARY-TEST TEMPLATE BODY
+```
+
+## Calibration notes
+n/a
+RECIPE
+}
+
+# 18a. Canary succeeds → real dispatch runs, exit 0, single metrics row.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "ok"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "canary success: exits 0"
+assert_contains "mock-model-output: ok" "$out" "canary success: dispatch output reaches stdout"
+canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
+dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
+assert_eq 1 "$canary_count" "canary success: probe was called exactly once"
+assert_eq 1 "$dispatch_count" "canary success: dispatch followed exactly once"
+# Sniff carries the dispatch payload — recipe template body must be in it.
+assert_contains 'CANARY-TEST TEMPLATE BODY' "$(cat "$sniff")" "canary success: dispatch carries recipe template"
+# Single metrics row with status:0 (the canary itself doesn't write a row
+# on success — only the final dispatch does).
+lines=$(grep -c '^' "$metrics")
+assert_eq 1 "$lines" "canary success: one metrics row"
+assert_contains '"exit_status":0' "$(cat "$metrics")" "canary success: dispatch logged status:0"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 18b. Canary times out (curl --max-time fires, exit 28) → exit 3, no
+# dispatch, stderr names the recipe + model + recovery options.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"; : > "$sniff"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "timeout"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 3 "$EC" "canary timeout: exit 3"
+canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
+dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
+assert_eq 1 "$canary_count" "canary timeout: probe was called"
+assert_eq 0 "$dispatch_count" "canary timeout: dispatch was NOT called"
+# Sniff was not overwritten by the canary (canary doesn't write the
+# sniff; only dispatch does).
+if [[ -s "$sniff" ]]; then
+  echo "  FAIL  canary timeout: dispatch sniff should be empty"; fail=$((fail+1))
+else
+  echo "  PASS  canary timeout: dispatch sniff stays empty"; pass=$((pass+1))
+fi
+stderr_content=$(cat "$stderr_file")
+assert_contains "pre-flight canary" "$stderr_content" "canary timeout: stderr names the canary"
+# Cause-specific message — gemini-code-assist flagged that the original
+# wording attributed every failure to a timeout regardless of curl exit.
+# Exit 28 must now read "did not return within Ns (curl --max-time fired)".
+assert_contains "did not return within 10s" "$stderr_content" "canary timeout: stderr names the timeout duration"
+assert_contains "curl --max-time fired" "$stderr_content" "canary timeout: stderr names the curl flag that fired"
+assert_contains "recipe='canary-recipe'" "$stderr_content" "canary timeout: stderr names recipe"
+assert_contains "model='qwen3.6:35b-a3b'" "$stderr_content" "canary timeout: stderr names resolved model"
+assert_contains "DELEGATE_PREFLIGHT_TIMEOUT" "$stderr_content" "canary timeout: stderr suggests timeout override"
+assert_contains "DELEGATE_NO_PREFLIGHT=1" "$stderr_content" "canary timeout: stderr names the opt-out"
+assert_contains "hand-write" "$stderr_content" "canary timeout: stderr suggests hand-writing"
+# Metrics row tagged status:3 so audit-metrics can pivot on it later.
+lines=$(grep -c '^' "$metrics")
+assert_eq 1 "$lines" "canary timeout: one metrics row"
+metric_line=$(cat "$metrics")
+assert_contains '"exit_status":3' "$metric_line" "canary timeout: metrics row tagged status:3"
+assert_contains '"recipe":"canary-recipe"' "$metric_line" "canary timeout: metrics row carries recipe name"
+assert_contains '"model":"qwen3.6:35b-a3b"' "$metric_line" "canary timeout: metrics row carries resolved model"
+# Verdict nudge must NOT fire on a status:3 exit.
+if echo "$stderr_content" | grep -q "record verdict"; then
+  echo "  FAIL  canary timeout: verdict nudge leaked"; fail=$((fail+1))
+else
+  echo "  PASS  canary timeout: verdict nudge silenced"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 18c. DELEGATE_NO_PREFLIGHT=1 skips the canary entirely. With a canary
+# mock that would have timed out, the dispatch still runs (and the mock's
+# dispatch path returns success).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "timeout"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  DELEGATE_NO_PREFLIGHT=1 \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "NO_PREFLIGHT=1: exits 0 even with timing-out canary mock"
+canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
+dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
+assert_eq 0 "$canary_count" "NO_PREFLIGHT=1: probe was NOT called"
+assert_eq 1 "$dispatch_count" "NO_PREFLIGHT=1: dispatch was called"
+rm -rf "$tmp" "$metrics"
+
+# 18d. DELEGATE_PREFLIGHT_TIMEOUT=0 is the documented disable equivalent.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "timeout"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  DELEGATE_PREFLIGHT_TIMEOUT=0 \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "PREFLIGHT_TIMEOUT=0: exits 0 (canary disabled)"
+canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
+assert_eq 0 "$canary_count" "PREFLIGHT_TIMEOUT=0: probe was NOT called"
+rm -rf "$tmp" "$metrics"
+
+# 18e. DELEGATE_PREFLIGHT_TIMEOUT=N flows into curl's --max-time argv on
+# the canary call. Capture the canary's argv into a sniff file and assert.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+# Custom mock that records the canary's argv specifically (not the
+# auto-probe's, not the dispatch's).
+canary_argv="$tmp/canary-argv.txt"; : > "$canary_argv"
+cat > "$tmp/curl" <<EOF
+#!/usr/bin/env bash
+url=""
+for arg in "\$@"; do
+  case "\$arg" in
+    http*|https*) url="\$arg" ;;
+  esac
+done
+case "\$url" in
+  *"/v1/models"*) exit 7 ;;
+esac
+payload=\$(cat)
+if echo "\$payload" | grep -qE '"num_predict":1|"max_tokens":1[,}]'; then
+  printf '%s\n' "\$*" > "${canary_argv}"
+  printf '%s' '{"response":"ok"}'
+  exit 0
+fi
+printf '%s' '{"response":"mock-model-output: ok\\n"}'
+EOF
+chmod +x "$tmp/curl"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  DELEGATE_PREFLIGHT_TIMEOUT=7 \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "PREFLIGHT_TIMEOUT=7: exits 0"
+assert_contains "--max-time 7" "$(cat "$canary_argv")" "PREFLIGHT_TIMEOUT=7 flows into curl --max-time"
+rm -rf "$tmp" "$metrics"
+
+# 18f. No --recipe → canary is skipped. A canary mock that would time out
+# does not affect bare delegations (the only call is the dispatch).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "timeout"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "no --recipe: bare call exits 0 even with timing-out canary mock"
+canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
+dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
+assert_eq 0 "$canary_count" "no --recipe: probe was NOT called"
+assert_eq 1 "$dispatch_count" "no --recipe: dispatch was called"
+rm -rf "$tmp" "$metrics"
+
+# 18g. MLX backend canary uses /v1/chat/completions with max_tokens:1.
+# The canary mock writes its payload to a separate sniff file so we can
+# assert against the MLX shape independently of the dispatch shape.
+tmp=$(mktemp -d)
+snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
+mkdir -p "$snap"
+touch "$snap/weights.safetensors"
+canary_payload_sniff="$tmp/canary-payload.json"; : > "$canary_payload_sniff"
+canary_argv_sniff="$tmp/canary-argv.txt"; : > "$canary_argv_sniff"
+cat > "$tmp/curl" <<EOF
+#!/usr/bin/env bash
+url=""
+for arg in "\$@"; do
+  case "\$arg" in
+    http*|https*) url="\$arg" ;;
+  esac
+done
+case "\$url" in
+  *"/v1/models"*)
+    # Probe succeeds so auto-mode routes to MLX.
+    cat > /dev/null
+    printf '%s' '{"object":"list","data":[]}'
+    exit 0
+    ;;
+esac
+payload=\$(cat)
+if echo "\$payload" | grep -qE '"max_tokens":1[,}]'; then
+  echo "\$payload" > "${canary_payload_sniff}"
+  printf '%s\n' "\$*" > "${canary_argv_sniff}"
+  printf '%s' '{"choices":[{"message":{"role":"assistant","content":"k"},"finish_reason":"stop"}]}'
+  exit 0
+fi
+printf '%s' '{"choices":[{"message":{"role":"assistant","content":"mlx-ok"},"finish_reason":"stop"}]}'
+EOF
+chmod +x "$tmp/curl"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "MLX canary: exits 0"
+canary_payload=$(cat "$canary_payload_sniff")
+canary_argv=$(cat "$canary_argv_sniff")
+assert_contains "/v1/chat/completions" "$canary_argv" "MLX canary: hits chat-completions endpoint"
+assert_contains '"max_tokens":1' "$canary_payload" "MLX canary: payload carries max_tokens:1"
+assert_contains '"messages":' "$canary_payload" "MLX canary: chat-completions shape"
+assert_contains '"role":"user"' "$canary_payload" "MLX canary: user-role message"
+assert_contains '"content":"hi"' "$canary_payload" "MLX canary: minimal 'hi' content"
+assert_contains '"enable_thinking":false' "$canary_payload" "MLX canary: enable_thinking:false (mirrors dispatch default)"
+rm -rf "$tmp" "$metrics"
+
+# 18h. Ollama canary uses /api/generate with num_predict:1.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+canary_payload_sniff="$tmp/canary-payload.json"; : > "$canary_payload_sniff"
+canary_argv_sniff="$tmp/canary-argv.txt"; : > "$canary_argv_sniff"
+cat > "$tmp/curl" <<EOF
+#!/usr/bin/env bash
+url=""
+for arg in "\$@"; do
+  case "\$arg" in
+    http*|https*) url="\$arg" ;;
+  esac
+done
+case "\$url" in
+  *"/v1/models"*) exit 7 ;;
+esac
+payload=\$(cat)
+if echo "\$payload" | grep -q '"num_predict":1'; then
+  echo "\$payload" > "${canary_payload_sniff}"
+  printf '%s\n' "\$*" > "${canary_argv_sniff}"
+  printf '%s' '{"response":"k"}'
+  exit 0
+fi
+printf '%s' '{"response":"mock-model-output: ok\\n"}'
+EOF
+chmod +x "$tmp/curl"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "Ollama canary: exits 0"
+canary_payload=$(cat "$canary_payload_sniff")
+canary_argv=$(cat "$canary_argv_sniff")
+assert_contains "/api/generate" "$canary_argv" "Ollama canary: hits /api/generate"
+assert_contains '"num_predict":1' "$canary_payload" "Ollama canary: payload carries num_predict:1"
+assert_contains '"prompt":"hi"' "$canary_payload" "Ollama canary: minimal 'hi' prompt"
+assert_contains '"think":false' "$canary_payload" "Ollama canary: think:false (mirrors dispatch default)"
+rm -rf "$tmp" "$metrics"
+
+# 18i. Canary connection-refused (curl exit 7) → exit 3 + stderr message
+# names the right cause (backend daemon may be down) rather than the
+# generic timeout copy. Addresses gemini-code-assist's PR #129 review
+# concern that --fail conflates non-timeout failures with timeouts.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"; : > "$sniff"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "refused"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 3 "$EC" "canary refused: exit 3"
+canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
+dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
+assert_eq 1 "$canary_count" "canary refused: probe was called"
+assert_eq 0 "$dispatch_count" "canary refused: dispatch was NOT called"
+stderr_content=$(cat "$stderr_file")
+assert_contains "could not reach" "$stderr_content" "canary refused: stderr names connection-refused cause"
+assert_contains "connection refused" "$stderr_content" "canary refused: stderr names the connection failure"
+case "$stderr_content" in
+  *"did not return within"*)
+    echo "  FAIL  canary refused: must not use timeout copy"; fail=$((fail+1));;
+  *)
+    echo "  PASS  canary refused: timeout copy not used"; pass=$((pass+1));;
+esac
+assert_contains '"exit_status":3' "$(cat "$metrics")" "canary refused: metrics row tagged status:3"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 18j. Canary HTTP-error (curl --fail on 4xx, exit 22) → exit 3 + stderr
+# names the right cause (HTTP error, bad model name / invalid payload)
+# rather than the generic timeout copy. Same gemini-code-assist concern.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"; : > "$sniff"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "http_error"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 3 "$EC" "canary http_error: exit 3"
+canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
+dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
+assert_eq 1 "$canary_count" "canary http_error: probe was called"
+assert_eq 0 "$dispatch_count" "canary http_error: dispatch was NOT called"
+stderr_content=$(cat "$stderr_file")
+assert_contains "HTTP error" "$stderr_content" "canary http_error: stderr names HTTP-error cause"
+case "$stderr_content" in
+  *"did not return within"*)
+    echo "  FAIL  canary http_error: must not use timeout copy"; fail=$((fail+1));;
+  *)
+    echo "  PASS  canary http_error: timeout copy not used"; pass=$((pass+1));;
+esac
+assert_contains '"exit_status":3' "$(cat "$metrics")" "canary http_error: metrics row tagged status:3"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
