@@ -14,7 +14,26 @@ if [[ -z "$skill" || ! -f "$skill" ]]; then
   exit 2
 fi
 
-dir_name=$(basename "$(cd "$(dirname "$skill")" && pwd)")
+# Determine the directory name to compare `name:` against. The naive choice
+# is the SKILL.md's parent directory, which works for the canonical layouts:
+#   ./SKILL.md                                 → repo root
+#   ~/.claude/skills/delegate-to-ollama/SKILL.md  → installed skill dir
+# But it breaks inside a git worktree (.claude/worktrees/<branch>/SKILL.md),
+# where the parent is the worktree name, not the skill name. Detect that
+# case via git's common-dir (shared across worktrees) and resolve to the
+# main checkout's basename. Falls back to the parent-directory check when
+# git is unavailable or the file is outside any checkout.
+git_common_dir=$(git -C "$(dirname "$skill")" rev-parse --git-common-dir 2>/dev/null || true)
+if [[ -n "$git_common_dir" ]]; then
+  # --git-common-dir can be relative (".git") or absolute; resolve relative
+  # paths against the SKILL.md's parent so the basename below is correct.
+  if [[ "$git_common_dir" != /* ]]; then
+    git_common_dir="$(cd "$(dirname "$skill")" && cd "$git_common_dir" 2>/dev/null && pwd)"
+  fi
+  dir_name=$(basename "$(dirname "$git_common_dir")")
+else
+  dir_name=$(basename "$(cd "$(dirname "$skill")" && pwd)")
+fi
 
 fail() {
   echo "::error file=$skill::$1" >&2

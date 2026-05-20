@@ -60,6 +60,18 @@
 #                                           #   in issue #110.
 #   DELEGATE_NO_PREFLIGHT=1                 # alternate disable for the canary
 #                                           #   (equivalent to TIMEOUT=0).
+#   DELEGATE_TO_OLLAMA_NO_META=1            # silence the structured
+#                                           #   `delegate-meta:` summary line
+#                                           #   printed to stderr after each
+#                                           #   successful call. SKILL.md
+#                                           #   teaches the assistant to read
+#                                           #   that line and surface the
+#                                           #   model + tokens_local count to
+#                                           #   the user, so the line is the
+#                                           #   contract surface for "this is
+#                                           #   how much we kept local." Off-
+#                                           #   by-default; opt out for clean
+#                                           #   stderr in batch runs.
 #   DELEGATE_METRICS_FILE=<path>            # override metrics destination
 #   DELEGATE_PROMPTS_DIR=<path>             # override prompts/ directory
 #                                           #   (default: <script_dir>/../prompts)
@@ -424,7 +436,38 @@ fi
 end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 duration_ms=$((end_epoch_ms - start_epoch_ms))
 
-log_metric "$ts_start" "$tier" "$model" "$(( ${#recipe_template} + ${#prompt} ))" "${#context}" "${#output}" "$duration_ms" "$status" "$recipe"
+# Char counts that feed both the metrics row and the stderr meta line.
+# Computed once so the two surfaces can't diverge on the same call (the
+# `tokens_local` field in the meta line must match `estimated_tokens_avoided`
+# in the JSONL row — the assistant surfaces one, the rollup script reads the
+# other; if they ever drifted, "how much have I saved" would mean two
+# different things depending on which surface you ask).
+prompt_chars=$(( ${#recipe_template} + ${#prompt} ))
+context_chars=${#context}
+output_chars=${#output}
+tokens_local=$(( (prompt_chars + context_chars + output_chars) / 4 ))
+
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe"
+
+# Structured stderr contract — the line SKILL.md teaches the assistant to
+# read after every delegation, so it can tell the user which model handled
+# the work and how many tokens stayed on-device. Format is parser-friendly
+# `key=value` pairs separated by spaces (matches the verdict-nudge plain-text
+# convention rather than the JSONL machine surface — humans skim this line
+# too). Conditions: successful call only (status==0; meaningless on a failed
+# call where there's no output to count), silenceable via NO_META for batch
+# runs that want clean stderr. The `tokens_local` value is the local-model
+# tokenizer's view (chars/4 estimate, same number as the JSONL row's
+# `estimated_tokens_avoided`) — not Anthropic's tokenizer, hence "kept local"
+# framing in SKILL.md rather than "saved from Claude".
+if [[ "${DELEGATE_TO_OLLAMA_NO_META:-}" != "1" ]] \
+   && (( status == 0 )); then
+  meta="model=$model tier=$tier backend=$backend tokens_local=$tokens_local duration_ms=$duration_ms"
+  if [[ -n "$recipe" ]]; then
+    meta="$meta recipe=$recipe"
+  fi
+  echo "delegate-meta: $meta" >&2
+fi
 
 # Verdict nudge — without it the metrics file accumulates "untracked" rows
 # (delegate row with no matching feedback row) and the recipe library can't

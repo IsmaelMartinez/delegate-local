@@ -1345,6 +1345,141 @@ esac
 assert_contains '"exit_status":3' "$(cat "$metrics")" "canary http_error: metrics row tagged status:3"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
+# 19. delegate-meta stderr line is the contract surface SKILL.md teaches
+# the assistant to read. On success, the line carries model / tier / backend
+# / tokens_local / duration_ms as space-separated key=value pairs. The test
+# captures stderr separately so the assertions are unambiguous against the
+# verdict nudge that also fires on the same path.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "delegate-meta: happy path exits 0"
+stderr_content=$(cat "$stderr_file")
+assert_contains "delegate-meta:" "$stderr_content" "delegate-meta: line prefix on stderr"
+assert_contains "model=qwen3.6:35b-a3b" "$stderr_content" "delegate-meta: model field"
+assert_contains "tier=prose" "$stderr_content" "delegate-meta: tier field"
+assert_contains "backend=ollama" "$stderr_content" "delegate-meta: backend field"
+assert_contains "tokens_local=" "$stderr_content" "delegate-meta: tokens_local field"
+assert_contains "duration_ms=" "$stderr_content" "delegate-meta: duration_ms field"
+# Line is stderr-only — model output on stdout must NOT contain the meta marker.
+if echo "$out" | grep -q "delegate-meta:"; then
+  echo "  FAIL  delegate-meta: leaked into stdout"; fail=$((fail+1))
+else
+  echo "  PASS  delegate-meta: stdout unaffected"; pass=$((pass+1))
+fi
+# tokens_local matches the chars/4 formula across prompt + context + output.
+# Prompt "Summarise" is 9 chars; no context (stdin closed); output is the
+# mock's "mock-model-output: ok\n" which is 21 chars after the JSON-encoded
+# newline becomes literal. (9 + 0 + 21) / 4 = 7. Extract the value and
+# compare numerically rather than asserting a literal string so any future
+# adjustment to the mock output is caught as a clean mismatch rather than a
+# silent equality drift.
+meta_line=$(grep '^delegate-meta:' "$stderr_file")
+tokens_val=$(printf '%s' "$meta_line" | grep -oE 'tokens_local=[0-9]+' | cut -d= -f2)
+if [[ -n "$tokens_val" && "$tokens_val" =~ ^[0-9]+$ ]] && (( tokens_val >= 0 )); then
+  echo "  PASS  delegate-meta: tokens_local is a non-negative integer ($tokens_val)"
+  pass=$((pass+1))
+else
+  echo "  FAIL  delegate-meta: tokens_local missing or non-numeric ('$tokens_val')"
+  fail=$((fail+1))
+fi
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 20. DELEGATE_TO_OLLAMA_NO_META=1 silences the meta line but the rest of
+# the delegation still runs (metrics row written, model output on stdout,
+# verdict nudge still fires — meta and nudge are independent surfaces with
+# independent opt-outs).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_NO_META=1 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "delegate-meta opt-out: still exits 0"
+stderr_content=$(cat "$stderr_file")
+if echo "$stderr_content" | grep -q "delegate-meta:"; then
+  echo "  FAIL  delegate-meta opt-out: line still printed"; fail=$((fail+1))
+else
+  echo "  PASS  delegate-meta opt-out: silenced"; pass=$((pass+1))
+fi
+# Verdict nudge still fires — opt-out is meta-only.
+assert_contains "record verdict" "$stderr_content" "delegate-meta opt-out: verdict nudge unaffected"
+# Metrics row still written — opt-out is meta-only.
+assert_eq 1 "$(grep -c '^' "$metrics")" "delegate-meta opt-out: metrics row still written"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 21. Non-zero exit (pick-model failure) silences the meta line — counts
+# on a failed call would point at nothing, since there's no model output.
+tmp=$(mktemp -d)
+cat > "$tmp/ollama" <<'EOF'
+#!/usr/bin/env bash
+[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
+unrelated:model  zz 5 GB   1 day ago"
+EOF
+chmod +x "$tmp/ollama"
+metrics=$(mktemp); : > "$metrics"
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 1 "$EC" "delegate-meta on failure: still exits 1"
+stderr_content=$(cat "$stderr_file")
+if echo "$stderr_content" | grep -q "delegate-meta:"; then
+  echo "  FAIL  delegate-meta on failure: line printed despite non-zero exit"; fail=$((fail+1))
+else
+  echo "  PASS  delegate-meta on failure: silenced"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 22. --recipe NAME adds a `recipe=NAME` field to the meta line so the
+# assistant can mention which recipe routed the work ("Delegated via the
+# commit-message recipe to qwen3.6:35b — ~578 tokens kept local"). The
+# --recipe pre-flight canary (test 18) runs first; the dispatch path is
+# what emits the meta line, so use the probe-aware mock with `ok` so the
+# canary passes and dispatch runs through to the meta-line code path.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "ok"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/meta-test.md" <<'EOF'
+# meta-test
+
+## When to use
+Test.
+
+## Prompt template
+
+```
+DUMMY TEMPLATE
+```
+
+## Calibration notes
+n/a
+EOF
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe meta-test prose "tail" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "delegate-meta with --recipe: exits 0"
+assert_contains "recipe=meta-test" "$(cat "$stderr_file")" "delegate-meta: recipe field present when --recipe used"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
