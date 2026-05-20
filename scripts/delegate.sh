@@ -172,11 +172,23 @@ else
   think="false"
 fi
 
+# Single source of truth for the local-tokenizer estimate: total chars in +
+# out divided by 4. Both the JSONL metrics row (estimated_tokens_avoided)
+# and the delegate-meta stderr line (tokens_local) call this helper, so the
+# two surfaces cannot drift on the formula — see gemini-code-assist's PR
+# #133 review concern that the divisor was previously duplicated in two
+# code paths. Bash integer division of a sum of `${#...}` lengths has no
+# zero-divide risk.
+compute_tokens_local() {
+  local pchars=$1 cchars=$2 ochars=$3
+  echo $(( (pchars + cchars + ochars) / 4 ))
+}
+
 log_metric() {
   [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" == "1" ]] && return 0
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}"
-  local total=$((pchars + cchars + ochars))
-  local tokens_avoided=$((total / 4))
+  local tokens_avoided
+  tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$ochars")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
   # source:"delegate" discriminates this from experiment-runner traffic that
   # writes to the same file via experiments/lib/run_api_cell.sh. backend
@@ -436,16 +448,16 @@ fi
 end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 duration_ms=$((end_epoch_ms - start_epoch_ms))
 
-# Char counts that feed both the metrics row and the stderr meta line.
-# Computed once so the two surfaces can't diverge on the same call (the
-# `tokens_local` field in the meta line must match `estimated_tokens_avoided`
-# in the JSONL row — the assistant surfaces one, the rollup script reads the
-# other; if they ever drifted, "how much have I saved" would mean two
-# different things depending on which surface you ask).
+# Char counts that feed both the metrics row and the stderr meta line. Both
+# surfaces route through compute_tokens_local so the two cannot drift on
+# the formula — the assistant surfaces `tokens_local` from the stderr line
+# while metrics-summary.sh rolls up `estimated_tokens_avoided` from the
+# JSONL; if they ever disagreed, "how much have I saved" would mean two
+# different things depending on which surface you ask.
 prompt_chars=$(( ${#recipe_template} + ${#prompt} ))
 context_chars=${#context}
 output_chars=${#output}
-tokens_local=$(( (prompt_chars + context_chars + output_chars) / 4 ))
+tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$output_chars")
 
 log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe"
 
@@ -462,9 +474,17 @@ log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$outpu
 # framing in SKILL.md rather than "saved from Claude".
 if [[ "${DELEGATE_TO_OLLAMA_NO_META:-}" != "1" ]] \
    && (( status == 0 )); then
-  meta="model=$model tier=$tier backend=$backend tokens_local=$tokens_local duration_ms=$duration_ms"
+  # String-typed fields are quoted so a model or recipe name containing a
+  # space stays a single token rather than ambiguating the format ("recipe=my
+  # name" otherwise reads as `recipe=my` + bare `name`). Today's Ollama tags
+  # and MLX HF identifiers don't have spaces, but model names come from
+  # `ollama list` parsing and the JSONL surface already escapes them via jq;
+  # the stderr surface owes the same defensive shape — flagged on PR #133.
+  # Integer fields (tokens_local, duration_ms) stay bare to avoid visual
+  # noise on the line.
+  meta="model=\"$model\" tier=\"$tier\" backend=\"$backend\" tokens_local=$tokens_local duration_ms=$duration_ms"
   if [[ -n "$recipe" ]]; then
-    meta="$meta recipe=$recipe"
+    meta="$meta recipe=\"$recipe\""
   fi
   echo "delegate-meta: $meta" >&2
 fi

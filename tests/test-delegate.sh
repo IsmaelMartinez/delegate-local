@@ -1362,11 +1362,14 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "delegate-meta: happy path exits 0"
 stderr_content=$(cat "$stderr_file")
 assert_contains "delegate-meta:" "$stderr_content" "delegate-meta: line prefix on stderr"
-assert_contains "model=qwen3.6:35b-a3b" "$stderr_content" "delegate-meta: model field"
-assert_contains "tier=prose" "$stderr_content" "delegate-meta: tier field"
-assert_contains "backend=ollama" "$stderr_content" "delegate-meta: backend field"
-assert_contains "tokens_local=" "$stderr_content" "delegate-meta: tokens_local field"
-assert_contains "duration_ms=" "$stderr_content" "delegate-meta: duration_ms field"
+# String-typed fields are quoted so values containing spaces stay one
+# token; integer fields stay bare. Asserting the opening quote captures
+# the format contract that PR #133's gemini-code-assist review tightened.
+assert_contains 'model="qwen3.6:35b-a3b' "$stderr_content" "delegate-meta: model field (quoted)"
+assert_contains 'tier="prose"' "$stderr_content" "delegate-meta: tier field (quoted)"
+assert_contains 'backend="ollama"' "$stderr_content" "delegate-meta: backend field (quoted)"
+assert_contains "tokens_local=" "$stderr_content" "delegate-meta: tokens_local field (bare integer)"
+assert_contains "duration_ms=" "$stderr_content" "delegate-meta: duration_ms field (bare integer)"
 # Line is stderr-only — model output on stdout must NOT contain the meta marker.
 if echo "$out" | grep -q "delegate-meta:"; then
   echo "  FAIL  delegate-meta: leaked into stdout"; fail=$((fail+1))
@@ -1477,7 +1480,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe meta-test prose "tail" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "delegate-meta with --recipe: exits 0"
-assert_contains "recipe=meta-test" "$(cat "$stderr_file")" "delegate-meta: recipe field present when --recipe used"
+assert_contains 'recipe="meta-test"' "$(cat "$stderr_file")" "delegate-meta: recipe field present and quoted when --recipe used"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
 echo
