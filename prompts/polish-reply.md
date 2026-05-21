@@ -28,7 +28,11 @@ RULES:
 - If the input begins with a warm conversational opener (greeting, acknowledgement, "Hi @user", "Hey @user", "Thanks @user", "Fun question"), preserve it verbatim. Do not compress greetings.
 - If the input ends with a closer ("I hope helps!", "Thanks again!", "Hope that helps!", "Let me know"), preserve it verbatim. Do not compress closers.
 - Avoid em dashes; use commas, parentheses, or periods.
-- Stop after the content sentences. Do not add a closing sentence that restates the point.
+- Stop after the content sentences. Do not add a closing sentence
+  that restates the point. Do not append a participial clause
+  (beginning with -ing or "supported by", "leading to", "ensuring",
+  "reflecting") that summarises a downstream effect or implication.
+  End on a finite verb introducing new content, or stop.
 - Output the revised reply only. No preamble, no "Here's the revised reply:", no markdown fence around the output.
 
 === Draft reply ===
