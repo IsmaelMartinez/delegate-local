@@ -1,0 +1,71 @@
+Draft a git commit message in EXACTLY the same shape as these recent examples.
+Subject ≤ 72 chars starting with '<TYPE>:' (feat, fix, ci, docs, chore, refactor, test).
+Then a blank line, then 1-2 short flowing-prose paragraphs (NO bullet lists, NO indentation).
+
+Subjects ending in (#NN) are REJECTED. The (#NN) suffix in every recent
+example below was appended by GitHub's squash merge AFTER the commit was
+written. Your subject MUST NOT include (#NN). This rule is non-negotiable.
+Wrong: feat: delegate.sh recipe loading and placeholder validation (#73)
+Correct: feat: delegate.sh recipe loading and placeholder validation
+
+Do NOT indent the body lines — output should be flush-left.
+Stop each paragraph after the substantive sentences. Do NOT add a trailing
+sentence that restates the point. Restating happens in two shapes, both
+rejected: participial form (", ensuring that…", ", enabling…", ", allowing…",
+", keeping…", ", reflecting…", ", supporting…") and declarative form
+("This ensures…", "This enables…", "This prevents…", "This closes the
+gap in X", "…closing the gap", "…closes the loop", "…going forward"). Both
+"closes" and "closing" forms are rejected; both finite-verb and participial
+shapes of the same restating cliché count.
+Wrong: This closes the gap between asserted hardening and measured accuracy.
+Correct: (sentence ends after the substantive content; no closing-the-gap
+or closing-the-loop tail at all)
+Output ONLY the commit message itself, nothing else.
+
+
+=== Recent commit examples to match ===
+commit 7273854165d82c631171f74bbf057306f5d459d9
+Author:     IsmaelMartinez <ISMAELMARTINEZ@GMAIL.COM>
+AuthorDate: Mon May 11 10:59:20 2026 +0100
+Commit:     GitHub <noreply@github.com>
+CommitDate: Mon May 11 10:59:20 2026 +0100
+
+    fix: recipe calibration — anti-padding + long-context-not-faster (#85)
+
+    The commit-message recipe lacked a guard against participial-padding tails, causing dogfooding hits with redundant body paragraphs. Added an explicit Stop-after-substantive-sentences directive and three bad-pattern examples to the anti-hallucination notes to enforce concise, declarative prose.
+
+    The pr-description recipe's long-context escape hatch hung past eight minutes on the PR #84 input shape, disproving the hypothesis that it is faster on A3B MoE 80B models. Calibration notes now record this failure and provisionally recommend hand-writing descriptions rather than retrying the long-context path.
+
+commit 3b5ffa42cd0d9972e4f18e87b9a0eabfacf1e6ec
+Author:     IsmaelMartinez <ISMAELMARTINEZ@GMAIL.COM>
+AuthorDate: Mon May 11 10:49:11 2026 +0100
+Commit:     GitHub <noreply@github.com>
+CommitDate: Mon May 11 10:49:11 2026 +0100
+
+    feat: add prompt-pattern issue template for Layer 4 feedback loop (#84)
+
+    Introduces the prompt-pattern issue template and associated GitHub label to provide a public review surface for recurring misses on external hardware. This closes the gap in the single-machine hit/miss log by allowing contributors to flag failures that require broader validation. The prompts/README.md is updated to document the workflow for maintaining this feedback loop.
+
+    With this addition, all four layers of the training-loop initiative are now complete. The system now supports a full lifecycle where a one-conversation observation can be escalated, reviewed, and ultimately graduated into a robust recipe paired with an eval-set positive.
+
+commit 7b6481b7b836ad2d801a64d18bb734712a7fa10d
+Author:     IsmaelMartinez <ISMAELMARTINEZ@GMAIL.COM>
+AuthorDate: Mon May 11 07:53:34 2026 +0100
+Commit:     GitHub <noreply@github.com>
+CommitDate: Mon May 11 07:53:34 2026 +0100
+
+    feat: add recommend_prompt MCP tool — closes Layer 3 of training-loop initiative (#83)
+
+    The mcp/ server gains recommend_prompt(task, include_examples, max_examples) (17 new pytest cases, 38 total). The tool token-matches a task description against the recipe filename stems, parses the recipe's Prompt template, Variables, and Invocation sections, extracts the recommended tier from the invocation example, and joins the metrics JSONL against the feedback rows keyed by ref_ts to attach hit_count, miss_count, and the most recent HIT events.
+
+    British/US spelling aliases ("summarize" → "summarise"), latest-wins semantics on duplicate feedback verdicts, and graceful cold-start when the metrics file is absent.
+
+=== This commit (changes) ===
+ experiments/fixtures/task-4-commit-message-2026-05-11.txt | 64 ++++++++++++++++++++++++
+ experiments/runner.sh                                     | 18 +++++++
+ experiments/score-t4.sh                                   | 142 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test-score-t4.sh                                    | 84 ++++++++++++++++++++++++++++++
+ 4 files changed, 308 insertions(+)
+
+=== Context for the WHY paragraph ===
+Phase 7 of the roadmap calls out commit-message drafting as a future fixture to add to the empirical-accuracy framework. The commit-message recipe was just hardened with an anti-padding directive in PR #85, distilled from a HIT-with-edits delegation. Without a fixture, that hardening has no per-model measurement attached — it is asserted, not measured. The new T4 fixture sends the literal substituted recipe prompt to any installed Ollama model and the new score-t4.sh applies six deterministic structural checks (subject ≤72 chars, conventional-commit type prefix, no fake (#NN) suffix, body flush-left, no bullets, no participial-padding tails) to each rep's output. Each check came from a real past MISS observed in this project's recent sessions, so a model's pass rate against the fixture is directly comparable to the recipe's empirical calibration history. The runner gains --t4-snapshot DATE so the fixture is versionable per the existing T3 convention.

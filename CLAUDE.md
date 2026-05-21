@@ -81,7 +81,7 @@ Run the trigger eval against the live Anthropic API (requires `ANTHROPIC_API_KEY
 ANTHROPIC_API_KEY=… bash scripts/eval-skill-triggers.sh --api
 ```
 
-Run the empirical accuracy fixtures against a specific installed model and append timing + raw output to `experiments/results/raw/<slug>.txt`. `--reps N` repeats every task N times within the same file (default 1); `--t3-snapshot DATE`, `--t4-snapshot DATE`, `--t5-snapshot DATE`, and `--t6-snapshot DATE` select which dated fixture each uses (defaults `2026-04-28`, `2026-05-11`, `2026-05-11`, `2026-05-11`):
+Run the empirical accuracy fixtures against a specific installed model and append timing + raw output to `experiments/results/raw/<slug>.txt`. `--reps N` repeats every task N times within the same file (default 1); `--t3-snapshot DATE`, `--t4-snapshot DATE`, `--t5-snapshot DATE`, and `--t6-snapshot DATE` select which dated fixture each uses (defaults `2026-04-28`, `2026-05-21`, `2026-05-11`, `2026-05-11`):
 
 ```bash
 bash experiments/runner.sh [--reps N] [--t3-snapshot DATE] [--t4-snapshot DATE] [--t5-snapshot DATE] [--t6-snapshot DATE] <ollama-model-name>
