@@ -106,9 +106,11 @@ The MISS source paragraph was:
 
 > "Phase 3: route api.example.com and admin.example.com via a wildcard ACM certificate, and consolidate per-service CloudFront distributions into one distribution with path-based routing."
 
-The verbatim MISS output (kept here as evidence so future recipe edits can verify they actually catch this shape):
+A reconstructed approximation of the MISS output, assembled from the verbatim fragments captured in issue #141 (the original full paragraph was not preserved; treat this as directionally correct, not character-exact — included so a future recipe edit has a single block to dogfood against rather than three loose fragments):
 
 > "Phase 3 will route api.example.com and admin.example.com by consolidating the wildcard ACM certificate into a single CloudFront distribution with path-based routing, utilizing the new wildcard certificate to align with the new routing configuration."
+
+The three verbatim fragments that ARE preserved from the original MISS appear in the provenance table below (`consolidate the wildcard ACM certificate into a single CloudFront distribution`, `utilizing the new wildcard certificate`, `to align with the new routing configuration`) — those are the load-bearing evidence; the block above is a reconstruction for narrative continuity.
 
 Three failure modes appeared in one response. The output collapsed the two comma-coordinated technical objects (the wildcard ACM certificate AND the consolidated CloudFront distribution) into one nonsensical action: "consolidate the wildcard ACM certificate into a single CloudFront distribution". The same output used "utilizing" in an otherwise British-voice paragraph. The same output closed with "to align with the new routing configuration" — pure restatement padding with the participle-clause shape SKILL.md's anti-padding directive blocks.
 
