@@ -81,6 +81,7 @@ The maintainer (or a future PR-bot) graduates a `prompt-pattern` issue by drafti
 - `em-dash-removal.md` — substitute every em-dash in prose with the most natural alternative (period, comma, semicolon, parens) without expanding contractions or collapsing parenthetical lists.
 - `ci-log-triage.md` — five-field structured triage of a CI / build failure log (FAILURE_TYPE / JOB / STEP / ROOT_CAUSE / NEXT_STEP) from a pre-filtered `gh run view --log-failed` slice. The prototypical input-digestion recipe — per-call token savings dominate output-bounded recipes by 10-100×.
 - `roadmap-entry.md` — one heading plus 1-2 flowing-prose paragraphs drafting a single "shipped" entry for a long-running project plan / roadmap file, anchored by a verbatim recent entry and a structured fact list (PR numbers, squash hashes, dates, per-PR shipped summaries).
+- `doc-section.md` — one short paragraph of guidance for a technical-doc section, grounded in a bullet list of facts; ships v5-style hard rules (keyword-triggered closing-recap deletion) drawn from issue #132's repeated MISS pattern.
 
 ## Related
 
