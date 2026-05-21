@@ -45,6 +45,11 @@
 #                                           #   untracked-verdict gap (see the
 #                                           #   2026-05-18 calibration finding
 #                                           #   in ROADMAP).
+#   DELEGATE_TO_OLLAMA_FORCE_VERDICT_NUDGE=1 # print the verdict nudge even
+#                                           #   when stderr is not a TTY.
+#                                           #   Useful for tests or wrappers
+#                                           #   that still want the reminder
+#                                           #   in captured logs.
 #   DELEGATE_PREFLIGHT_TIMEOUT=<s>          # default 10. Only consulted when
 #                                           #   --recipe is set. A 1-token
 #                                           #   canary probe hits the resolved
@@ -494,9 +499,14 @@ fi
 # self-correct from production data. Conditions: only after a successful call
 # (status==0), only when a metrics row was actually written (NO_METRICS off),
 # and silenceable via NO_VERDICT_NUDGE for callers who want clean stderr.
+# By default it is interactive-only (`stderr` must be a TTY) so callers that
+# intentionally combine stdout and stderr do not get the reminder mixed into
+# captured model output. Set FORCE_VERDICT_NUDGE=1 to keep the old captured-log
+# behaviour explicitly.
 if [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" != "1" ]] \
    && [[ "${DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE:-}" != "1" ]] \
-   && (( status == 0 )); then
+   && (( status == 0 )) \
+   && { [[ "${DELEGATE_TO_OLLAMA_FORCE_VERDICT_NUDGE:-}" == "1" ]] || [[ -t 2 ]]; }; then
   echo "delegate: record verdict → bash scripts/delegate-feedback.sh hit (or miss \"<reason>\")" >&2
 fi
 

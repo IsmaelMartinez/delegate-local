@@ -824,10 +824,10 @@ decoded_model=$(echo "$line" | jq -r '.model')
 assert_eq 'qwen3.6:35b"weird-name' "$decoded_model" "jq-metrics: model field decodes to original string"
 rm -rf "$tmp" "$metrics"
 
-# 14. Verdict nudge prints to stderr on a successful call. The nudge is the
+# 14. Verdict nudge is suppressed when stderr is redirected. The nudge is the
 # 2026-05-18 intervention against the untracked-verdict gap (65% of prose
-# delegations carried no feedback row at that point). Captures stderr
-# separately from stdout so the assertion is unambiguous.
+# delegations carried no feedback row at that point), but non-interactive
+# callers often combine stdout and stderr into one output file.
 tmp=$(mktemp -d)
 make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
@@ -839,16 +839,37 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge: happy path exits 0"
 stderr_content=$(cat "$stderr_file")
-assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge: prints to stderr on success"
-assert_contains "delegate-feedback.sh hit" "$stderr_content" "verdict-nudge: names hit"
-assert_contains "miss" "$stderr_content" "verdict-nudge: names miss"
-# Nudge stays on stderr — stdout should hold only the model output, so
-# downstream pipes (e.g. `delegate.sh prose "..." | jq ...`) keep working.
+if echo "$stderr_content" | grep -q "record verdict"; then
+  echo "  FAIL  verdict-nudge redirected: nudge printed despite non-TTY stderr"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge redirected: silenced"; pass=$((pass+1))
+fi
+# Nudge must not leak into stdout — stdout should hold only the model output,
+# so downstream pipes (e.g. `delegate.sh prose "..." | jq ...`) keep working.
 if echo "$out" | grep -q "record verdict"; then
   echo "  FAIL  verdict-nudge: leaked into stdout"; fail=$((fail+1))
 else
   echo "  PASS  verdict-nudge: stdout unaffected"; pass=$((pass+1))
 fi
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 14b. DELEGATE_TO_OLLAMA_FORCE_VERDICT_NUDGE=1 preserves the captured-log
+# reminder for wrappers that deliberately want it while redirecting stderr.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_FORCE_VERDICT_NUDGE=1 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "verdict-nudge force: still exits 0"
+stderr_content=$(cat "$stderr_file")
+assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge force: prints under redirected stderr"
+assert_contains "delegate-feedback.sh hit" "$stderr_content" "verdict-nudge force: names hit"
+assert_contains "miss" "$stderr_content" "verdict-nudge force: names miss"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 15. DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1 silences the nudge but keeps
@@ -1395,9 +1416,9 @@ fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 20. DELEGATE_TO_OLLAMA_NO_META=1 silences the meta line but the rest of
-# the delegation still runs (metrics row written, model output on stdout,
-# verdict nudge still fires — meta and nudge are independent surfaces with
-# independent opt-outs).
+# the delegation still runs (metrics row written, model output on stdout).
+# Force the verdict nudge here so the test proves meta and nudge remain
+# independent surfaces with independent opt-outs even under redirected stderr.
 tmp=$(mktemp -d)
 make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
@@ -1407,6 +1428,7 @@ EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_TO_OLLAMA_NO_META=1 \
+  DELEGATE_TO_OLLAMA_FORCE_VERDICT_NUDGE=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "delegate-meta opt-out: still exits 0"
 stderr_content=$(cat "$stderr_file")
@@ -1415,7 +1437,7 @@ if echo "$stderr_content" | grep -q "delegate-meta:"; then
 else
   echo "  PASS  delegate-meta opt-out: silenced"; pass=$((pass+1))
 fi
-# Verdict nudge still fires — opt-out is meta-only.
+# Verdict nudge still fires when explicitly forced — opt-out is meta-only.
 assert_contains "record verdict" "$stderr_content" "delegate-meta opt-out: verdict nudge unaffected"
 # Metrics row still written — opt-out is meta-only.
 assert_eq 1 "$(grep -c '^' "$metrics")" "delegate-meta opt-out: metrics row still written"
