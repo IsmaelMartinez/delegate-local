@@ -53,15 +53,19 @@ The `≤ 8k tokens` is a theoretical upper bound; the practical ceiling on a giv
 
 Recipe-shaped prompts have a sharper threshold than the byte-count framing suggests — issue #110's 2026-05-13 follow-up measured the 35B-class prose-tier model stalling on ~3-4 KB recipe inputs on both Ollama and MLX while a 0.6B-class model handled the same shape in 1 second; see `prompts/pr-description.md` calibration history for the full evidence.
 
-**Pitfall — shell-variable expansion silently drops prompt tokens.** Any prompt argument referencing a literal `$VARNAME` token (environment variables, CI variables, shell parameters named by their `$VAR` form) must be single-quoted, wrapped in a `<<'EOF'` heredoc, or escape the dollar as `\$VARNAME`. Otherwise the surrounding shell substitutes the variable before `delegate.sh` ever sees it; unset variables expand to empty so the token vanishes from the prompt, the model produces output with a matching hole, and the corruption looks indistinguishable from the model forgetting a token. Observed in production on a documentation draft referencing `$PR_AGENT_GITLAB_TOKEN` — the unescaped reference dropped to nothing and the model dutifully reproduced the gap. The failure is silent: no error, no warning.
+**Pitfall — shell-variable expansion leaks secrets or drops tokens.** Any prompt argument referencing a literal `$VARNAME` token (environment variables, CI variables, shell parameters) must be single-quoted, wrapped in a `<<'EOF'` heredoc, or escape the dollar as `\$VARNAME`. Otherwise the surrounding shell substitutes the variable before `delegate.sh` ever sees it: unset variables expand to empty so the token vanishes from the prompt (the model produces output with a matching hole, indistinguishable from a forgotten token), while set variables expand to their literal value so the secret leaks into the prompt sent to the model and into the metrics JSONL row that captures `prompt_chars` for audit. Observed in production on a documentation draft referencing `$PR_AGENT_GITLAB_TOKEN` — the unescaped reference dropped to nothing in that case (the variable was unset locally), but on a CI host where the same name is the live token, the model would have received the secret directly. The failure is silent: no error, no warning.
 
 ```bash
-# Wrong: $PR_AGENT_GITLAB_TOKEN expands to empty and disappears from the prompt
+# Wrong: $PR_AGENT_GITLAB_TOKEN expands — leaks the secret if set, vanishes if unset
 bash scripts/delegate.sh prose "Document the job that copies $PR_AGENT_GITLAB_TOKEN."
 # Right: single quotes disable expansion
 bash scripts/delegate.sh prose 'Document the job that copies $PR_AGENT_GITLAB_TOKEN.'
 # Right: backslash-escape the dollar inside double quotes
 bash scripts/delegate.sh prose "Document the job that copies \$PR_AGENT_GITLAB_TOKEN."
+# Right: quoted heredoc keeps the literal token in stdin without any expansion
+cat <<'EOF' | bash scripts/delegate.sh prose "Summarise the doc below."
+Document the job that copies $PR_AGENT_GITLAB_TOKEN from the group CI variable.
+EOF
 ```
 
 ## Recipes — calibrated prompt templates for recurring task shapes
