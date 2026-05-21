@@ -93,7 +93,7 @@ done
 wait
 ```
 
-xargs alternative for one-liner fan-out:
+xargs alternative for one-liner fan-out. **Caveat:** the `$(jq ...)` expansions are evaluated inside the `sh -c` string, so any double quote, dollar sign, or backslash in a fact body will break argument parsing. Prefer the `for` loop above for arbitrary slide content; reach for this only when the fact strings are known to be quote-free.
 
 ```bash
 printf '1\n2\n3\n4\n5\n6\n' | xargs -n1 -P6 -I{} \

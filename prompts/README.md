@@ -83,7 +83,7 @@ The maintainer (or a future PR-bot) graduates a `prompt-pattern` issue by drafti
 - `roadmap-entry.md` — one heading plus 1-2 flowing-prose paragraphs drafting a single "shipped" entry for a long-running project plan / roadmap file, anchored by a verbatim recent entry and a structured fact list (PR numbers, squash hashes, dates, per-PR shipped summaries).
 - `doc-section.md` — one short paragraph of guidance for a technical-doc section, grounded in a bullet list of facts; ships v5-style hard rules (keyword-triggered closing-recap deletion) drawn from issue #132's repeated MISS pattern.
 - `jira-ticket-description.md` — 2-3 sentence Jira ticket description rewritten from a source paragraph; ships the verbatim-preservation directive, the British-spelling glossary guard, the comma-coordinated no-merge rule, and the closing-sentence opener blocklist.
-- `presentation-slide-prose.md` — 2-3 sentence narrative paragraph for a slide given a title + fact list; ships a list-completeness REFUSE hatch and the sharpened anti-padding directive. Parallel-invocation safe.
+- `presentation-slide-prose.md` — 2-4 sentence narrative paragraph for a slide given a title + fact list; ships a list-completeness REFUSE hatch and the sharpened anti-padding directive. Parallel-invocation safe.
 
 ## Related
 
