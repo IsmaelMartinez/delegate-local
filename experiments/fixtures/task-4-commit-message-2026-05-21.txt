@@ -11,12 +11,14 @@ Correct: feat: delegate.sh recipe loading and placeholder validation
 Do NOT indent the body lines — output should be flush-left.
 Stop each paragraph after the substantive sentences. Do NOT add a trailing
 sentence that restates the point. Restating happens in two shapes, both
-rejected: participial form (", ensuring that…", ", enabling…", ", allowing…",
-", keeping…", ", reflecting…", ", supporting…") and declarative form
-("This ensures…", "This enables…", "This prevents…", "This closes the
-gap in X", "…closing the gap", "…closes the loop", "…going forward"). Both
-"closes" and "closing" forms are rejected; both finite-verb and participial
-shapes of the same restating cliché count.
+rejected: participial form (", ensuring…", ", enabling…", ", allowing…",
+", providing…", ", keeping…", ", reflecting…", ", supporting…") and
+declarative form ("This ensures…", "This enables…", "This prevents…",
+"This guarantees…", "This delivers…", "This is crucial/essential",
+"This distinction is crucial", "This closes the gap in X", "…closing
+the gap", "…closes the loop", "…going/moving forward", "…across diverse
+environments"). Both "closes" and "closing" forms are rejected; both
+finite-verb and participial shapes of the same restating cliché count.
 Wrong: This closes the gap between asserted hardening and measured accuracy.
 Correct: (sentence ends after the substantive content; no closing-the-gap
 or closing-the-loop tail at all)
