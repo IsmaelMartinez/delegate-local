@@ -53,6 +53,17 @@ The `≤ 8k tokens` is a theoretical upper bound; the practical ceiling on a giv
 
 Recipe-shaped prompts have a sharper threshold than the byte-count framing suggests — issue #110's 2026-05-13 follow-up measured the 35B-class prose-tier model stalling on ~3-4 KB recipe inputs on both Ollama and MLX while a 0.6B-class model handled the same shape in 1 second; see `prompts/pr-description.md` calibration history for the full evidence.
 
+**Pitfall — shell-variable expansion silently drops prompt tokens.** Any prompt argument referencing a literal `$VARNAME` token (environment variables, CI variables, shell parameters named by their `$VAR` form) must be single-quoted, wrapped in a `<<'EOF'` heredoc, or escape the dollar as `\$VARNAME`. Otherwise the surrounding shell substitutes the variable before `delegate.sh` ever sees it; unset variables expand to empty so the token vanishes from the prompt, the model produces output with a matching hole, and the corruption looks indistinguishable from the model forgetting a token. Observed in production on a documentation draft referencing `$PR_AGENT_GITLAB_TOKEN` — the unescaped reference dropped to nothing and the model dutifully reproduced the gap. The failure is silent: no error, no warning.
+
+```bash
+# Wrong: $PR_AGENT_GITLAB_TOKEN expands to empty and disappears from the prompt
+bash scripts/delegate.sh prose "Document the job that copies $PR_AGENT_GITLAB_TOKEN."
+# Right: single quotes disable expansion
+bash scripts/delegate.sh prose 'Document the job that copies $PR_AGENT_GITLAB_TOKEN.'
+# Right: backslash-escape the dollar inside double quotes
+bash scripts/delegate.sh prose "Document the job that copies \$PR_AGENT_GITLAB_TOKEN."
+```
+
 ## Recipes — calibrated prompt templates for recurring task shapes
 
 For task shapes that come up often — drafting a commit message, drafting a PR description, summarising an issue's CI logs into a timeline comment — there is a calibrated recipe in `prompts/<task>.md` rather than just a description of "use the prose tier". Recipes ship the proven prompt skeleton, the canonical context-gathering commands, the verbatim-example anchors, and the explicit anti-hallucination guards drawn from prior session HITs. The reason they exist: small / local models default to whatever output shape is most common in their training (bullets when asked for "concise commit message"), and abstract style descriptors do not reliably override that prior — verbatim-example anchoring plus explicit guards do. Each guard in a recipe corresponds to a real past MISS, so the recipe accumulates calibration over time without rediscovering it every conversation.
