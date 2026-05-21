@@ -884,6 +884,7 @@ EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1 \
+  DELEGATE_TO_OLLAMA_FORCE_VERDICT_NUDGE=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge opt-out: still exits 0"
 stderr_content=$(cat "$stderr_file")
@@ -909,6 +910,7 @@ EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_TO_OLLAMA_NO_METRICS=1 \
+  DELEGATE_TO_OLLAMA_FORCE_VERDICT_NUDGE=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge NO_METRICS: still exits 0"
 stderr_content=$(cat "$stderr_file")
