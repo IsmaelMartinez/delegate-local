@@ -26,7 +26,7 @@ No git or repo introspection is needed — this recipe operates over agent-autho
 ```
 Write ONE short paragraph (≤{{max_sentences}} sentences) of guidance about: {{topic}}.
 
-Plain UK English. No bullets, no headings, no markdown. Output ONLY the paragraph itself, nothing else.
+Plain UK English. No bullets, no headings, no bold, no inline code, no markdown. Output ONLY the paragraph itself, nothing else.
 
 HARD RULES (non-negotiable; each addresses a real past MISS):
 
@@ -44,7 +44,7 @@ HARD RULES (non-negotiable; each addresses a real past MISS):
    - "As a result, …"
    This list is non-negotiable; if the trigger phrase appears at the start of the final sentence, drop the whole sentence rather than rewording it.
 
-3. If your draft is exactly N sentences and the final one paraphrases or restates an earlier sentence (even without a trigger phrase from rule 2), OUTPUT only the first N-1 sentences.
+3. If the final sentence paraphrases or restates an earlier sentence (even without a trigger phrase from rule 2), omit it from your response.
 
 Wrong (drafted with the closing recap pattern the rules above reject):
 "Tune these settings only when the current defaults do not suit your specific needs, rather than applying changes preemptively. The four key knobs are enforced via CI environment variables which take precedence over your `.pr_agent.toml`, meaning local adjustments to those specific parameters will not take effect until AI-61 is resolved. Consequently, any configuration changes for these fields are strictly opt-in and should be avoided if the existing values are adequate."
@@ -123,10 +123,10 @@ The same shape recurred in a later 2026-05-20 session (`ref_ts=2026-05-20T22:37:
 | Guard | Source |
 |-------|--------|
 | `ONE short paragraph (≤N sentences)` | The 2026-05-20 HITs all used an explicit sentence cap; the MISSes mostly held the cap but emitted a recap sentence within the cap. |
-| `Plain UK English. No bullets, no headings, no markdown` | General prose-tier default in SKILL.md; restated locally for resilience. |
+| `Plain UK English. No bullets, no headings, no bold, no inline code, no markdown` | General prose-tier default in SKILL.md; restated locally for resilience. Inline elements (`**bold**`, `` `code` ``) are listed explicitly because the prose tier sometimes interprets bare "no markdown" as a structural-only constraint and emits inline emphasis for what it considers "important" words. The PR #135 review surfaced this on first round. |
 | HARD RULE 1 (Stop after substantive sentences) | Verbatim from SKILL.md Discipline section; established practice. |
 | HARD RULE 2 (keyword-triggered DELETE list) | New for this recipe. The phrase list is drawn from the actual MISS outputs in issue #132 and the broader metrics history's PADDING_RECAP rows (10 of 18 recent MISSes classified as recap-shaped on 2026-05-21 — see `metrics.jsonl` rows tagged `kept=false`). |
-| HARD RULE 3 (N-sentence paraphrase removal) | New for this recipe. Issue #132 noted that some MISSes used legitimate-looking opening clauses that still amounted to restatement (e.g. "should be avoided if the existing values are adequate" without a trigger phrase from rule 2). Rule 3 catches that residual shape. |
+| HARD RULE 3 (final-sentence paraphrase removal) | New for this recipe. Issue #132 noted that some MISSes used legitimate-looking opening clauses that still amounted to restatement (e.g. "should be avoided if the existing values are adequate" without a trigger phrase from rule 2). Rule 3 catches that residual shape. Phrased in natural language rather than "OUTPUT only the first N-1 sentences" because the prose-tier model in the 35B range parses mathematical variable notation unreliably (PR #135 review surfaced this — natural-language rewording is the load-bearing change). |
 | Wrong/Correct one-shot | Verbatim from issue #132's tuning-paragraph MISS (`ref_ts=2026-05-20T12:59:15Z`); the Correct version is the hand-edited form the user kept. |
 
 ### What's not yet measured
