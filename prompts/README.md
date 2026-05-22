@@ -87,7 +87,7 @@ The maintainer (or a future PR-bot) graduates a `prompt-pattern` issue by drafti
 
 ## What this library does NOT adopt
 
-Three patterns recur in public prompt libraries and have been deliberately rejected for this skill. Documenting the rejection rationale here so future contributors do not drift toward the public idiom unknowingly.
+Three patterns recur in public prompt libraries and have been deliberately rejected for this skill. Documenting the rejection rationale here so future contributors do not drift toward the public idiom unknowingly. External citations in this file are intentional and pre-allowlisted by scope (see `scripts/validate-skill-content.sh` — CI / hooks only scan `SKILL.md`).
 
 ### "You are an expert X" persona prompts
 

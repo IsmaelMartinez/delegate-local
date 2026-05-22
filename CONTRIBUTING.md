@@ -48,6 +48,8 @@ cd mcp && pytest -q
 
 A post-edit hook at `.claude/hooks/post-edit-validate.sh` runs the frontmatter and content checks automatically when you save through Claude Code. It does not run the trigger-accuracy gate — run that yourself before merge.
 
+The `URL_EXTERNAL` content check applies to `SKILL.md` only; contributor docs under `prompts/` may cite external sources (papers, third-party libraries) as evidence of design decisions without going through the allowlist.
+
 ## Commits and PRs
 
 Conventional-commit prefixes (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`) are required by the release-please pipeline that drives versioning and CHANGELOG generation. Keep commit and PR messages concise. Reference an issue or roadmap item when the change is non-trivial.
