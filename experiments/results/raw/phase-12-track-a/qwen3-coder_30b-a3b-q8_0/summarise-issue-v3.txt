@@ -1,0 +1,111 @@
+MODEL: qwen3-coder:30b-a3b-q8_0
+VARIANT: v3
+RECIPE: summarise-issue-v3-persona
+DATE: 2026-05-22T07:30:44Z
+REPS: 5
+
+===== T8-summarise-issue rep 1 =====
+DURATION_SEC: 7
+RUN_STATUS: 0
+OUTPUT:
+## What happened
+- 2026-05-13T09:14:22Z: `user-a` can repro the hang on 4.2KB stat input against `qwen3.6:35b-a3b-q8_0`, with `ollama ps` showing the model loaded but request queued at 100% CPU.
+- 2026-05-13T11:46:01Z: `user-b` bisected the issue to ~3KB prompt input size — below 3KB returns in 20-40s, above stalls indefinitely.
+- 2026-05-13T14:02:35Z: `maintainer` confirms the issue and plans a pre-flight canary in `delegate.sh` with bounded timeout to prevent input collection waste.
+- 2026-05-13T14:02:35Z: `maintainer` states that the canary will exit 3 with stderr message naming recovery options if it times out.
+- 2026-05-13T14:02:35Z: `maintainer` notes that default `DELEGATE_PREFLIGHT_TIMEOUT=10` and a PR is coming.
+
+## What's blocking
+- The `qwen3.6:35b-a3b-q8_0` model hangs on prompt inputs larger than ~3KB, with no token output.
+- The issue is not a token-budget problem, as the request never starts emitting tokens.
+- The ollama daemon itself is not the problem, as smaller prompts return quickly.
+
+## What's next
+- `maintainer` will add a pre-flight canary to `delegate.sh` with bounded timeout.
+- `maintainer` will exit 3 with a stderr message naming recovery options if the canary times out.
+- `maintainer` will file a PR with the pre-flight timeout fix.
+
+===== T8-summarise-issue rep 2 =====
+DURATION_SEC: 7
+RUN_STATUS: 0
+OUTPUT:
+## What happened
+- 2026-05-13T09:14:22Z: `user-a` can repro the hang on 4.2KB stat input against `qwen3.6:35b-a3b-q8_0`, with `ollama ps` showing the model loaded but request queued at 100% CPU.
+- 2026-05-13T11:46:01Z: `user-b` bisected the issue to ~3KB prompt input size — below 3KB returns in 20-40s, above stalls indefinitely.
+- 2026-05-13T14:02:35Z: `maintainer` confirms the issue and plans a pre-flight canary in `delegate.sh` with bounded timeout to prevent input collection waste.
+- 2026-05-13T14:02:35Z: `maintainer` states that the canary will exit 3 with stderr message naming recovery options if it times out.
+- 2026-05-13T14:02:35Z: `maintainer` notes that default `DELEGATE_PREFLIGHT_TIMEOUT=10` and a PR is coming.
+
+## What's blocking
+- The `qwen3.6:35b-a3b-q8_0` model hangs on prompt inputs larger than ~3KB, with no token output.
+- The issue is not a token-budget problem, as the request never starts emitting tokens.
+- The ollama daemon itself is not the problem, as smaller prompts return quickly.
+
+## What's next
+- `maintainer` will add a pre-flight canary to `delegate.sh` with bounded timeout.
+- `maintainer` will exit 3 with a stderr message naming recovery options if the canary times out.
+- `maintainer` will file a PR with the pre-flight timeout fix.
+
+===== T8-summarise-issue rep 3 =====
+DURATION_SEC: 7
+RUN_STATUS: 0
+OUTPUT:
+## What happened
+- 2026-05-13T09:14:22Z: `user-a` can repro the hang on 4.2KB stat input against `qwen3.6:35b-a3b-q8_0`, with `ollama ps` showing the model loaded but request queued at 100% CPU.
+- 2026-05-13T11:46:01Z: `user-b` bisected the issue to ~3KB prompt input size — below 3KB returns in 20-40s, above stalls indefinitely.
+- 2026-05-13T14:02:35Z: `maintainer` confirms the issue and plans a pre-flight canary in `delegate.sh` with bounded timeout to prevent input collection waste.
+- 2026-05-13T14:02:35Z: `maintainer` states that the canary will exit 3 with stderr message naming recovery options if it times out.
+- 2026-05-13T14:02:35Z: `maintainer` notes that default `DELEGATE_PREFLIGHT_TIMEOUT=10` and a PR is coming.
+
+## What's blocking
+- The `qwen3.6:35b-a3b-q8_0` model hangs on prompt inputs larger than ~3KB, with no token output.
+- The issue is not a token-budget problem, as the request never starts emitting tokens.
+- The ollama daemon itself is not the problem, as smaller prompts return quickly.
+
+## What's next
+- `maintainer` will add a pre-flight canary to `delegate.sh` with bounded timeout.
+- `maintainer` will exit 3 with a stderr message naming recovery options if the canary times out.
+- `maintainer` will file a PR with the pre-flight timeout fix.
+
+===== T8-summarise-issue rep 4 =====
+DURATION_SEC: 7
+RUN_STATUS: 0
+OUTPUT:
+## What happened
+- 2026-05-13T09:14:22Z: `user-a` can repro the hang on 4.2KB stat input against `qwen3.6:35b-a3b-q8_0`, with `ollama ps` showing the model loaded but request queued at 100% CPU.
+- 2026-05-13T11:46:01Z: `user-b` bisected the issue to ~3KB prompt input size — below 3KB returns in 20-40s, above stalls indefinitely.
+- 2026-05-13T14:02:35Z: `maintainer` confirms the issue and plans a pre-flight canary in `delegate.sh` with bounded timeout to prevent input collection waste.
+- 2026-05-13T14:02:35Z: `maintainer` states that the canary will exit 3 with stderr message naming recovery options if it times out.
+- 2026-05-13T14:02:35Z: `maintainer` notes that default `DELEGATE_PREFLIGHT_TIMEOUT=10` and a PR is coming.
+
+## What's blocking
+- The `qwen3.6:35b-a3b-q8_0` model hangs on prompt inputs larger than ~3KB, with no token output.
+- The issue is not a token-budget problem, as the request never starts emitting tokens.
+- The ollama daemon itself is not the problem, as smaller prompts return quickly.
+
+## What's next
+- `maintainer` will add a pre-flight canary to `delegate.sh` with bounded timeout.
+- `maintainer` will exit 3 with a stderr message naming recovery options if the canary times out.
+- `maintainer` will file a PR with the pre-flight timeout fix.
+
+===== T8-summarise-issue rep 5 =====
+DURATION_SEC: 7
+RUN_STATUS: 0
+OUTPUT:
+## What happened
+- 2026-05-13T09:14:22Z: `user-a` can repro the hang on 4.2KB stat input against `qwen3.6:35b-a3b-q8_0`, with `ollama ps` showing the model loaded but request queued at 100% CPU.
+- 2026-05-13T11:46:01Z: `user-b` bisected the issue to ~3KB prompt input size — below 3KB returns in 20-40s, above stalls indefinitely.
+- 2026-05-13T14:02:35Z: `maintainer` confirms the issue and plans a pre-flight canary in `delegate.sh` with bounded timeout to prevent input collection waste.
+- 2026-05-13T14:02:35Z: `maintainer` states that the canary will exit 3 with stderr message naming recovery options if it times out.
+- 2026-05-13T14:02:35Z: `maintainer` notes that default `DELEGATE_PREFLIGHT_TIMEOUT=10` and a PR is coming.
+
+## What's blocking
+- The `qwen3.6:35b-a3b-q8_0` model hangs on prompt inputs larger than ~3KB, with no token output.
+- The issue is not a token-budget problem, as the request never starts emitting tokens.
+- The ollama daemon itself is not the problem, as smaller prompts return quickly.
+
+## What's next
+- `maintainer` will add a pre-flight canary to `delegate.sh` with bounded timeout.
+- `maintainer` will exit 3 with a stderr message naming recovery options if the canary times out.
+- `maintainer` will file a PR with the pre-flight timeout fix.
+

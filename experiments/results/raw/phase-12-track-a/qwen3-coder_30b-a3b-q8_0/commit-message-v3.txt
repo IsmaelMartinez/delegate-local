@@ -1,0 +1,56 @@
+MODEL: qwen3-coder:30b-a3b-q8_0
+VARIANT: v3
+RECIPE: commit-message-v3-persona
+DATE: 2026-05-22T07:28:54Z
+REPS: 5
+
+===== T4-commit-message rep 1 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+feat: add T4 commit-message fixture with structural validation checks
+
+Introduces the T4 fixture for commit-message drafting, designed to measure empirical accuracy against the hardened recipe from PR #85. The fixture sends the literal substituted recipe prompt to Ollama models and applies six deterministic structural checks to outputs, including subject length, conventional-commit type, and absence of fake suffixes. Each check reflects a real MISS from recent sessions, enabling direct comparison with the recipe's calibration history.
+
+The runner.sh gains a --t4-snapshot DATE flag to version the fixture per existing T3 conventions. A new score-t4.sh script validates output structure, while tests/test-score-t4.sh ensures all checks function correctly. This completes the foundational setup for measuring commit-message accuracy in the empirical-accuracy framework.
+
+===== T4-commit-message rep 2 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+feat: add T4 commit-message fixture with structural validation checks
+
+Introduces the T4 fixture for commit-message drafting, designed to measure empirical accuracy against the hardened recipe from PR #85. The fixture sends the literal substituted recipe prompt to Ollama models and applies six deterministic structural checks to outputs, including subject length, conventional-commit type, and absence of fake suffixes. Each check reflects a real MISS from recent sessions, enabling direct comparison with the recipe's calibration history.
+
+The runner.sh gains a --t4-snapshot DATE flag to version the fixture per existing T3 conventions. A new score-t4.sh script validates output structure, while tests/test-score-t4.sh ensures all checks function correctly. This completes the foundational setup for measuring commit-message accuracy in the empirical-accuracy framework.
+
+===== T4-commit-message rep 3 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+feat: add T4 commit-message fixture with structural validation checks
+
+Introduces the T4 fixture for commit-message drafting, designed to measure empirical accuracy against the hardened recipe from PR #85. The fixture sends the literal substituted recipe prompt to Ollama models and applies six deterministic structural checks to outputs, including subject length, conventional-commit type, and absence of fake suffixes. Each check reflects a real MISS from recent sessions, enabling direct comparison with the recipe's calibration history.
+
+The runner.sh gains a --t4-snapshot DATE flag to version the fixture per existing T3 conventions. A new score-t4.sh script validates output structure, while tests/test-score-t4.sh ensures all checks function correctly. This completes the foundational setup for measuring commit-message accuracy in the empirical-accuracy framework.
+
+===== T4-commit-message rep 4 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+feat: add T4 commit-message fixture with structural validation checks
+
+Introduces the T4 fixture for commit-message drafting, designed to measure empirical accuracy against the hardened recipe from PR #85. The fixture sends the literal substituted recipe prompt to Ollama models and applies six deterministic structural checks to outputs, including subject length, conventional-commit type, and absence of fake suffixes. Each check reflects a real MISS from recent sessions, enabling direct comparison with the recipe's calibration history.
+
+The runner.sh gains a --t4-snapshot DATE flag to version the fixture per existing T3 conventions. A new score-t4.sh script validates output structure, while tests/test-score-t4.sh ensures all checks function correctly. This completes the foundational setup for measuring commit-message accuracy in the empirical-accuracy framework.
+
+===== T4-commit-message rep 5 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+feat: add T4 commit-message fixture with structural validation checks
+
+Introduces the T4 fixture for commit-message drafting, designed to measure empirical accuracy against the hardened recipe from PR #85. The fixture sends the literal substituted recipe prompt to Ollama models and applies six deterministic structural checks to outputs, including subject length, conventional-commit type, and absence of fake suffixes. Each check reflects a real MISS from recent sessions, enabling direct comparison with the recipe's calibration history.
+
+The runner.sh gains a --t4-snapshot DATE flag to version the fixture per existing T3 conventions. A new score-t4.sh script validates output structure, while tests/test-score-t4.sh ensures all checks function correctly. This completes the foundational setup for measuring commit-message accuracy in the empirical-accuracy framework.
+

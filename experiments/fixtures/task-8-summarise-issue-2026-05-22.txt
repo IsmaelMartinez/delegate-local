@@ -1,0 +1,21 @@
+{
+  "title": "Recipe stalls on 35B model — 8-minute timeout with no output",
+  "body": "Opened on 2026-05-13. The pr-description recipe hung indefinitely on the PR #84 input shape when invoked against qwen3.6:35b-a3b-q8_0 via the prose tier. No response after 8 minutes of wall-clock. Repro: stage a real PR-sized diff (~5KB stat output), invoke `bash scripts/delegate.sh --recipe pr-description --var recent_pr=... --var diff_stat=... prose 'Match the merged PR voice.'`. Expected: a draft PR description within ~30s like the smaller-input control case. Actual: no stdout, process pegged at 100% CPU on the ollama daemon, killed manually after 8 min.",
+  "comments": [
+    {
+      "author": "user-a",
+      "createdAt": "2026-05-13T09:14:22Z",
+      "body": "I can repro on the same model. Got the hang on a 4.2KB stat input against the same recipe. `ollama ps` shows the model loaded but the request is queued at 100% with no token output. Same model on a tiny prompt (`echo hi | ollama run qwen3.6:35b-a3b-q8_0`) returns in 1.2s, so it is not a daemon-level issue."
+    },
+    {
+      "author": "user-b",
+      "createdAt": "2026-05-13T11:46:01Z",
+      "body": "Bisected the recipe size — it stalls past ~3KB of prompt input on this hardware. Below 3KB it returns in 20-40s. Above 3KB it stalls indefinitely. Not a token-budget issue (the request never starts emitting). Filed a bug upstream against ollama with the repro."
+    },
+    {
+      "author": "maintainer",
+      "createdAt": "2026-05-13T14:02:35Z",
+      "body": "Confirmed. Adding a pre-flight canary to `delegate.sh` — a 1-token probe with bounded timeout — so callers don't sink their input collection effort. Will exit 3 with a stderr message naming recovery options if the canary times out. Default DELEGATE_PREFLIGHT_TIMEOUT=10. PR coming today."
+    }
+  ]
+}

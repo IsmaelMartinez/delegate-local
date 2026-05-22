@@ -1,0 +1,86 @@
+MODEL: qwen3.6:35b-a3b-q8_0
+VARIANT: v1
+RECIPE: summarise-issue
+DATE: 2026-05-22T07:25:06Z
+REPS: 5
+
+===== T8-summarise-issue rep 1 =====
+DURATION_SEC: 9
+RUN_STATUS: 0
+OUTPUT:
+## What happened
+- 2026-05-13: Issue opened reporting that the `pr-description` recipe hung indefinitely on the `qwen3.6:35b-a3b-q8_0` model with a ~5KB input, pegging CPU at 100% and requiring manual kill after 8 minutes.
+- 2026-05-13T09:14:22Z: user-a confirmed repro on the same model with a 4.2KB stat input, noting `ollama ps` showed the request queued at 100% with no token output, while tiny prompts returned in 1.2s.
+- 2026-05-13T11:46:01Z: user-b bisected the issue, finding the recipe stalls past ~3KB of prompt input on this hardware, and filed an upstream bug against ollama.
+- 2026-05-13T14:02:35Z: maintainer confirmed the issue and announced a plan to add a pre-flight canary to `delegate.sh` to prevent callers from sinking input collection effort.
+
+## What's blocking
+- The `pr-description` recipe stalls indefinitely on inputs above ~3KB on the `qwen3.6:35b-a3b-q8_0` model, causing 100% CPU usage and no token output.
+
+## What's next
+- maintainer will add a pre-flight canary to `delegate.sh` using a 1-token probe with a bounded timeout (`DELEGATE_PREFLIGHT_TIMEOUT=10`) to exit 3 with recovery options if the canary times out.
+
+===== T8-summarise-issue rep 2 =====
+DURATION_SEC: 9
+RUN_STATUS: 0
+OUTPUT:
+## What happened
+- 2026-05-13: Issue opened reporting that the `pr-description` recipe hung indefinitely on the `qwen3.6:35b-a3b-q8_0` model with a ~5KB input, pegging CPU at 100% and requiring manual kill after 8 minutes.
+- 2026-05-13T09:14:22Z: user-a confirmed repro on the same model with a 4.2KB stat input, noting `ollama ps` showed the request queued at 100% with no token output, while tiny prompts returned in 1.2s.
+- 2026-05-13T11:46:01Z: user-b bisected the issue, finding the recipe stalls past ~3KB of prompt input on this hardware, and filed an upstream bug against ollama.
+- 2026-05-13T14:02:35Z: maintainer confirmed the issue and announced a plan to add a pre-flight canary to `delegate.sh` to prevent callers from sinking input collection effort.
+
+## What's blocking
+- The `pr-description` recipe stalls indefinitely on inputs above ~3KB on the `qwen3.6:35b-a3b-q8_0` model, causing 100% CPU usage and no token output.
+
+## What's next
+- maintainer will add a pre-flight canary to `delegate.sh` using a 1-token probe with a bounded timeout (`DELEGATE_PREFLIGHT_TIMEOUT=10`) to exit 3 with recovery options if the canary times out.
+
+===== T8-summarise-issue rep 3 =====
+DURATION_SEC: 10
+RUN_STATUS: 0
+OUTPUT:
+## What happened
+- 2026-05-13: Issue opened reporting that the `pr-description` recipe hung indefinitely on the `qwen3.6:35b-a3b-q8_0` model with a ~5KB input, pegging CPU at 100% and requiring manual kill after 8 minutes.
+- 2026-05-13T09:14:22Z: user-a confirmed repro on the same model with a 4.2KB stat input, noting `ollama ps` showed the request queued at 100% with no token output, while tiny prompts returned in 1.2s.
+- 2026-05-13T11:46:01Z: user-b bisected the issue, finding the recipe stalls past ~3KB of prompt input on this hardware, and filed an upstream bug against ollama.
+- 2026-05-13T14:02:35Z: maintainer confirmed the issue and announced a plan to add a pre-flight canary to `delegate.sh` to prevent callers from sinking input collection effort.
+
+## What's blocking
+- The `pr-description` recipe stalls indefinitely on inputs above ~3KB on the `qwen3.6:35b-a3b-q8_0` model, causing 100% CPU usage and no token output.
+
+## What's next
+- maintainer will add a pre-flight canary to `delegate.sh` using a 1-token probe with a bounded timeout (`DELEGATE_PREFLIGHT_TIMEOUT=10`) to exit 3 with recovery options if the canary times out.
+
+===== T8-summarise-issue rep 4 =====
+DURATION_SEC: 9
+RUN_STATUS: 0
+OUTPUT:
+## What happened
+- 2026-05-13: Issue opened reporting that the `pr-description` recipe hung indefinitely on the `qwen3.6:35b-a3b-q8_0` model with a ~5KB input, pegging CPU at 100% and requiring manual kill after 8 minutes.
+- 2026-05-13T09:14:22Z: user-a confirmed repro on the same model with a 4.2KB stat input, noting `ollama ps` showed the request queued at 100% with no token output, while tiny prompts returned in 1.2s.
+- 2026-05-13T11:46:01Z: user-b bisected the issue, finding the recipe stalls past ~3KB of prompt input on this hardware, and filed an upstream bug against ollama.
+- 2026-05-13T14:02:35Z: maintainer confirmed the issue and announced a plan to add a pre-flight canary to `delegate.sh` to prevent callers from sinking input collection effort.
+
+## What's blocking
+- The `pr-description` recipe stalls indefinitely on inputs above ~3KB on the `qwen3.6:35b-a3b-q8_0` model, causing 100% CPU usage and no token output.
+
+## What's next
+- maintainer will add a pre-flight canary to `delegate.sh` using a 1-token probe with a bounded timeout (`DELEGATE_PREFLIGHT_TIMEOUT=10`) to exit 3 with recovery options if the canary times out.
+
+===== T8-summarise-issue rep 5 =====
+DURATION_SEC: 10
+RUN_STATUS: 0
+OUTPUT:
+## What happened
+- 2026-05-13: Issue opened reporting that the `pr-description` recipe hung indefinitely on the `qwen3.6:35b-a3b-q8_0` model with a ~5KB input, pegging CPU at 100% and requiring manual kill after 8 minutes.
+- 2026-05-13T09:14:22Z: user-a confirmed repro on the same model with a 4.2KB stat input, noting `ollama ps` showed the request queued at 100% with no token output, while tiny prompts returned in 1.2s.
+- 2026-05-13T11:46:01Z: user-b bisected the issue, finding the recipe stalls past ~3KB of prompt input on this hardware, and filed an upstream bug against ollama.
+- 2026-05-13T14:02:35Z: maintainer confirmed the issue and announced a plan to add a pre-flight canary to `delegate.sh` to prevent callers from sinking input collection effort.
+
+## What's blocking
+- The `pr-description` recipe stalls indefinitely on inputs above ~3KB on the `qwen3.6:35b-a3b-q8_0` model, causing 100% CPU usage and no token output.
+
+## What's next
+- maintainer will add a pre-flight canary to `delegate.sh` using a 1-token probe with a bounded timeout (`DELEGATE_PREFLIGHT_TIMEOUT=10`) to exit 3 with recovery options if the canary times out.
+
