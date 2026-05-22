@@ -187,6 +187,56 @@ assert_contains "## What's next" "$prompt_template_section" \
 assert_contains "no next-action stated" "$prompt_template_section" \
   "summarise-issue.md prompt template anchors no-next-action Wrong shape"
 
+# plan-section-intro.md — heading-line and FACTS-echo Wrong/Correct anchoring.
+# Pinned after the two confirming 2026-05-22 dogfood MISS observations
+# (ts=2026-05-22T11:12:12Z + verdict ts=2026-05-22T11:12:47Z; and
+# ts=2026-05-22T11:43:18Z + verdict ts=2026-05-22T11:43:47Z) prompted the
+# sharpening. Without these pins a future refactor could silently drop a
+# guard whose absence cost two dogfood iterations to add. Same discipline
+# the OMIT-EMPTY-SECTION + COMMENT-N-CITATION pins above apply to
+# summarise-issue.md.
+plan_section_intro_body=$(cat "$PROMPTS_DIR/plan-section-intro.md")
+assert_contains "NO-HEADING-LINE" "$plan_section_intro_body" \
+  "plan-section-intro.md names NO-HEADING-LINE rule"
+assert_contains "FACTS-BLOCK-REPHRASE" "$plan_section_intro_body" \
+  "plan-section-intro.md names FACTS-BLOCK-REPHRASE rule"
+# Both rules must appear in the Anti-hallucination guards section so the
+# calibration provenance for each guard is anchored in the document.
+plan_guards_section=$(awk '
+  /^## Anti-hallucination guards/ { in_section=1; next }
+  /^## / && in_section { in_section=0 }
+  in_section { print }
+' "$PROMPTS_DIR/plan-section-intro.md")
+assert_contains "NO-HEADING-LINE" "$plan_guards_section" \
+  "plan-section-intro.md '## Anti-hallucination guards' names NO-HEADING-LINE"
+assert_contains "FACTS-BLOCK-REPHRASE" "$plan_guards_section" \
+  "plan-section-intro.md '## Anti-hallucination guards' names FACTS-BLOCK-REPHRASE"
+# The Wrong/Correct anchor for NO-HEADING-LINE must be grounded in the
+# actual observed dogfood failure (the `### Phase 13 — Cross-machine
+# calibration aggregation` heading from the 2026-05-22T11:12:12Z dogfood)
+# rather than an abstract Wrong shape. Pinning the literal heading string
+# guards against a future refactor that paraphrases the anchor away from
+# the failure shape it was grounded in.
+plan_template_section=$(awk '
+  /^## Prompt template[[:space:]]*$/ { in_section=1; next }
+  in_section && /^```/ { in_block = !in_block; print; next }
+  in_section && !in_block && /^## / { exit }
+  in_section { print }
+' "$PROMPTS_DIR/plan-section-intro.md")
+assert_contains "NO-HEADING-LINE" "$plan_template_section" \
+  "plan-section-intro.md prompt template carries NO-HEADING-LINE directive"
+assert_contains "FACTS-BLOCK-REPHRASE" "$plan_template_section" \
+  "plan-section-intro.md prompt template carries FACTS-BLOCK-REPHRASE directive"
+assert_contains "Phase 13 — Cross-machine calibration aggregation" "$plan_template_section" \
+  "plan-section-intro.md prompt template anchors heading-line Wrong shape to observed dogfood failure"
+# The FACTS-BLOCK-REPHRASE Wrong/Correct anchor must reference the actual
+# observed verbatim-echo from the 2026-05-22T11:43:18Z second dogfood
+# (the SCOPE last sentence "The aggregator is opt-in, single-user..."),
+# proxy for "the Wrong shape stays grounded in real failure rather than
+# drifting to an abstract paraphrase".
+assert_contains "The aggregator is opt-in, single-user" "$plan_template_section" \
+  "plan-section-intro.md prompt template anchors FACTS-echo Wrong shape to observed dogfood failure"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
