@@ -22,8 +22,22 @@ The PR title and body carry the "what" and "why"; the recipe extracts the user-f
 
 ```
 Draft a single release-note entry for the merged PR below.
-Skip internal changes (CI, tests, refactors, dependency bumps, docs-only typos, lint fixes, formatter runs) — anything not user-facing. The audience is the consumer / installer / integrator, not a future maintainer reading git log.
+Skip internal changes — CI updates, test changes, refactors, dependency bumps, lint fixes, formatter runs, docs-only typo/formatting fixes, and contributor-facing documentation (internal ADRs, ROADMAP entries, CONTRIBUTING.md edits, README sections aimed at future maintainers). Anything not user-facing.
+HOWEVER, the following ARE user-facing and produce a "Documented..." or "Changed..." bullet, NOT a SKIP:
+  (a) NEW setup runbooks, install guides, or operational docs an installer/integrator follows.
+  (b) NEW or substantively changed prompt recipes, slash-commands, or templates that change what callers see when they invoke the skill.
+  (c) Changes to wire contracts, env vars, command-line interfaces, or documented behaviour — even if the change lives entirely in markdown.
+The audience is the consumer / installer / integrator, not a future maintainer reading git log. Test against the audience, not against the file extension.
 If the PR is entirely internal by that test, output the single token SKIP on a line by itself (no backticks, no bullet, no preamble, no PR number) so the caller can drop it from the release rollup rather than emit a fabricated user-facing claim.
+
+Wrong (over-aggressive SKIP — observed 2026-05-22 dogfood):
+TITLE: docs: observability runbooks — Grafana Cloud, Langfuse self-host, Phoenix
+Output: SKIP
+Why wrong: the PR adds three NEW user-facing setup runbooks for end-users wiring observability backends to the skill. That is exactly what an installer/integrator would follow. Bullet, not SKIP.
+
+Correct (same input):
+- Documented setup runbooks for Grafana Cloud, Langfuse self-host, and Arize Phoenix as observability backends for the planned OTLP exporter (#166).
+
 Otherwise:
 Output ONE bullet starting with "- " and a past-tense verb (Added, Fixed, Changed, Removed, Renamed, Documented).
 The bullet describes the change from the reader's perspective — what they can now do, or what no longer breaks, or what behaviour shifted. Do NOT describe the implementation.
@@ -94,3 +108,7 @@ First-pass against `qwen3.6:35b-a3b-q8_0` (prose tier) on the freshly-merged PR 
 ### 2026-05-22 — audience-filter rule ported from sst/opencode (closes #163)
 
 Ported the audience-filter directive from sst/opencode's `.opencode/command/changelog.md` slash-command (https://github.com/sst/opencode/blob/dev/.opencode/command/changelog.md). The external example handled internal-vs-external commit triage explicitly with a list of skip-categories (CI, tests, refactors, dependency bumps, lint fixes) plus a `SKIP` output token for PRs that are entirely internal — both portions adopted. This recipe previously relied on the agent's judgement of what counts as user-facing, which observed sessions showed defaulted to "list everything" when the input diff had a mix of user-facing and internal commits. The 2026-05-22 prompt-library research sweep identified opencode's changelog command as the single highest-quality external example worth porting; this entry implements the port. Dogfood pending the next release-notes pass — the next `bash scripts/delegate.sh --recipe release-note` invocation should be recorded as a HIT or MISS so the calibration history starts measuring the rule's binding strength.
+
+### 2026-05-22 dogfood: 3 HIT / 2 MISS — sharpened audience-filter
+
+Same-day dogfood of the ported audience-filter on the five 2026-05-22 merge batch (PRs #164–#168). Three HITs (correct SKIPs): PR #164 (internal ADR), #167 (contributor-facing README rationale), #168 (internal experiment infrastructure with null-result data). Two MISSes (false-positive SKIPs): PR #166 added NEW setup runbooks an installer follows, and PR #165 substantively changed what the release-note recipe outputs for callers — both ARE user-facing for the integrator audience but the over-broad "docs-only" interpretation collapsed them into SKIP. Sharpened the rule to (a) enumerate the "internal" set more precisely (CI / tests / refactors / dependency bumps / lint / formatter / typo fixes / contributor-facing markdown), (b) explicitly carve out the three user-facing-but-markdown shapes (new setup runbooks, recipe / template behaviour changes, wire-contract documentation), and (c) add a Wrong/Correct contrastive example using the actual #166 input that triggered the MISS. The "test against the audience, not against the file extension" framing is the new directive — same v5/v7 pattern that closed the commit-message recipe's `(#NN)` gap on file-extension proxying.
