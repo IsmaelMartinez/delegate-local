@@ -141,7 +141,7 @@
       "id": 6,
       "type": "histogram",
       "title": "gen_ai.client.operation.duration",
-      "description": "End-to-end delegate.sh wall-clock per Phase 11 Track G's planned histogram metric. Until Track G ships the dedicated metric, this panel keys off the equivalent span duration (queue_wait_ms + generation_ms) and produces the same shape.",
+      "description": "End-to-end delegate.sh wall-clock per Phase 11 Track G's planned histogram metric. Until Track G ships the dedicated metric, this panel keys off the span duration intrinsic — equivalent to `queue_wait_ms + generation_ms` since both attributes derive from the same start/end timestamps.",
       "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
       "datasource": {"type": "tempo", "uid": "tempo"},
       "targets": [

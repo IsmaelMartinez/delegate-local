@@ -90,15 +90,15 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Per-recipe HIT rate trend",
-      "description": "HIT rate over time grouped by delegate.recipe. The parent delegation's recipe attribute is joined to the feedback span via the links array; backends that do not render links fall back to grouping by delegate.feedback.parent_trace_id and joining client-side. Untracked delegations are excluded from the denominator so an absent verdict does not pull the rate down.",
+      "title": "HIT rate trend (overall)",
+      "description": "Limitation: per-recipe HIT-rate attribution requires joining the feedback span back to the parent delegation's `delegate.recipe`, and TraceQL does not support cross-trace joins (the feedback-as-linked-span pattern from ADR 0007 leaves recipe on the parent trace). This panel therefore plots the overall HIT rate over time — for the per-recipe breakdown, follow-up issue #187 adds `delegate.recipe` as a feedback-span attribute at emit-time so the per-recipe rate becomes a single-query panel. Numerator: feedback spans with verdict=\"hit\". Denominator: feedback spans with any verdict set.",
       "gridPos": {"h": 10, "w": 24, "x": 0, "y": 6},
       "datasource": {"type": "tempo", "uid": "tempo"},
       "targets": [
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.delegate.feedback.verdict=\"hit\"} | rate() by (link.span.delegate.recipe)"
+          "query": "{resource.service.name=\"delegate-to-ollama\" && span.delegate.feedback.verdict=\"hit\"} | rate() / {resource.service.name=\"delegate-to-ollama\" && span.delegate.feedback.verdict != \"\"} | rate()"
         }
       ],
       "fieldConfig": {
@@ -110,15 +110,15 @@
     {
       "id": 5,
       "type": "table",
-      "title": "Recent MISSes (by recipe + reason)",
-      "description": "Each row is one feedback span with verdict=\"miss\". The reason column is the free-text reason the user typed via `delegate-feedback.sh miss \"<reason>\"`. When the same reason recurs three times in a 30-day window, the delegate-feedback.sh runtime nudge prints a draft `gh issue create` command pre-targeted at the `prompt-pattern` label — this table is the dashboard counterpart of that nudge.",
+      "title": "Recent MISSes (by reason)",
+      "description": "Limitation: the per-recipe / per-model / per-tier columns are deferred to follow-up issue #187 because those attributes live on the parent delegate span, not on the feedback span. TraceQL does not surface attributes from linked spans for projection, so this table shows only the feedback-span-native columns: verdict and reason. Each row is one feedback span with verdict=\"miss\". The reason column is the free-text reason the user typed via `delegate-feedback.sh miss \"<reason>\"`. When the same reason recurs three times in a 30-day window, the delegate-feedback.sh runtime nudge prints a draft `gh issue create` command pre-targeted at the `prompt-pattern` label — this table is the dashboard counterpart of that nudge.",
       "gridPos": {"h": 12, "w": 24, "x": 0, "y": 16},
       "datasource": {"type": "tempo", "uid": "tempo"},
       "targets": [
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.delegate.feedback.verdict=\"miss\"} | select(span.delegate.feedback.reason, link.span.delegate.recipe, link.span.gen_ai.request.model, link.span.delegate.tier)"
+          "query": "{resource.service.name=\"delegate-to-ollama\" && span.delegate.feedback.verdict=\"miss\"} | select(span.delegate.feedback.reason)"
         }
       ],
       "options": {"showHeader": true, "sortBy": [{"displayName": "Time", "desc": true}]},
