@@ -80,6 +80,19 @@ export DELEGATE_OTEL_HEADERS="Authorization: Basic <base64-encoded-instance-id:t
 
 Substitute your region (e.g. `us-central-0`, `eu-west-0`) and the base64 string from the auth step. Once exported, the next `delegate.sh` call posts one span per invocation; the matching `delegate-feedback.sh hit|miss` call posts the feedback span with `links` to the parent.
 
+## Backfill historical metrics
+
+The exporter only emits spans for new delegations going forward. If your `metrics.jsonl` already has weeks or months of pre-exporter rows, the dashboards will start empty until enough new traffic accumulates. To seed the dashboards with the existing history, run the backfill script after the env vars above are exported:
+
+```bash
+bash scripts/backfill-otel.sh                       # post every pre-exporter row
+bash scripts/backfill-otel.sh --since 2026-05-01T00:00:00Z  # only since a date
+bash scripts/backfill-otel.sh --dry-run             # preview without POSTing
+bash scripts/backfill-otel.sh --update-jsonl        # also write the IDs back
+```
+
+Row-level idempotent: any row that was already exported live (carries `otel_trace_id` in the JSONL) is skipped, and rows that pre-date the exporter get deterministic trace and span IDs derived from `sha256(ts|source)` and `sha1(ts|source)`. Re-running the backfill — or resuming an interrupted run — collides in Tempo's OTel ID space and produces no duplicate spans. `--update-jsonl` writes the computed IDs back into the JSONL so subsequent runs skip via the live-exported path (mutates the metrics file atomically via tempfile-and-rename); it's opt-in because mutating the metrics file is a more invasive operation than the default read-only backfill.
+
 ## See also
 
 - [docs/observability/langfuse-self-host.md](langfuse-self-host.md) — privacy-conscious self-hosted alternative when telemetry must stay on-device.

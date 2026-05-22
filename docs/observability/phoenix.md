@@ -40,6 +40,19 @@ export DELEGATE_OTEL_ENDPOINT="http://localhost:6006/v1/traces"
 
 No `DELEGATE_OTEL_HEADERS` is required for the default workstation install. Once exported, the next `delegate.sh` call posts one span per invocation; the matching `delegate-feedback.sh hit|miss` call posts the feedback span with `links` to the parent — Phoenix renders the two as a linked trace pair under the parent's project view.
 
+## Backfill historical metrics
+
+The exporter only emits spans for new delegations going forward. If your `metrics.jsonl` already has weeks or months of pre-exporter rows, the Phoenix trace list starts empty until enough new traffic accumulates. To seed Phoenix with the existing history, run the backfill script after the env var above is exported:
+
+```bash
+bash scripts/backfill-otel.sh                       # post every pre-exporter row
+bash scripts/backfill-otel.sh --since 2026-05-01T00:00:00Z  # only since a date
+bash scripts/backfill-otel.sh --dry-run             # preview without POSTing
+bash scripts/backfill-otel.sh --update-jsonl        # also write the IDs back
+```
+
+Row-level idempotent: any row that was already exported live (carries `otel_trace_id` in the JSONL) is skipped, and rows that pre-date the exporter get deterministic trace and span IDs derived from `sha256(ts|source)` and `sha1(ts|source)`. Re-running the backfill — or resuming an interrupted run — collides in Phoenix's OTel ID space and produces no duplicate traces. The Phoenix LLM-trace view will then show the full historical timeline rather than starting from the first post-exporter delegation.
+
 ## Dashboards
 
 Phoenix does not have an import-a-JSON-dashboard surface — the UI is the OpenInference LLM-trace view (spans listed under the project, click into a span to see attributes and the linked feedback). For the dashboard-style aggregates the Grafana and Langfuse backends ship, point those backends at this same exporter rather than reinventing the rollups inside Phoenix. The committed Grafana JSON files in [`dashboards/grafana/`](../../dashboards/grafana/) and the Langfuse view definitions in [`dashboards/langfuse/README.md`](../../dashboards/langfuse/README.md) are the reference for which slices matter: call volume by tier/recipe/backend, HIT-rate by recipe, canary-timeout rate. Within Phoenix, the filter bar at the top of the trace list accepts the same attribute names (e.g. `delegate.tier="prose"`, `delegate.recipe="commit-message"`, `delegate.exit_status="3"`) so the equivalent slice is recoverable per-session without a saved view.
