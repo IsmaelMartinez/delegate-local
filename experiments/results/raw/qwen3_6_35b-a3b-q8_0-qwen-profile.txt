@@ -1,0 +1,269 @@
+MODEL: qwen3.6:35b-a3b-q8_0
+BACKEND: ollama
+OLLAMA_API: 1
+DATE: 2026-05-22T22:01:49Z
+REPS: 5
+T3_SNAPSHOT: 2026-04-28
+T4_SNAPSHOT: 2026-05-21
+T5_SNAPSHOT: 2026-05-11
+T6_SNAPSHOT: 2026-05-11
+
+===== T1-doc-drift rep 1 =====
+DURATION_SEC: 2
+RUN_STATUS: 0
+OUTPUT:
+CLAIM_A: still-open — No "How we did" retrospective page or related code exists in the repo.
+CLAIM_B: already-done — grep for defaultProjection or DEFAULT_PROJECTION returns no matches in scripts/ or src/.
+CLAIM_C: already-done — scripts/apply-party-positions.ts:60 uses yaml.stringify with { lineWidth: 0 }.
+CLAIM_D: already-done — src/lib/data.ts shows six cached loaders all using shallow Object.freeze with no deep-freeze.
+
+===== T2-party-config rep 1 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+CLEAN
+
+===== T3-merge-patterns rep 1 =====
+DURATION_SEC: 6
+RUN_STATUS: 0
+OUTPUT:
+1. CONCERN: Roadmap may not reflect the actual implementation status of the "28 April candidate audit" or subsequent quiz features mentioned in recent commits. | `docs/ROADMAP.md`
+2. CONCERN: Region card counts on the index page might still be misaligned if the fix in `6d23c5e` was incomplete or reverted, as it only modified `src/pages/index.astro` without corresponding test updates. | `src/pages/index.astro`
+3. CONCERN: IGV branding normalization and listPosition outliers in regional candidate data may have introduced inconsistencies if the YAML normalization in `2a54127` did not cover all expected fields or if downstream components rely on the old structure. | `data/regional-candidates/*.yaml`
+4. CONCERN: Quiz tie handling logic and podium display may contain edge-case bugs or UI regressions, given the significant addition of new components (`QuizPodium.tsx`, `PartyResultCard.tsx`) and helper logic (`quiz-helpers.ts`) in commit `8a8ace1`. | `src/lib/quiz-helpers.ts`, `src/components/QuizPodium.tsx`
+
+===== T4-commit-message rep 1 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+feat: add T4 commit-message fixture and score-t4.sh validator
+
+Phase 7 of the roadmap adds commit-message drafting to the empirical-accuracy framework. The new T4 fixture sends the literal substituted recipe prompt to any installed Ollama model and score-t4.sh applies six deterministic structural checks to each output.
+
+The checks include subject length limits, conventional-commit type prefixes, absence of fake (#NN) suffixes, flush-left body lines, no bullet lists, and no participial-padding tails. The runner gains --t4-snapshot DATE to version the fixture per the existing T3 convention.
+
+===== T5-json-shape rep 1 =====
+DURATION_SEC: 3
+RUN_STATUS: 0
+OUTPUT:
+{
+  "owner": "ismael",
+  "items": [
+    { "task": "update the data-retention policy doc to reflect the new 90-day window.", "due": "2026-04-22" },
+    { "task": "draft the SOC2 type-II evidence pack for the auth service.", "due": "2026-05-08" },
+    { "task": "review the privacy impact assessment for the new search index.", "due": "2026-04-30" }
+  ]
+}
+
+===== T6-regex-generation rep 1 =====
+DURATION_SEC: 1
+RUN_STATUS: 0
+OUTPUT:
+^\d{5}(-\d{4})?$
+
+===== T1-doc-drift rep 2 =====
+DURATION_SEC: 3
+RUN_STATUS: 0
+OUTPUT:
+CLAIM_A: still-open — No "How we did" retrospective page or related code exists in the repo.
+CLAIM_B: already-done — grep for defaultProjection or DEFAULT_PROJECTION across scripts/ and src/ returns no matches.
+CLAIM_C: already-done — scripts/apply-party-positions.ts:60 uses yaml.stringify with { lineWidth: 0 } matching sync-regional-candidates.ts.
+CLAIM_D: already-done — src/lib/data.ts shows six cached loaders all use consistent shallow Object.freeze with no deep-freeze.
+
+===== T2-party-config rep 2 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+CLEAN
+
+===== T3-merge-patterns rep 2 =====
+DURATION_SEC: 1
+RUN_STATUS: 0
+OUTPUT:
+NONE
+
+===== T4-commit-message rep 2 =====
+DURATION_SEC: 5
+RUN_STATUS: 0
+OUTPUT:
+feat: add T4 commit-message fixture and score-t4.sh to empirical-accuracy framework
+
+Phase 7 of the roadmap requires commit-message drafting to be added to the empirical-accuracy framework. The commit-message recipe was hardened with an anti-padding directive in PR #85, distilled from a HIT-with-edits delegation. The new T4 fixture sends the literal substituted recipe prompt to any installed Ollama model and the new score-t4.sh applies six deterministic structural checks to each rep's output.
+
+Each check came from a real past MISS observed in this project's recent sessions, so a model's pass rate against the fixture is directly comparable to the recipe's empirical calibration history. The runner gains --t4-snapshot DATE so the fixture is versionable per the existing T3 convention.
+
+===== T5-json-shape rep 2 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+{
+  "owner": "ismael",
+  "items": [
+    { "task": "update the data-retention policy doc to reflect the new 90-day window.", "due": "2026-04-22" },
+    { "task": "draft the SOC2 type-II evidence pack for the auth service.", "due": "2026-05-08" },
+    { "task": "review the privacy impact assessment for the new search index.", "due": "2026-04-30" }
+  ]
+}
+
+===== T6-regex-generation rep 2 =====
+DURATION_SEC: 1
+RUN_STATUS: 0
+OUTPUT:
+^\d{5}(-\d{4})?$
+
+===== T1-doc-drift rep 3 =====
+DURATION_SEC: 3
+RUN_STATUS: 0
+OUTPUT:
+CLAIM_A: still-open — No "How we did" retrospective page or related code exists in the repo.
+CLAIM_B: already-done — grep for defaultProjection or DEFAULT_PROJECTION across scripts/ and src/ returns no matches.
+CLAIM_C: already-done — scripts/apply-party-positions.ts:60 explicitly uses yaml.stringify(data, { lineWidth: 0 }).
+CLAIM_D: already-done — src/lib/data.ts shows six cached loaders all use shallow Object.freeze with no deep-freeze applied.
+
+===== T2-party-config rep 3 =====
+DURATION_SEC: 5
+RUN_STATUS: 0
+OUTPUT:
+CLEAN
+
+===== T3-merge-patterns rep 3 =====
+DURATION_SEC: 5
+RUN_STATUS: 0
+OUTPUT:
+CONCERN: Quiz tie handling logic and podium rendering may have regressions or missing edge cases given the large diff size and new components. | `src/components/QuizPodium.tsx`, `src/lib/quiz-helpers.ts`
+CONCERN: Simplification phase 1 removed several scripts; verify if data population or reconciliation is still handled correctly or if manual intervention is required. | `scripts/cross-copy-bios.ts`, `scripts/enrich-candidates.ts`, `scripts/populate-projections.ts`
+CONCERN: IGV branding normalization and listPosition outliers were changed across many regional candidate files; verify consistency of these fields in the data. | `data/regional-candidates/*.yaml`
+CONCERN: Polling data was updated from Wikipedia; verify the accuracy and source citation of the newly added entries. | `data/polls.json`
+
+===== T4-commit-message rep 3 =====
+DURATION_SEC: 6
+RUN_STATUS: 0
+OUTPUT:
+feat: add commit-message T4 fixture and structural scoring
+
+Phase 7 of the roadmap requires empirical measurement for the newly hardened commit-message recipe. The new T4 fixture sends the literal substituted recipe prompt to any installed Ollama model to generate output for analysis. The score-t4.sh script applies six deterministic structural checks against the generated text, including subject length limits, conventional-commit type prefixes, and the absence of fake issue-number suffixes.
+
+The scoring logic verifies that the body remains flush-left without bullet lists and contains no participial-padding tails. Each check corresponds to a specific past miss observed in recent project sessions, allowing the model's pass rate to be directly compared against the recipe's calibration history. The runner gains a --t4-snapshot option to version these results per the existing T3 convention.
+
+===== T5-json-shape rep 3 =====
+DURATION_SEC: 3
+RUN_STATUS: 0
+OUTPUT:
+{
+  "owner": "ismael",
+  "items": [
+    { "task": "update the data-retention policy doc to reflect the new 90-day window.", "due": "2026-04-22" },
+    { "task": "draft the SOC2 type-II evidence pack for the auth service.", "due": "2026-05-08" },
+    { "task": "review the privacy impact assessment for the new search index.", "due": "2026-04-30" }
+  ]
+}
+
+===== T6-regex-generation rep 3 =====
+DURATION_SEC: 1
+RUN_STATUS: 0
+OUTPUT:
+^(\d{5}|\d{5}-\d{4})$
+
+===== T1-doc-drift rep 4 =====
+DURATION_SEC: 2
+RUN_STATUS: 0
+OUTPUT:
+CLAIM_A: still-open — no "How we did" retrospective page or related code exists in the repo
+CLAIM_B: already-done — grep for defaultProjection or DEFAULT_PROJECTION across scripts/ and src/ returns no matches
+CLAIM_C: already-done — scripts/apply-party-positions.ts:60 uses yaml.stringify with { lineWidth: 0 }
+CLAIM_D: still-open — src/lib/data.ts uses shallow Object.freeze consistently, not deep-freeze
+
+===== T2-party-config rep 4 =====
+DURATION_SEC: 5
+RUN_STATUS: 0
+OUTPUT:
+CLEAN
+
+===== T3-merge-patterns rep 4 =====
+DURATION_SEC: 6
+RUN_STATUS: 0
+OUTPUT:
+1. CONCERN: Roadmap dates may be stale or inconsistent with the "28 April" reference in commit subjects and quiz specs; verify actual roadmap content against current date. | `docs/ROADMAP.md`
+2. CONCERN: Region card counts on the index page may still be misaligned if the fix in #71 did not account for dynamic data changes; verify count logic against actual regional candidate data. | `src/pages/index.astro`
+3. CONCERN: IGV branding normalization and listPosition outliers in regional candidates may have introduced inconsistencies in YAML structure or missing fields; verify all listed candidate YAML files for correct `branding` and `listPosition` keys. | `data/regional-candidates/*.yaml`
+4. CONCERN: Quiz tie-handling logic and podium rendering may have edge cases not covered by existing tests; verify `quiz-helpers.test.ts` covers all tie scenarios mentioned in the plan. | `tests/quiz-helpers.test.ts`
+
+===== T4-commit-message rep 4 =====
+DURATION_SEC: 6
+RUN_STATUS: 0
+OUTPUT:
+feat: add commit-message T4 fixture and scoring harness
+
+Phase 7 of the roadmap requires empirical measurement of the recently hardened commit-message recipe. The new T4 fixture sends the literal substituted recipe prompt to any installed Ollama model and score-t4.sh applies six deterministic structural checks against the output. These checks target specific past misses, including subject length, conventional-commit type prefix, absence of fake issue suffixes, flush-left body, lack of bullets, and removal of participial-padding tails.
+
+The runner gains --t4-snapshot DATE to version the fixture results per the existing T3 convention. This setup allows the recipe's hardening to be validated against per-model data rather than relying on asserted accuracy. Each check corresponds to a real failure observed in recent project sessions, ensuring the pass rate is directly comparable to the recipe's calibration history.
+
+===== T5-json-shape rep 4 =====
+DURATION_SEC: 3
+RUN_STATUS: 0
+OUTPUT:
+{
+  "owner": "ismael",
+  "items": [
+    { "task": "update the data-retention policy doc to reflect the new 90-day window.", "due": "2026-04-22" },
+    { "task": "draft the SOC2 type-II evidence pack for the auth service.", "due": "2026-05-08" },
+    { "task": "review the privacy impact assessment for the new search index.", "due": "2026-04-30" }
+  ]
+}
+
+===== T6-regex-generation rep 4 =====
+DURATION_SEC: 1
+RUN_STATUS: 0
+OUTPUT:
+^\d{5}(-\d{4})?$
+
+===== T1-doc-drift rep 5 =====
+DURATION_SEC: 3
+RUN_STATUS: 0
+OUTPUT:
+CLAIM_A: still-open — No "How we did" retrospective page or related code exists in the repo.
+CLAIM_B: already-done — grep for defaultProjection or DEFAULT_PROJECTION across scripts/ and src/ returns no matches.
+CLAIM_C: already-done — scripts/apply-party-positions.ts:60 uses yaml.stringify with { lineWidth: 0 } matching the pattern.
+CLAIM_D: already-done — src/lib/data.ts shows six cached loaders all use shallow Object.freeze with no deep-freeze applied.
+
+===== T2-party-config rep 5 =====
+DURATION_SEC: 6
+RUN_STATUS: 0
+OUTPUT:
+CLEAN
+
+===== T3-merge-patterns rep 5 =====
+DURATION_SEC: 2
+RUN_STATUS: 0
+OUTPUT:
+NONE
+
+===== T4-commit-message rep 5 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+feat: add commit-message fixture and scoring harness for T4
+
+Phase 7 of the roadmap requires empirical measurement for the newly hardened commit-message recipe. The new T4 fixture sends the literal substituted recipe prompt to any installed Ollama model to generate output for evaluation.
+
+The score-t4.sh script applies six deterministic structural checks to each rep's output, including subject length limits, conventional-commit type prefixes, and absence of fake (#NN) suffixes. Each check corresponds to a real past MISS observed in recent sessions, allowing direct comparison of model pass rates against the recipe's calibration history.
+
+===== T5-json-shape rep 5 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+{
+  "owner": "ismael",
+  "items": [
+    { "task": "update the data-retention policy doc to reflect the new 90-day window.", "due": "2026-04-22" },
+    { "task": "draft the SOC2 type-II evidence pack for the auth service.", "due": "2026-05-08" },
+    { "task": "review the privacy impact assessment for the new search index.", "due": "2026-04-30" }
+  ]
+}
+
+===== T6-regex-generation rep 5 =====
+DURATION_SEC: 1
+RUN_STATUS: 0
+OUTPUT:
+^\d{5}(-\d{4})?$
+
