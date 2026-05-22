@@ -59,6 +59,16 @@ Grafana Cloud's [AI Observability integration](https://grafana.com/docs/grafana-
 
 Import them from your stack's **Apps → AI Observability** tile. The dashboard panels filter by `gen_ai.provider.name="ollama"` (or `"mlx"`) so spans from this skill appear alongside any other GenAI workload sending to the same stack.
 
+## Skill-specific dashboards (committed in `dashboards/grafana/`)
+
+The pre-built integration above covers the GenAI-generic view. Three skill-specific dashboards committed to the repo cover the slices Grafana's GenAI integration does not — the recipe-and-tier slices keyed off the private `delegate.*` namespace, the HIT/MISS calibration view that consumes the feedback-as-linked-span pattern, and the exit-status breakdown including the canary-timeout (`exit_status=3`) rate. Each is one JSON file; import via **Dashboards → New → Import → Upload JSON file** in the Grafana UI:
+
+- Import [`dashboards/grafana/delegate-overview.json`](../../dashboards/grafana/delegate-overview.json) for call volume over time broken down by `delegate.tier`, `delegate.recipe`, and `gen_ai.provider.name`, plus histograms for `delegate.queue_wait_ms`, `delegate.generation_ms`, and end-to-end span duration.
+- Import [`dashboards/grafana/delegate-calibration.json`](../../dashboards/grafana/delegate-calibration.json) for the HIT/MISS rate keyed off `delegate.feedback.verdict`, per-recipe HIT-rate trend, and a recent-MISSes table grouped by recipe and reason.
+- Import [`dashboards/grafana/delegate-errors.json`](../../dashboards/grafana/delegate-errors.json) for the exit-status breakdown, the canary-timeout rate (`exit_status=3`), the recipe-substitution-failure count (`exit_status=2`), and a recent-failed-spans table.
+
+All three dashboards target a Tempo datasource provisioned with the UID `tempo` (Grafana Cloud's default name for the bundled traces datasource); if your stack uses a different UID, update the `datasource.uid` field in each JSON before importing. The TraceQL queries inside the panels reference attribute names verbatim from [`docs/otel-schema.md`](../otel-schema.md), so the dashboards stay correct as long as the schema doc and the exporter stay in sync — [`tests/test-dashboards.sh`](../../tests/test-dashboards.sh) is the CI gate that pins each panel's referenced attribute back to the schema.
+
 ## Copy-pasteable env block
 
 After generating the auth string above, export the two variables `delegate.sh` reads:

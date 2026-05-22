@@ -40,6 +40,10 @@ export DELEGATE_OTEL_ENDPOINT="http://localhost:6006/v1/traces"
 
 No `DELEGATE_OTEL_HEADERS` is required for the default workstation install. Once exported, the next `delegate.sh` call posts one span per invocation; the matching `delegate-feedback.sh hit|miss` call posts the feedback span with `links` to the parent — Phoenix renders the two as a linked trace pair under the parent's project view.
 
+## Dashboards
+
+Phoenix does not have an import-a-JSON-dashboard surface — the UI is the OpenInference LLM-trace view (spans listed under the project, click into a span to see attributes and the linked feedback). For the dashboard-style aggregates the Grafana and Langfuse backends ship, point those backends at this same exporter rather than reinventing the rollups inside Phoenix. The committed Grafana JSON files in [`dashboards/grafana/`](../../dashboards/grafana/) and the Langfuse view definitions in [`dashboards/langfuse/README.md`](../../dashboards/langfuse/README.md) are the reference for which slices matter: call volume by tier/recipe/backend, HIT-rate by recipe, canary-timeout rate. Within Phoenix, the filter bar at the top of the trace list accepts the same attribute names (e.g. `delegate.tier="prose"`, `delegate.recipe="commit-message"`, `delegate.exit_status="3"`) so the equivalent slice is recoverable per-session without a saved view.
+
 ## See also
 
 - [docs/observability/grafana-cloud.md](grafana-cloud.md) — hosted alternative with pre-built GenAI dashboards keyed on the native `gen_ai.*` attributes.

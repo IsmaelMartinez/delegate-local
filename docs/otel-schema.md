@@ -13,7 +13,7 @@ The source for every attribute is one of:
 A real recent delegation row from `~/.claude/skills/delegate-to-ollama/metrics.jsonl`:
 
 ```json
-{"ts":"2026-05-21T21:46:56Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b-q8_0","prompt_chars":80,"context_chars":3739,"output_chars":2807,"duration_ms":19267,"exit_status":0,"estimated_tokens_avoided":1656}
+{"ts":"2026-05-21T21:46:56Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b-q8_0","prompt_chars":80,"context_chars":3739,"output_chars":2807,"duration_ms":19267,"queue_wait_ms":412,"generation_ms":18855,"exit_status":0,"estimated_tokens_avoided":1656}
 ```
 
 Most example values in the tables below come from this row, so a reader can trace a delegation end-to-end through the exporter mapping. Two exceptions: `delegate.recipe` is shown as `doc-section` for illustration (the sample row above is a bare prose-tier call with no recipe field), and the feedback-span examples in the Feedback span section below are drawn from a separate kept-row written by `delegate-feedback.sh`, not shown here.
@@ -21,6 +21,16 @@ Most example values in the tables below come from this row, so a reader can trac
 ## Delegation span
 
 One span per `scripts/delegate.sh` invocation.
+
+### Resource attributes
+
+Resource attributes are set once on the OTLP `resourceSpans.resource` envelope and apply to every span in the batch. The exporter sets exactly one resource attribute:
+
+| Attribute | Type | Source | OTel convention | Example |
+|-----------|------|--------|-----------------|---------|
+| `service.name` | string | exporter-constant (`"delegate-to-ollama"`) | https://opentelemetry.io/docs/specs/semconv/resource/#service | `delegate-to-ollama` |
+
+The constant value lets dashboards filter spans from this skill (`resource.service.name="delegate-to-ollama"`) so other GenAI workloads sharing the same collector do not bleed in.
 
 ### Span identity
 
@@ -63,6 +73,8 @@ Attributes the OTel WG does not cover. The `delegate.*` prefix follows the SemCo
 | `delegate.prompt_chars` | int | JSONL `prompt_chars` | private | `80` |
 | `delegate.context_chars` | int | JSONL `context_chars` | private | `3739` |
 | `delegate.output_chars` | int | JSONL `output_chars` | private | `2807` |
+| `delegate.queue_wait_ms` | int | JSONL `queue_wait_ms` | private | `412` |
+| `delegate.generation_ms` | int | JSONL `generation_ms` | private | `18855` |
 | `delegate.estimated_tokens_avoided` | int | JSONL `estimated_tokens_avoided` | private | `1656` |
 | `delegate.exit_status` | int | JSONL `exit_status` | private | `0` |
 
@@ -71,6 +83,7 @@ Notes on each:
 - `delegate.tier` is the routing tier `pick-model.sh` resolved (`code`, `prose`, `reasoning`, `long-context`, or one of the scaffolded tiers once they go live). Dashboards group by tier to track per-tier hit rate and per-tier tokens-avoided.
 - `delegate.recipe` is present only when the caller used `delegate.sh --recipe NAME`. Bare-prose-tier calls omit it; the exporter SHOULD NOT emit the attribute with an empty string. The `delegate.recipe` attribute is what dashboards group by to track per-recipe hit/miss rates, which is the load-bearing signal for the prompt-library calibration work.
 - `delegate.prompt_chars` / `delegate.context_chars` / `delegate.output_chars` are character counts only. They are NOT a stand-in for the content itself — ADR 0007's no-content rule is strict and Track F's redaction test asserts the rule as a tested invariant. The three counts let dashboards correlate latency and verdict against input/output size without leaking anything sensitive.
+- `delegate.queue_wait_ms` and `delegate.generation_ms` split the JSONL `duration_ms` total per the gotcha #170 telemetry fix: `queue_wait_ms` is the wall-clock from `delegate.sh` invoking the backend HTTP endpoint to the first byte returned (parallel-caller contention surfaces here), and `generation_ms` is first-byte to response-complete (the model's own decode time). The two sum to `duration_ms` within rounding. Dashboards keep both histograms so a slow tail can be attributed to queue pressure versus generation pressure rather than being hidden in a single `duration_ms` blob.
 - `delegate.estimated_tokens_avoided` is the tokens-avoided counter the skill's README headlines as one of the two core values (the other being on-device privacy). It is the central rollup metric for the per-tier and per-recipe panels in Track D's dashboards.
 - `delegate.exit_status` is critical to surface as a filterable attribute because `exit_status:3` rows are the canary-failure case (preflight probe timed out — see the canary mitigation note in CLAUDE.md). Track D's dashboard set includes an exit-status-3 rate panel that filters on this attribute. The span status is independently set to `ERROR` when `exit_status != 0`, so backends that don't easily filter by attribute can still surface failures via the standard mechanism.
 
