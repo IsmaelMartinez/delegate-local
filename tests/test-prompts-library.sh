@@ -153,6 +153,24 @@ assert_contains "prompts/" "$skill_body" "SKILL.md '## Recipes' references promp
 # named directives that calibration history shows must survive future
 # "simplification" passes — without these pins a refactor can silently drop
 # a guard whose absence cost real session iterations to add.
+
+# commit-message.md: the 2026-05-22 calibration entry promoted SUBJECT_LEN
+# and TYPE-selection into template-body first-match-wins directives after
+# three MISS rows (ts=2026-05-22T09:42:54Z, 11:14:13Z, 09:40:45Z) confirmed
+# the trailing-prompt reinforcement was insufficient. Pin both directive
+# headings inside the prompt template so a future simplification cannot
+# silently revert to advisory enumeration.
+commit_message_template=$(awk '
+  /^## Prompt template[[:space:]]*$/ { in_section=1; next }
+  in_section && /^```/ { in_block = !in_block; print; next }
+  in_section && !in_block && /^## / { exit }
+  in_section { print }
+' "$PROMPTS_DIR/commit-message.md")
+assert_contains "Subject length — first match wins, non-negotiable" "$commit_message_template" \
+  "commit-message.md prompt template names SUBJECT_LEN first-match-wins directive"
+assert_contains "TYPE selection — first match wins, non-negotiable" "$commit_message_template" \
+  "commit-message.md prompt template names TYPE-selection first-match-wins directive"
+
 summarise_issue_body=$(cat "$PROMPTS_DIR/summarise-issue.md")
 assert_contains "OMIT-EMPTY-SECTION" "$summarise_issue_body" \
   "summarise-issue.md names OMIT-EMPTY-SECTION rule"

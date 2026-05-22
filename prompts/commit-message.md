@@ -31,6 +31,24 @@ Draft a git commit message in EXACTLY the same shape as these recent examples.
 Subject ≤ 72 chars starting with '<TYPE>:' (feat, fix, ci, docs, chore, refactor, test).
 Then a blank line, then 1-2 short flowing-prose paragraphs (NO bullet lists, NO indentation).
 
+Subject length — first match wins, non-negotiable:
+Count the characters in your subject line including the '<TYPE>:' prefix.
+If the count exceeds 72, REWRITE the subject before emitting. Drop adjectives,
+collapse "X and Y" pairs to whichever is primary, prefer the shorter
+synonym. The 72-char limit is a hard ceiling, not a guideline.
+Wrong: feat: prompts/summarise-issue — OMIT-EMPTY positive directive + Comment-N citation guard (79 chars)
+Correct: feat: prompts/summarise-issue — OMIT-EMPTY + Comment-N guard (60 chars)
+
+TYPE selection — first match wins, non-negotiable:
+1. If the diff body or WHY paragraph mentions "fix", "bug", "regression", "broken", "hang", "crash", or "leak" → `fix:`
+2. If the diff adds a NEW file, function, recipe, command-line flag, or env var that did not exist on main → `feat:`
+3. If the diff is only documentation (.md edits, comments, ADRs, README, ROADMAP) → `docs:`
+4. If the diff only adds or changes tests (tests/, *_test.sh) → `test:`
+5. If the diff only touches `.github/workflows/`, release config, or build/CI scaffolding → `chore:`
+6. Default: `feat:`
+Wrong: feat: handle stale lock file when daemon crashes (this is a bug fix — should be fix:)
+Correct: fix: handle stale lock file when daemon crashes
+
 Subjects ending in (#NN) are REJECTED. The (#NN) suffix in every recent
 example below was appended by GitHub's squash merge AFTER the commit was
 written. Your subject MUST NOT include (#NN). This rule is non-negotiable.
@@ -187,3 +205,13 @@ Provenance for this recipe also lives in the `feedback_delegate_prose_prompt_anc
 ### 2026-05-22 — worked example for Phase 12 Track B conventions (#161)
 
 This recipe is the first to adopt the two optional conventions documented in `prompts/README.md` "How to add a new recipe — Optional conventions for new recipes (Phase 12 Track B, #161)". The frontmatter `inputs:` block declares the three required string inputs (`recent_commits`, `diff_stat`, `why`) so `delegate.sh --recipe commit-message` validates them pre-flight rather than letting a missing `--var` surface later as an unsubstituted-placeholder error. The one-sentence identity-and-scope opener at the top of the template body ("Draft a git commit message from the staged diff and recent-commit anchors below. Do not invent file paths, PR numbers, or features that are not present in the diff.") consolidates the recipe's most-repeated forbidden actions — invent-file-paths and invent-PR-numbers — into one upfront sentence the model encounters before the structural directives. The existing `(#NN)` guard and the Wrong/Correct contrastive example remain load-bearing and are NOT removed by the opener; the opener is additive rather than a replacement, on the principle that established calibration evidence outweighs untested condensation. T4 re-measurement remains the empirical gate; whether the opener visibly changes output quality is logged via dogfood verdict, not asserted in advance.
+
+### 2026-05-22 — SUBJECT_LEN promoted to template-body directive + TYPE-selection priority list
+
+The 2026-05-11 calibration entry's stated trigger condition fired during the 2026-05-22 session: three MISS rows in `~/.claude/skills/delegate-to-ollama/metrics.jsonl` against `qwen3.6:35b-a3b-q8_0` (prose tier) showed SUBJECT_LEN and wrong-type-tag failures persisting despite the trailing-prompt reinforcement. The verbatim reasons recorded by `delegate-feedback.sh miss`: ts=2026-05-22T09:42:54Z — `SUBJECT_LEN — model emitted 87-char subject for fix:171 even with explicit '72 chars or fewer' reinforcement; trimmed by hand to 64 chars`; ts=2026-05-22T11:14:13Z — `SUBJECT_LEN: subject was 79 chars (>72 limit); body content was usable verbatim. Manually trimmed subject and added '(closes #148)' suffix.`; ts=2026-05-22T09:40:45Z — `wrong type tag (feat: vs fix:) and two participial-padding tails (ensuring..., and a 'but provides' restating tail); also missed the conventional fix: prefix for a bug fix`. Two SUBJECT_LEN misses on the same day flip the prior from "encouraging signal" to "the trailing-prompt reinforcement is insufficient on its own", and the wrong-type-tag MISS adds a separate recurring shape the bare type allowlist `(feat, fix, ci, docs, chore, refactor, test)` does not actively trigger on.
+
+The fix promotes both directives from advisory to first-match-wins template-body rules with v5/v7 Wrong/Correct one-shots. The SUBJECT_LEN block names the recovery procedure (count chars including TYPE prefix, drop adjectives, collapse "X and Y" pairs, prefer shorter synonyms) and grounds the Wrong/Correct in the 2026-05-22T11:14:13Z MISS — the literal 79-char subject the model emitted (`feat: prompts/summarise-issue — OMIT-EMPTY positive directive + Comment-N citation guard`) paired with the 60-char trim that actually landed in PR #180 (`feat: prompts/summarise-issue — OMIT-EMPTY + Comment-N guard`). Using the literal failure shape rather than a paraphrase mirrors the closes-the-gap calibration finding from 2026-05-12, where the verbatim-MISS anchor outperformed a synthetic example. The TYPE-selection directive ports the priority-list shape from the brief: six numbered rules, first match wins, with the trigger keywords (`fix`, `bug`, `regression`, `broken`, `hang`, `crash`, `leak`) and file-pattern triggers (`.github/workflows/`, ROADMAP, tests/) tuned against `git log --oneline -30` so the rules cover the actual type distribution this project ships (34 feat / 12 docs / 8 chore / 5 fix in the rolling 30-commit window). The Wrong/Correct pair shows the exact MISS shape from 2026-05-22T09:40:45Z — `feat:` for a fix that mentions "fix" in the WHY paragraph.
+
+Both directives use the "first match wins, non-negotiable" framing that closed the `(#NN)` gap in 2026-05-10 and the closes-the-gap shape in 2026-05-12. The trailing-prompt reinforcement (`Keep subject ≤ 72 chars`) stays as belt-and-braces — promotion adds, doesn't replace. Dogfood verdict is the empirical gate; the recipe's track record is that the v5/v7 directive-rule-plus-example pattern binds where bare enumeration drifts.
+
+Dogfood result (ts=2026-05-22T12:50:39Z, recorded HIT): the tightened recipe generated this very PR's commit message against `qwen3.6:35b-a3b-q8_0` on the prose tier. Subject came in at 66 chars (`feat: commit-message.md — subject-length + type-selection guards`), below the 72-char ceiling. TYPE-selection picked `feat:` correctly per priority rule #2 — the diff adds two new directives that did not exist on main, and the WHY paragraph contained no rule-1 keywords. No `(#NN)` suffix, body flush-left, no participial- or declarative-padding tails. Both promoted directives bound on the first dogfood after promotion, which matches the empirical pattern observed when `(#NN)` and closes-the-gap were promoted using the same v5/v7 shape. Second dogfood as the recipe gets exercised against further commits will tell whether the bind generalises or whether SUBJECT_LEN needs a sharper anchor for diff shapes the current example does not cover.
