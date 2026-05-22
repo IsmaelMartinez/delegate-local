@@ -3,6 +3,16 @@
 # Categories: SEC_DISABLE, SEC_PERMISSIVE, CRED_EXFIL, OBFUSC_B64,
 #             OBFUSC_UNICODE, TOOL_BROAD, CONFLICT_MARKER, URL_EXTERNAL.
 #
+# Scope: CI (.github/workflows/ci.yml) and the post-edit hook
+# (.claude/hooks/post-edit-validate.sh) invoke this validator against SKILL.md
+# only — that file is the production prompt content Claude reads to decide
+# trigger eligibility, so strict URL hygiene matters. Contributor docs under
+# prompts/ (e.g., prompts/README.md "What this library does NOT adopt")
+# deliberately permit external citations (arxiv, microsoft/prompty,
+# danielmiessler/fabric) as evidence of rejection rationale, not as trigger
+# surface. The validator itself is file-agnostic — pointing it at any markdown
+# still flags violations — but the gates only call it on SKILL.md by design.
+#
 # Usage: validate-skill-content.sh <file>
 # Env:   ALLOW_FILE  override path to .content-check-allow (default: repo root)
 # Exit:  0 clean, 1 unjustified hit, 2 usage error.
