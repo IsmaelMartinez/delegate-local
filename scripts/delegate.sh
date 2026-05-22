@@ -492,7 +492,7 @@ duration_ms=$((end_epoch_ms - start_epoch_ms))
 # stays intact.
 queue_wait_ms=0
 if [[ -n "${ttfb_s:-}" ]] && [[ "$status" -eq 0 ]]; then
-  queue_wait_ms=$(awk -v s="$ttfb_s" 'BEGIN { printf "%d", s * 1000 }')
+  queue_wait_ms=$(awk -v s="$ttfb_s" 'BEGIN { printf "%.0f", s * 1000 }')
   if (( queue_wait_ms > duration_ms )); then
     queue_wait_ms=$duration_ms
   fi
