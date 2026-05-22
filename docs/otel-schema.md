@@ -16,7 +16,7 @@ A real recent delegation row from `~/.claude/skills/delegate-to-ollama/metrics.j
 {"ts":"2026-05-21T21:46:56Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b-q8_0","prompt_chars":80,"context_chars":3739,"output_chars":2807,"duration_ms":19267,"exit_status":0,"estimated_tokens_avoided":1656}
 ```
 
-Every example value in the tables below comes from this row, so a reader can trace one full row end-to-end through the exporter mapping.
+Most example values in the tables below come from this row, so a reader can trace a delegation end-to-end through the exporter mapping. Two exceptions: `delegate.recipe` is shown as `doc-section` for illustration (the sample row above is a bare prose-tier call with no recipe field), and the feedback-span examples in the Feedback span section below are drawn from a separate kept-row written by `delegate-feedback.sh`, not shown here.
 
 ## Delegation span
 
@@ -47,7 +47,7 @@ All attributes in this table follow the published OTel SemConv (https://opentele
 
 Notes on each:
 
-- `gen_ai.operation.name` is always `chat`. The OTel SemConv enumerates `chat`, `text_completion`, `embeddings`, and others; this skill routes through Ollama's `/api/generate` and MLX's `/v1/chat/completions` (both chat-template-applied), so `chat` is the accurate value for both backends.
+- `gen_ai.operation.name` is always `chat`. The OTel SemConv enumerates `chat`, `text_completion`, `embeddings`, and others; this skill routes through Ollama's `/api/generate` (the raw completion endpoint — chat templating is applied by `scripts/delegate.sh` shaping the prompt before posting, not by the Ollama daemon) and MLX's `/v1/chat/completions` (OpenAI-compatible, applies the model's chat template server-side). Despite the endpoint asymmetry both calls are chat-shaped from the user's perspective, so `chat` is the accurate value for both backends.
 - `gen_ai.provider.name` is set from the JSONL `backend` field. Both `ollama` and `mlx` are already registered as provider strings in the SemConv registry, so the values are conventional rather than ad-hoc.
 - `gen_ai.request.model` is the model tag as Ollama or MLX sees it — `qwen3.6:35b-a3b-q8_0` for Ollama, `mlx-community/Qwen3.6-35B-A3B-8bit` for MLX. The raw tag is preserved so downstream filtering and grouping work against the same identifier a user would type into `ollama run` or `mlx_lm.generate`.
 - `gen_ai.request.temperature` is hardcoded to `0` in `scripts/delegate.sh` (the skill never varies it). Emitting the attribute is still useful because Grafana's GenAI dashboards group by temperature when set.
@@ -69,7 +69,7 @@ Attributes the OTel WG does not cover. The `delegate.*` prefix follows the SemCo
 Notes on each:
 
 - `delegate.tier` is the routing tier `pick-model.sh` resolved (`code`, `prose`, `reasoning`, `long-context`, or one of the scaffolded tiers once they go live). Dashboards group by tier to track per-tier hit rate and per-tier tokens-avoided.
-- `delegate.recipe` is present only when the caller used `delegate.sh --recipe NAME`. Bare-prose-tier calls omit it; the exporter SHOULD NOT emit the attribute with an empty string. The recipe attribute is what dashboards group by to track per-recipe HIT/MISS rates, which is the load-bearing signal for the prompt-library calibration work.
+- `delegate.recipe` is present only when the caller used `delegate.sh --recipe NAME`. Bare-prose-tier calls omit it; the exporter SHOULD NOT emit the attribute with an empty string. The `delegate.recipe` attribute is what dashboards group by to track per-recipe hit/miss rates, which is the load-bearing signal for the prompt-library calibration work.
 - `delegate.prompt_chars` / `delegate.context_chars` / `delegate.output_chars` are character counts only. They are NOT a stand-in for the content itself — ADR 0007's no-content rule is strict and Track F's redaction test asserts the rule as a tested invariant. The three counts let dashboards correlate latency and verdict against input/output size without leaking anything sensitive.
 - `delegate.estimated_tokens_avoided` is the tokens-avoided counter the skill's README headlines as one of the two core values (the other being on-device privacy). It is the central rollup metric for the per-tier and per-recipe panels in Track D's dashboards.
 - `delegate.exit_status` is critical to surface as a filterable attribute because `exit_status:3` rows are the canary-failure case (preflight probe timed out — see the canary mitigation note in CLAUDE.md). Track D's dashboard set includes an exit-status-3 rate panel that filters on this attribute. The span status is independently set to `ERROR` when `exit_status != 0`, so backends that don't easily filter by attribute can still surface failures via the standard mechanism.
