@@ -22,6 +22,9 @@ The PR title and body carry the "what" and "why"; the recipe extracts the user-f
 
 ```
 Draft a single release-note entry for the merged PR below.
+Skip internal changes (CI, tests, refactors, dependency bumps, docs-only typos, lint fixes, formatter runs) — anything not user-facing. The audience is the consumer / installer / integrator, not a future maintainer reading git log.
+If the PR is entirely internal by that test, output the single token SKIP on a line by itself (no backticks, no bullet, no preamble, no PR number) so the caller can drop it from the release rollup rather than emit a fabricated user-facing claim.
+Otherwise:
 Output ONE bullet starting with "- " and a past-tense verb (Added, Fixed, Changed, Removed, Renamed, Documented).
 The bullet describes the change from the reader's perspective — what they can now do, or what no longer breaks, or what behaviour shifted. Do NOT describe the implementation.
 Length: one sentence, ≤ 200 chars. A second sentence is allowed only when the change has a non-obvious consequence the reader needs to know to use it.
@@ -87,3 +90,7 @@ Initial recipe drafted 2026-05-10 from the empty release-note slot pointed at by
 ### 2026-05-10 dogfood: HIT verbatim on first attempt
 
 First-pass against `qwen3.6:35b-a3b-q8_0` (prose tier) on the freshly-merged PR #80, anchor left empty: `- Added \`summarise-diff\` and \`pr-review-reply\` recipes to the library, and trimmed \`pr-description\` to a single-example default (#80)` — exact `- ` bullet, past-tense "Added", single sentence under 200 chars, PR number in trailing parentheses, no preamble. HIT, no edits needed. The recipe's reader-perspective guard didn't get a chance to fire because the PR title itself was already external-ish; a more internal-titled PR would exercise the reword guard harder.
+
+### 2026-05-22 — audience-filter rule ported from sst/opencode (closes #163)
+
+Ported the audience-filter directive from sst/opencode's `.opencode/command/changelog.md` slash-command (https://github.com/sst/opencode/blob/dev/.opencode/command/changelog.md). The external example handled internal-vs-external commit triage explicitly with a list of skip-categories (CI, tests, refactors, dependency bumps, lint fixes) plus a `SKIP` output token for PRs that are entirely internal — both portions adopted. This recipe previously relied on the agent's judgement of what counts as user-facing, which observed sessions showed defaulted to "list everything" when the input diff had a mix of user-facing and internal commits. The 2026-05-22 prompt-library research sweep identified opencode's changelog command as the single highest-quality external example worth porting; this entry implements the port. Dogfood pending the next release-notes pass — the next `bash scripts/delegate.sh --recipe release-note` invocation should be recorded as a HIT or MISS so the calibration history starts measuring the rule's binding strength.
