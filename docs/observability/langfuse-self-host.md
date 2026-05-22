@@ -79,6 +79,19 @@ export DELEGATE_OTEL_HEADERS="Authorization: Basic <base64-encoded-public-key:se
 
 Substitute the base64 string from the auth step. Once exported, the next `delegate.sh` call posts one span per invocation; the matching `delegate-feedback.sh hit|miss` call posts the feedback span, and Langfuse renders it as a [score](https://langfuse.com/docs/scores/overview) attached to the parent trace via the OTLP span `links` field — making the hit/miss verdict a first-class object in the UI rather than a buried attribute.
 
+## Backfill historical metrics
+
+The exporter only emits spans for new delegations going forward. If your `metrics.jsonl` already has weeks or months of pre-exporter rows, the Langfuse trace view and scores aggregates start empty until enough new traffic accumulates. To seed the project with the existing history, run the backfill script after the env vars above are exported:
+
+```bash
+bash scripts/backfill-otel.sh                       # post every pre-exporter row
+bash scripts/backfill-otel.sh --since 2026-05-01T00:00:00Z  # only since a date
+bash scripts/backfill-otel.sh --dry-run             # preview without POSTing
+bash scripts/backfill-otel.sh --update-jsonl        # also write the IDs back
+```
+
+Row-level idempotent: any row that was already exported live (carries `otel_trace_id` in the JSONL) is skipped, and rows that pre-date the exporter get deterministic trace and span IDs derived from `sha256(ts|source)` and `sha1(ts|source)`. Re-running the backfill — or resuming an interrupted run — collides in Langfuse's OTel ID space and produces no duplicate traces. The feedback rows in the JSONL are exported as feedback-spans linked to the parent delegation's deterministic IDs, so Langfuse's `scores` view also populates from the historical HIT/MISS verdicts.
+
 ## Dashboards (committed in `dashboards/langfuse/`)
 
 Langfuse dashboards are session-views configured per-project through the web UI, not file-as-code artefacts the way Grafana ships — there is no portable dashboard JSON to import. The equivalent reproducible-from-scratch artefact is [`dashboards/langfuse/README.md`](../../dashboards/langfuse/README.md), which names the three views (Overview, Calibration, Errors) the Grafana JSON dashboards in `dashboards/grafana/` cover and explains how to recreate each one in Langfuse from saved filters, the Scores view, and a couple of sample public-API SQL queries. Follow the README after the exporter is wired and the first few spans have landed in the project.
