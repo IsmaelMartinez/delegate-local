@@ -392,9 +392,9 @@ rm -rf "$tmp"
 # future stray write or premature row added before the verdict is detected.
 # ---------------------------------------------------------------------------
 
-# assert_one_row_added <file> <name>
-#   Compares wc -l of <file> before/after the most recent invocation; expects
-#   delta == 1 and the appended row to be valid JSON with the expected source.
+# assert_one_row_added <before_count> <after_count> <name>
+#   Compares line counts before and after an invocation; expects
+#   delta == 1. Callers should separately verify the content of the new row.
 assert_one_row_added() {
   local before="$1" after="$2" name="$3"
   local delta=$((after - before))
