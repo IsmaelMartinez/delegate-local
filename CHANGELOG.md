@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.4.0](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.3.0...v0.4.0) (2026-05-22)
+
+
+### Features
+
+* capture queue-wait time in delegate.sh metrics (closes [#170](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/170)) ([#177](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/177)) ([0d63b18](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/0d63b188ec1cb6b6186f485127437060c63fa6db))
+* commit-message recipe — extend anti-padding verb enumeration ([#147](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/147)) ([ee303e4](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/ee303e4c62703118f4f1bed53a0fc135e46a63a9))
+* commit-message.md — subject-length + type-selection guards ([#184](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/184)) ([17e6753](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/17e675306a435f76c8eba6d568031e5f18b077d5))
+* dashboards/{grafana,langfuse} — committed dashboards for OTel exporter (closes [#156](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/156)) ([#186](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/186)) ([b9dccc7](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/b9dccc721d8745f6de72d8d6b676b6d85db6b578))
+* delegate-feedback.sh — per-recipe HIT-rate panel via span metadata ([#190](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/190)) ([a8c69fd](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/a8c69fdc83174519abfb693f442ad3886c901791))
+* docs/adr — OTel schema ADR + reference doc ([#164](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/164)) ([72157f9](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/72157f9e6c49458b69b5fa7f7cdc3649554f0a81))
+* experiments — domain-priming validation gate ([#168](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/168)) ([20075eb](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/20075ebe5cfbbaaf220a0bb3e69f00cbf45b4fb5))
+* future-recipe convention — identity opener + flat YAML inputs (closes [#161](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/161)) ([#178](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/178)) ([c9e6f8f](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/c9e6f8f10c15cd6bcbcd0384867930e5531ddf59))
+* OTLP exporter for delegate.sh + delegate-feedback.sh (closes [#134](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/134)) ([#182](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/182)) ([b31b702](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/b31b702f57507f38279823f0ac426f7aba3abe72))
+* plan-section-intro — no-heading + facts-rephrase guards ([#185](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/185)) ([5de6ca4](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/5de6ca403e7b758b595009a84a7bd6ae45b77057))
+* privacy redaction default for OTel exporter (closes [#158](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/158)) ([#188](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/188)) ([fcea6ba](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/fcea6ba51ddfb78e58e24668c9114b6cf54d47d1))
+* prompts/jira-ticket-description.md — verbatim-preserve + UK-spelling glossary (closes [#141](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/141)) ([#142](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/142)) ([2594d88](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/2594d88cb39ae162df24414ee614e5d22a3117ce))
+* prompts/plan-section-intro.md — forward-looking phase intro recipe (closes [#150](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/150)) ([#181](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/181)) ([c23a3c6](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/c23a3c603ddd32417ecad53aadab05f4e23fc1a7))
+* prompts/presentation-slide-prose.md — list-completeness guard + parallel-fanout (closes [#137](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/137)) ([#143](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/143)) ([85c50d8](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/85c50d895833f48fcc87ce5fbb8891b1e4dbd39d))
+* prompts/release-note — port sst/opencode audience-filter rule ([#165](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/165)) ([2624da1](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/2624da11ee27b7cc6ab9f115a5ebbd9974081b9b))
+* prompts/summarise-issue — OMIT-EMPTY positive directive + Comment-N guard (closes [#148](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/148)) ([#180](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/180)) ([8b626b1](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/8b626b1691f47d487880910f3687dbb69c3791f1))
+* scripts/backfill-otel.sh — idempotent JSONL → OTel backfill (closes [#157](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/157)) ([#191](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/191)) ([db1bc47](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/db1bc47c709ef879efae3c4f80319dd8aa03978b))
+* sharpen anti-padding directive — participial-clause keyword triggers (closes [#138](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/138)) ([#144](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/144)) ([edf236f](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/edf236f6134299fa0503f3e311bf4f076d06203e))
+
+
+### Bug Fixes
+
+* delegate-feedback.sh writes single row per verdict (closes [#171](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/171)) ([#176](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/176)) ([8e08d67](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/8e08d678c005efa5cfa70dee2c7b6373354f763c))
+* delegate.sh stdin probe — guard against socket FDs (closes [#169](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/169)) ([#175](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/175)) ([baf1e6b](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/baf1e6b084d0300f11cb8c0c8ff2b3331dbca388))
+* verdict-nudge fires unconditionally on success (closes [#149](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/149)) ([#189](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/189)) ([e5aeefd](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/e5aeefd2ceb165d055da79347a4d58b4b46f8f2b))
+
+
+### Documentation
+
+* document URL_EXTERNAL SKILL.md-only scope as intentional (closes [#172](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/172)) ([#174](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/174)) ([27697b4](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/27697b4394543bb7234bcf61e79f46fdef057566))
+* observability runbooks — Grafana Cloud, Langfuse self-host, Phoenix ([#166](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/166)) ([a2ca2b2](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/a2ca2b2faefb5b1b1ea542d22cb8146fddb34e99))
+* post-merge ROADMAP refresh + observability cross-ref + release-note recipe sharpening ([#173](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/173)) ([37d8c16](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/37d8c16430aa87216c39ae6def0ede4f680d915c))
+* prompts/README — document rejection rationale for persona / Prompty / fabric counts ([#167](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/167)) ([8d220ad](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/8d220ad8bcbbb3996103f656275c8119338451bb))
+* ROADMAP — add Phase 11 (OTel observability) + Phase 12 (prompt-library hardening) ([#153](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/153)) ([05e1c34](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/05e1c34e1cf1cb716759095d71749c8813d5ce26))
+* ROADMAP — round-2 parallel-agent pass shipped ([#179](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/179)) ([ecb3c68](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/ecb3c68b3a1643e33237348a05e439971109eccf))
+* ROADMAP — round-3 (Phase 11 Track A + recipe iteration) shipped ([#183](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/183)) ([5926fa0](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/5926fa0b70b9a19196cbf462afa49f049c109f7d))
+* warn callers about shell-var expansion silently dropping prompt tokens (closes [#145](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/145)) ([#146](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/146)) ([50edb05](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/50edb05f6f557f501d57f371985d1759280a8230))
+
 ## [0.3.0](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.2.1...v0.3.0) (2026-05-21)
 
 
