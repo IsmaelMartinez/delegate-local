@@ -666,17 +666,17 @@ else
 fi
 
 validate_numeric() {
+  # Bash 3.2 =~ POSIX ERE — same idiom as the canary's preflight_timeout
+  # check at line 711. Accepts: optional leading minus, then digits, or
+  # digits.digits, or digits., or .digits. Rejects strings like `1-2`,
+  # `5-`, `.-` that an earlier permissive `case` pattern passed through
+  # and pushed to jq as garbage --argjson input (the failure surfaced as
+  # an obscure 'invalid JSON text' rather than the script's own clean error).
   local name="$1" value="$2"
-  case "$value" in
-    ""|*[!0-9.-]*|*-*-*|*.*.*)
-      echo "delegate: $name='$value' is not numeric" >&2
-      exit 2
-      ;;
-    -|.|-.)
-      echo "delegate: $name='$value' is not numeric" >&2
-      exit 2
-      ;;
-  esac
+  if ! [[ "$value" =~ ^-?([0-9]+(\.[0-9]*)?|\.[0-9]+)$ ]]; then
+    echo "delegate: $name='$value' is not numeric" >&2
+    exit 2
+  fi
 }
 
 if [[ -n "${DELEGATE_TEMPERATURE:-}" ]]; then

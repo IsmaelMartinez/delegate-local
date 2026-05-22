@@ -3227,6 +3227,45 @@ for vname in DELEGATE_TOP_P DELEGATE_TOP_K DELEGATE_PRESENCE_PENALTY; do
   rm -rf "$tmp" "$metrics" "$stderr_file"
 done
 
+# QS4c. Edge-case rejected values. The validator must catch shapes that
+# `[!0-9.-]` character-class checks would let through but jq --argjson
+# rejects (`1-2`, `5-`, `.-`, `1.5.6`). Each must exit 2 with the script's
+# own clean error, not jq's 'invalid JSON text' surface. Pins the
+# bash-3.2-compatible `=~` regex against regression to the permissive
+# case-pattern form.
+for bad in "1-2" "5-" ".-" "1.5.6" "-" "."; do
+  tmp=$(mktemp -d)
+  make_mock_ollama "$tmp"
+  make_mock_curl_ok "$tmp"
+  metrics=$(mktemp); : > "$metrics"
+  stderr_file=$(mktemp)
+  EC=0
+  out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_METRICS_FILE="$metrics" \
+    DELEGATE_TEMPERATURE="$bad" \
+    bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+  assert_eq 2 "$EC" "QS4c/'$bad': exit 2"
+  assert_contains "not numeric" "$(cat "$stderr_file")" "QS4c/'$bad': clean validator error (not jq's 'invalid JSON' surface)"
+  rm -rf "$tmp" "$metrics" "$stderr_file"
+done
+
+# QS4d. Valid numeric shapes the validator must continue to accept:
+# integers, negatives, floats, leading-dot decimals, trailing-dot integers.
+# Each should pass through to dispatch (exit 0).
+for good in "0" "1" "-1" "0.7" "1.3" ".5" "1." "-42" "-0.5"; do
+  tmp=$(mktemp -d)
+  make_mock_ollama "$tmp"
+  make_mock_curl_ok "$tmp"
+  metrics=$(mktemp)
+  EC=0
+  out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_METRICS_FILE="$metrics" \
+    DELEGATE_TEMPERATURE="$good" \
+    bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+  assert_eq 0 "$EC" "QS4d/'$good': accepted (exit 0)"
+  rm -rf "$tmp" "$metrics"
+done
+
 # QS5. Same shape on the MLX path — Qwen profile lands on /v1/chat/completions
 # as top-level keys (OpenAI shape), not inside an `options` object.
 tmp=$(mktemp -d)
