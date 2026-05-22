@@ -149,6 +149,44 @@ skill_body=$(cat "$REPO/SKILL.md")
 assert_contains "## Recipes" "$skill_body" "SKILL.md has '## Recipes' section"
 assert_contains "prompts/" "$skill_body" "SKILL.md '## Recipes' references prompts/"
 
+# 6. Recipe-specific structural pins. Each entry names the recipe and the
+# named directives that calibration history shows must survive future
+# "simplification" passes — without these pins a refactor can silently drop
+# a guard whose absence cost real session iterations to add.
+summarise_issue_body=$(cat "$PROMPTS_DIR/summarise-issue.md")
+assert_contains "OMIT-EMPTY-SECTION" "$summarise_issue_body" \
+  "summarise-issue.md names OMIT-EMPTY-SECTION rule"
+assert_contains "COMMENT-N-CITATION" "$summarise_issue_body" \
+  "summarise-issue.md names COMMENT-N-CITATION rule"
+# The Anti-hallucination guards section must explicitly enumerate both rules
+# so the calibration provenance for each guard is anchored in the document.
+guards_section=$(awk '
+  /^## Anti-hallucination guards/ { in_section=1; next }
+  /^## / && in_section { in_section=0 }
+  in_section { print }
+' "$PROMPTS_DIR/summarise-issue.md")
+assert_contains "OMIT-EMPTY-SECTION" "$guards_section" \
+  "summarise-issue.md '## Anti-hallucination guards' names OMIT-EMPTY-SECTION"
+assert_contains "COMMENT-N-CITATION" "$guards_section" \
+  "summarise-issue.md '## Anti-hallucination guards' names COMMENT-N-CITATION"
+# The OMIT-EMPTY-SECTION rule's Wrong/Correct anchors must cover BOTH
+# `## What's blocking` and `## What's next` per the PR #173 dual-anchoring
+# principle. PR #180 added the What's-next symmetric pair after gemini and
+# self-review flagged the asymmetry. Pin the symmetric anchor so a future
+# refactor cannot silently revert to a blockers-only anchor set.
+prompt_template_section=$(awk '
+  /^## Prompt template[[:space:]]*$/ { in_section=1; next }
+  in_section && /^```/ { in_block = !in_block; print; next }
+  in_section && !in_block && /^## / { exit }
+  in_section { print }
+' "$PROMPTS_DIR/summarise-issue.md")
+assert_contains "## What's next" "$prompt_template_section" \
+  "summarise-issue.md prompt template references What's next section"
+# The Wrong-shape anchor for the What's-next zero-comments case must be
+# present — proxy for "the symmetric anchor pair survives refactors".
+assert_contains "no next-action stated" "$prompt_template_section" \
+  "summarise-issue.md prompt template anchors no-next-action Wrong shape"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
