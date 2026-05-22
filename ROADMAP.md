@@ -6,6 +6,30 @@ The skill works today as a personal tool. To make it dependable for shared use, 
 
 Going-public completed in May 2026 (trigger-eval gate enforced on every PR, community-health files, release-please pipeline, doc-drift cleanup). See `git log`, the GitHub releases page, the per-phase summaries below, and the ADRs under `docs/adr/` for the full PR-by-PR history.
 
+### Phase 11 Track A + recipe-iteration round-3 pass (2026-05-22 — shipped)
+
+Phase 11 Track A (OTLP exporter MVP, `#134`) shipped via `#182`. The exporter is opt-in via `DELEGATE_OTEL_ENDPOINT`, fires one span per `delegate.sh` call plus a linked feedback span per `delegate-feedback.sh`, and follows the OTLP/HTTP JSON wire format per `docs/adr/0007-otel-schema.md`. Three correctness findings surfaced during /address-pr-comments and got fixed in the same PR: synchronous-POST latency documented in env-var docstrings as a known opt-in cost, 32-bit perl int precision edge acknowledged with an inline comment, and the load-bearing `DELEGATE_OTEL_HEADERS` comma-split bug (a header value containing a literal comma was fragmenting into multiple `-H` flags) closed with a core-perl url-decode + two regression tests pinning the round-trip.
+
+Round 3 also shipped recipe-iteration work: `prompts/plan-section-intro.md` (`#150` via `#181`) as a forward-looking ROADMAP-phase-intro recipe (sibling of `roadmap-entry.md` for past-tense entries) and `prompts/summarise-issue.md` (`#148` via `#180`) sharpening with the OMIT-EMPTY positive-form directive plus the Comment-N hallucination guard for zero-comment issues. The summarise-issue iteration surfaced the "Wrong/Correct anchor reproduces forbidden literal" risk — the literal example anchor was being pattern-matched back into output — and the fix replaced the single-literal anchor with a family-of-paraphrases description grounded in four real prior MISS phrasings (2026-05-20, -21, -22, with-comments variant). PR `#179` documented the round-2 sweep for ROADMAP continuity.
+
+Phase 11 Tracks D (`#156` dashboards-as-code), E (`#157` JSONL backfill), F (`#158` privacy redaction), and G (`#159` metrics counters) are all now unblocked by Track A landing. Track F (redaction) is the load-bearing follow-up because the exporter ships unguarded — field values currently land on the wire as-is — and Phase 11 cannot be considered production-safe until that gap closes.
+
+**MISSes recorded during round 3 worth carrying forward into a recipe-tightening pass:**
+
+- **`commit-message.md` — SUBJECT_LEN recurring (87-char and 79-char subjects despite "72 chars or fewer" reinforcement, 2026-05-22 metrics).** The recipe's calibration notes already documented the trigger condition for promoting the subject-length directive into the template body with a v5/v7 Wrong/Correct one-shot — that trigger has now fired and the promotion should land.
+- **`commit-message.md` — wrong type-tag (`feat:` for a fix, 2026-05-22).** Add a directive (or expand the existing one) for conventional-commit type selection grounded in keyword triggers.
+- **`pr-description.md` — massive hallucination on 35B-class prose tier.** Documented as known-flaky in the recipe's calibration notes; the workaround is hand-writing on this host class. Promoting the recipe to a tier-gated form (refuse on prose tier above N params) is the cleaner long-term fix but not urgent.
+- **`plan-section-intro.md` — heading-line drift confirmed on second observation (2026-05-22 ×2).** Two data points clear the recipe's calibration-notes bar for tightening the "no heading line" directive into a stronger form.
+
+**Next-pickup order (post-round-3):**
+
+1. **Phase 11 Track F (`#158`) — privacy redaction guard.** Production-safety blocker for the now-shipped exporter. Field values currently leave the host as-is.
+2. **Phase 11 Track D (`#156`) — dashboards-as-code.** Makes the exporter useful end-to-end (the runbooks under `docs/observability/` describe deployments but the dashboards themselves are user-built today).
+3. **`commit-message.md` SUBJECT_LEN promotion.** Calibration-loop discipline — the trigger condition is met.
+4. **Phase 11 Track E (`#157`) — backfill script for pre-exporter JSONL rows.**
+5. **`plan-section-intro.md` heading-line directive tightening.** Two-observation calibration data is in.
+6. **Phase 11 Track G (`#159`) — metrics counters.** Speculative until real-world usage signal arrives.
+
 ### Phase 11 + 12 round-2 parallel-agent pass (2026-05-22 — shipped)
 
 A second 5-agent parallel pass landed all four gotcha tickets (#169 stdin probe via #175, #170 queue-wait telemetry via #177, #171 double-row regression coverage via #176, #172 URL_EXTERNAL scope documentation via #174) plus Phase 12 Track B (#161 future-recipe convention via #178). Round 2 ran against the gotchas filed during round 1, closing the loop in the same day.
