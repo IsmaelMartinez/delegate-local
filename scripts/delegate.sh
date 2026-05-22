@@ -136,6 +136,26 @@
 #                                           #   wire header is the literal
 #                                           #   original (e.g. `a%2Cb` →
 #                                           #   `a,b`).
+#   DELEGATE_OTEL_INCLUDE_CONTENT=1         # Phase 11 Track F (#158). When =1,
+#                                           #   include prompt / context /
+#                                           #   output content in the OTel span
+#                                           #   as attribute values
+#                                           #   (delegate.prompt,
+#                                           #   delegate.context,
+#                                           #   delegate.output). Default unset
+#                                           #   = redact those fields entirely
+#                                           #   — only metadata (tier, model,
+#                                           #   recipe, char counts, durations)
+#                                           #   leaves the host. WARNING:
+#                                           #   content fields may carry PII,
+#                                           #   API keys, or internal URLs;
+#                                           #   only enable this against
+#                                           #   trusted collectors (a local
+#                                           #   Phoenix instance, a vetted
+#                                           #   private OTel backend, etc.).
+#                                           #   See ADR 0007 + docs/otel-
+#                                           #   schema.md for the field-by-
+#                                           #   field split.
 #
 # Output:  model response on stdout (no ANSI; HTTP body is plain text)
 # Errors:  pick-model failures and HTTP errors propagate as non-zero exit.
@@ -310,7 +330,7 @@ otel_gen_id() {
 
 # emit_otel_span <start_ms> <duration_ms> <status> <trace_id> <span_id>
 #   <model> <backend> <tier> <recipe_name> <pchars> <cchars> <ochars>
-#   <qwait_ms> <gen_ms> <tokens_avoided>
+#   <qwait_ms> <gen_ms> <tokens_avoided> <prompt> <context> <output>
 #
 # Translate a delegate row into an OTLP/HTTP JSON payload matching ADR 0007
 # (schema in docs/otel-schema.md) and POST it to $DELEGATE_OTEL_ENDPOINT.
@@ -318,12 +338,19 @@ otel_gen_id() {
 # caller's exit status or pollute its stdout. When DELEGATE_OTEL_VERBOSE=1
 # the failure reason goes to stderr; default is silent so a misconfigured
 # endpoint doesn't spam every delegation.
+#
+# Content fields (prompt / context / output) are only emitted when
+# DELEGATE_OTEL_INCLUDE_CONTENT=1. Track F (#158) made the default redact:
+# only metadata (tier, model, recipe, char counts, durations) leaves the
+# host unless the caller explicitly opts in.
 emit_otel_span() {
   [[ -z "${DELEGATE_OTEL_ENDPOINT:-}" ]] && return 0
   local start_ms="$1" dur_ms="$2" status="$3" trace_id="$4" span_id="$5"
   local model="$6" backend="$7" tier="$8" recipe_name="$9" pchars="${10}"
   local cchars="${11}" ochars="${12}" qwait_ms="${13}" gen_ms="${14}"
-  local tokens_avoided="${15}"
+  local tokens_avoided="${15}" prompt_text="${16:-}" context_text="${17:-}"
+  local output_text="${18:-}"
+  local include_content="${DELEGATE_OTEL_INCLUDE_CONTENT:-0}"
 
   # Compute nanosecond timestamps. start_ms is the high-resolution
   # millisecond epoch captured at script start (Time::HiRes), so ns = ms *
@@ -352,6 +379,12 @@ emit_otel_span() {
   # kind and status code are int32 enums and stay JSON numbers (--argjson).
   # delegate.recipe is only emitted when --recipe was used (the schema
   # explicitly forbids the attribute with an empty string).
+  #
+  # Content fields (delegate.prompt / delegate.context / delegate.output)
+  # are only appended when DELEGATE_OTEL_INCLUDE_CONTENT=1. Default is to
+  # omit them entirely — Track F (#158) inverted the default so content
+  # never leaves the host unless the operator explicitly opts in. Char
+  # counts above are the unconditional metadata equivalents.
   local payload
   payload=$(jq -nc \
     --arg trace_id "$trace_id" --arg span_id "$span_id" \
@@ -362,6 +395,9 @@ emit_otel_span() {
     --arg pchars "$pchars" --arg cchars "$cchars" --arg ochars "$ochars" \
     --arg dur_ms "$dur_ms" --arg qwait_ms "$qwait_ms" --arg gen_ms "$gen_ms" \
     --arg exit_status "$status" --arg tokens_avoided "$tokens_avoided" \
+    --arg include_content "$include_content" \
+    --arg prompt_text "$prompt_text" --arg context_text "$context_text" \
+    --arg output_text "$output_text" \
     '{
       resourceSpans: [{
         resource: {
@@ -392,7 +428,13 @@ emit_otel_span() {
                 {key: "delegate.generation_ms", value: {intValue: $gen_ms}},
                 {key: "delegate.estimated_tokens_avoided", value: {intValue: $tokens_avoided}},
                 {key: "delegate.exit_status", value: {intValue: $exit_status}}
-              ] + (if $recipe != "" then [{key: "delegate.recipe", value: {stringValue: $recipe}}] else [] end)),
+              ]
+              + (if $recipe != "" then [{key: "delegate.recipe", value: {stringValue: $recipe}}] else [] end)
+              + (if $include_content == "1" then [
+                  {key: "delegate.prompt", value: {stringValue: $prompt_text}},
+                  {key: "delegate.context", value: {stringValue: $context_text}},
+                  {key: "delegate.output", value: {stringValue: $output_text}}
+                ] | map(select(.value.stringValue != "")) else [] end)),
               status: {code: $status_code}
             }
           )]
@@ -733,7 +775,7 @@ if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
   fail_cchars=${#context}
   fail_toks=$(compute_tokens_local "$fail_pchars" "$fail_cchars" 0)
   log_metric "$ts_start" "$tier" "(none)" "$fail_pchars" "$fail_cchars" 0 "$fail_dur_ms" 1 "$recipe" 0 "$fail_dur_ms" "$otel_trace_id" "$otel_span_id"
-  emit_otel_span "$start_epoch_ms" "$fail_dur_ms" 1 "$otel_trace_id" "$otel_span_id" "(none)" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks"
+  emit_otel_span "$start_epoch_ms" "$fail_dur_ms" 1 "$otel_trace_id" "$otel_span_id" "(none)" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks" "${recipe_template}${prompt}" "$context" ""
   echo "delegate: pick-model failed for tier '$tier'" >&2
   exit 1
 fi
@@ -770,7 +812,7 @@ if [[ -n "$recipe" ]] \
     canary_cchars=${#context}
     canary_toks=$(compute_tokens_local "$canary_pchars" "$canary_cchars" 0)
     log_metric "$ts_start" "$tier" "$model" "$canary_pchars" "$canary_cchars" 0 "$canary_dur_ms" 3 "$recipe" 0 "$canary_dur_ms" "$otel_trace_id" "$otel_span_id"
-    emit_otel_span "$start_epoch_ms" "$canary_dur_ms" 3 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$canary_pchars" "$canary_cchars" 0 0 "$canary_dur_ms" "$canary_toks"
+    emit_otel_span "$start_epoch_ms" "$canary_dur_ms" 3 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$canary_pchars" "$canary_cchars" 0 0 "$canary_dur_ms" "$canary_toks" "${recipe_template}${prompt}" "$context" ""
     # Distinguish curl exit codes so the recovery advice points at the
     # right knob. 28 is the --max-time-fired timeout (the case the canary
     # was designed for); 7 is "can't reach host" (daemon down or wrong
@@ -921,7 +963,7 @@ output_chars=${#output}
 tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$output_chars")
 
 log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id"
-emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local"
+emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to
 # read after every delegation, so it can tell the user which model handled

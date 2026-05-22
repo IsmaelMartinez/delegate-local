@@ -1,10 +1,10 @@
-# 7. OpenTelemetry export schema — namespace split, feedback-as-linked-span, no content attributes
+# 7. OpenTelemetry export schema — namespace split, feedback-as-linked-span, content-redacted-by-default
 
-Date: 2026-05-22
+Date: 2026-05-22 (Track A); amended 2026-05-22 (Track F)
 
 ## Status
 
-Accepted.
+Accepted. Track F amendment (privacy redaction default) accepted 2026-05-22.
 
 ## Context
 
@@ -34,24 +34,33 @@ The chosen option is to emit the feedback as a new short span in a new trace, wi
 
 To make the link discoverable even on collectors and backends that do not render `links` well, the feedback span also carries `delegate.feedback.parent_trace_id` and `delegate.feedback.parent_span_id` as plain string attributes. This is belt-and-braces — backends that handle `links` correctly will use the standard mechanism; backends that don't will at least let the user filter and join by attribute. The parent IDs themselves are captured into the JSONL row at delegation time (`otel_trace_id`, `otel_span_id`) so the feedback script can correlate without a second lookup, and so historical backfill (Track E) can reconstruct the link for rows that pre-date the exporter.
 
-### No prompt or output content as attributes — char counts only
+### Content redacted by default; opt-in via `DELEGATE_OTEL_INCLUDE_CONTENT=1`
 
 The skill's README and SKILL.md frontmatter both frame on-device privacy as a primary value: content stays on the host, only routing metadata travels. The wire payload to the OTel collector must match that framing, regardless of which backend the user points the exporter at.
 
-The exporter therefore emits character counts (`delegate.prompt_chars`, `delegate.context_chars`, `delegate.output_chars`) but never the prompt, context, or output text itself. The OTel GenAI conventions reserve `gen_ai.prompt` and `gen_ai.completion` as opt-in content attributes (they are explicitly off-by-default in the SemConv); this skill rejects those attributes unconditionally rather than gating them behind a flag.
+The exporter therefore emits character counts (`delegate.prompt_chars`, `delegate.context_chars`, `delegate.output_chars`) and other metadata (tier, model, recipe, verdict, parent IDs, durations, exit status) unconditionally. Content fields — `delegate.prompt`, `delegate.context`, `delegate.output`, and `delegate.feedback.reason` — are gated behind `DELEGATE_OTEL_INCLUDE_CONTENT=1`. When the flag is unset (the default), the content attributes are omitted from the wire payload entirely; no `<redacted>` sentinel is emitted, the attribute simply does not appear. When the flag is set to `1`, the attributes are emitted with their actual values.
 
-The rejected alternative is a flag like `DELEGATE_OTEL_INCLUDE_CONTENT=1`. Drawback: a flag invites the failure mode where a user enables it for a debug session, forgets it on for the next privacy-sensitive workload, and ships prompts to a third-party collector. Track F (issue #158) adds a unit-test assertion that no attribute key matching the content patterns is ever present in the OTLP body, regardless of env-var settings, which makes the no-content rule a tested invariant rather than a documented convention.
+Track F (issue #158, 2026-05-22) is the amendment that inverted the default. The original Track A landing (PR #182, 2026-05-22) emitted the feedback span's `delegate.feedback.reason` unconditionally and did not emit prompt / context / output content at all. Track F made content emission a single coherent opt-in across both scripts: the same flag covers all four content fields, the four fields share one warning in the env-var docstring, and the redaction default applies to existing rows the same way it applies to new ones. The amendment's tests (extensions to `tests/test-delegate.sh` and `tests/test-delegate-feedback.sh`) assert that with the flag unset, none of the four content attributes appear in the OTLP body; with the flag set, all four appear with their JSONL-row values verbatim.
+
+The two alternatives rejected during Track F's design:
+
+1. **No flag at all — reject content unconditionally.** This was the original Track A position and the reason `delegate.feedback.reason` was an exception. Rejected on the second pass because the calibration history living in `metrics.jsonl` already records the reason on-host; an operator with a local Phoenix instance or vetted private collector loses no privacy by exporting the same string to a backend they own, and the dashboard's MISS-reason word cloud is a real Track D feature. A blanket reject would forbid that legitimate use case.
+2. **Sentinel string `<redacted>` instead of omission.** Rejected because emitting the attribute with a placeholder value pollutes group-by panels and word clouds with the literal sentinel string. Omission is cleaner: backends that filter on attribute presence behave correctly, and the schema's "attribute MUST NOT be present when X" rule is enforceable.
+
+The original concern with the flag — that an operator enables it for one debug session and forgets it on for the next privacy-sensitive workload — is mitigated by the env-var docstring warning in both scripts, the prominent backwards-compat note in the Track F PR description, and the fact that the flag has to be set per-shell or in a sourced rc file rather than persisted globally by the skill. The mitigation is documented, not engineered — the project's "two bash scripts" rule rules out a persistent state file.
 
 ## Consequences
 
-The wire payload is fully enumerated by `docs/otel-schema.md` (the companion to this ADR), which lists every attribute with its source JSONL field, OTel convention reference, and example value. Track A's review checks the exporter's payload against that table directly. Track F's privacy-redaction test treats the no-content rule as a tested invariant.
+The wire payload is fully enumerated by `docs/otel-schema.md` (the companion to this ADR), which lists every attribute with its source JSONL field, OTel convention reference, example value, and whether it is metadata (unconditional) or content (gated on `DELEGATE_OTEL_INCLUDE_CONTENT=1`). Track A's review checks the exporter's payload against that table directly. Track F's privacy-redaction tests treat the content-gating invariant as tested behaviour.
 
 The namespace split makes future-collision with WG-promoted attribute names a non-issue for any skill-specific field. If the WG ever ships a `gen_ai.evaluation.*` namespace, this skill can decide separately whether to mirror its verdict attribute into the new namespace alongside the existing `delegate.feedback.verdict` (with a deprecation period for the private name) or stay private — the migration is cheap because the private name was never claimed to be canonical.
 
 The feedback-as-linked-span pattern means feedback events show up in the observability backend as their own trace, joined to the parent delegation either by `links` (standard mechanism) or by `delegate.feedback.parent_trace_id` (fallback for backends that don't render links). Dashboards (Track D) consume the join in whichever form their backend supports.
 
-The no-content rule means dashboards cannot show the prompt text alongside the output for debugging. Acceptable trade-off: the calibration history already lives in `metrics.jsonl` plus the per-recipe `Calibration notes` in `prompts/<task>.md`, which both stay on-host. Anything that needs prompt-level introspection uses the local files directly.
+The redact-by-default rule means dashboards on a fresh setup cannot show the prompt text alongside the output for debugging. Acceptable trade-off: the calibration history already lives in `metrics.jsonl` plus the per-recipe `Calibration notes` in `prompts/<task>.md`, which both stay on-host. Operators who want prompt-level introspection in the dashboard set `DELEGATE_OTEL_INCLUDE_CONTENT=1` against a trusted collector (a local Phoenix instance, a vetted self-hosted Langfuse, a private OTLP endpoint behind a firewall) and the four content attributes flow through. The flag is per-shell rather than persisted, so the failure mode of "I forgot it on" is bounded to the operator's current session.
 
-What would justify revisiting any of the three decisions: the WG promoting `gen_ai.*` evaluation conventions to Stable with semantics that match the verdict shape (re-open the namespace split for the verdict attribute specifically); a real observability backend with documented and dependable `links` rendering becoming dominant enough that the parent-id fallback attributes are dead weight (drop the fallback); or a use case where on-device debugging genuinely needs prompt content in the dashboard and the user explicitly accepts the privacy trade-off (still likely better solved by a local-only Phoenix instance than by relaxing the no-content rule).
+Backwards-compat note for the Track F amendment: callers who were already running the exporter from Track A against a collector and relied on `delegate.feedback.reason` in their dashboard need to set `DELEGATE_OTEL_INCLUDE_CONTENT=1` to restore the previous behaviour. The amendment ships within the same release cycle as Track A so the migration window is short, but the change IS backwards-incompatible at the wire-payload level. The Track F PR description flags this prominently.
+
+What would justify revisiting any of the four decisions: the WG promoting `gen_ai.*` evaluation conventions to Stable with semantics that match the verdict shape (re-open the namespace split for the verdict attribute specifically); a real observability backend with documented and dependable `links` rendering becoming dominant enough that the parent-id fallback attributes are dead weight (drop the fallback); operational data showing that operators forget the `DELEGATE_OTEL_INCLUDE_CONTENT` flag on across privacy boundaries (consider a per-call confirmation prompt or a more granular per-attribute flag); or a content category that genuinely cannot leak (e.g. a pure-numeric output) that warrants its own unconditional attribute.
 
 The cost of this ADR is one more file in `docs/adr/` plus the companion reference doc. The benefit is that Track A's code review references the schema decisions directly rather than re-deriving them, and any future contributor who wonders why the exporter looks the way it does finds the rationale in one place.

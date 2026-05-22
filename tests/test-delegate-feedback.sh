@@ -575,7 +575,11 @@ rm -rf "$tmp"
 
 # FB-OT2. DELEGATE_OTEL_ENDPOINT set → exactly one OTLP POST. Payload has the
 # feedback-specific shape: new trace_id, new span_id, kind=1 (INTERNAL),
-# `links` array pointing at the parent, the four feedback.* attributes.
+# `links` array pointing at the parent, the verdict + parent ID attributes.
+# Track F (#158): the `delegate.feedback.reason` attribute is gated behind
+# DELEGATE_OTEL_INCLUDE_CONTENT=1, so this default-no-content test asserts
+# the verdict + parent IDs travel but the reason does NOT. The opt-in path
+# is exercised in FB-OT3 below.
 tmp=$(mktemp -d)
 PARENT_TID="aaaa1111bbbb2222cccc3333dddd4444"
 PARENT_SID="feedface12345678"
@@ -604,15 +608,31 @@ fi
 assert_contains '"feedback qwen3.6:35b"' "$otel_body" "FB-OT2: span name includes parent model"
 # Span kind 1 = INTERNAL.
 assert_contains '"kind":1' "$otel_body" "FB-OT2: span kind=1 (INTERNAL)"
-# Feedback-specific attributes (per docs/otel-schema.md).
+# Metadata attributes still present (verdict, parent IDs).
 assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT2: delegate.feedback.verdict attribute"
 assert_contains '"hit"' "$otel_body" "FB-OT2: verdict value is 'hit'"
-assert_contains '"delegate.feedback.reason"' "$otel_body" "FB-OT2: delegate.feedback.reason attribute"
-assert_contains '"verbatim used"' "$otel_body" "FB-OT2: reason value preserved"
 assert_contains '"delegate.feedback.parent_trace_id"' "$otel_body" "FB-OT2: parent_trace_id attribute"
 assert_contains "\"$PARENT_TID\"" "$otel_body" "FB-OT2: parent_trace_id value matches delegate row"
 assert_contains '"delegate.feedback.parent_span_id"' "$otel_body" "FB-OT2: parent_span_id attribute"
 assert_contains "\"$PARENT_SID\"" "$otel_body" "FB-OT2: parent_span_id value matches delegate row"
+# Track F default-redaction: reason attribute is OMITTED when the flag is unset.
+case "$otel_body" in
+  *'delegate.feedback.reason'*)
+    echo "  FAIL  FB-OT2: delegate.feedback.reason MUST be absent without DELEGATE_OTEL_INCLUDE_CONTENT=1 (Track F #158)"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT2: delegate.feedback.reason absent by default (Track F #158)"
+    pass=$((pass+1));;
+esac
+# The reason text itself must not appear in the payload anywhere.
+case "$otel_body" in
+  *'verbatim used'*)
+    echo "  FAIL  FB-OT2: reason text 'verbatim used' must not appear in payload when content is redacted"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT2: reason text not present in payload (no sentinel leak, no key leak)"
+    pass=$((pass+1));;
+esac
 # links array points at the parent (the canonical OTel mechanism).
 assert_contains '"links":[' "$otel_body" "FB-OT2: links array present"
 links_trace=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].links[0].traceId')
@@ -648,8 +668,12 @@ fb_count=$(grep -c '"source":"feedback"' "$tmp/m.jsonl")
 assert_eq 1 "$fb_count" "FB-OT2: feedback row still written alongside the OTLP POST"
 rm -rf "$tmp"
 
-# FB-OT3. miss verdict + reason → verdict attribute is 'miss', reason
-# preserved.
+# FB-OT3. DELEGATE_OTEL_INCLUDE_CONTENT=1 opt-in: miss verdict + reason →
+# verdict attribute is 'miss', AND `delegate.feedback.reason` is present
+# with the original text. This is the Track F opt-in path — operators
+# pointing the exporter at a trusted collector flip the flag and the
+# reason content travels alongside the verdict for the MISS-reason word
+# cloud in Track D's dashboards.
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -659,11 +683,13 @@ EC=0
 out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
   DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_INCLUDE_CONTENT=1 \
   bash "$SCRIPT" miss "had to rewrite the bullets" 2>&1) || EC=$?
-assert_eq 0 "$EC" "FB-OT3: miss verdict → exits 0"
+assert_eq 0 "$EC" "FB-OT3: miss verdict + include-content opt-in → exits 0"
 otel_body=$(cat "$otel_sniff")
 assert_contains '"miss"' "$otel_body" "FB-OT3: verdict value is 'miss'"
-assert_contains '"had to rewrite the bullets"' "$otel_body" "FB-OT3: reason preserved"
+assert_contains '"delegate.feedback.reason"' "$otel_body" "FB-OT3: reason attribute present when include-content=1"
+assert_contains '"had to rewrite the bullets"' "$otel_body" "FB-OT3: reason text preserved when include-content=1"
 rm -rf "$tmp"
 
 # FB-OT4. miss verdict with NO reason → no delegate.feedback.reason attribute
@@ -831,6 +857,171 @@ assert_contains "X-Tenant: y" "$otel_args_line" "FB-OT10: second header still pa
 # this test guards against.
 h_count=$(echo "$otel_args_line" | grep -oE '\-H ' | wc -l | tr -d ' ')
 assert_eq 3 "$h_count" "FB-OT10: exactly three -H flags (Content-Type + Cookie + X-Tenant) — not four"
+rm -rf "$tmp"
+
+# ---------------------------------------------------------------------------
+# Phase 11 Track F — privacy redaction default (#158)
+# DELEGATE_OTEL_INCLUDE_CONTENT gates the `delegate.feedback.reason`
+# attribute. Default unset = redact (omit the attribute entirely). Set to
+# `1` = include the attribute with its actual value. Metadata attributes
+# (verdict, parent_trace_id, parent_span_id) stay unconditional.
+# ---------------------------------------------------------------------------
+
+# FB-OT11. Default redaction with reason supplied: feedback row carries the
+# reason on disk (the JSONL row is the on-host calibration record and is
+# unaffected by the gate), but the OTLP payload OMITS the reason attribute.
+# Asserts the omission is total — no `delegate.feedback.reason` key, no
+# reason text anywhere in the body, no `<redacted>` sentinel.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+REASON="sensitive customer URL https://internal.example.com/customers/42 leaked into the prompt"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" miss "$REASON" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT11: default redaction → exits 0"
+otel_body=$(cat "$otel_sniff")
+# The OTLP body must NOT contain the reason attribute key OR the reason text.
+case "$otel_body" in
+  *'delegate.feedback.reason'*)
+    echo "  FAIL  FB-OT11: delegate.feedback.reason key MUST be absent by default"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT11: delegate.feedback.reason key absent by default"
+    pass=$((pass+1));;
+esac
+case "$otel_body" in
+  *'internal.example.com'*|*'customers/42'*)
+    echo "  FAIL  FB-OT11: reason text MUST NOT appear anywhere in the body"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT11: reason text omitted from body entirely"
+    pass=$((pass+1));;
+esac
+# Sentinel check: no literal '<redacted>' placeholder either (omission, not sentinel).
+case "$otel_body" in
+  *'<redacted>'*)
+    echo "  FAIL  FB-OT11: no '<redacted>' sentinel should leak into the body"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT11: no '<redacted>' sentinel in body (omission, not placeholder)"
+    pass=$((pass+1));;
+esac
+# Metadata attributes still present.
+assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT11: verdict attribute still present"
+assert_contains '"miss"' "$otel_body" "FB-OT11: verdict value 'miss' still present"
+assert_contains '"delegate.feedback.parent_trace_id"' "$otel_body" "FB-OT11: parent_trace_id attribute still present"
+# JSONL row on disk still carries the reason — the gate is wire-only.
+last_row=$(grep '"source":"feedback"' "$tmp/m.jsonl" | tail -1)
+assert_contains "$REASON" "$last_row" "FB-OT11: reason still recorded on-disk JSONL row (gate is wire-only)"
+rm -rf "$tmp"
+
+# FB-OT12. Opt-in inclusion (DELEGATE_OTEL_INCLUDE_CONTENT=1): the reason
+# attribute is present with its original value. Asserts the opt-in path
+# exercises the same code, just with the gate flipped.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+REASON="prose model added 'going forward' tail to body paragraph"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_INCLUDE_CONTENT=1 \
+  bash "$SCRIPT" miss "$REASON" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT12: opt-in include-content → exits 0"
+otel_body=$(cat "$otel_sniff")
+assert_contains '"delegate.feedback.reason"' "$otel_body" "FB-OT12: reason attribute present when opt-in"
+assert_contains "\"$REASON\"" "$otel_body" "FB-OT12: reason value matches input verbatim"
+# Metadata attributes also still present (opt-in doesn't change metadata).
+assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT12: verdict attribute present"
+assert_contains '"miss"' "$otel_body" "FB-OT12: verdict value 'miss' present"
+rm -rf "$tmp"
+
+# FB-OT13. Opt-in with NO reason supplied → still no reason attribute. The
+# gate doesn't synthesise content; it just unlocks the existing
+# "only emit when non-empty" rule. Mirrors FB-OT4 but with the flag on.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_INCLUDE_CONTENT=1 \
+  bash "$SCRIPT" hit 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT13: opt-in + no reason → exits 0"
+otel_body=$(cat "$otel_sniff")
+case "$otel_body" in
+  *'delegate.feedback.reason'*)
+    echo "  FAIL  FB-OT13: reason attribute should be absent when no reason supplied (even with opt-in)"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT13: reason attribute absent when no reason supplied (opt-in is necessary, not sufficient)"
+    pass=$((pass+1));;
+esac
+# Verdict attribute still present.
+assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT13: verdict attribute present"
+rm -rf "$tmp"
+
+# FB-OT14. The redact-by-default applies to DELEGATE_OTEL_INCLUDE_CONTENT=0
+# explicitly (not just unset). Defensive: the gate compares string equality
+# to "1" rather than truthiness, so any value other than "1" stays redacted.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_INCLUDE_CONTENT=0 \
+  bash "$SCRIPT" miss "explicit zero" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT14: explicit =0 → exits 0"
+otel_body=$(cat "$otel_sniff")
+case "$otel_body" in
+  *'delegate.feedback.reason'*|*'explicit zero'*)
+    echo "  FAIL  FB-OT14: DELEGATE_OTEL_INCLUDE_CONTENT=0 must redact same as unset"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT14: DELEGATE_OTEL_INCLUDE_CONTENT=0 redacts same as unset"
+    pass=$((pass+1));;
+esac
+rm -rf "$tmp"
+
+# FB-OT15. The redact-by-default rejects any non-"1" value (true/yes/on are
+# NOT recognised as opt-in). Operators must use the literal string "1" so
+# typos like INCLUDE_CONTENT=true don't silently include content.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_INCLUDE_CONTENT=true \
+  bash "$SCRIPT" miss "should stay redacted" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT15: =true (not '1') → exits 0"
+otel_body=$(cat "$otel_sniff")
+case "$otel_body" in
+  *'delegate.feedback.reason'*|*'should stay redacted'*)
+    echo "  FAIL  FB-OT15: DELEGATE_OTEL_INCLUDE_CONTENT=true must NOT enable content (only '1')"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT15: only literal '1' enables include-content (typo-safe)"
+    pass=$((pass+1));;
+esac
 rm -rf "$tmp"
 
 echo

@@ -2824,6 +2824,259 @@ end_type=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].e
 assert_eq "string" "$end_type" "OT13: endTimeUnixNano is JSON string (fixed64)"
 rm -rf "$tmp" "$metrics"
 
+# ---------------------------------------------------------------------------
+# Phase 11 Track F — privacy redaction default (#158)
+# DELEGATE_OTEL_INCLUDE_CONTENT gates `delegate.prompt`, `delegate.context`,
+# `delegate.output`. Default unset = redact (omit the three attributes
+# entirely). Set to `1` = include them with their actual values. Metadata
+# attributes (tier, model, char counts, durations, exit_status) stay
+# unconditional.
+# ---------------------------------------------------------------------------
+
+# OT14. Default redaction: with DELEGATE_OTEL_ENDPOINT set but
+# DELEGATE_OTEL_INCLUDE_CONTENT unset, the OTLP body contains the metadata
+# attributes (prompt_chars, context_chars, output_chars, tier, model) but
+# does NOT contain delegate.prompt, delegate.context, or delegate.output.
+# The actual content text (the prompt arg and the canned mock response)
+# must not appear anywhere in the body — no key, no value, no sentinel.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+SENTINEL_PROMPT="Summarise the diff for repo project-alpha"
+SENTINEL_CONTEXT="diff --git a/secret-customer-config.yaml b/secret-customer-config.yaml"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" prose "$SENTINEL_PROMPT" <<<"$SENTINEL_CONTEXT" 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT14: default redaction → exits 0"
+otel_body=$(cat "$otel_sniff")
+# Metadata still present.
+assert_contains '"delegate.tier"' "$otel_body" "OT14: metadata delegate.tier present"
+assert_contains '"delegate.prompt_chars"' "$otel_body" "OT14: metadata delegate.prompt_chars present"
+assert_contains '"delegate.context_chars"' "$otel_body" "OT14: metadata delegate.context_chars present"
+assert_contains '"delegate.output_chars"' "$otel_body" "OT14: metadata delegate.output_chars present"
+# Content attribute keys MUST be absent.
+case "$otel_body" in
+  *'"delegate.prompt"'*)
+    echo "  FAIL  OT14: delegate.prompt key MUST be absent by default"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT14: delegate.prompt key absent by default"
+    pass=$((pass+1));;
+esac
+case "$otel_body" in
+  *'"delegate.context"'*)
+    echo "  FAIL  OT14: delegate.context key MUST be absent by default"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT14: delegate.context key absent by default"
+    pass=$((pass+1));;
+esac
+case "$otel_body" in
+  *'"delegate.output"'*)
+    echo "  FAIL  OT14: delegate.output key MUST be absent by default"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT14: delegate.output key absent by default"
+    pass=$((pass+1));;
+esac
+# Content TEXT itself must not appear anywhere in the body.
+case "$otel_body" in
+  *"$SENTINEL_PROMPT"*)
+    echo "  FAIL  OT14: prompt sentinel text MUST NOT appear in payload"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT14: prompt sentinel text omitted from body"
+    pass=$((pass+1));;
+esac
+case "$otel_body" in
+  *"$SENTINEL_CONTEXT"*)
+    echo "  FAIL  OT14: context sentinel text MUST NOT appear in payload"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT14: context sentinel text omitted from body"
+    pass=$((pass+1));;
+esac
+# Output text (canned `mock-model-output: ok`) must also be absent.
+case "$otel_body" in
+  *'mock-model-output: ok'*)
+    echo "  FAIL  OT14: model output text MUST NOT appear in payload"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT14: model output text omitted from body"
+    pass=$((pass+1));;
+esac
+# No '<redacted>' sentinel either — the schema is omission, not placeholder.
+case "$otel_body" in
+  *'<redacted>'*)
+    echo "  FAIL  OT14: no '<redacted>' sentinel should leak into the body"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT14: no '<redacted>' sentinel in body (omission, not placeholder)"
+    pass=$((pass+1));;
+esac
+rm -rf "$tmp" "$metrics"
+
+# OT15. Opt-in inclusion (DELEGATE_OTEL_INCLUDE_CONTENT=1): all three content
+# attributes are present with their actual values. The metadata attributes
+# also stay present — opt-in adds content, it doesn't replace metadata.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+SENTINEL_PROMPT="Summarise this PR description"
+SENTINEL_CONTEXT="diff --git a/README.md b/README.md"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_INCLUDE_CONTENT=1 \
+  bash "$SCRIPT" prose "$SENTINEL_PROMPT" <<<"$SENTINEL_CONTEXT" 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT15: opt-in include-content → exits 0"
+otel_body=$(cat "$otel_sniff")
+# All three content attribute KEYS present.
+assert_contains '"delegate.prompt"' "$otel_body" "OT15: delegate.prompt key present when opt-in"
+assert_contains '"delegate.context"' "$otel_body" "OT15: delegate.context key present when opt-in"
+assert_contains '"delegate.output"' "$otel_body" "OT15: delegate.output key present when opt-in"
+# Content TEXT present.
+assert_contains "$SENTINEL_PROMPT" "$otel_body" "OT15: prompt text preserved verbatim when opt-in"
+assert_contains "$SENTINEL_CONTEXT" "$otel_body" "OT15: context text preserved verbatim when opt-in"
+assert_contains 'mock-model-output: ok' "$otel_body" "OT15: output text preserved verbatim when opt-in"
+# Metadata still present (opt-in is additive, not replacement).
+assert_contains '"delegate.prompt_chars"' "$otel_body" "OT15: char-count metadata still present"
+assert_contains '"delegate.tier"' "$otel_body" "OT15: tier metadata still present"
+# Use jq to confirm the content attributes have the right structural shape.
+prompt_val=$(echo "$otel_body" | jq -r '
+  .resourceSpans[0].scopeSpans[0].spans[0].attributes
+  | map(select(.key == "delegate.prompt"))
+  | .[0].value.stringValue')
+assert_eq "$SENTINEL_PROMPT" "$prompt_val" "OT15: delegate.prompt stringValue matches input"
+context_val=$(echo "$otel_body" | jq -r '
+  .resourceSpans[0].scopeSpans[0].spans[0].attributes
+  | map(select(.key == "delegate.context"))
+  | .[0].value.stringValue')
+assert_eq "$SENTINEL_CONTEXT" "$context_val" "OT15: delegate.context stringValue matches input"
+rm -rf "$tmp" "$metrics"
+
+# OT16. Explicit =0 redacts same as unset. Defensive: the gate compares
+# string equality to "1" rather than truthiness, so any value other than
+# "1" stays redacted.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_INCLUDE_CONTENT=0 \
+  bash "$SCRIPT" prose "ExplicitZeroSentinel" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT16: explicit =0 → exits 0"
+otel_body=$(cat "$otel_sniff")
+case "$otel_body" in
+  *'"delegate.prompt"'*|*'ExplicitZeroSentinel'*)
+    echo "  FAIL  OT16: DELEGATE_OTEL_INCLUDE_CONTENT=0 must redact same as unset"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT16: DELEGATE_OTEL_INCLUDE_CONTENT=0 redacts same as unset"
+    pass=$((pass+1));;
+esac
+rm -rf "$tmp" "$metrics"
+
+# OT17. Only literal "1" enables include-content (typo-safe). Operators
+# who set INCLUDE_CONTENT=true or =yes expecting truthiness get the safer
+# default (redact) instead of accidentally shipping content.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_INCLUDE_CONTENT=true \
+  bash "$SCRIPT" prose "TrueSentinelValue" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT17: =true (not '1') → exits 0"
+otel_body=$(cat "$otel_sniff")
+case "$otel_body" in
+  *'"delegate.prompt"'*|*'TrueSentinelValue'*)
+    echo "  FAIL  OT17: DELEGATE_OTEL_INCLUDE_CONTENT=true must NOT enable content (only literal '1')"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT17: only literal '1' enables include-content (typo-safe)"
+    pass=$((pass+1));;
+esac
+rm -rf "$tmp" "$metrics"
+
+# OT18. Pick-model failure path with content-include opt-in: prompt
+# content is emitted (the prompt was real, the model resolution failed).
+# Empty-string content attributes are OMITTED entirely, not emitted as
+# `stringValue: ""` — gemini-code-assist review on PR #188 flagged this
+# inconsistency: `delegate.recipe` is omitted when empty, so the content
+# attributes should follow the same convention. Consumers can rely on
+# attribute presence as a meaningful signal that content exists. On the
+# failure path, output_text is "" so `delegate.output` is absent; the
+# success-path test (OT15) covers the non-empty case.
+tmp=$(mktemp -d)
+cat > "$tmp/ollama" <<'EOF'
+#!/usr/bin/env bash
+[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
+unrelated:model  zz 5 GB   1 day ago"
+EOF
+chmod +x "$tmp/ollama"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_INCLUDE_CONTENT=1 \
+  bash "$SCRIPT" prose "FailurePathSentinel" </dev/null 2>&1) || EC=$?
+assert_eq 1 "$EC" "OT18: pick-model failure with opt-in → exit 1"
+otel_body=$(cat "$otel_sniff")
+# delegate.prompt still emitted (the prompt text is non-empty on failure span).
+assert_contains '"delegate.prompt"' "$otel_body" "OT18: delegate.prompt present on failure span with opt-in"
+assert_contains 'FailurePathSentinel' "$otel_body" "OT18: prompt content matches input on failure span"
+# delegate.output should be ABSENT because output_text is empty on the
+# failure path (no model response was generated). Empty-string content
+# attributes are omitted per the gemini consistency fix.
+case "$otel_body" in
+  *'"delegate.output"'*)
+    echo "  FAIL  OT18: delegate.output MUST be absent when output is empty (gemini consistency fix)"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT18: delegate.output omitted when output_text is empty (consistent with delegate.recipe)"
+    pass=$((pass+1));;
+esac
+# delegate.context is also empty on this failure-path call (no stdin), so
+# it should also be absent.
+case "$otel_body" in
+  *'"delegate.context"'*)
+    echo "  FAIL  OT18: delegate.context MUST be absent when context is empty"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT18: delegate.context omitted when context_text is empty"
+    pass=$((pass+1));;
+esac
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
