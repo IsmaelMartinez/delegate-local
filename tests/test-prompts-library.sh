@@ -169,6 +169,23 @@ assert_contains "OMIT-EMPTY-SECTION" "$guards_section" \
   "summarise-issue.md '## Anti-hallucination guards' names OMIT-EMPTY-SECTION"
 assert_contains "COMMENT-N-CITATION" "$guards_section" \
   "summarise-issue.md '## Anti-hallucination guards' names COMMENT-N-CITATION"
+# The OMIT-EMPTY-SECTION rule's Wrong/Correct anchors must cover BOTH
+# `## What's blocking` and `## What's next` per the PR #173 dual-anchoring
+# principle. PR #180 added the What's-next symmetric pair after gemini and
+# self-review flagged the asymmetry. Pin the symmetric anchor so a future
+# refactor cannot silently revert to a blockers-only anchor set.
+prompt_template_section=$(awk '
+  /^## Prompt template[[:space:]]*$/ { in_section=1; next }
+  in_section && /^```/ { in_block = !in_block; print; next }
+  in_section && !in_block && /^## / { exit }
+  in_section { print }
+' "$PROMPTS_DIR/summarise-issue.md")
+assert_contains "## What's next" "$prompt_template_section" \
+  "summarise-issue.md prompt template references What's next section"
+# The Wrong-shape anchor for the What's-next zero-comments case must be
+# present — proxy for "the symmetric anchor pair survives refactors".
+assert_contains "no next-action stated" "$prompt_template_section" \
+  "summarise-issue.md prompt template anchors no-next-action Wrong shape"
 
 echo
 echo "$pass passed, $fail failed"
