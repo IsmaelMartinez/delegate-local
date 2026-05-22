@@ -383,6 +383,128 @@ if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  stopword-only re
 else echo "  FAIL  stopword-only reason: nudge fired"; fail=$((fail+1)); fi
 rm -rf "$tmp"
 
+# ---------------------------------------------------------------------------
+# Single-row-per-invocation regression (issue #171)
+# Every code path through delegate-feedback.sh must append exactly one new
+# JSONL row — never zero (silent drop), never two (double-count in
+# metrics-summary). Bisects across verdict (hit/miss), reason absent/present,
+# --ts absent/present, and DELEGATE_FEEDBACK_NO_NUDGE absent/present so a
+# future stray write or premature row added before the verdict is detected.
+# ---------------------------------------------------------------------------
+
+# assert_one_row_added <file> <name>
+#   Compares wc -l of <file> before/after the most recent invocation; expects
+#   delta == 1 and the appended row to be valid JSON with the expected source.
+assert_one_row_added() {
+  local before="$1" after="$2" name="$3"
+  local delta=$((after - before))
+  if (( delta == 1 )); then
+    echo "  PASS  $name: exactly one row appended (delta=1)"
+    pass=$((pass+1))
+  else
+    echo "  FAIL  $name: expected 1 row appended, got $delta (before=$before, after=$after)"
+    fail=$((fail+1))
+  fi
+}
+
+# n28: hit with no reason, no --ts → one row.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit >/dev/null 2>&1
+after=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+assert_one_row_added "$before" "$after" "single-row hit no-reason no-ts"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains '"kept":true' "$last" "single-row hit no-reason no-ts: kept=true on the appended row"
+rm -rf "$tmp"
+
+# n29: hit with reason, no --ts → one row, reason preserved.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit "verbatim used" >/dev/null 2>&1
+after=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+assert_one_row_added "$before" "$after" "single-row hit with-reason no-ts"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains '"reason":"verbatim used"' "$last" "single-row hit with-reason no-ts: reason preserved on the appended row"
+assert_contains '"kept":true' "$last" "single-row hit with-reason no-ts: kept=true on the appended row"
+rm -rf "$tmp"
+
+# n30: hit with --ts pinned to the latest delegate row → one row.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts "$TS_LATEST" hit "verbatim used" >/dev/null 2>&1
+after=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+assert_one_row_added "$before" "$after" "single-row hit with-reason with --ts"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "single-row hit with --ts: ref_ts matches pinned"
+assert_contains '"reason":"verbatim used"' "$last" "single-row hit with --ts: reason preserved"
+rm -rf "$tmp"
+
+# n31: miss with reason, no --ts → one row, reason and kept=false preserved.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "needed rewrite" >/dev/null 2>&1
+after=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+assert_one_row_added "$before" "$after" "single-row miss with-reason no-ts"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains '"reason":"needed rewrite"' "$last" "single-row miss with-reason no-ts: reason preserved"
+assert_contains '"kept":false' "$last" "single-row miss with-reason no-ts: kept=false preserved"
+rm -rf "$tmp"
+
+# n32: miss with reason + --ts → one row, both preserved.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts "$TS_LATEST" miss "needed rewrite" >/dev/null 2>&1
+after=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+assert_one_row_added "$before" "$after" "single-row miss with-reason with --ts"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "single-row miss with --ts: ref_ts matches pinned"
+assert_contains '"reason":"needed rewrite"' "$last" "single-row miss with --ts: reason preserved"
+assert_contains '"kept":false' "$last" "single-row miss with --ts: kept=false preserved"
+rm -rf "$tmp"
+
+# n33: miss with reason + DELEGATE_FEEDBACK_NO_NUDGE=1 → one row even when
+# nudge would otherwise fire. Seeds 5 prior similar MISSes so the nudge code
+# path is fully exercised but silenced — guards against a future change that
+# accidentally writes a row during the nudge logic.
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 5
+before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+DELEGATE_FEEDBACK_NO_NUDGE=1 DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" >/dev/null 2>&1
+after=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+assert_one_row_added "$before" "$after" "single-row miss with NO_NUDGE=1 + similar history"
+rm -rf "$tmp"
+
+# n34: miss with reason + nudge fires (default settings, ≥3 similar prior) →
+# still exactly one row. The nudge writes to stderr only — a regression that
+# adds a preliminary or duplicate JSONL row during the matcher must fail
+# here. This is the load-bearing assertion against the "two rows per
+# verdict — one empty, one with reason" shape called out in issue #171.
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 5
+before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1)
+after=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+assert_one_row_added "$before" "$after" "single-row miss nudge-fires default + 5 similar history"
+assert_contains "NOTE: this MISS plus" "$out" "single-row miss nudge-fires: nudge actually fired (so the assertion is meaningful)"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains '"reason":"pr-description recipe stalled past 30s on prose tier body"' "$last" "single-row miss nudge-fires: reason on the appended row is the real one, not empty"
+assert_contains '"kept":false' "$last" "single-row miss nudge-fires: kept=false on the appended row"
+rm -rf "$tmp"
+
+# n35: same scenario as n34 but with --ts pinning → still exactly one row.
+# Crosses the two most recently-extended code paths (--ts validation + nudge
+# matcher) so a stray write at either branch boundary is detected.
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 5
+before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  bash "$SCRIPT" --ts "$TS_LATEST" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1)
+after=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+assert_one_row_added "$before" "$after" "single-row miss with --ts + nudge fires"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "single-row miss with --ts + nudge: ref_ts pinned"
+assert_contains '"reason":"pr-description recipe stalled past 30s on prose tier body"' "$last" "single-row miss with --ts + nudge: reason on the appended row is the real one"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
