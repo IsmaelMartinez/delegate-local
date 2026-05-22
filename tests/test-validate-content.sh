@@ -72,7 +72,7 @@ CI_INVOCATIONS=$(grep -E 'validate-skill-content\.sh' "$REPO/.github/workflows/c
 if [[ -z "$CI_INVOCATIONS" ]]; then
   echo "  FAIL  CI workflow has no validate-skill-content.sh invocation"; fail=$((fail+1))
 else
-  bad=$(printf '%s\n' "$CI_INVOCATIONS" | grep -v 'validate-skill-content\.sh SKILL\.md' || true)
+  bad=$(printf '%s\n' "$CI_INVOCATIONS" | grep -vE 'validate-skill-content\.sh SKILL\.md[[:space:]]*$' || true)
   if [[ -z "$bad" ]]; then
     echo "  PASS  CI workflow only invokes validate-skill-content.sh on SKILL.md"
     pass=$((pass+1))
