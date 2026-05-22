@@ -85,6 +85,24 @@ The maintainer (or a future PR-bot) graduates a `prompt-pattern` issue by drafti
 - `jira-ticket-description.md` — 2-3 sentence Jira ticket description rewritten from a source paragraph; ships the verbatim-preservation directive, the British-spelling glossary guard, the comma-coordinated no-merge rule, and the closing-sentence opener blocklist.
 - `presentation-slide-prose.md` — 2-4 sentence narrative paragraph for a slide given a title + fact list; ships a list-completeness REFUSE hatch and the sharpened anti-padding directive. Parallel-invocation safe.
 
+## What this library does NOT adopt
+
+Three patterns recur in public prompt libraries and have been deliberately rejected for this skill. Documenting the rejection rationale here so future contributors do not drift toward the public idiom unknowingly.
+
+### "You are an expert X" persona prompts
+
+Persona prompts ("You are an expert X", "Act as a senior Y") are a public-idiom default in agent prompt libraries. Zheng et al. ([arXiv 2311.10054](https://arxiv.org/html/2311.10054v3)) tested 162 personas across Qwen2.5 3B-72B on MMLU and found no statistically significant improvement; Qwen2.5 was insensitive to all 162. The Wharton replication ["Playing Pretend: Expert Personas Don't Improve Factual Accuracy"](https://gail.wharton.upenn.edu/research-and-insights/playing-pretend-expert-personas/) confirmed the null effect on knowledge-retrieval tasks, and [arXiv 2507.16076](https://arxiv.org/html/2507.16076v2) found irrelevant persona attributes can degrade accuracy by up to 30 percentage points. This skill exclusively targets local Qwen-class small models so persona uplift is null-to-negative. Domain-context priming (declarative input-naming, e.g. "The input is a unified diff hunk") is distinct from persona and is validated separately — see Phase 12 Track A (#160) for the local empirical test.
+
+### Microsoft Prompty wholesale schema
+
+Microsoft [Prompty](https://github.com/microsoft/prompty) is the closest format-cousin to this library's recipe shape: YAML frontmatter, markdown body, Jinja templating, VS Code extension. It is calibrated for VS Code Copilot integration that this skill does not consume. The reformat cost of rewriting fifteen existing recipes (re-running every scorer, re-dogfooding each recipe across multiple sessions) is real, and the persona / prompt-engineering literature does not predict a quality uplift for Qwen-class small models from adopting the schema wholesale. Heavier YAML features (nesting, anchors, flow style) exceed what awk-parseable templating can handle and stay rejected on portability grounds.
+
+### fabric's "produce N items at M words each" item-count discipline
+
+[fabric](https://github.com/danielmiessler/fabric) ships 255 patterns; many specify caps like "20-50 ideas at 16 words each". The T4 calibration history captured in `prompts/commit-message.md` calibration notes and `experiments/score-t4.sh` PADDING_REGEXES shows that the small-model failures this skill actually sees are shape failures (participial padding, declarative restating), not count failures. Importing fabric's count discipline would invite the model to fabricate-to-fill the prescribed item count, creating a new MISS class the calibration loop would then have to absorb — net negative. The skill's existing `## Expected output shape` block already encodes structural limits (e.g., commit-message's 72-char subject cap) without inviting the fabricate-to-fill failure mode.
+
+The companion list of patterns this library DOES adopt lives in Track B (#161), which imports only the flat `key: type` `inputs:` block convention from Prompty for declarative type validation.
+
 ## Related
 
 - `SKILL.md` "Recipes" section references this directory and tells the agent when to consult a recipe.
