@@ -132,11 +132,11 @@ if [[ -n "$since_iso" ]]; then
   fi
 fi
 
-# Read the file once into a perl-friendly working set. The two-pass design
-# (first pass: build parent lookup; second pass: emit) is the simplest way
-# to support feedback rows linking to parent delegate rows without a
-# stateful streaming parser. JSONL files in practice top out at a few MB
-# (thousands of rows, ~150 bytes each) so the memory cost is negligible.
+# Two-pass design (first pass: build parent lookup; second pass: emit) is
+# the simplest way to support feedback rows linking to parent delegate rows
+# without a stateful streaming parser. JSONL files in practice top out at
+# a few MB (thousands of rows, ~150 bytes each) so the memory cost of the
+# lookup table is negligible.
 #
 # The parent-lookup pass extracts every delegate row's ts, model,
 # otel_trace_id (if already exported live), and otel_span_id. Keyed by ts
@@ -151,16 +151,6 @@ parent_lookup=$(jq -rc '
   [.ts, (.model // ""), (.otel_trace_id // ""), (.otel_span_id // "")] |
   @tsv
 ' "$metrics_file")
-
-# Reduce the metrics file to a list of rows to consider, applying the
-# --since filter here so the emission loop doesn't have to re-check.
-# jq -c keeps the JSON compact (one row per line) for the perl-side
-# processing.
-if [[ -n "$since_iso" ]]; then
-  rows_to_process=$(jq -c --arg since "$since_iso" 'select(.ts >= $since)' "$metrics_file")
-else
-  rows_to_process=$(jq -c '.' "$metrics_file")
-fi
 
 total_rows=0
 sent_count=0
@@ -193,11 +183,48 @@ emit_delegate_row() {
   local ts source backend tier model recipe
   local pchars cchars ochars dur_ms qwait_ms gen_ms status tokens_avoided
   local existing_trace existing_span
-  ts=$(jq -r '.ts // ""' <<< "$row")
-  source=$(jq -r '.source // "delegate"' <<< "$row")
-  existing_trace=$(jq -r '.otel_trace_id // ""' <<< "$row")
-  existing_span=$(jq -r '.otel_span_id // ""' <<< "$row")
   ROW_KIND="delegate"
+
+  # One jq call per row extracts every field into a record separated by
+  # ASCII Unit Separator (0x1F), then read parses it into named locals.
+  # Replaces the 14 per-row jq invocations from the initial draft —
+  # gemini-code-assist on PR #191 flagged the per-field calls as the
+  # dominant cost on multi-thousand-row metrics files (one fork+exec per
+  # call). Defaults match delegate.sh's log_metric: backend defaults to
+  # ollama (pre-2026-05 rows omit the field); empty tier/model/recipe
+  # pass through to the OTel payload as empty strings.
+  #
+  # Unit Separator rather than tab because bash `read` with a whitespace
+  # IFS collapses adjacent separators (empty fields disappear); 0x1F is
+  # a non-whitespace control char so consecutive separators each
+  # delimit a real (possibly empty) field. The 0x1F character cannot
+  # appear in any of the source values — model names, tier names, recipe
+  # names, ISO timestamps, integer fields all reject it by construction.
+  #
+  # The field order in the jq expression below MUST match the order of
+  # vars passed to `read -r` — adding a field requires updating both.
+  local fields
+  fields=$(jq -r '[
+    .ts // "",
+    .source // "delegate",
+    .backend // "ollama",
+    .tier // "",
+    .model // "",
+    .recipe // "",
+    .prompt_chars // 0,
+    .context_chars // 0,
+    .output_chars // 0,
+    .duration_ms // 0,
+    .queue_wait_ms // 0,
+    .generation_ms // 0,
+    .exit_status // 0,
+    .estimated_tokens_avoided // 0,
+    .otel_trace_id // "",
+    .otel_span_id // ""
+  ] | map(tostring) | join("\u001f")' <<< "$row")
+  IFS=$'\x1f' read -r ts source backend tier model recipe \
+    pchars cchars ochars dur_ms qwait_ms gen_ms status tokens_avoided \
+    existing_trace existing_span <<< "$fields"
 
   if [[ -n "$existing_trace" && -n "$existing_span" ]]; then
     ROW_RESULT="SKIP"
@@ -208,22 +235,6 @@ emit_delegate_row() {
     ROW_RESULT="ERROR malformed row (no ts)"
     return 0
   fi
-
-  # Pull the rest of the row. Defaults match delegate.sh's log_metric:
-  # backend defaults to ollama (pre-2026-05 rows omit the field); empty
-  # tier/model/recipe pass through to the OTel payload as empty strings.
-  backend=$(jq -r '.backend // "ollama"' <<< "$row")
-  tier=$(jq -r '.tier // ""' <<< "$row")
-  model=$(jq -r '.model // ""' <<< "$row")
-  recipe=$(jq -r '.recipe // ""' <<< "$row")
-  pchars=$(jq -r '.prompt_chars // 0' <<< "$row")
-  cchars=$(jq -r '.context_chars // 0' <<< "$row")
-  ochars=$(jq -r '.output_chars // 0' <<< "$row")
-  dur_ms=$(jq -r '.duration_ms // 0' <<< "$row")
-  qwait_ms=$(jq -r '.queue_wait_ms // 0' <<< "$row")
-  gen_ms=$(jq -r '.generation_ms // 0' <<< "$row")
-  status=$(jq -r '.exit_status // 0' <<< "$row")
-  tokens_avoided=$(jq -r '.estimated_tokens_avoided // 0' <<< "$row")
 
   # queue_wait_ms / generation_ms were added in PR #170. Older rows have
   # only duration_ms — attribute the whole duration to generation_ms so
@@ -287,11 +298,24 @@ emit_delegate_row() {
 emit_feedback_row() {
   local row="$1"
   local fb_ts ref_ts kept reason verdict
-  fb_ts=$(jq -r '.ts // ""' <<< "$row")
-  ref_ts=$(jq -r '.ref_ts // ""' <<< "$row")
-  kept=$(jq -r '.kept // false' <<< "$row")
-  reason=$(jq -r '.reason // ""' <<< "$row")
   ROW_KIND="feedback"
+
+  # One jq call extracts every field into a 0x1F-separated record — same
+  # consolidation that emit_delegate_row does, for the same reason
+  # (gemini-code-assist on PR #191). `kept` becomes the boolean string
+  # "true"/"false" via the `tostring` filter; downstream code already
+  # compares with `[[ ... == "true" ]]`. Unit Separator (0x1F) rather than
+  # tab because reason text could in theory contain a tab and the empty-
+  # reason case must round-trip as a real empty field rather than being
+  # collapsed by whitespace-IFS `read`.
+  local fields
+  fields=$(jq -r '[
+    .ts // "",
+    .ref_ts // "",
+    (.kept // false | tostring),
+    .reason // ""
+  ] | join("\u001f")' <<< "$row")
+  IFS=$'\x1f' read -r fb_ts ref_ts kept reason <<< "$fields"
 
   if [[ -z "$fb_ts" ]]; then
     ROW_RESULT="ERROR malformed feedback row (no ts)"
@@ -327,7 +351,14 @@ emit_feedback_row() {
   parent_span=""
   parent_model=""
   if [[ -n "$ref_ts" ]]; then
-    parent_line=$(printf '%s\n' "$parent_lookup" | awk -F'\t' -v ts="$ref_ts" '$1 == ts {print; exit}')
+    # grep -F -m1 with a leading anchor — fixed-string match for the ts
+    # followed by a literal tab so a prefix match (e.g. ts="2026-05-22T"
+    # against a row starting "2026-05-22T10:00:00Z") doesn't false-match.
+    # Faster than awk-per-feedback-row (gemini-code-assist's PR #191
+    # observation): grep stops at the first match (-m1) and avoids
+    # awk's full field-splitting per line. The output goes to read with
+    # the same TSV split as before.
+    parent_line=$(printf '%s\n' "$parent_lookup" | grep -F -m1 "${ref_ts}	" || true)
     if [[ -n "$parent_line" ]]; then
       IFS=$'\t' read -r _ parent_model parent_existing_trace parent_existing_span <<< "$parent_line"
       if [[ -n "$parent_existing_trace" && -n "$parent_existing_span" ]]; then
@@ -372,17 +403,22 @@ iso_to_epoch_ms() {
   ' "$1"
 }
 
-# Main loop. perl-side line iteration to keep parse-once-then-iterate
-# shape; the per-row jq invocations inside emit_*_row are unavoidable
-# (jq is the only sane way to handle a JSON-with-special-chars row from
-# bash without breaking on quoted backslashes in model names or recipe
-# placeholders). The cost is bounded by row count, not row size.
-while IFS= read -r row; do
+# Main loop. Stream rows directly from a single jq pass through process
+# substitution rather than buffering the whole file into a shell variable
+# — that bounds memory at the row size, not file size, and removes the
+# ARG_MAX risk gemini-code-assist flagged on PR #191. Each line emitted by
+# jq is "<source>\t<ts>\t<row_json>" so the loop never re-invokes jq just
+# to discriminate source — the per-row 2 jq calls drop to zero. Row-level
+# field extraction inside emit_*_row still uses a single consolidated jq
+# call per row (also a PR #191 review fix), so the dominant per-row cost
+# is now one jq invocation rather than fifteen.
+#
+# The `--since` filter applies inside the same jq pass (when set), so a
+# row that doesn't match never costs more than the jq filter evaluation —
+# it never reaches the loop body.
+while IFS=$'\t' read -r source ts row; do
   [[ -z "$row" ]] && continue
   total_rows=$((total_rows + 1))
-
-  source=$(jq -r '.source // "delegate"' <<< "$row")
-  ts=$(jq -r '.ts // ""' <<< "$row")
 
   ROW_RESULT=""
   ROW_KIND=""
@@ -426,62 +462,105 @@ while IFS= read -r row; do
       echo "ERROR ts=$ts (${ROW_RESULT#ERROR })" >&2
       ;;
   esac
-done <<< "$rows_to_process"
+done < <(jq -rc --arg since "$since_iso" '
+  if $since != "" and .ts < $since then empty
+  else [(.source // "delegate"), (.ts // ""), tojson] | @tsv
+  end
+' "$metrics_file")
 
 # --update-jsonl rewrite phase. The metrics file is rewritten atomically
 # via a tempfile in the same directory (so the rename is a single inode
-# swap, no cross-filesystem move). Each original line is re-emitted; lines
-# matching a row that was just exported get their otel_trace_id /
-# otel_span_id fields added. The lookup against updates_tsv uses awk
-# (rather than a fancier external join) so the in-loop matching stays
-# O(rows × updates) without extra deps. For workstation-scale JSONL (few
-# MB) this is fine; if the file ever grew to GB scale, the right answer
-# would be a hash-table join in perl, not micro-optimising the awk
-# lookup. Concurrent writers (a delegate.sh call appending while the
-# backfill rewrites) are not coordinated — the second writer wins per
-# `mv` semantics. Acceptable at workstation scale; document explicitly
-# rather than building a lock-file dance for a constraint nobody hits.
+# swap, no cross-filesystem move). The rewrite happens in a single perl
+# pass — the original draft of this script ran two jq invocations per
+# line of the WHOLE file, which gemini-code-assist flagged on PR #191 as
+# the dominant pessimisation for multi-thousand-row metrics files.
+#
+# Perl reads the updates_tsv into a hash keyed by ts → "trace\tspan",
+# then streams the input file line-by-line. For each line that parses as
+# JSON and is a delegate row without an existing otel_trace_id, the hash
+# is consulted; on a hit, the trace_id / span_id keys are appended with
+# minimal JSON manipulation (the closing `}` is replaced with `,"otel_
+# trace_id":"...","otel_span_id":"..."}`). For correctness this matters
+# only that (a) the line was valid JSON when delegate.sh wrote it (true
+# by construction — jq -nc produced it), and (b) the closing brace is
+# the last non-whitespace character (true for jq -nc output). Lines that
+# don't match either criterion pass through verbatim — same fail-open
+# behaviour as the previous bash+jq version.
+#
+# Concurrent writers (a delegate.sh call appending while the backfill
+# rewrites) are not coordinated — the second writer wins per `mv`
+# semantics. Acceptable at workstation scale; document explicitly rather
+# than building a lock-file dance for a constraint nobody hits.
 if (( update_jsonl == 1 && sent_count > 0 )); then
   tmp_out=$(mktemp "${metrics_file}.backfill.XXXXXX") || {
     echo "backfill-otel: could not create tempfile for --update-jsonl" >&2
     echo "backfill: $total_rows rows, $sent_count sent, $skipped_count skipped, $errored_count errored" >&2
     exit 0
   }
-  # Stream the original file; for each row, if it's a delegate row whose
-  # ts matches an update tuple and it does NOT already have otel_trace_id,
-  # append the IDs. The match is O(updates) per row, fine at workstation
-  # scale.
-  while IFS= read -r line; do
-    if [[ -z "$line" ]]; then
-      printf '\n' >> "$tmp_out"
-      continue
-    fi
-    # Extract source + ts + existing otel_trace_id without re-shelling for
-    # speed. jq is still the right tool here because the line is JSON and
-    # raw bash matching would break on edge cases (model names containing
-    # `"ts":"...`, etc.).
-    line_meta=$(jq -r '[(.source // "delegate"), (.ts // ""), (.otel_trace_id // "")] | @tsv' <<< "$line" 2>/dev/null) || line_meta=""
-    if [[ -z "$line_meta" ]]; then
-      # Malformed line — pass through unchanged. Don't drop user data.
-      printf '%s\n' "$line" >> "$tmp_out"
-      continue
-    fi
-    IFS=$'\t' read -r line_source line_ts line_existing_trace <<< "$line_meta"
-    if [[ "$line_source" != "delegate" || -n "$line_existing_trace" ]]; then
-      printf '%s\n' "$line" >> "$tmp_out"
-      continue
-    fi
-    update_match=$(printf '%s' "$updates_tsv" | awk -F'\t' -v ts="$line_ts" '$1 == ts {print; exit}')
-    if [[ -z "$update_match" ]]; then
-      printf '%s\n' "$line" >> "$tmp_out"
-      continue
-    fi
-    IFS=$'\t' read -r _ upd_trace upd_span <<< "$update_match"
-    # Inject the IDs via jq so the field order stays controlled and any
-    # special characters in the original row stay correctly escaped.
-    jq -c --arg t "$upd_trace" --arg s "$upd_span" \
-      '. + {otel_trace_id: $t, otel_span_id: $s}' <<< "$line" >> "$tmp_out"
-  done < "$metrics_file"
+
+  # Pass updates_tsv on stdin as a here-string so perl reads it from a
+  # known FH. The metrics file is the script's positional arg.
+  perl -e '
+    use strict; use warnings;
+    my $updates_path = shift @ARGV;
+    my $metrics_path = shift @ARGV;
+    my $out_path = shift @ARGV;
+    # Build the ts -> "trace\tspan" hash. updates_tsv has one line per
+    # exported delegate row: ts<TAB>trace_id<TAB>span_id.
+    my %updates;
+    open(my $uh, "<", $updates_path) or die "open updates: $!";
+    while (my $line = <$uh>) {
+      chomp $line;
+      next unless length $line;
+      my ($ts, $trace, $span) = split /\t/, $line, 3;
+      next unless defined $trace && defined $span;
+      $updates{$ts} = qq{"otel_trace_id":"$trace","otel_span_id":"$span"};
+    }
+    close $uh;
+    # Stream the metrics file. For each line, fast-path: if it does not
+    # look like a delegate row needing an update, pass through. Otherwise
+    # do a regex check for both an existing otel_trace_id (skip) and a
+    # ts match against the hash; on a hit, splice the new keys before the
+    # closing brace. The regex extraction works because delegate.sh
+    # writes its JSONL via `jq -nc` which produces a flat object with
+    # double-quoted ASCII keys and no embedded literal newlines.
+    open(my $ih, "<", $metrics_path) or die "open metrics: $!";
+    open(my $oh, ">", $out_path) or die "open out: $!";
+    while (my $line = <$ih>) {
+      # Preserve blank lines exactly.
+      if ($line =~ /^\s*$/) { print $oh $line; next; }
+      # Cheap discriminator: skip lines that are not delegate rows or
+      # that already carry otel_trace_id. Anchored on `"source":` and
+      # `"otel_trace_id":` strings rather than parsed JSON so the cost
+      # is one regex per line, not a full JSON parse.
+      if ($line =~ /"source":"feedback"/ || $line =~ /"source":"experiment"/) {
+        print $oh $line; next;
+      }
+      if ($line =~ /"otel_trace_id":/) { print $oh $line; next; }
+      # Extract ts — anchored on the `"ts":"...Z"` shape delegate.sh
+      # writes. Skip lines without a matching ts (malformed; pass
+      # through unchanged).
+      if ($line =~ /"ts":"([^"]+)"/) {
+        my $ts = $1;
+        if (exists $updates{$ts}) {
+          # Splice the new keys before the final `}`. Match the last
+          # `}` followed by optional whitespace (\r?\n at line end is
+          # captured separately) so a row with trailing newline keeps
+          # its newline placement.
+          my $injected = $updates{$ts};
+          if ($line =~ s/\}(\s*)$/,${injected}\}$1/) {
+            print $oh $line;
+            next;
+          }
+        }
+      }
+      # Fall-through: not a delegate row with a matched ts, or a row
+      # whose closing brace could not be located. Pass through unchanged.
+      print $oh $line;
+    }
+    close $ih;
+    close $oh;
+  ' <(printf '%s' "$updates_tsv") "$metrics_file" "$tmp_out"
   mv "$tmp_out" "$metrics_file"
 fi
 
