@@ -2734,6 +2734,96 @@ assert_contains '"otel_trace_id":"' "$line" "OT11: metrics row carries otel_trac
 assert_contains '"otel_span_id":"' "$line" "OT11: metrics row carries otel_span_id even with exporter unset"
 rm -rf "$tmp" "$metrics"
 
+# OT12. DELEGATE_OTEL_HEADERS url-decodes header values per the OTel SDK
+# convention, so a header value carrying a literal comma (encoded as %2C)
+# round-trips to the on-wire header without fragmenting the comma-split.
+# This is the self-review correctness gap caught during PR #182 review:
+# unencoded `Cookie: a=1, b=2` would fragment into two malformed -H flags;
+# the documented fix is for callers to url-encode the value (`a%3D1%2C%20b%3D2`)
+# and rely on the script to decode it before emitting -H.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+EC=0
+# `a%3D1%2C%20b%3D2` decodes to `a=1, b=2` — a literal comma in the value.
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_HEADERS="Cookie: a%3D1%2C%20b%3D2, X-Tenant: y" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT12: url-encoded comma in header → exits 0"
+otel_args_line=$(grep '^otel' "$invocations" | head -1)
+# The decoded value must contain the literal `,` and `=` — proving the
+# perl url-decode ran and the comma was NOT mistaken for a header
+# separator. The X-Tenant header following the comma in the env var
+# must also still be present, proving the script's split is on the
+# OUTER comma (between header pairs) and the inner %2C was preserved.
+assert_contains "Cookie: a=1, b=2" "$otel_args_line" "OT12: header value's literal comma round-trips after url-decode"
+assert_contains "X-Tenant: y" "$otel_args_line" "OT12: second header still parsed after comma-bearing first header"
+# Three -H flags total: Content-Type (always present), Cookie, X-Tenant.
+# A fragmented Cookie header would push the count to four; the literal
+# `,` proves the value was NOT split.
+h_count=$(echo "$otel_args_line" | grep -oE '\-H ' | wc -l | tr -d ' ')
+assert_eq 3 "$h_count" "OT12: exactly three -H flags (Content-Type + Cookie + X-Tenant) — not four (would mean Cookie fragmented)"
+rm -rf "$tmp" "$metrics"
+
+# OT13. OTLP/JSON int64 attribute values are encoded as JSON strings per the
+# proto3 JSON mapping (AnyValue.int_value is int64). The exporter passes
+# integer attribute values via jq --arg (not --argjson) so they emerge as
+# quoted strings in the wire payload. status.code and span.kind are int32
+# enums and stay JSON numbers.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT13: int64-as-string export → exits 0"
+otel_body=$(cat "$otel_sniff")
+# delegate.exit_status is always 0 here (successful call); the OTLP int64
+# encoding must wrap that 0 in quotes. Same for the other int attributes.
+# Use jq to inspect the actual JSON type rather than substring-matching
+# the wire bytes (which would conflate `"0"` and `0` if the surrounding
+# tokens overlap). pchars/cchars/ochars are non-zero for the prompt
+# `"Summarise"` and the canned mock response.
+exit_status_type=$(echo "$otel_body" | jq -r '
+  .resourceSpans[0].scopeSpans[0].spans[0].attributes
+  | map(select(.key == "delegate.exit_status"))
+  | .[0].value.intValue | type')
+assert_eq "string" "$exit_status_type" "OT13: delegate.exit_status intValue is JSON string"
+pchars_type=$(echo "$otel_body" | jq -r '
+  .resourceSpans[0].scopeSpans[0].spans[0].attributes
+  | map(select(.key == "delegate.prompt_chars"))
+  | .[0].value.intValue | type')
+assert_eq "string" "$pchars_type" "OT13: delegate.prompt_chars intValue is JSON string"
+tokens_type=$(echo "$otel_body" | jq -r '
+  .resourceSpans[0].scopeSpans[0].spans[0].attributes
+  | map(select(.key == "delegate.estimated_tokens_avoided"))
+  | .[0].value.intValue | type')
+assert_eq "string" "$tokens_type" "OT13: delegate.estimated_tokens_avoided intValue is JSON string"
+# span.kind and status.code stay int32 (JSON numbers) — they're enums
+# in the proto, not int64 fields.
+kind_type=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].kind | type')
+assert_eq "number" "$kind_type" "OT13: span.kind stays a JSON number (int32 enum)"
+status_code_type=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].status.code | type')
+assert_eq "number" "$status_code_type" "OT13: status.code stays a JSON number (int32 enum)"
+# startTimeUnixNano / endTimeUnixNano are fixed64 — also JSON strings.
+start_type=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].startTimeUnixNano | type')
+assert_eq "string" "$start_type" "OT13: startTimeUnixNano is JSON string (fixed64)"
+end_type=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].endTimeUnixNano | type')
+assert_eq "string" "$end_type" "OT13: endTimeUnixNano is JSON string (fixed64)"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

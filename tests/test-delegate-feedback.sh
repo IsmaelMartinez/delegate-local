@@ -806,6 +806,33 @@ linked_trace=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[
 assert_eq "$OLD_TID" "$linked_trace" "FB-OT9: links use the --ts pinned row's trace_id, not the most-recent row's"
 rm -rf "$tmp"
 
+# FB-OT10. DELEGATE_OTEL_HEADERS url-decodes header values per the OTel SDK
+# convention so a header value carrying a literal comma (encoded as %2C)
+# survives the outer comma-split intact. Mirrors OT12 in test-delegate.sh
+# for the feedback exporter path; the self-review correctness gap caught
+# during PR #182 review covered BOTH scripts.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_HEADERS="Cookie: a%3D1%2C%20b%3D2, X-Tenant: y" \
+  bash "$SCRIPT" hit "ok" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT10: url-encoded comma in header → exits 0"
+otel_args_line=$(grep '^args' "$invocations" | head -1)
+assert_contains "Cookie: a=1, b=2" "$otel_args_line" "FB-OT10: header value's literal comma round-trips after url-decode"
+assert_contains "X-Tenant: y" "$otel_args_line" "FB-OT10: second header still parsed after comma-bearing first header"
+# Three -H flags total: Content-Type + Cookie + X-Tenant. Four would mean
+# the Cookie header got fragmented on the literal `,` — the regression
+# this test guards against.
+h_count=$(echo "$otel_args_line" | grep -oE '\-H ' | wc -l | tr -d ' ')
+assert_eq 3 "$h_count" "FB-OT10: exactly three -H flags (Content-Type + Cookie + X-Tenant) — not four"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

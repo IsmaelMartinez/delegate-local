@@ -102,7 +102,16 @@
 #                                           #   (e.g. https://otlp.example
 #                                           #   /v1/traces) after the metrics
 #                                           #   row is written. Off when
-#                                           #   unset — zero overhead.
+#                                           #   unset — zero overhead. The
+#                                           #   POST is SYNCHRONOUS: a hung
+#                                           #   collector adds up to
+#                                           #   DELEGATE_OTEL_TIMEOUT seconds
+#                                           #   of user-visible latency per
+#                                           #   call. If delegations feel
+#                                           #   sluggish, set DELEGATE_OTEL
+#                                           #   _VERBOSE=1 to see export
+#                                           #   failures or unset the
+#                                           #   endpoint to disable.
 #   DELEGATE_OTEL_TIMEOUT=<s>               # default 5. curl --max-time on
 #                                           #   the OTLP POST so a hung
 #                                           #   collector cannot block the
@@ -110,12 +119,23 @@
 #   DELEGATE_OTEL_VERBOSE=1                 # log exporter failures to stderr.
 #                                           #   Default silent — a misconfigured
 #                                           #   endpoint must not spam the
-#                                           #   caller's tool output.
+#                                           #   caller's tool output. Use this
+#                                           #   to diagnose suspected exporter
+#                                           #   failures (timeouts, auth, DNS).
 #   DELEGATE_OTEL_HEADERS=<H: v,H: v>       # optional. Comma-separated
 #                                           #   Header: value pairs (matches
 #                                           #   OpenTelemetry SDK convention).
 #                                           #   Used for collector auth on
 #                                           #   Grafana Cloud, Langfuse, etc.
+#                                           #   Per OTel SDK convention, header
+#                                           #   values containing commas (or
+#                                           #   any reserved char) MUST be
+#                                           #   url-encoded — the script
+#                                           #   url-decodes each value before
+#                                           #   emitting -H flags so the on-
+#                                           #   wire header is the literal
+#                                           #   original (e.g. `a%2Cb` →
+#                                           #   `a,b`).
 #
 # Output:  model response on stdout (no ANSI; HTTP body is plain text)
 # Errors:  pick-model failures and HTTP errors propagate as non-zero exit.
@@ -288,7 +308,7 @@ otel_gen_id() {
   ' "$nhex"
 }
 
-# emit_otel_span <ts_start> <duration_ms> <status> <trace_id> <span_id>
+# emit_otel_span <start_ms> <duration_ms> <status> <trace_id> <span_id>
 #   <model> <backend> <tier> <recipe_name> <pchars> <cchars> <ochars>
 #   <qwait_ms> <gen_ms> <tokens_avoided>
 #
@@ -300,27 +320,23 @@ otel_gen_id() {
 # endpoint doesn't spam every delegation.
 emit_otel_span() {
   [[ -z "${DELEGATE_OTEL_ENDPOINT:-}" ]] && return 0
-  local ts_iso="$1" dur_ms="$2" status="$3" trace_id="$4" span_id="$5"
+  local start_ms="$1" dur_ms="$2" status="$3" trace_id="$4" span_id="$5"
   local model="$6" backend="$7" tier="$8" recipe_name="$9" pchars="${10}"
   local cchars="${11}" ochars="${12}" qwait_ms="${13}" gen_ms="${14}"
   local tokens_avoided="${15}"
 
-  # Compute nanosecond timestamps. ts_iso is second-precision (the rest of
-  # the project uses %S not %3N for portability), so start_ns is the iso ->
-  # epoch seconds * 1e9. end_ns = start_ns + dur_ms * 1e6. Both must be
-  # 64-bit integers expressed as JSON numbers (or strings — many backends
-  # accept either; we emit numbers since bash + jq handle them natively).
+  # Compute nanosecond timestamps. start_ms is the high-resolution
+  # millisecond epoch captured at script start (Time::HiRes), so ns = ms *
+  # 1e6 and end_ns = start_ns + dur_ms * 1e6. Bash arithmetic is signed
+  # long on every platform this script runs on (macOS bash 3.2 + Linux), so
+  # the values fit comfortably below 2^63 for any timestamp in this
+  # millennium. Strings (not numbers) are emitted to jq below because the
+  # OTLP/JSON spec encodes int64 fields as JSON strings (proto3 JSON
+  # mapping); doing the math here keeps it out of the perl process and
+  # avoids the second-precision truncation the ts_iso path used.
   local start_ns end_ns
-  start_ns=$(perl -MTime::Local=timegm -e '
-    my $ts = shift @ARGV;
-    if ($ts =~ /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/) {
-      printf "%d000000000\n", timegm($6, $5, $4, $3, $2-1, $1);
-    } else { exit 1; }
-  ' "$ts_iso" 2>/dev/null) || return 0
-  end_ns=$(perl -e '
-    my ($s, $d) = @ARGV;
-    printf "%d\n", $s + $d * 1_000_000;
-  ' "$start_ns" "$dur_ms" 2>/dev/null) || return 0
+  start_ns="${start_ms}000000"
+  end_ns="$(( start_ms + dur_ms ))000000"
 
   # Span kind 3 = SPAN_KIND_CLIENT (OTel proto enum). Status code 1 = OK,
   # 2 = ERROR per OTLP proto. Mapping per docs/otel-schema.md.
@@ -328,10 +344,14 @@ emit_otel_span() {
   (( status != 0 )) && status_code=2
 
   # Build attributes per the schema in docs/otel-schema.md. The OTLP/HTTP
-  # JSON encoding wraps each value in a typed envelope ({stringValue}, {intValue},
-  # {doubleValue}); jq handles the structure directly. delegate.recipe is
-  # only emitted when --recipe was used (the schema explicitly forbids the
-  # attribute with an empty string).
+  # JSON encoding wraps each value in a typed envelope ({stringValue},
+  # {intValue}, {doubleValue}); jq handles the structure directly. Per the
+  # OTLP/JSON spec, AnyValue.int_value is an int64 field that MUST be
+  # encoded as a JSON string (proto3 JSON mapping) — so each int attribute
+  # is passed via --arg (string), not --argjson (raw number). The span
+  # kind and status code are int32 enums and stay JSON numbers (--argjson).
+  # delegate.recipe is only emitted when --recipe was used (the schema
+  # explicitly forbids the attribute with an empty string).
   local payload
   payload=$(jq -nc \
     --arg trace_id "$trace_id" --arg span_id "$span_id" \
@@ -339,9 +359,9 @@ emit_otel_span() {
     --arg recipe "$recipe_name" \
     --arg start_ns "$start_ns" --arg end_ns "$end_ns" \
     --argjson span_kind "$span_kind" --argjson status_code "$status_code" \
-    --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
-    --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
-    --argjson exit_status "$status" --argjson tokens_avoided "$tokens_avoided" \
+    --arg pchars "$pchars" --arg cchars "$cchars" --arg ochars "$ochars" \
+    --arg dur_ms "$dur_ms" --arg qwait_ms "$qwait_ms" --arg gen_ms "$gen_ms" \
+    --arg exit_status "$status" --arg tokens_avoided "$tokens_avoided" \
     '{
       resourceSpans: [{
         resource: {
@@ -381,9 +401,18 @@ emit_otel_span() {
     }')
 
   # Build the curl command. DELEGATE_OTEL_HEADERS is a comma-separated list
-  # of `Header: value` pairs matching the OpenTelemetry SDK convention;
-  # split on `,` and add each as a -H flag. The header parsing trims
-  # surrounding whitespace so `Auth: x, Tenant: y` works without surprises.
+  # of `Header: value` pairs matching the OpenTelemetry SDK convention. The
+  # split is on `,`, which means a header value that legitimately contains
+  # a comma (e.g. `Cookie: a=1, b=2`) would otherwise fragment into two
+  # malformed `-H` flags. The OTel SDK convention is that callers url-
+  # encode reserved characters in values; we honour that by url-decoding
+  # each value (the part after the first `:`) before emitting the -H flag,
+  # so the on-wire header is the literal original. The header name itself
+  # is not decoded — RFC 7230 forbids reserved characters in field names,
+  # so encoding there would be a caller bug we don't paper over. The trim
+  # of surrounding whitespace lets `Auth: x, Tenant: y` work without
+  # surprises. Decoding uses core perl only (no URI::Escape dep) so the
+  # change works on stripped CI images.
   local timeout="${DELEGATE_OTEL_TIMEOUT:-5}"
   local -a header_args=()
   if [[ -n "${DELEGATE_OTEL_HEADERS:-}" ]]; then
@@ -394,7 +423,22 @@ emit_otel_span() {
       hdr="${hdr#"${hdr%%[![:space:]]*}"}"
       hdr="${hdr%"${hdr##*[![:space:]]}"}"
       [[ -z "$hdr" ]] && continue
-      header_args+=("-H" "$hdr")
+      # url-decode the value portion (everything after the first colon).
+      # Header lines without a colon are emitted as-is so curl can surface
+      # the malformed-input error rather than the script silently
+      # swallowing it. Empty values decode to empty; that's a valid header
+      # per RFC 7230 and curl handles it.
+      if [[ "$hdr" == *":"* ]]; then
+        local hname="${hdr%%:*}"
+        local hvalue="${hdr#*:}"
+        # Strip one leading space if present (OTel SDK convention is
+        # `Name: value`; the space is cosmetic and not part of the value).
+        hvalue="${hvalue# }"
+        hvalue=$(printf '%s' "$hvalue" | perl -pe 's/%([0-9A-Fa-f]{2})/chr(hex($1))/ge')
+        header_args+=("-H" "${hname}: ${hvalue}")
+      else
+        header_args+=("-H" "$hdr")
+      fi
     done
   fi
 
@@ -689,7 +733,7 @@ if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
   fail_cchars=${#context}
   fail_toks=$(compute_tokens_local "$fail_pchars" "$fail_cchars" 0)
   log_metric "$ts_start" "$tier" "(none)" "$fail_pchars" "$fail_cchars" 0 "$fail_dur_ms" 1 "$recipe" 0 "$fail_dur_ms" "$otel_trace_id" "$otel_span_id"
-  emit_otel_span "$ts_start" "$fail_dur_ms" 1 "$otel_trace_id" "$otel_span_id" "(none)" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks"
+  emit_otel_span "$start_epoch_ms" "$fail_dur_ms" 1 "$otel_trace_id" "$otel_span_id" "(none)" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks"
   echo "delegate: pick-model failed for tier '$tier'" >&2
   exit 1
 fi
@@ -726,7 +770,7 @@ if [[ -n "$recipe" ]] \
     canary_cchars=${#context}
     canary_toks=$(compute_tokens_local "$canary_pchars" "$canary_cchars" 0)
     log_metric "$ts_start" "$tier" "$model" "$canary_pchars" "$canary_cchars" 0 "$canary_dur_ms" 3 "$recipe" 0 "$canary_dur_ms" "$otel_trace_id" "$otel_span_id"
-    emit_otel_span "$ts_start" "$canary_dur_ms" 3 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$canary_pchars" "$canary_cchars" 0 0 "$canary_dur_ms" "$canary_toks"
+    emit_otel_span "$start_epoch_ms" "$canary_dur_ms" 3 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$canary_pchars" "$canary_cchars" 0 0 "$canary_dur_ms" "$canary_toks"
     # Distinguish curl exit codes so the recovery advice points at the
     # right knob. 28 is the --max-time-fired timeout (the case the canary
     # was designed for); 7 is "can't reach host" (daemon down or wrong
@@ -877,7 +921,7 @@ output_chars=${#output}
 tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$output_chars")
 
 log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id"
-emit_otel_span "$ts_start" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local"
+emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to
 # read after every delegation, so it can tell the user which model handled

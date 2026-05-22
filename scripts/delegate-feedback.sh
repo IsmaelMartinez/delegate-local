@@ -35,14 +35,30 @@
 #                                         `links` array points back to the
 #                                         parent delegation's trace/span IDs
 #                                         (per ADR 0007). Off by default.
+#                                         The POST is SYNCHRONOUS — a hung
+#                                         collector adds up to
+#                                         DELEGATE_OTEL_TIMEOUT seconds of
+#                                         user-visible latency per feedback
+#                                         call. Set DELEGATE_OTEL_VERBOSE=1
+#                                         to diagnose, or unset the endpoint
+#                                         to disable.
 #   DELEGATE_OTEL_TIMEOUT                 default 5. curl --max-time on the
 #                                         OTLP POST so a hung collector
 #                                         cannot block the script.
 #   DELEGATE_OTEL_VERBOSE                 when =1, log exporter failures to
-#                                         stderr. Default silent.
+#                                         stderr. Default silent. Use this
+#                                         to diagnose suspected exporter
+#                                         failures (timeouts, auth, DNS).
 #   DELEGATE_OTEL_HEADERS                 optional. Comma-separated
 #                                         Header: value pairs for collector
 #                                         auth (Grafana Cloud, Langfuse).
+#                                         Per OTel SDK convention, values
+#                                         containing commas (or any
+#                                         reserved char) MUST be url-
+#                                         encoded — the script url-decodes
+#                                         each value before emitting -H
+#                                         flags so the on-wire header is
+#                                         the literal original.
 # Exit:   0 OK, 1 file/event missing or stale, 2 usage error. OTLP-export
 #         failures NEVER change the exit status — telemetry is non-fatal.
 
@@ -158,17 +174,24 @@ emit_otel_feedback_span() {
   trace_id=$(otel_gen_id 32) || return 0
   span_id=$(otel_gen_id 16) || return 0
 
-  # Convert the feedback row's ISO ts to nanoseconds. start + 1 ms = end so
-  # the span has a non-zero duration (zero-duration spans are rejected by
-  # some collectors).
+  # Convert the feedback row's ISO ts to nanoseconds and derive end_ns
+  # (start + 1 ms) in the same perl invocation so the OTLP export costs
+  # one process instead of two. The 1 ms bump is intentional — zero-
+  # duration spans are rejected by some collectors. The arithmetic
+  # assumes 64-bit perl integers (every modern macOS and Linux build is
+  # 64-bit; on a 32-bit perl build, $Config{ivsize}=4, perl would
+  # silently switch to floating-point for values above 2^31 and lose the
+  # last few digits of ns precision — accepted edge case, the in-
+  # practice impact is negligible).
   local start_ns end_ns
-  start_ns=$(perl -MTime::Local=timegm -e '
+  read -r start_ns end_ns <<< "$(perl -MTime::Local=timegm -e '
     my $ts = shift @ARGV;
     if ($ts =~ /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/) {
-      printf "%d000000000\n", timegm($6, $5, $4, $3, $2-1, $1);
+      my $s = timegm($6, $5, $4, $3, $2-1, $1) * 1_000_000_000;
+      printf "%d %d\n", $s, $s + 1_000_000;
     } else { exit 1; }
-  ' "$fb_ts" 2>/dev/null) || return 0
-  end_ns=$(perl -e 'printf "%d\n", $ARGV[0] + 1_000_000' "$start_ns" 2>/dev/null) || return 0
+  ' "$fb_ts" 2>/dev/null)"
+  [[ -z "$start_ns" || -z "$end_ns" ]] && return 0
 
   # SPAN_KIND_INTERNAL = 1 per OTLP proto. Span status OK (code 1) always —
   # the feedback span carries the verdict in an attribute, the span's own
@@ -219,6 +242,15 @@ emit_otel_feedback_span() {
     }')
 
   # Headers: split DELEGATE_OTEL_HEADERS on `,` and add each as a -H flag.
+  # Per OTel SDK convention, header values containing commas (or any
+  # reserved char) are url-encoded by the caller and decoded by the
+  # script before the -H emission, so values like `Cookie: a=1, b=2` (sent
+  # as `a%3D1%2C%20b%3D2`) reach the collector intact instead of being
+  # fragmented into malformed flags. Decoding uses core perl only — no
+  # URI::Escape dependency — so the change works on stripped CI images.
+  # Header NAMES are not decoded; RFC 7230 forbids reserved characters in
+  # field names so any encoding there would be a caller bug worth letting
+  # curl surface.
   local timeout="${DELEGATE_OTEL_TIMEOUT:-5}"
   local -a header_args=()
   if [[ -n "${DELEGATE_OTEL_HEADERS:-}" ]]; then
@@ -228,7 +260,15 @@ emit_otel_feedback_span() {
       hdr="${hdr#"${hdr%%[![:space:]]*}"}"
       hdr="${hdr%"${hdr##*[![:space:]]}"}"
       [[ -z "$hdr" ]] && continue
-      header_args+=("-H" "$hdr")
+      if [[ "$hdr" == *":"* ]]; then
+        local hname="${hdr%%:*}"
+        local hvalue="${hdr#*:}"
+        hvalue="${hvalue# }"
+        hvalue=$(printf '%s' "$hvalue" | perl -pe 's/%([0-9A-Fa-f]{2})/chr(hex($1))/ge')
+        header_args+=("-H" "${hname}: ${hvalue}")
+      else
+        header_args+=("-H" "$hdr")
+      fi
     done
   fi
 
