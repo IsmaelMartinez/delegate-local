@@ -2187,6 +2187,92 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "inputs: stdin: string satisfied by pipe → exits 0"
 rm -rf "$tmp" "$metrics"
 
+# 23k. stdin: integer type-checks the piped value. Numeric piped value
+# satisfies; non-numeric exits 2.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/stdin-int.md" <<'RECIPE'
+---
+inputs:
+  stdin: integer
+---
+# stdin-int
+
+## When to use
+test
+
+## Prompt template
+
+```
+N: {{stdin}}
+```
+
+## Calibration notes
+n/a
+RECIPE
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash -c 'echo "42" | bash "$0" --recipe stdin-int prose "tail"' "$SCRIPT" 2>&1) || EC=$?
+assert_eq 0 "$EC" "inputs: stdin: integer satisfied by numeric pipe → exits 0"
+
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash -c 'echo "not a number" | bash "$0" --recipe stdin-int prose "tail"' "$SCRIPT" 2>&1) || EC=$?
+assert_eq 2 "$EC" "inputs: stdin: integer rejects non-numeric pipe → exits 2"
+assert_contains "stdin expected type 'integer'" "$out" "inputs: stdin: integer error names the type"
+rm -rf "$tmp" "$metrics"
+
+# 23l. Missing-required error message has no trailing space (cosmetic
+# fix). Pin so a future refactor doesn't re-introduce the dangling space.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/required-foo.md" <<'RECIPE'
+---
+inputs:
+  foo: string
+---
+# required-foo
+
+## When to use
+test
+
+## Prompt template
+
+```
+F: {{foo}}
+```
+
+## Calibration notes
+n/a
+RECIPE
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash -c 'bash "$0" --recipe required-foo prose "tail"' "$SCRIPT" 2>&1) || EC=$?
+assert_eq 2 "$EC" "inputs: missing required exits 2"
+# Capture just the first error line and assert no trailing space.
+first_line=$(printf '%s\n' "$out" | grep -F 'missing required inputs:' | head -1)
+if [[ "$first_line" == *' ' ]]; then
+  echo "  FAIL  inputs: missing-required error has trailing whitespace"
+  echo "        first_line=[$first_line]"
+  fail=$((fail+1))
+else
+  echo "  PASS  inputs: missing-required error has no trailing whitespace"
+  pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

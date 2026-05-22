@@ -367,9 +367,31 @@ if [[ -n "$recipe" ]]; then
 
     # `{{stdin}}` satisfies a declared `stdin: string` input when piped, so
     # a recipe can require stdin via the typed surface without forcing the
-    # caller to pass it twice (once as --var, once piped).
+    # caller to pass it twice (once as --var, once piped). If the recipe
+    # declares a non-string type for stdin (e.g. `stdin: integer`), the
+    # piped value is type-checked against that declaration here so the
+    # pre-flight covers stdin the same way it covers --var inputs.
     if [[ -n "$context" ]]; then
       provided_keys="${provided_keys}stdin"$'\n'
+      sidx=0
+      for dk in "${declared_keys[@]}"; do
+        if [[ "$dk" == "stdin" ]]; then
+          stype="${declared_types[$sidx]}"
+          case "$stype" in
+            integer)
+              if ! [[ "$context" =~ ^-?[0-9]+$ ]]; then
+                echo "delegate: piped stdin expected type 'integer' (declared by recipe '$recipe'), got non-integer value" >&2
+                exit 2
+              fi
+              ;;
+            string)
+              :
+              ;;
+          esac
+          break
+        fi
+        sidx=$((sidx + 1))
+      done
     fi
 
     # Required-input check: any declared input without the `?` optional
@@ -387,7 +409,7 @@ if [[ -n "$recipe" ]]; then
       idx=$((idx + 1))
     done
     if [[ -n "${missing_required// /}" ]]; then
-      echo "delegate: recipe '$recipe' missing required inputs: $missing_required" >&2
+      echo "delegate: recipe '$recipe' missing required inputs: ${missing_required% }" >&2
       echo "         pass them via --var key=value" >&2
       exit 2
     fi
