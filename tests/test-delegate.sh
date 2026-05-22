@@ -920,6 +920,44 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
+# 14a. Non-TTY caller still gets the nudge — pins the issue #149 fix in
+# place. A previous TTY-gate proposal (PR #140 / issue #139) would have
+# silenced the nudge whenever stderr wasn't a terminal, causing Agent SDK
+# tool calls, scheduled routines, and `2>logfile` redirects to all skip
+# verdict tracking. Lifetime coverage measured 47.8% under that gate. This
+# test invokes delegate.sh with stdin piped from a here-string and stderr
+# captured via a pipeline (both definitely non-TTY) and asserts the nudge
+# still lands. If a future PR re-introduces a `[[ -t 2 ]]` gate on the
+# verdict-nudge code path, this test fails loud.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+# Pipe stdin in (non-TTY), redirect stderr to a file via the shell (non-TTY).
+# Both file-descriptors are pipes/files, never terminals — exactly what an
+# Agent SDK `run_in_background` caller or a CI step sees.
+out=$(echo "some context" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "verdict-nudge non-TTY: exits 0 with piped stdin and redirected stderr"
+stderr_content=$(cat "$stderr_file")
+assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge non-TTY: nudge still printed when neither stdin nor stderr is a TTY"
+# Belt-and-braces: also pipe stdout through `cat` so stdout is unambiguously
+# a pipe (the variable-capture path above already deattaches it from any
+# TTY, but a future test reader looking for "was stdout a pipe?" sees the
+# explicit pipeline here without having to know about command-substitution
+# semantics).
+EC=0
+piped=$(echo "ctx" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" 2>"$stderr_file" | cat) || EC=$?
+assert_eq 0 "$EC" "verdict-nudge non-TTY: exits 0 with stdout piped through cat"
+stderr_content=$(cat "$stderr_file")
+assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge non-TTY: nudge still printed with stdout piped through cat"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
 # 15. DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1 silences the nudge but keeps
 # the rest of the behaviour intact (metrics row still written, model
 # output still on stdout). For users who genuinely don't want the noise.
