@@ -1,10 +1,10 @@
 # 7. OpenTelemetry export schema — namespace split, feedback-as-linked-span, content-redacted-by-default
 
-Date: 2026-05-22 (Track A); amended 2026-05-22 (Track F)
+Date: 2026-05-22 (Track A); amended 2026-05-22 (Track F); amended 2026-05-22 (#187)
 
 ## Status
 
-Accepted. Track F amendment (privacy redaction default) accepted 2026-05-22.
+Accepted. Track F amendment (privacy redaction default) accepted 2026-05-22. Issue #187 amendment (`delegate.recipe` on feedback span) accepted 2026-05-22.
 
 ## Context
 
@@ -60,6 +60,8 @@ The feedback-as-linked-span pattern means feedback events show up in the observa
 The redact-by-default rule means dashboards on a fresh setup cannot show the prompt text alongside the output for debugging. Acceptable trade-off: the calibration history already lives in `metrics.jsonl` plus the per-recipe `Calibration notes` in `prompts/<task>.md`, which both stay on-host. Operators who want prompt-level introspection in the dashboard set `DELEGATE_OTEL_INCLUDE_CONTENT=1` against a trusted collector (a local Phoenix instance, a vetted self-hosted Langfuse, a private OTLP endpoint behind a firewall) and the four content attributes flow through. The flag is per-shell rather than persisted, so the failure mode of "I forgot it on" is bounded to the operator's current session.
 
 Backwards-compat note for the Track F amendment: callers who were already running the exporter from Track A against a collector and relied on `delegate.feedback.reason` in their dashboard need to set `DELEGATE_OTEL_INCLUDE_CONTENT=1` to restore the previous behaviour. The amendment ships within the same release cycle as Track A so the migration window is short, but the change IS backwards-incompatible at the wire-payload level. The Track F PR description flags this prominently.
+
+Issue #187 amendment (2026-05-22): `delegate.recipe` is duplicated from the parent delegate span onto the feedback span when the parent delegation used `--recipe NAME`. The motivation is the per-recipe HIT-rate dashboard panel in `dashboards/grafana/delegate-calibration.json` — Track D (PR #186) had to drop that panel to a limitation-noted overall-only state because TraceQL does not support cross-trace joins from the feedback span back to the parent delegate span. Carrying the recipe directly on the feedback span turns the panel into a single-query `rate() by (.delegate.recipe)` projection. Recipe names are metadata (predefined short identifiers from `prompts/<NAME>.md`, not arbitrary user content), so the attribute travels unconditionally — the `DELEGATE_OTEL_INCLUDE_CONTENT` content gate from Track F does not apply. The attribute is omitted entirely when the parent was a bare-tier call without `--recipe`, consistent with the parent delegate span's recipe handling. The change is additive at the wire-payload level — no backwards-compat break.
 
 What would justify revisiting any of the four decisions: the WG promoting `gen_ai.*` evaluation conventions to Stable with semantics that match the verdict shape (re-open the namespace split for the verdict attribute specifically); a real observability backend with documented and dependable `links` rendering becoming dominant enough that the parent-id fallback attributes are dead weight (drop the fallback); operational data showing that operators forget the `DELEGATE_OTEL_INCLUDE_CONTENT` flag on across privacy boundaries (consider a per-call confirmation prompt or a more granular per-attribute flag); or a content category that genuinely cannot leak (e.g. a pure-numeric output) that warrants its own unconditional attribute.
 
