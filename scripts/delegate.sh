@@ -186,7 +186,7 @@ compute_tokens_local() {
 
 log_metric() {
   [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" == "1" ]] && return 0
-  local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}"
+  local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}"
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$ochars")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -194,6 +194,15 @@ log_metric() {
   # writes to the same file via experiments/lib/run_api_cell.sh. backend
   # discriminates ollama vs mlx traffic — pre-2026-05 rows lack the field and
   # metrics-summary.sh treats their absence as backend=ollama for back-compat.
+  # duration_ms remains the inclusive total (invoke → response complete) so
+  # downstream consumers (metrics-summary.sh rollups, audit-metrics) keep
+  # seeing the same field they did before #170. queue_wait_ms (invoke →
+  # first byte from the model server) and generation_ms (first byte →
+  # response complete) are emitted alongside so Phase 11 OTel can split the
+  # span into queue-wait and generation attributes, and so parallel-caller
+  # contention shows up in metrics instead of being hidden inside the
+  # generation phase. The two new fields always sum to duration_ms within
+  # rounding.
   # jq builds the line so any quote, backslash, or newline in $model or
   # $recipe_name (recipe names are filename-safe today but model names come
   # from `ollama list` parsing and are not under our control) escapes
@@ -203,15 +212,17 @@ log_metric() {
       --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" \
       --arg model "$model" --arg recipe "$recipe_name" \
       --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
-      --argjson dur_ms "$dur_ms" --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
-      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, recipe:$recipe, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}' \
+      --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
+      --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
+      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, recipe:$recipe, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}' \
       >> "$metrics_file" 2>/dev/null || true
   else
     jq -nc \
       --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" --arg model "$model" \
       --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
-      --argjson dur_ms "$dur_ms" --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
-      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}' \
+      --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
+      --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
+      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}' \
       >> "$metrics_file" 2>/dev/null || true
   fi
 }
@@ -416,15 +427,26 @@ done
 # newlines are escaped correctly. Each backend has its own request and
 # response envelope — Ollama's /api/generate returns .response, MLX's
 # OpenAI-compatible /v1/chat/completions returns .choices[0].message.content.
+#
+# curl -w "%{time_starttransfer}" reports seconds-from-curl-start until the
+# first response byte arrived. This is the closest measurable proxy for
+# "time the Ollama/MLX daemon spent queuing this request plus connecting
+# plus model cold-load" — issue #170. We capture body and TTFB separately
+# (-o body_file plus -w on stdout) so the response stays parser-clean and
+# the timing flows into queue_wait_ms / generation_ms without disturbing
+# the existing response-handling path.
+body_file=$(mktemp)
+trap 'rm -f "$body_file"' EXIT
 if [[ "$backend" == "ollama" ]]; then
   # think:false suppresses chain-of-thought for thinking-capable models —
   # see DELEGATE_THINK above.
   payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson th "$think" \
     '{model:$m, prompt:$p, stream:false, think:$th, options:{temperature:0}}')
-  response=$(curl -sS --fail -X POST "$ollama_host/api/generate" -d @- <<< "$payload")
+  ttfb_s=$(curl -sS --fail -X POST "$ollama_host/api/generate" -d @- \
+    -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
   status=$?
   if [[ "$status" -eq 0 ]]; then
-    output=$(jq -r '.response // ""' <<< "$response")
+    output=$(jq -r '.response // ""' < "$body_file")
   else
     output=""
   fi
@@ -445,10 +467,11 @@ else
   # chat-template kwarg).
   payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson mt "$max_tokens" --argjson et "$think" \
     '{model:$m, messages:[{role:"user", content:$p}], stream:false, temperature:0, max_tokens:$mt, chat_template_kwargs:{enable_thinking:$et}}')
-  response=$(curl -sS --fail -X POST "$mlx_host/v1/chat/completions" -d @- <<< "$payload")
+  ttfb_s=$(curl -sS --fail -X POST "$mlx_host/v1/chat/completions" -d @- \
+    -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
   status=$?
   if [[ "$status" -eq 0 ]]; then
-    output=$(jq -r '.choices[0].message.content // ""' <<< "$response")
+    output=$(jq -r '.choices[0].message.content // ""' < "$body_file")
   else
     output=""
   fi
@@ -456,6 +479,25 @@ fi
 
 end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 duration_ms=$((end_epoch_ms - start_epoch_ms))
+
+# Derive queue_wait_ms and generation_ms from curl's time_starttransfer
+# (seconds-float). awk handles the float→int conversion without depending
+# on bc (not always installed on stripped CI images). If curl failed or
+# emitted an empty TTFB (some failure modes leave ttfb_s blank), fall back
+# to attributing the whole duration to generation_ms so the two fields
+# still sum to duration_ms and consumers can detect "no queue split
+# available" by queue_wait_ms == 0 on a failed call. Clamp queue_wait_ms
+# at duration_ms in case clock skew or sub-millisecond rounding pushes
+# it above; the generation_ms = duration_ms - queue_wait_ms invariant
+# stays intact.
+queue_wait_ms=0
+if [[ -n "${ttfb_s:-}" ]] && [[ "$status" -eq 0 ]]; then
+  queue_wait_ms=$(awk -v s="$ttfb_s" 'BEGIN { printf "%d", s * 1000 }')
+  if (( queue_wait_ms > duration_ms )); then
+    queue_wait_ms=$duration_ms
+  fi
+fi
+generation_ms=$((duration_ms - queue_wait_ms))
 
 # Char counts that feed both the metrics row and the stderr meta line. Both
 # surfaces route through compute_tokens_local so the two cannot drift on
@@ -468,7 +510,7 @@ context_chars=${#context}
 output_chars=${#output}
 tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$output_chars")
 
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe"
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to
 # read after every delegation, so it can tell the user which model handled

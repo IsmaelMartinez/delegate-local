@@ -47,22 +47,52 @@ make_mock_curl_ok() {
   # simulate "no MLX server reachable" so the default auto backend falls
   # back to ollama — that lets every existing ollama-shaped test keep
   # working without explicitly setting DELEGATE_BACKEND=ollama.
+  #
+  # #170: delegate.sh now invokes the dispatch curl with `-o body_file -w
+  # "%{time_starttransfer}"` so it can capture time-to-first-byte and split
+  # duration_ms into queue_wait_ms + generation_ms. The mock parses -o /
+  # -w out of argv: with -o the canned response goes to the named file
+  # (the body curl would normally write to stdout); with -w the mock emits
+  # a synthetic TTFB on stdout (0.001 seconds → 1 queue_wait_ms after
+  # awk-rounding). Without -o / -w (older callers), the canned response
+  # still goes to stdout for back-compat.
   local dir="$1" sniff="${2:-/dev/null}"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
-for arg in "\$@"; do
-  case "\$arg" in
-    *"/v1/models"*) exit 7 ;;
+out_file=""
+write_out=""
+saw_probe=0
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *"/v1/models"*) saw_probe=1; shift ;;
+    *) shift ;;
   esac
 done
+if (( saw_probe == 1 )); then exit 7; fi
 cat > "${sniff}"
-printf '%s' '{"response":"mock-model-output: ok\\n"}'
+body='{"response":"mock-model-output: ok\\n"}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  # Substitute %{time_starttransfer} with a synthetic 1-ms value so the
+  # delegate.sh awk-conversion exercises the float→int path.
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
 EOF
   chmod +x "$dir/curl"
 }
 
 make_mock_curl_fail() {
-  # Mock curl that exits non-zero (HTTP error or connection refused).
+  # Mock curl that exits non-zero (HTTP error or connection refused). #170:
+  # the dispatch now uses `-o body_file -w "%{time_starttransfer}"`; on a
+  # failure the body file stays empty and no TTFB is emitted, so the mock
+  # exits before writing anything. delegate.sh handles the empty-ttfb_s
+  # case by defaulting queue_wait_ms = 0 (and generation_ms = duration_ms).
   local dir="$1"
   cat > "$dir/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -560,6 +590,9 @@ make_mock_curl_mlx_ok() {
   # an empty success body) and the dispatch call (/v1/chat/completions —
   # returns the chat-completions shape). The argv sniff captures the LAST
   # curl invocation, which is always the dispatch (probe runs first).
+  # #170: dispatch now uses `-o body_file -w "%{time_starttransfer}"`; the
+  # mock parses both and writes the body to the named file when present,
+  # while emitting a synthetic 1-ms TTFB to stdout via the -w format.
   local dir="$1" payload_sniff="${2:-/dev/null}" argv_sniff="${3:-/dev/null}"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
@@ -574,8 +607,25 @@ for arg in "\$@"; do
   esac
 done
 printf '%s\n' "\$*" > "${argv_sniff}"
+out_file=""
+write_out=""
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 cat > "${payload_sniff}"
-printf '%s' '{"choices":[{"message":{"role":"assistant","content":"mlx-output-ok"},"finish_reason":"stop"}]}'
+body='{"choices":[{"message":{"role":"assistant","content":"mlx-output-ok"},"finish_reason":"stop"}]}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
 EOF
   chmod +x "$dir/curl"
 }
@@ -716,8 +766,27 @@ for arg in "\$@"; do
       ;;
   esac
 done
+# Dispatch path: honour -o / -w (#170 introduced these on the dispatch
+# curl call so delegate.sh can split duration_ms into queue/generation).
+out_file=""
+write_out=""
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 cat > /dev/null
-printf '%s' '{"response":"mock-model-output: ok\\n"}'
+body='{"response":"mock-model-output: ok\\n"}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
 EOF
 chmod +x "$tmp/curl"
 metrics=$(mktemp)
@@ -939,10 +1008,18 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # always returns the canned response). Each invocation logs `canary` or
 # `dispatch` to an invocations file so tests can count the dispatches.
 make_mock_curl_probe_aware() {
+  # #170: dispatch invocations now pass `-o body_file -w "%{time_starttransfer}"`;
+  # the mock parses both and routes the canned dispatch body into the file
+  # when -o is present, emitting a synthetic 1-ms TTFB on stdout via -w.
+  # Canary invocations don't use -o/-w (delegate.sh sends canary output to
+  # /dev/null) so their handling is unchanged.
   local dir="$1" sniff="${2:-/dev/null}" invocations_log="${3:-/dev/null}" canary_behaviour="${4:-ok}"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
 url=""
+out_file=""
+write_out=""
+saw_args=( "\$@" )
 for arg in "\$@"; do
   case "\$arg" in
     http*|https*) url="\$arg" ;;
@@ -951,6 +1028,15 @@ done
 case "\$url" in
   *"/v1/models"*) exit 7 ;;
 esac
+# Parse -o and -w out of argv for the dispatch path; canary path doesn't
+# emit these but the loop costs nothing on either.
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 payload=\$(cat)
 # Distinguish canary from dispatch by 1-token request signature. The
 # follow-on character ([,}]) ensures \`"max_tokens":1\` doesn't match a
@@ -966,7 +1052,15 @@ if echo "\$payload" | grep -qE '"num_predict":1|"max_tokens":1[,}]'; then
 fi
 echo "dispatch url=\$url" >> "${invocations_log}"
 echo "\$payload" > "${sniff}"
-printf '%s' '{"response":"mock-model-output: ok\\n"}'
+body='{"response":"mock-model-output: ok\\n"}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
 EOF
   chmod +x "$dir/curl"
 }
@@ -1138,13 +1232,33 @@ done
 case "\$url" in
   *"/v1/models"*) exit 7 ;;
 esac
+# Snapshot argv for the canary-argv assertion before we shift it parsing
+# -o / -w (dispatch path uses these — #170).
+argv_snapshot="\$*"
+out_file=""
+write_out=""
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 payload=\$(cat)
 if echo "\$payload" | grep -qE '"num_predict":1|"max_tokens":1[,}]'; then
-  printf '%s\n' "\$*" > "${canary_argv}"
+  printf '%s\n' "\$argv_snapshot" > "${canary_argv}"
   printf '%s' '{"response":"ok"}'
   exit 0
 fi
-printf '%s' '{"response":"mock-model-output: ok\\n"}'
+body='{"response":"mock-model-output: ok\\n"}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
 EOF
 chmod +x "$tmp/curl"
 prompts="$tmp/prompts"
@@ -1204,14 +1318,33 @@ case "\$url" in
     exit 0
     ;;
 esac
+# Snapshot argv before parsing -o / -w (dispatch path uses these — #170).
+argv_snapshot="\$*"
+out_file=""
+write_out=""
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 payload=\$(cat)
 if echo "\$payload" | grep -qE '"max_tokens":1[,}]'; then
   echo "\$payload" > "${canary_payload_sniff}"
-  printf '%s\n' "\$*" > "${canary_argv_sniff}"
+  printf '%s\n' "\$argv_snapshot" > "${canary_argv_sniff}"
   printf '%s' '{"choices":[{"message":{"role":"assistant","content":"k"},"finish_reason":"stop"}]}'
   exit 0
 fi
-printf '%s' '{"choices":[{"message":{"role":"assistant","content":"mlx-ok"},"finish_reason":"stop"}]}'
+body='{"choices":[{"message":{"role":"assistant","content":"mlx-ok"},"finish_reason":"stop"}]}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
 EOF
 chmod +x "$tmp/curl"
 prompts="$tmp/prompts"
@@ -1250,14 +1383,33 @@ done
 case "\$url" in
   *"/v1/models"*) exit 7 ;;
 esac
+# Snapshot argv before parsing -o / -w (dispatch path uses these — #170).
+argv_snapshot="\$*"
+out_file=""
+write_out=""
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 payload=\$(cat)
 if echo "\$payload" | grep -q '"num_predict":1'; then
   echo "\$payload" > "${canary_payload_sniff}"
-  printf '%s\n' "\$*" > "${canary_argv_sniff}"
+  printf '%s\n' "\$argv_snapshot" > "${canary_argv_sniff}"
   printf '%s' '{"response":"k"}'
   exit 0
 fi
-printf '%s' '{"response":"mock-model-output: ok\\n"}'
+body='{"response":"mock-model-output: ok\\n"}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
 EOF
 chmod +x "$tmp/curl"
 prompts="$tmp/prompts"
@@ -1555,6 +1707,132 @@ exit($rc >> 8);
 ' bash "$SCRIPT" prose "Summarise" 2>&1) || EC=$?
 assert_eq 0 "$EC" "stdin probe: empty unix socket exits 0 (no hang, #169 regression)"
 assert_contains '"context_chars":0' "$(cat "$metrics")" "stdin probe: empty unix socket skips cat (context_chars=0)"
+rm -rf "$tmp" "$metrics"
+
+# 24. Queue-wait / generation-time split (#170). On a successful delegation
+# the metrics row carries queue_wait_ms (time spent waiting for the Ollama
+# daemon to start streaming — surfaces concurrent-caller queueing under
+# parallel agents) and generation_ms (the actual model-generation slice),
+# while duration_ms remains the inclusive total so existing
+# metrics-summary.sh rollups still work. The mock's synthetic TTFB is
+# 0.001 s → 1 ms queue_wait_ms after awk-rounding, which is below most
+# real-world numbers but exercises the float→int conversion path and
+# proves the field shape end-to-end. The sum-equals-duration invariant
+# is the contract we promise downstream consumers (Phase 11 OTel).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "queue-wait split: happy path exits 0"
+line=$(cat "$metrics")
+# Field presence — both new keys must be in the JSONL row.
+assert_contains '"queue_wait_ms":' "$line" "queue-wait split: queue_wait_ms field present"
+assert_contains '"generation_ms":' "$line" "queue-wait split: generation_ms field present"
+# Existing duration_ms field is preserved (rollups in metrics-summary.sh
+# read it; #170 promises not to break them).
+assert_contains '"duration_ms":' "$line" "queue-wait split: duration_ms field preserved"
+# Both new fields are integers (jq's @numeric output for --argjson, so the
+# JSON type is number; we additionally check the string match has no
+# decimal point inside the value).
+qwait_val=$(echo "$line" | jq -r '.queue_wait_ms')
+gen_val=$(echo "$line" | jq -r '.generation_ms')
+dur_val=$(echo "$line" | jq -r '.duration_ms')
+if [[ "$qwait_val" =~ ^[0-9]+$ ]]; then
+  echo "  PASS  queue-wait split: queue_wait_ms is a non-negative integer ($qwait_val)"
+  pass=$((pass+1))
+else
+  echo "  FAIL  queue-wait split: queue_wait_ms not an integer ('$qwait_val')"
+  fail=$((fail+1))
+fi
+if [[ "$gen_val" =~ ^[0-9]+$ ]]; then
+  echo "  PASS  queue-wait split: generation_ms is a non-negative integer ($gen_val)"
+  pass=$((pass+1))
+else
+  echo "  FAIL  queue-wait split: generation_ms not an integer ('$gen_val')"
+  fail=$((fail+1))
+fi
+# Sum-equals-duration invariant — the two new fields together must equal
+# duration_ms (no rounding gap; both are derived from integer arithmetic
+# after the awk float→int conversion, so the math is exact).
+sum=$((qwait_val + gen_val))
+if [[ "$sum" == "$dur_val" ]]; then
+  echo "  PASS  queue-wait split: queue_wait_ms + generation_ms == duration_ms ($qwait_val + $gen_val == $dur_val)"
+  pass=$((pass+1))
+else
+  echo "  FAIL  queue-wait split: $qwait_val + $gen_val != $dur_val"
+  fail=$((fail+1))
+fi
+# The mock emits time_starttransfer=0.001 (1 ms after rounding), so we
+# expect queue_wait_ms to be exactly 1 — exercising the float→int path
+# rather than the empty-string-falls-to-zero fallback.
+assert_eq 1 "$qwait_val" "queue-wait split: synthetic 0.001s TTFB → 1 ms queue_wait_ms"
+rm -rf "$tmp" "$metrics"
+
+# 25. On a failed dispatch (HTTP error / connection refused), queue_wait_ms
+# defaults to 0 so the sum-equals-duration invariant still holds. The
+# split is meaningful only on success; on failure consumers can detect
+# "no split available" by queue_wait_ms == 0 alongside exit_status != 0.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_fail "$tmp"
+metrics=$(mktemp); : > "$metrics"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+if [[ "$EC" -ne 0 ]]; then
+  echo "  PASS  queue-wait split on failure: non-zero exit"
+  pass=$((pass+1))
+else
+  echo "  FAIL  queue-wait split on failure: expected non-zero exit, got 0"
+  fail=$((fail+1))
+fi
+line=$(cat "$metrics")
+qwait_val=$(echo "$line" | jq -r '.queue_wait_ms')
+gen_val=$(echo "$line" | jq -r '.generation_ms')
+dur_val=$(echo "$line" | jq -r '.duration_ms')
+assert_eq 0 "$qwait_val" "queue-wait split on failure: queue_wait_ms is 0"
+# generation_ms absorbs the whole duration on failure so the sum invariant
+# still holds — same shape downstream consumers can rely on.
+sum=$((qwait_val + gen_val))
+if [[ "$sum" == "$dur_val" ]]; then
+  echo "  PASS  queue-wait split on failure: sum-equals-duration invariant holds ($qwait_val + $gen_val == $dur_val)"
+  pass=$((pass+1))
+else
+  echo "  FAIL  queue-wait split on failure: $qwait_val + $gen_val != $dur_val"
+  fail=$((fail+1))
+fi
+rm -rf "$tmp" "$metrics"
+
+# 26. Pick-model failure (no model installed) records queue_wait_ms = 0
+# and generation_ms = duration_ms — the failure happens before any HTTP
+# call so the queue/generation split is structurally undefined. The two
+# fields are emitted anyway so the JSON shape stays consistent across
+# success and failure rows.
+tmp=$(mktemp -d)
+cat > "$tmp/ollama" <<'EOF'
+#!/usr/bin/env bash
+[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
+unrelated:model  zz 5 GB   1 day ago"
+EOF
+chmod +x "$tmp/ollama"
+metrics=$(mktemp); : > "$metrics"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 1 "$EC" "queue-wait split on pick-model failure: exit 1"
+line=$(cat "$metrics")
+# Both fields are still present even though the model never started — the
+# shape is the contract surface, missing fields would break Phase 11
+# OTel translation logic.
+assert_contains '"queue_wait_ms":' "$line" "queue-wait split on pick-model failure: queue_wait_ms still emitted"
+assert_contains '"generation_ms":' "$line" "queue-wait split on pick-model failure: generation_ms still emitted"
+assert_eq 0 "$(echo "$line" | jq -r '.queue_wait_ms')" "queue-wait split on pick-model failure: queue_wait_ms == 0"
 rm -rf "$tmp" "$metrics"
 
 echo
