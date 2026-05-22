@@ -1,3 +1,8 @@
+---
+inputs:
+  style_anchor: string
+  facts: string
+---
 # roadmap-entry
 
 ## When to use

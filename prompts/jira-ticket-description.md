@@ -1,3 +1,8 @@
+---
+inputs:
+  source_text: string
+  sentence_count: integer
+---
 # jira-ticket-description
 
 ## When to use

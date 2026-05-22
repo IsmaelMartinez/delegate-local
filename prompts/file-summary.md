@@ -1,3 +1,7 @@
+---
+inputs:
+  stdin: string
+---
 # file-summary
 
 ## When to use

@@ -1,3 +1,7 @@
+---
+inputs:
+  stdin: string
+---
 # em-dash-removal
 
 ## When to use

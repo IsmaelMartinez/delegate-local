@@ -1,3 +1,9 @@
+---
+inputs:
+  kind: string
+  N_FACTS: integer
+  stdin: string
+---
 # summarise-issue
 
 ## When to use

@@ -1,3 +1,9 @@
+---
+inputs:
+  diff_stat: string
+  diff: string
+  count: integer
+---
 # summarise-diff
 
 ## When to use
