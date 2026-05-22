@@ -365,6 +365,25 @@ assert_contains "metrics file not found" "$out" "T9: error names the missing-fil
 rm -rf "$tmp"
 
 # ---------------------------------------------------------------------------
+# 9b. Empty JSONL → no-op (per issue #157 spec). Exits 0 with a summary
+#     of "0 rows" and zero curl calls.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+bodies="$tmp/bodies"
+invocations="$tmp/invocations"; : > "$invocations"
+make_mock_curl "$tmp" "$bodies" "$invocations" "ok"
+: > "$tmp/m.jsonl"  # empty file
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" --metrics-file "$tmp/m.jsonl" 2>&1) || EC=$?
+assert_eq 0 "$EC" "T9b: empty JSONL → exits 0"
+assert_contains "backfill: 0 rows, 0 sent, 0 skipped, 0 errored" "$out" "T9b: empty JSONL → summary shows zero counts"
+curl_count=$(grep -c '^curl' "$invocations" 2>/dev/null) || curl_count=0
+assert_eq 0 "$curl_count" "T9b: empty JSONL → zero curl calls"
+rm -rf "$tmp"
+
+# ---------------------------------------------------------------------------
 # 10. Unknown flag → usage exit 2.
 # ---------------------------------------------------------------------------
 EC=0

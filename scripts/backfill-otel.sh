@@ -432,11 +432,15 @@ done <<< "$rows_to_process"
 # via a tempfile in the same directory (so the rename is a single inode
 # swap, no cross-filesystem move). Each original line is re-emitted; lines
 # matching a row that was just exported get their otel_trace_id /
-# otel_span_id fields added. The `--rawfile` jq trick streams the update
-# tsv into the jq filter via env so the in-loop matching stays O(rows ×
-# updates) without an external join. For workstation-scale JSONL (few MB)
-# this is fine; if the file ever grew to GB scale, the right answer would
-# be a hash-table join in perl, not micro-optimising the jq filter.
+# otel_span_id fields added. The lookup against updates_tsv uses awk
+# (rather than a fancier external join) so the in-loop matching stays
+# O(rows × updates) without extra deps. For workstation-scale JSONL (few
+# MB) this is fine; if the file ever grew to GB scale, the right answer
+# would be a hash-table join in perl, not micro-optimising the awk
+# lookup. Concurrent writers (a delegate.sh call appending while the
+# backfill rewrites) are not coordinated — the second writer wins per
+# `mv` semantics. Acceptable at workstation scale; document explicitly
+# rather than building a lock-file dance for a constraint nobody hits.
 if (( update_jsonl == 1 && sent_count > 0 )); then
   tmp_out=$(mktemp "${metrics_file}.backfill.XXXXXX") || {
     echo "backfill-otel: could not create tempfile for --update-jsonl" >&2
