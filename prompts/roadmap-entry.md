@@ -48,12 +48,7 @@ If the anchor uses British spelling (organisation, behaviour, optimise), use
 British. If it uses American (organization, behavior, optimize), use American.
 Detect from the anchor; do NOT default to either.
 
-Stop after the substantive content sentences. Do NOT add a closing sentence
-that restates the point. Restating happens in two shapes, both rejected:
-participial form (", ensuring that…", ", enabling…", ", allowing…") and
-declarative form ("This ensures…", "This enables…", "…closing the gap in X",
-"…closes the loop", "…going forward"). Roadmap entries are factual logs,
-and a closing-flourish sentence reads especially wrong in that genre.
+Stop after the substantive content. Do NOT add a trailing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling", "highlighting", "underscoring"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "To summarise"). End on a finite verb introducing new content, or stop.
 
 Preserve every PR number, squash hash, and date from the FACTS block exactly
 as written. Do NOT invent identifiers; do NOT round commit hashes; do NOT

@@ -56,16 +56,7 @@ Wrong: feat: delegate.sh recipe loading and placeholder validation (#73)
 Correct: feat: delegate.sh recipe loading and placeholder validation
 
 Do NOT indent the body lines — output should be flush-left.
-Stop each paragraph after the substantive sentences. Do NOT add a trailing
-sentence that restates the point. Restating happens in two shapes, both
-rejected: participial form (", ensuring…", ", enabling…", ", allowing…",
-", providing…", ", keeping…", ", reflecting…", ", supporting…") and
-declarative form ("This ensures…", "This enables…", "This prevents…",
-"This guarantees…", "This delivers…", "This is crucial/essential",
-"This distinction is crucial", "This closes the gap in X", "…closing
-the gap", "…closes the loop", "…going/moving forward", "…across diverse
-environments"). Both "closes" and "closing" forms are rejected; both
-finite-verb and participial shapes of the same restating cliché count.
+Stop after the substantive content. Do NOT add a trailing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling", "highlighting", "underscoring"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "To summarise"). End on a finite verb introducing new content, or stop.
 Wrong: This closes the gap between asserted hardening and measured accuracy.
 Correct: (sentence ends after the substantive content; no closing-the-gap
 or closing-the-loop tail at all)

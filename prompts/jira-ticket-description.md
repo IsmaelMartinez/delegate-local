@@ -31,7 +31,7 @@ HARD RULES (non-negotiable; each addresses a real past MISS):
 
 3. Preserve filenames, file paths, URLs, AWS service names (CloudFront, ACM, Route 53, Lambda, EventBridge, etc.), and proper nouns EXACTLY as they appear in the source. Do not abbreviate, expand, re-format, or rename them.
 
-4. Stop after the content sentences. Do not add a closing sentence that restates the point. Do not append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting") that summarises a downstream effect or implication. End on a finite verb introducing new content, or stop.
+4. Stop after the substantive content. Do NOT add a trailing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling", "highlighting", "underscoring"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "To summarise"). End on a finite verb introducing new content, or stop.
 
 5. The final sentence of your output must NOT begin with any of these openers (case-insensitive): "this", "to ensure", "to align", "allowing", "enabling", "supporting", or any participle (-ing form) that restates the prior point. If the final sentence would begin with one of these, rephrase it to introduce material content while maintaining the required sentence count — do not drop the sentence (the EXACTLY {{sentence_count}} constraint takes precedence).
 

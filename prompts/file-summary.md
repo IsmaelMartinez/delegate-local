@@ -29,8 +29,12 @@ Rules:
 - Sentence must include both the SUBJECT (what was decided/found) and the MECHANISM (because/by which thing).
 - Do NOT begin with a bare past-tense verb that omits the subject — always state WHAT was confirmed or found.
 - Do NOT include the title, session number, or date — these go in the link text.
-- Do NOT add a trailing clause that restates the point.
-- Stop immediately after the mechanism.
+- Stop after the substantive content. Do NOT add a trailing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling", "highlighting", "underscoring"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "To summarise"). End on a finite verb introducing new content, or stop.
+
+Example shape (do not copy literally — the input below is different):
+
+Wrong: Confirmed because slope conditioning reveals heterogeneity that the 2-axis grid averages out across slope buckets.
+Correct: The 3-axis grid surfaces one new regime cell missed by the 2-axis grid because slope conditioning reveals heterogeneity averaged out in the broader grid.
 
 === Document ===
 {{stdin}}

@@ -43,7 +43,8 @@ Rules:
 - NEXT_STEP must name an actual file path or shell command, not advice ("review the config", "check permissions"). If the failure is in user code, name the workflow file, test file, or source file actually involved.
 - FAILURE_TYPE category boundaries: static-analysis tools (CodeQL, ESLint, semgrep, ruff, mypy) are `lint`, NOT `test`. Test runners (pytest, jest, cargo test, go test) are `test`. Compilation / packaging steps (tsc, webpack, rollup, sam build) are `build`. Dependency-resolution failures (pip install, npm install, cargo fetch) are `install`. The `analyze` job name on its own does not imply `test` — match the tool actually running.
 - If the failure type genuinely does not fit the listed categories, use `other` and explain in ROOT_CAUSE.
-- Output ONLY the five fields, one per line (ROOT_CAUSE may wrap to additional lines). No preamble, no markdown headers, no trailing summary.
+- Output ONLY the five fields, one per line (ROOT_CAUSE may wrap to additional lines). No preamble, no markdown headers.
+- Stop after the substantive content. Do NOT add a trailing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling", "highlighting", "underscoring"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "To summarise"). End on a finite verb introducing new content, or stop.
 
 === CI failure log ===
 {{stdin}}

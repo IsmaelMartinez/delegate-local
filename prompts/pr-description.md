@@ -28,6 +28,7 @@ Required sections in this order: '## Summary' (3-bullet list of what the PR does
 Do NOT invent example output for any tool — only describe what's in the diff.
 Do NOT prefix the title with 'PR #NN —' or any PR number reference.
 Output ONLY the markdown body, nothing else.
+Stop after the substantive content. Do NOT add a trailing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling", "highlighting", "underscoring"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "To summarise"). End on a finite verb introducing new content, or stop.
 
 === Recent merged-PR examples (shape anchors) ===
 {{recent_prs}}
