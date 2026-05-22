@@ -30,14 +30,6 @@ HOWEVER, the following ARE user-facing and produce a "Documented..." or "Changed
 The audience is the consumer / installer / integrator, not a future maintainer reading git log. Test against the audience, not against the file extension.
 If the PR is entirely internal by that test, output the single token SKIP on a line by itself (no backticks, no bullet, no preamble, no PR number) so the caller can drop it from the release rollup rather than emit a fabricated user-facing claim.
 
-Wrong (over-aggressive SKIP — observed 2026-05-22 dogfood):
-TITLE: docs: observability runbooks — Grafana Cloud, Langfuse self-host, Phoenix
-Output: SKIP
-Why wrong: the PR adds three NEW user-facing setup runbooks for end-users wiring observability backends to the skill. That is exactly what an installer/integrator would follow. Bullet, not SKIP.
-
-Correct (same input):
-- Documented setup runbooks for Grafana Cloud, Langfuse self-host, and Arize Phoenix as observability backends for the planned OTLP exporter (#166).
-
 Otherwise:
 Output ONE bullet starting with "- " and a past-tense verb (Added, Fixed, Changed, Removed, Renamed, Documented).
 The bullet describes the change from the reader's perspective — what they can now do, or what no longer breaks, or what behaviour shifted. Do NOT describe the implementation.
@@ -46,6 +38,24 @@ Reference the PR number at the end in parentheses: "(#NN)".
 Do NOT include the merge commit hash.
 Do NOT echo the PR title verbatim — reword for an external reader who has not seen the PR.
 Output ONLY the bullet, no preamble.
+
+=== Examples of internal-vs-user-facing triage ===
+
+Wrong (over-aggressive SKIP — observed 2026-05-22 dogfood):
+TITLE: docs: observability runbooks — Grafana Cloud, Langfuse self-host, Phoenix
+Output: SKIP
+Why wrong: the PR adds three NEW user-facing setup runbooks for end-users wiring observability backends to the skill. That is exactly what an installer/integrator would follow. Bullet, not SKIP.
+
+Correct (same input):
+- Documented setup runbooks for Grafana Cloud, Langfuse self-host, and Arize Phoenix as observability backends for the planned OTLP exporter (#166).
+
+Wrong (under-aggressive bullet — contributor-facing README change being bulleted; observed 2026-05-22 dogfood after the first reorder):
+TITLE: docs: prompts/README — document rejection rationale for persona / Prompty / fabric counts
+Output: - Documented the rationale for rejecting persona prompts, Microsoft Prompty schemas, and fabric item-count disciplines in prompt recipes.
+Why wrong: the PR adds a "What this library does NOT adopt" section to prompts/README.md aimed at future contributors deciding which patterns to import. The audience is the maintainer / contributor reading the recipe library's design rationale, not the consumer / installer / integrator reading release notes to decide whether to upgrade. SKIP.
+
+Correct (same input):
+SKIP
 
 === Recent release-note style anchor (optional) ===
 {{anchor}}
@@ -112,3 +122,7 @@ Ported the audience-filter directive from sst/opencode's `.opencode/command/chan
 ### 2026-05-22 dogfood: 3 HIT / 2 MISS — sharpened audience-filter
 
 Same-day dogfood of the ported audience-filter on the five 2026-05-22 merge batch (PRs #164–#168). Three HITs (correct SKIPs): PR #164 (internal ADR), #167 (contributor-facing README rationale), #168 (internal experiment infrastructure with null-result data). Two MISSes (false-positive SKIPs): PR #166 added NEW setup runbooks an installer follows, and PR #165 substantively changed what the release-note recipe outputs for callers — both ARE user-facing for the integrator audience but the over-broad "docs-only" interpretation collapsed them into SKIP. Sharpened the rule to (a) enumerate the "internal" set more precisely (CI / tests / refactors / dependency bumps / lint / formatter / typo fixes / contributor-facing markdown), (b) explicitly carve out the three user-facing-but-markdown shapes (new setup runbooks, recipe / template behaviour changes, wire-contract documentation), and (c) add a Wrong/Correct contrastive example using the actual #166 input that triggered the MISS. The "test against the audience, not against the file extension" framing is the new directive — same v5/v7 pattern that closed the commit-message recipe's `(#NN)` gap on file-extension proxying.
+
+### 2026-05-22 refinement: reorder + dual-example anchoring (gemini-code-assist PR #173 review)
+
+PR #173 review surfaced a prompt-engineering principle the first sharpening violated: the `Otherwise:` bullet-output rules were separated from the SKIP-output rule by the Wrong/Correct example, fragmenting the core instruction set. Reordered to group all rules together first, then a separate `=== Examples ===` reference section. Initial dogfood after reorder regressed PR #167: the lone example anchored the model toward "Documented..." bullets and it stopped SKIPping the contributor-facing README change. Fix: added a SECOND Wrong/Correct pair to the examples section where the correct answer is SKIP and the input is the actual PR #167 title — dual-direction anchoring. Re-dogfood: #166 → bullet, #167 → SKIP, #168 → SKIP, all three correct. Takeaway for future recipe iterations: when reordering rules-and-examples, the example set needs to anchor BOTH outcomes (HIT case AND SKIP case) or the model over-generalises to whichever case the single example demonstrates. Single examples are sufficient when the rules are inlined with the decision point; once the example moves to a separate section, dual anchoring is required.
