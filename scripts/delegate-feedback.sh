@@ -162,7 +162,7 @@ otel_gen_id() {
 }
 
 # emit_otel_feedback_span <fb_ts> <verdict> <reason> <parent_trace_id>
-#   <parent_span_id> <parent_model>
+#   <parent_span_id> <parent_model> <parent_recipe>
 #
 # Emit a feedback-as-linked-span per ADR 0007: NEW trace, NEW span, with
 # `links: [{traceId, spanId}]` pointing at the parent delegation when the
@@ -181,10 +181,17 @@ otel_gen_id() {
 # DELEGATE_OTEL_INCLUDE_CONTENT=1. Track F (#158) inverted the default:
 # verdict + parent IDs always travel (they are metadata), but the free-
 # text reason stays on-host unless the operator explicitly opts in.
+#
+# The `delegate.recipe` attribute (#187) travels unconditionally when the
+# parent delegation used --recipe — recipe names are metadata (predefined
+# short identifiers from prompts/<NAME>.md), not arbitrary user content,
+# so the no-content gate does not apply. The attribute is omitted entirely
+# when the parent was a bare-tier call (consistent with the parent delegate
+# span's recipe handling).
 emit_otel_feedback_span() {
   [[ -z "${DELEGATE_OTEL_ENDPOINT:-}" ]] && return 0
   local fb_ts="$1" verdict="$2" reason="$3" parent_trace_id="$4"
-  local parent_span_id="$5" parent_model="$6"
+  local parent_span_id="$5" parent_model="$6" parent_recipe="${7:-}"
   local include_content="${DELEGATE_OTEL_INCLUDE_CONTENT:-0}"
 
   # Generate this span's own identifiers. Per ADR 0007, the feedback is in a
@@ -228,11 +235,19 @@ emit_otel_feedback_span() {
   # entirely — the verdict, parent IDs, and span itself still go through
   # so dashboards keep counting hits and misses; only the reason text is
   # held back unless the operator opts in.
+  #
+  # `delegate.recipe` (#187) is metadata (a predefined recipe name from
+  # prompts/<NAME>.md) and travels unconditionally when present. Omitted
+  # when the parent was a bare-tier call, matching the parent delegate
+  # span's recipe handling. This is what lets per-recipe HIT-rate
+  # dashboards key off the feedback span directly without a cross-trace
+  # join — TraceQL doesn't support cross-trace projection cleanly.
   local payload
   payload=$(jq -nc \
     --arg trace_id "$trace_id" --arg span_id "$span_id" \
     --arg parent_trace_id "$parent_trace_id" --arg parent_span_id "$parent_span_id" \
-    --arg model "$parent_model" --arg verdict "$verdict" --arg reason "$reason" \
+    --arg model "$parent_model" --arg recipe "$parent_recipe" \
+    --arg verdict "$verdict" --arg reason "$reason" \
     --arg start_ns "$start_ns" --arg end_ns "$end_ns" \
     --arg include_content "$include_content" \
     --argjson span_kind "$span_kind" --argjson status_code "$status_code" \
@@ -257,7 +272,9 @@ emit_otel_feedback_span() {
                 {key: "delegate.feedback.verdict", value: {stringValue: $verdict}},
                 {key: "delegate.feedback.parent_trace_id", value: {stringValue: $parent_trace_id}},
                 {key: "delegate.feedback.parent_span_id", value: {stringValue: $parent_span_id}}
-              ] + (if $include_content == "1" and $reason != "" then [{key: "delegate.feedback.reason", value: {stringValue: $reason}}] else [] end)),
+              ]
+              + (if $recipe != "" then [{key: "delegate.recipe", value: {stringValue: $recipe}}] else [] end)
+              + (if $include_content == "1" and $reason != "" then [{key: "delegate.feedback.reason", value: {stringValue: $reason}}] else [] end)),
               status: {code: $status_code}
             }
             + (if $parent_trace_id != "" and $parent_span_id != "" then
@@ -331,12 +348,15 @@ if [[ -n "$override_ts" ]]; then
     exit 1
   fi
   ref_ts="$override_ts"
-  # Capture model + trace/span IDs from the pinned delegate row so the OTel
-  # feedback span (Phase 11 Track A) can name the parent. Empty when the
-  # row pre-dates the exporter (Track E #157 backfills these later).
+  # Capture model + trace/span IDs + recipe from the pinned delegate row so
+  # the OTel feedback span (Phase 11 Track A) can name the parent and
+  # carry delegate.recipe (#187). Empty fields are tolerated — the parent
+  # IDs and recipe are absent when the row pre-dates the exporter
+  # (Track E #157 backfills the IDs later) or when the delegation was a
+  # bare-tier call without --recipe.
   parent_meta=$(jq -r --arg ts "$override_ts" \
     'select((.source // "delegate") == "delegate" and .ts == $ts)
-     | [(.otel_trace_id // ""), (.otel_span_id // ""), (.model // "")]
+     | [(.otel_trace_id // ""), (.otel_span_id // ""), (.model // ""), (.recipe // "")]
      | @tsv' \
     "$metrics_file" | head -n 1)
 else
@@ -349,14 +369,16 @@ else
     echo "no recent delegate event found in $metrics_file" >&2
     exit 1
   fi
-  # Look up the matched delegate row's trace/span IDs and model for the OTel
-  # feedback-as-linked-span (Phase 11 Track A). Rows that pre-date the
-  # exporter return empty strings; the OTel emission code path treats empty
-  # parent IDs as "no link" and still emits the feedback span (Track E #157
-  # backfills the parent IDs later, at which point links become available).
+  # Look up the matched delegate row's trace/span IDs, model, and recipe
+  # for the OTel feedback-as-linked-span (Phase 11 Track A) plus the
+  # delegate.recipe attribute (#187). Rows that pre-date the exporter
+  # return empty strings for the IDs; the OTel emission code path treats
+  # empty parent IDs as "no link" and still emits the feedback span
+  # (Track E #157 backfills the parent IDs later). Bare-tier delegations
+  # return empty recipe and the attribute is omitted from the payload.
   parent_meta=$(jq -r --arg ts "$ref_ts" \
     'select((.source // "delegate") == "delegate" and .ts == $ts)
-     | [(.otel_trace_id // ""), (.otel_span_id // ""), (.model // "")]
+     | [(.otel_trace_id // ""), (.otel_span_id // ""), (.model // ""), (.recipe // "")]
      | @tsv' \
     "$metrics_file" | tail -n 1)
   # Stale-window check: refuse to silently attach to a row that almost
@@ -397,16 +419,18 @@ verdict_word=$([[ "$kept" == "true" ]] && echo "HIT" || echo "MISS")
 
 # Emit OTel feedback-as-linked-span (Phase 11 Track A #134). The split
 # variables come from the parent_meta TSV captured during the ref_ts lookup
-# above. Empty fields are tolerated — emit_otel_feedback_span omits link
-# attributes when the parent IDs are unknown (row pre-dates the exporter).
+# above. Empty fields are tolerated — emit_otel_feedback_span omits the
+# `links` array when the parent IDs are unknown (row pre-dates the exporter)
+# and omits delegate.recipe (#187) when the parent was a bare-tier call.
 parent_trace_id=""
 parent_span_id=""
 parent_model=""
+parent_recipe=""
 if [[ -n "${parent_meta:-}" ]]; then
-  IFS=$'\t' read -r parent_trace_id parent_span_id parent_model <<< "$parent_meta"
+  IFS=$'\t' read -r parent_trace_id parent_span_id parent_model parent_recipe <<< "$parent_meta"
 fi
 verdict_lower=$([[ "$kept" == "true" ]] && echo "hit" || echo "miss")
-emit_otel_feedback_span "$ts" "$verdict_lower" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model"
+emit_otel_feedback_span "$ts" "$verdict_lower" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model" "$parent_recipe"
 
 echo "$verdict_word recorded against delegate ts=$ref_ts${reason:+ ($reason)}"
 

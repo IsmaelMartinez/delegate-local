@@ -1024,6 +1024,161 @@ case "$otel_body" in
 esac
 rm -rf "$tmp"
 
+# ---------------------------------------------------------------------------
+# Issue #187 — delegate.recipe on feedback span
+# When the parent delegation used --recipe NAME the recipe field lives on
+# the parent's JSONL row. We copy it onto the feedback span as the
+# `delegate.recipe` attribute so per-recipe HIT-rate dashboards can group
+# by it directly (TraceQL doesn't support cross-trace projection cleanly).
+# Recipe names are metadata (predefined identifiers from prompts/<NAME>.md),
+# not user content, so they travel unconditionally — NOT gated behind
+# DELEGATE_OTEL_INCLUDE_CONTENT.
+# ---------------------------------------------------------------------------
+
+# seed_metrics_with_recipe <file> <recipe_name> [<trace_id>] [<span_id>]
+#   Like seed_metrics_with_otel but also includes a `recipe` field on the
+#   delegate row, modelling a parent delegation that used --recipe NAME.
+seed_metrics_with_recipe() {
+  local file="$1" recipe="$2"
+  local tid="${3:-aaaa1111bbbb2222cccc3333dddd4444}"
+  local sid="${4:-feedface12345678}"
+  TS_LATEST=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  cat > "$file" <<EOF
+{"ts":"$TS_LATEST","source":"delegate","tier":"prose","model":"qwen3.6:35b","recipe":"$recipe","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$tid","otel_span_id":"$sid"}
+EOF
+}
+
+# FB-OT16. Parent delegation used --recipe NAME → feedback span carries the
+# delegate.recipe attribute with the recipe name. The recipe travels
+# unconditionally — content gating (DELEGATE_OTEL_INCLUDE_CONTENT) does NOT
+# apply because recipe names are predefined metadata, not user input.
+tmp=$(mktemp -d)
+seed_metrics_with_recipe "$tmp/m.jsonl" "commit-message"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" hit "verbatim used" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT16: recipe parent → exits 0"
+otel_body=$(cat "$otel_sniff")
+assert_contains '"delegate.recipe"' "$otel_body" "FB-OT16: delegate.recipe attribute present on feedback span"
+assert_contains '"commit-message"' "$otel_body" "FB-OT16: delegate.recipe value matches parent row"
+# Recipe travels unconditionally — verify it's still present even without the include-content flag.
+case "$otel_body" in
+  *'delegate.feedback.reason'*)
+    echo "  FAIL  FB-OT16: reason should be absent (content gate unchanged)"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT16: reason absent (recipe travels but content gate still applies to reason)"
+    pass=$((pass+1));;
+esac
+rm -rf "$tmp"
+
+# FB-OT17. Bare-tier parent delegation (no --recipe) → feedback span omits
+# the delegate.recipe attribute entirely. Mirrors the parent delegate span's
+# recipe handling (the span only carries the attribute when it has a value).
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" hit "verbatim used" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT17: bare-tier parent → exits 0"
+otel_body=$(cat "$otel_sniff")
+case "$otel_body" in
+  *'delegate.recipe'*)
+    echo "  FAIL  FB-OT17: delegate.recipe MUST be absent when parent had no --recipe"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT17: delegate.recipe absent for bare-tier parent (consistent with parent span)"
+    pass=$((pass+1));;
+esac
+# Verdict and parent IDs still present — only the recipe attribute is conditional.
+assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT17: verdict attribute still present"
+assert_contains '"delegate.feedback.parent_trace_id"' "$otel_body" "FB-OT17: parent_trace_id attribute still present"
+rm -rf "$tmp"
+
+# FB-OT18. Backwards-compat — feedback rows whose parent delegate row pre-
+# dates the exporter still produce a feedback span. Older JSONL rows carry
+# neither `otel_trace_id` nor `recipe` (the recipe field only started landing
+# once --recipe shipped, and earlier still rows had no telemetry at all);
+# the span emits without `links` and without a delegate.recipe attribute,
+# but the verdict attribute still travels so the dashboard counts the
+# verdict. Track E #157 backfills parent IDs separately; recipe back-fill
+# is out of scope here because the field is genuinely absent on rows that
+# pre-date the --recipe flag.
+tmp=$(mktemp -d)
+TS_PRE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$TS_PRE","source":"delegate","tier":"prose","model":"qwen3.6:35b","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
+EOF
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" hit "ok" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT18: pre-exporter row (no recipe, no otel IDs) → exits 0"
+otel_count=$(grep -c '^args' "$invocations" 2>/dev/null) || otel_count=0
+assert_eq 1 "$otel_count" "FB-OT18: OTel POST happens even on pre-exporter rows"
+otel_body=$(cat "$otel_sniff")
+case "$otel_body" in
+  *'delegate.recipe'*)
+    echo "  FAIL  FB-OT18: delegate.recipe MUST be absent when parent row has no recipe field"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT18: delegate.recipe absent on pre-exporter rows (recipe field genuinely missing)"
+    pass=$((pass+1));;
+esac
+# Verdict still travels so the dashboard counts the marker event.
+assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT18: verdict still travels"
+case "$otel_body" in
+  *'"links":['*)
+    echo "  FAIL  FB-OT18: links should be absent on pre-exporter rows"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT18: links absent on pre-exporter rows (parent IDs unknown)"
+    pass=$((pass+1));;
+esac
+rm -rf "$tmp"
+
+# FB-OT19. --ts pinning + recipe: the recipe is pulled from the PINNED
+# delegate row, not the most-recent one. Mirrors FB-OT9's check that --ts
+# correctly attaches to the chosen row's metadata.
+tmp=$(mktemp -d)
+T_OLD=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-200))')
+T_RECENT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+OLD_TID="1111111111111111aaaaaaaaaaaaaaaa"
+OLD_SID="1111111111111111"
+RECENT_TID="2222222222222222bbbbbbbbbbbbbbbb"
+RECENT_SID="2222222222222222"
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$T_OLD","source":"delegate","tier":"prose","model":"qwen3.6:35b","recipe":"commit-message","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$OLD_TID","otel_span_id":"$OLD_SID"}
+{"ts":"$T_RECENT","source":"delegate","tier":"prose","model":"qwen3.6:35b","recipe":"pr-description","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$RECENT_TID","otel_span_id":"$RECENT_SID"}
+EOF
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" --ts "$T_OLD" hit "verbatim" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT19: --ts pinned to old row with recipe → exits 0"
+otel_body=$(cat "$otel_sniff")
+recipe_attr=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].attributes[] | select(.key=="delegate.recipe") | .value.stringValue')
+assert_eq "commit-message" "$recipe_attr" "FB-OT19: delegate.recipe pulled from --ts pinned row, not most-recent"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

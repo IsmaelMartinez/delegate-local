@@ -146,11 +146,13 @@ The feedback span is short by design — it is a marker event, not a unit of wor
 | `delegate.feedback.verdict` | string (`hit` or `miss`) | feedback JSONL `kept` (true → `hit`, false → `miss`) | private | `hit` |
 | `delegate.feedback.parent_trace_id` | string | parent delegation's JSONL `otel_trace_id` | private (fallback for backends that don't render `links` well) | 32 hex chars |
 | `delegate.feedback.parent_span_id` | string | parent delegation's JSONL `otel_span_id` | private (fallback for backends that don't render `links` well) | 16 hex chars |
+| `delegate.recipe` | string | parent delegation's JSONL `recipe` (optional — only when `--recipe` was used) | private | `commit-message` |
 
 Notes on each:
 
 - `delegate.feedback.verdict` collapses the JSONL `kept` boolean to a string. The string form makes dashboard group-by clauses readable (`group by delegate.feedback.verdict` reads as `hit` / `miss` rather than `true` / `false`).
 - `delegate.feedback.parent_trace_id` and `delegate.feedback.parent_span_id` duplicate the `links` array as plain string attributes for backends that do not render `links` well in their default trace view. Backends that handle `links` correctly use the standard mechanism; backends that don't can still filter and join on the attribute. The fallback is intentionally redundant.
+- `delegate.recipe` (#187) is duplicated from the parent delegate span onto the feedback span so per-recipe HIT-rate dashboards become single-query panels. TraceQL does not support cross-trace projection cleanly — a query of the form "verdict distribution grouped by the parent's recipe" needs the recipe attribute physically present on the feedback span, not just reachable through a `links` traversal. Recipe names are short predefined identifiers from `prompts/<NAME>.md` (not arbitrary user content), so the attribute travels unconditionally — the `DELEGATE_OTEL_INCLUDE_CONTENT` content gate does not apply. Omitted when the parent delegation was a bare-tier call without `--recipe`, consistent with the parent delegate span's recipe handling.
 
 #### Content attributes (gated on `DELEGATE_OTEL_INCLUDE_CONTENT=1`)
 

@@ -174,6 +174,52 @@ else
   fail=$((fail+1))
 fi
 
+# Fifth check (#187): the calibration dashboard's per-recipe HIT-rate panel
+# uses `span.delegate.recipe` for grouping. PR #186 had to drop this panel
+# to a limitation-noted overall-only state because TraceQL couldn't join
+# the feedback span back to the parent delegate span. #187 added the recipe
+# attribute directly on the feedback span so the per-recipe panel is a
+# single-query group-by; this assertion pins that restoration so a future
+# "simplification" doesn't accidentally drop it again.
+CALIBRATION="$DASHBOARDS/grafana/delegate-calibration.json"
+if [[ -f "$CALIBRATION" ]]; then
+  # Look for a panel whose query references span.delegate.recipe AND uses
+  # `by (span.delegate.recipe)` grouping — the recipe attribute alone could
+  # appear in any panel description, the grouping clause is what makes the
+  # panel "per-recipe" rather than overall.
+  per_recipe_panels=$(jq -r '
+    .panels[]
+    | select(
+        (.targets // [])
+        | map(.query // "")
+        | join(" ")
+        | (contains("span.delegate.recipe") and contains("by (span.delegate.recipe)"))
+      )
+    | .id
+  ' "$CALIBRATION" 2>/dev/null)
+  if [[ -n "$per_recipe_panels" ]]; then
+    echo "  PASS  delegate-calibration.json: per-recipe HIT-rate panel present (#187 restored)"
+    pass=$((pass+1))
+  else
+    echo "  FAIL  delegate-calibration.json: no panel uses 'by (span.delegate.recipe)' — #187's per-recipe panel was dropped"
+    fail=$((fail+1))
+  fi
+
+  # Confirm the #186 limitation note pointing at #187 is gone — closed-issue
+  # cleanup. A future panel description referencing #187 as an open follow-up
+  # is a signal someone reverted the restoration.
+  if grep -q 'follow-up issue #187\|deferred to follow-up issue #187' "$CALIBRATION"; then
+    echo "  FAIL  delegate-calibration.json: stale '#187 follow-up' limitation note still present — should be removed once #187 lands"
+    fail=$((fail+1))
+  else
+    echo "  PASS  delegate-calibration.json: stale '#187 follow-up' limitation note removed"
+    pass=$((pass+1))
+  fi
+else
+  echo "  FAIL  delegate-calibration.json missing — cannot validate per-recipe panel"
+  fail=$((fail+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 if [[ "$fail" -gt 0 ]]; then
