@@ -6,6 +6,16 @@ The skill works today as a personal tool. To make it dependable for shared use, 
 
 Going-public completed in May 2026 (trigger-eval gate enforced on every PR, community-health files, release-please pipeline, doc-drift cleanup). See `git log`, the GitHub releases page, the per-phase summaries below, and the ADRs under `docs/adr/` for the full PR-by-PR history.
 
+### Phase 11 + 12 round-2 parallel-agent pass (2026-05-22 — shipped)
+
+A second 5-agent parallel pass landed all four gotcha tickets (#169 stdin probe via #175, #170 queue-wait telemetry via #177, #171 double-row regression coverage via #176, #172 URL_EXTERNAL scope documentation via #174) plus Phase 12 Track B (#161 future-recipe convention via #178). Round 2 ran against the gotchas filed during round 1, closing the loop in the same day.
+
+Three calibration findings worth carrying forward. First, the #171 investigation returned a **null result** — `delegate-feedback.sh` has no duplicate-write bug; the observed double-row pattern traces to `experiments/phase-12-track-a-runner.sh` calling feedback per-rep against the same delegate row, which is upstream caller behaviour. The agent still shipped 23 regression assertions pinning the no-bug invariant so the failure shape can't silently regress later. Second, the #169 agent rejected the issue's recommended `read -t 0 -N 0` probe after verifying `-N` is bash 4+ only (fails on macOS-shipped bash 3.2.57), and substituted `[[ -p /dev/stdin || -s /dev/stdin ]]` which is bash 3.2 compatible — verified with a perl socketpair regression test that actually reproduces the hang. The portability constraint in `CLAUDE.md` was load-bearing here; an agent that hadn't read it would have shipped a Linux-only fix. Third, the #177 review surfaced a recurring gemini-code-assist false positive (the `mktemp -t prefix` BSD-portability suggestion that breaks GNU); the rejection cited the existing session memory and the closing PR comment names this as a known-pitfall pattern. Memory paid off — a fresh agent would not have recognised it.
+
+Two reusable infrastructure pieces stay in the repo as a result: the perl socketpair stdin regression pattern (now reusable for future FD-related bugs) and the `inputs: type validation` framework with `integer`/`string`/`integer?`/`string?` (Phase 12 Track B's lazy-migration scaffold).
+
+**Open at the end of round 2:** Phase 11 Track A (#134) is now the single highest-priority unblocked ticket. All four round-1 gotchas are closed and the convention work is shipped — the OTel exporter MVP has nothing left in front of it. Three smaller items also sit available in parallel: external-contributor PR #140 awaiting your re-review, `prompts/plan-section-intro.md` recipe (#150), and the `prompts/summarise-issue.md` OMIT-EMPTY-SECTION bypass (#148).
+
 ### Phase 11 + 12 parallel-agent pass (2026-05-22 — shipped)
 
 A 5-agent parallel pass on Phase 11/12 sub-tracks landed: schema ADR + reference doc (#164), platform runbooks (#166), audience-filter port into release-note (#165), rejection rationale in `prompts/README.md` (#167), domain-priming validation-gate experiment (#168). A post-merge docs sweep (#173) refreshed the ROADMAP, cross-referenced observability runbooks from the top-level README, and iterated the release-note recipe through two calibration cycles (3 HIT / 2 MISS → 5/5 after sharpening + dual-direction anchoring).
@@ -21,7 +31,7 @@ Four gotcha tickets surfaced during the parallel pass and got filed (each a smal
 
 One recipe-design principle captured in `prompts/release-note.md` calibration notes during PR #173 review: when separating rules from few-shot examples (per gemini-code-assist's prompt-engineering suggestion), the example set needs to anchor BOTH outcomes (HIT case AND SKIP case) — a single example over-anchors the model toward whichever case it demonstrates. Worth applying to future recipe iterations.
 
-**Next-pickup order:**
+**Next-pickup order (round-1 snapshot — superseded by the round-2 section above, retained as historical record):**
 
 1. **Phase 11 Track A — OTLP exporter MVP (#134, now unblocked).** The schema ADR + reference doc (#154/#164) landed and frames the wire payload exactly, so the implementation work is bounded: a `curl` POST per `delegate.sh` call when `DELEGATE_OTEL_ENDPOINT` is set, plus a feedback-as-linked-span POST per `delegate-feedback.sh`. The pre-existing tests in `tests/test-delegate.sh` mock `curl` already; extending them to assert OTLP payload shape and that exporter failures don't change exit status is the test surface. Estimated single-PR scope.
 2. **Gotcha #169 — `delegate.sh` stdin hardening.** Small fix (one `read -t 0` probe before `cat`), unblocks parallel-agent dispatch reliability for the next batched pass. Add a regression test in `tests/test-delegate.sh`.
