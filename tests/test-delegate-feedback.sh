@@ -505,6 +505,334 @@ assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "single-row miss with --ts +
 assert_contains '"reason":"pr-description recipe stalled past 30s on prose tier body"' "$last" "single-row miss with --ts + nudge: reason on the appended row is the real one"
 rm -rf "$tmp"
 
+# ---------------------------------------------------------------------------
+# Phase 11 Track A — OTLP/HTTP feedback-as-linked-span (#134)
+# When DELEGATE_OTEL_ENDPOINT is set, delegate-feedback.sh POSTs a feedback
+# span per ADR 0007: a new trace, new span_id, with `links: [{traceId, spanId}]`
+# pointing at the parent delegation (looked up via ref_ts). Belt-and-braces,
+# delegate.feedback.parent_trace_id / parent_span_id duplicated as plain
+# string attributes for backends that don't render links well.
+# ---------------------------------------------------------------------------
+
+# Helper: a curl mock for delegate-feedback.sh that captures the OTel POST
+# body for inspection. Unlike delegate.sh's mock, this one doesn't need to
+# handle the auto-probe (delegate-feedback.sh doesn't probe) or the
+# dispatch path (no model call) — it only sees /v1/traces.
+make_mock_curl_fb_otel() {
+  local dir="$1" otel_sniff="${2:-/dev/null}" invocations="${3:-/dev/null}" behaviour="${4:-ok}"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+echo "args \$*" >> "${invocations}"
+saw_otel=0
+for a in "\$@"; do
+  case "\$a" in *"/v1/traces"*) saw_otel=1 ;; esac
+done
+if (( saw_otel == 1 )); then
+  cat > "${otel_sniff}"
+  case "${behaviour}" in
+    fail)    exit 22 ;;
+    timeout) exit 28 ;;
+    refused) exit 7 ;;
+    *)       exit 0 ;;
+  esac
+fi
+exit 0
+EOF
+  chmod +x "$dir/curl"
+}
+
+# seed_metrics_with_otel <file> [<trace_id>] [<span_id>]
+#   Like seed_metrics but includes otel_trace_id / otel_span_id on each
+#   delegate row so the feedback span has a parent linkage.
+seed_metrics_with_otel() {
+  local file="$1"
+  local tid="${2:-aaaa1111bbbb2222cccc3333dddd4444}"
+  local sid="${3:-feedface12345678}"
+  TS_LATEST=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  cat > "$file" <<EOF
+{"ts":"$TS_LATEST","source":"delegate","tier":"prose","model":"qwen3.6:35b","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$tid","otel_span_id":"$sid"}
+EOF
+}
+
+# FB-OT1. DELEGATE_OTEL_ENDPOINT unset → no OTLP POST. Existing feedback
+# behaviour is unchanged when the exporter is disabled.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  bash "$SCRIPT" hit "verbatim used" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT1: endpoint unset → exits 0"
+otel_count=$(grep -c '^args' "$invocations" 2>/dev/null) || otel_count=0
+assert_eq 0 "$otel_count" "FB-OT1: endpoint unset → zero OTel POSTs"
+# Feedback row still written (the exporter is opt-in, the JSONL is not).
+fb_count=$(grep -c '"source":"feedback"' "$tmp/m.jsonl")
+assert_eq 1 "$fb_count" "FB-OT1: feedback row still written when exporter disabled"
+rm -rf "$tmp"
+
+# FB-OT2. DELEGATE_OTEL_ENDPOINT set → exactly one OTLP POST. Payload has the
+# feedback-specific shape: new trace_id, new span_id, kind=1 (INTERNAL),
+# `links` array pointing at the parent, the four feedback.* attributes.
+tmp=$(mktemp -d)
+PARENT_TID="aaaa1111bbbb2222cccc3333dddd4444"
+PARENT_SID="feedface12345678"
+seed_metrics_with_otel "$tmp/m.jsonl" "$PARENT_TID" "$PARENT_SID"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" hit "verbatim used" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT2: endpoint set → exits 0"
+otel_count=$(grep -c '^args' "$invocations" 2>/dev/null) || otel_count=0
+assert_eq 1 "$otel_count" "FB-OT2: endpoint set → exactly one OTLP POST"
+otel_body=$(cat "$otel_sniff")
+# JSON validity.
+if echo "$otel_body" | jq -e . >/dev/null 2>&1; then
+  echo "  PASS  FB-OT2: body parses as JSON"
+  pass=$((pass+1))
+else
+  echo "  FAIL  FB-OT2: body is not valid JSON"
+  fail=$((fail+1))
+fi
+# Span name format per docs/otel-schema.md.
+assert_contains '"feedback qwen3.6:35b"' "$otel_body" "FB-OT2: span name includes parent model"
+# Span kind 1 = INTERNAL.
+assert_contains '"kind":1' "$otel_body" "FB-OT2: span kind=1 (INTERNAL)"
+# Feedback-specific attributes (per docs/otel-schema.md).
+assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT2: delegate.feedback.verdict attribute"
+assert_contains '"hit"' "$otel_body" "FB-OT2: verdict value is 'hit'"
+assert_contains '"delegate.feedback.reason"' "$otel_body" "FB-OT2: delegate.feedback.reason attribute"
+assert_contains '"verbatim used"' "$otel_body" "FB-OT2: reason value preserved"
+assert_contains '"delegate.feedback.parent_trace_id"' "$otel_body" "FB-OT2: parent_trace_id attribute"
+assert_contains "\"$PARENT_TID\"" "$otel_body" "FB-OT2: parent_trace_id value matches delegate row"
+assert_contains '"delegate.feedback.parent_span_id"' "$otel_body" "FB-OT2: parent_span_id attribute"
+assert_contains "\"$PARENT_SID\"" "$otel_body" "FB-OT2: parent_span_id value matches delegate row"
+# links array points at the parent (the canonical OTel mechanism).
+assert_contains '"links":[' "$otel_body" "FB-OT2: links array present"
+links_trace=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].links[0].traceId')
+links_span=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].links[0].spanId')
+assert_eq "$PARENT_TID" "$links_trace" "FB-OT2: links[0].traceId == parent trace_id"
+assert_eq "$PARENT_SID" "$links_span" "FB-OT2: links[0].spanId == parent span_id"
+# This span has its OWN trace/span ID (new trace per the ADR).
+own_trace=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].traceId')
+own_span=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].spanId')
+if [[ "$own_trace" != "$PARENT_TID" ]]; then
+  echo "  PASS  FB-OT2: feedback trace_id differs from parent (new-trace pattern)"
+  pass=$((pass+1))
+else
+  echo "  FAIL  FB-OT2: feedback trace_id is the parent's (should be new)"
+  fail=$((fail+1))
+fi
+if [[ "$own_span" != "$PARENT_SID" ]]; then
+  echo "  PASS  FB-OT2: feedback span_id differs from parent"
+  pass=$((pass+1))
+else
+  echo "  FAIL  FB-OT2: feedback span_id is the parent's (should be new)"
+  fail=$((fail+1))
+fi
+# Privacy: no prompt/output text attributes.
+case "$otel_body" in
+  *'gen_ai.prompt'*|*'gen_ai.completion'*|*'delegate.prompt_text'*|*'delegate.output_text'*)
+    echo "  FAIL  FB-OT2: body must not contain content-bearing attributes"
+    fail=$((fail+1));;
+  *) echo "  PASS  FB-OT2: body has no content-bearing attributes"; pass=$((pass+1));;
+esac
+# Feedback row still written.
+fb_count=$(grep -c '"source":"feedback"' "$tmp/m.jsonl")
+assert_eq 1 "$fb_count" "FB-OT2: feedback row still written alongside the OTLP POST"
+rm -rf "$tmp"
+
+# FB-OT3. miss verdict + reason → verdict attribute is 'miss', reason
+# preserved.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" miss "had to rewrite the bullets" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT3: miss verdict → exits 0"
+otel_body=$(cat "$otel_sniff")
+assert_contains '"miss"' "$otel_body" "FB-OT3: verdict value is 'miss'"
+assert_contains '"had to rewrite the bullets"' "$otel_body" "FB-OT3: reason preserved"
+rm -rf "$tmp"
+
+# FB-OT4. miss verdict with NO reason → no delegate.feedback.reason attribute
+# (the schema omits the attribute entirely rather than emitting an empty
+# string).
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" miss 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT4: miss verdict no-reason → exits 0"
+otel_body=$(cat "$otel_sniff")
+case "$otel_body" in
+  *'delegate.feedback.reason'*)
+    echo "  FAIL  FB-OT4: reason attribute should be absent when no reason supplied"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT4: reason attribute absent when no reason supplied"
+    pass=$((pass+1));;
+esac
+# verdict attribute still present.
+assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT4: verdict attribute still present"
+rm -rf "$tmp"
+
+# FB-OT5. OTLP failure (curl exit 22) does NOT change exit status. The
+# feedback JSONL row was already appended before the OTel emission runs,
+# so the user's verdict is durable even if the collector is down.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "fail"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" hit "ok" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT5: OTel HTTP error → delegate-feedback.sh STILL exits 0"
+fb_count=$(grep -c '"source":"feedback"' "$tmp/m.jsonl")
+assert_eq 1 "$fb_count" "FB-OT5: feedback row still written when OTLP fails"
+rm -rf "$tmp"
+
+# FB-OT6. DELEGATE_OTEL_TIMEOUT flows into curl's --max-time argv.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_TIMEOUT=1 \
+  bash "$SCRIPT" hit "ok" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT6: timeout override → exits 0"
+otel_args_line=$(grep '^args' "$invocations" | head -1)
+assert_contains "--max-time 1" "$otel_args_line" "FB-OT6: --max-time 1 in curl argv"
+rm -rf "$tmp"
+
+# FB-OT7. DELEGATE_OTEL_HEADERS produces one -H flag per header.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_HEADERS="Authorization: Bearer x, X-Tenant: y" \
+  bash "$SCRIPT" hit "ok" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT7: headers → exits 0"
+otel_args_line=$(grep '^args' "$invocations" | head -1)
+assert_contains "Authorization: Bearer x" "$otel_args_line" "FB-OT7: first header in argv"
+assert_contains "X-Tenant: y" "$otel_args_line" "FB-OT7: second header in argv"
+rm -rf "$tmp"
+
+# FB-OT8. Parent row WITHOUT otel_trace_id (pre-exporter row) → feedback
+# span still emits, but without `links` and with empty parent_trace_id.
+# Track E #157 backfills these later.
+tmp=$(mktemp -d)
+TS_PRE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$TS_PRE","source":"delegate","tier":"prose","model":"qwen3.6:35b","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
+EOF
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" hit "ok" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT8: pre-exporter row → exits 0"
+otel_count=$(grep -c '^args' "$invocations" 2>/dev/null) || otel_count=0
+assert_eq 1 "$otel_count" "FB-OT8: OTel POST happens even without parent IDs"
+otel_body=$(cat "$otel_sniff")
+# The span doesn't have a links array (the parent IDs are empty).
+case "$otel_body" in
+  *'"links":['*)
+    echo "  FAIL  FB-OT8: links array should be absent when parent IDs unknown"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  FB-OT8: links array absent when parent IDs unknown"
+    pass=$((pass+1));;
+esac
+# verdict attribute still present so the dashboard counts the verdict.
+assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT8: verdict attribute still emitted"
+rm -rf "$tmp"
+
+# FB-OT9. --ts pinning + OTel: when --ts pins a specific delegate row, its
+# trace/span IDs are used for the link (not the most-recent row's IDs).
+tmp=$(mktemp -d)
+T_OLD=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-200))')
+T_RECENT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+OLD_TID="1111111111111111aaaaaaaaaaaaaaaa"
+OLD_SID="1111111111111111"
+RECENT_TID="2222222222222222bbbbbbbbbbbbbbbb"
+RECENT_SID="2222222222222222"
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$T_OLD","source":"delegate","tier":"prose","model":"qwen3.6:35b","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$OLD_TID","otel_span_id":"$OLD_SID"}
+{"ts":"$T_RECENT","source":"delegate","tier":"prose","model":"qwen3.6:35b","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$RECENT_TID","otel_span_id":"$RECENT_SID"}
+EOF
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" --ts "$T_OLD" hit "verbatim" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT9: --ts pinned + OTel → exits 0"
+otel_body=$(cat "$otel_sniff")
+linked_trace=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].links[0].traceId')
+assert_eq "$OLD_TID" "$linked_trace" "FB-OT9: links use the --ts pinned row's trace_id, not the most-recent row's"
+rm -rf "$tmp"
+
+# FB-OT10. DELEGATE_OTEL_HEADERS url-decodes header values per the OTel SDK
+# convention so a header value carrying a literal comma (encoded as %2C)
+# survives the outer comma-split intact. Mirrors OT12 in test-delegate.sh
+# for the feedback exporter path; the self-review correctness gap caught
+# during PR #182 review covered BOTH scripts.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_HEADERS="Cookie: a%3D1%2C%20b%3D2, X-Tenant: y" \
+  bash "$SCRIPT" hit "ok" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT10: url-encoded comma in header → exits 0"
+otel_args_line=$(grep '^args' "$invocations" | head -1)
+assert_contains "Cookie: a=1, b=2" "$otel_args_line" "FB-OT10: header value's literal comma round-trips after url-decode"
+assert_contains "X-Tenant: y" "$otel_args_line" "FB-OT10: second header still parsed after comma-bearing first header"
+# Three -H flags total: Content-Type + Cookie + X-Tenant. Four would mean
+# the Cookie header got fragmented on the literal `,` — the regression
+# this test guards against.
+h_count=$(echo "$otel_args_line" | grep -oE '\-H ' | wc -l | tr -d ' ')
+assert_eq 3 "$h_count" "FB-OT10: exactly three -H flags (Content-Type + Cookie + X-Tenant) — not four"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

@@ -27,7 +27,40 @@
 #                                         tokens, stopwords removed) at which
 #                                         two MISS reasons are considered
 #                                         similar (default 0.4).
-# Exit:   0 OK, 1 file/event missing or stale, 2 usage error.
+#   DELEGATE_OTEL_ENDPOINT                Phase 11 Track A (#134). When set,
+#                                         POST a feedback-as-linked-span to
+#                                         this OTLP/HTTP traces URL after the
+#                                         feedback JSONL row is written. The
+#                                         feedback span is a NEW trace whose
+#                                         `links` array points back to the
+#                                         parent delegation's trace/span IDs
+#                                         (per ADR 0007). Off by default.
+#                                         The POST is SYNCHRONOUS — a hung
+#                                         collector adds up to
+#                                         DELEGATE_OTEL_TIMEOUT seconds of
+#                                         user-visible latency per feedback
+#                                         call. Set DELEGATE_OTEL_VERBOSE=1
+#                                         to diagnose, or unset the endpoint
+#                                         to disable.
+#   DELEGATE_OTEL_TIMEOUT                 default 5. curl --max-time on the
+#                                         OTLP POST so a hung collector
+#                                         cannot block the script.
+#   DELEGATE_OTEL_VERBOSE                 when =1, log exporter failures to
+#                                         stderr. Default silent. Use this
+#                                         to diagnose suspected exporter
+#                                         failures (timeouts, auth, DNS).
+#   DELEGATE_OTEL_HEADERS                 optional. Comma-separated
+#                                         Header: value pairs for collector
+#                                         auth (Grafana Cloud, Langfuse).
+#                                         Per OTel SDK convention, values
+#                                         containing commas (or any
+#                                         reserved char) MUST be url-
+#                                         encoded — the script url-decodes
+#                                         each value before emitting -H
+#                                         flags so the on-wire header is
+#                                         the literal original.
+# Exit:   0 OK, 1 file/event missing or stale, 2 usage error. OTLP-export
+#         failures NEVER change the exit status — telemetry is non-fatal.
 
 set -uo pipefail
 
@@ -96,6 +129,169 @@ iso_to_epoch() {
   ' "$1"
 }
 
+# Generate a random hex string of $1 hex chars. Used for the feedback span's
+# own trace_id (32 hex / 128 bits) and span_id (16 hex / 64 bits). Mirrors
+# the helper in delegate.sh so the two scripts share a wire-format-compatible
+# ID generator (no SDK dep, no shared library — bash 3.2 portability rules).
+otel_gen_id() {
+  local nhex="$1"
+  perl -e '
+    my $n = int(shift @ARGV);
+    my $bytes = int(($n + 1) / 2);
+    open(my $fh, "<", "/dev/urandom") or die "urandom: $!";
+    binmode $fh;
+    my $buf;
+    read($fh, $buf, $bytes) == $bytes or die "short read";
+    close $fh;
+    print substr(unpack("H*", $buf), 0, $n);
+  ' "$nhex"
+}
+
+# emit_otel_feedback_span <fb_ts> <verdict> <reason> <parent_trace_id>
+#   <parent_span_id> <parent_model>
+#
+# Emit a feedback-as-linked-span per ADR 0007: NEW trace, NEW span, with
+# `links: [{traceId, spanId}]` pointing at the parent delegation when the
+# parent IDs are known. Belt-and-braces, the parent IDs are duplicated as
+# plain string attributes (delegate.feedback.parent_trace_id /
+# delegate.feedback.parent_span_id) for backends that don't render `links`
+# well. The span is short by design — 1 ms end-time bump per the schema
+# doc — because it is a marker event, not a unit of work.
+#
+# Failures are intentionally swallowed: OTLP-export errors NEVER change
+# delegate-feedback.sh's exit status. The JSONL feedback row has already
+# been written by the time this function runs, so the user's verdict is
+# always durable on disk.
+emit_otel_feedback_span() {
+  [[ -z "${DELEGATE_OTEL_ENDPOINT:-}" ]] && return 0
+  local fb_ts="$1" verdict="$2" reason="$3" parent_trace_id="$4"
+  local parent_span_id="$5" parent_model="$6"
+
+  # Generate this span's own identifiers. Per ADR 0007, the feedback is in a
+  # new trace because the parent trace has already been flushed by the time
+  # the feedback arrives (often minutes or hours later).
+  local trace_id span_id
+  trace_id=$(otel_gen_id 32) || return 0
+  span_id=$(otel_gen_id 16) || return 0
+
+  # Convert the feedback row's ISO ts to nanoseconds and derive end_ns
+  # (start + 1 ms) in the same perl invocation so the OTLP export costs
+  # one process instead of two. The 1 ms bump is intentional — zero-
+  # duration spans are rejected by some collectors. The arithmetic
+  # assumes 64-bit perl integers (every modern macOS and Linux build is
+  # 64-bit; on a 32-bit perl build, $Config{ivsize}=4, perl would
+  # silently switch to floating-point for values above 2^31 and lose the
+  # last few digits of ns precision — accepted edge case, the in-
+  # practice impact is negligible).
+  local start_ns end_ns
+  read -r start_ns end_ns <<< "$(perl -MTime::Local=timegm -e '
+    my $ts = shift @ARGV;
+    if ($ts =~ /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/) {
+      my $s = timegm($6, $5, $4, $3, $2-1, $1) * 1_000_000_000;
+      printf "%d %d\n", $s, $s + 1_000_000;
+    } else { exit 1; }
+  ' "$fb_ts" 2>/dev/null)"
+  [[ -z "$start_ns" || -z "$end_ns" ]] && return 0
+
+  # SPAN_KIND_INTERNAL = 1 per OTLP proto. Span status OK (code 1) always —
+  # the feedback span carries the verdict in an attribute, the span's own
+  # status reflects whether the marker event happened, which it did.
+  local span_kind=1 status_code=1
+
+  # Build the span. The `links` array is populated only when the parent IDs
+  # are known; for rows that pre-date the exporter (no otel_trace_id in the
+  # JSONL), the span is emitted without a link but with the parent_trace_id
+  # attribute left empty — Track E #157 backfills these later.
+  local payload
+  payload=$(jq -nc \
+    --arg trace_id "$trace_id" --arg span_id "$span_id" \
+    --arg parent_trace_id "$parent_trace_id" --arg parent_span_id "$parent_span_id" \
+    --arg model "$parent_model" --arg verdict "$verdict" --arg reason "$reason" \
+    --arg start_ns "$start_ns" --arg end_ns "$end_ns" \
+    --argjson span_kind "$span_kind" --argjson status_code "$status_code" \
+    '{
+      resourceSpans: [{
+        resource: {
+          attributes: [
+            {key: "service.name", value: {stringValue: "delegate-to-ollama"}}
+          ]
+        },
+        scopeSpans: [{
+          scope: {name: "delegate-to-ollama", version: "1.0"},
+          spans: [(
+            {
+              traceId: $trace_id,
+              spanId: $span_id,
+              name: ("feedback " + (if $model != "" then $model else "(unknown)" end)),
+              kind: $span_kind,
+              startTimeUnixNano: $start_ns,
+              endTimeUnixNano: $end_ns,
+              attributes: ([
+                {key: "delegate.feedback.verdict", value: {stringValue: $verdict}},
+                {key: "delegate.feedback.parent_trace_id", value: {stringValue: $parent_trace_id}},
+                {key: "delegate.feedback.parent_span_id", value: {stringValue: $parent_span_id}}
+              ] + (if $reason != "" then [{key: "delegate.feedback.reason", value: {stringValue: $reason}}] else [] end)),
+              status: {code: $status_code}
+            }
+            + (if $parent_trace_id != "" and $parent_span_id != "" then
+                {links: [{traceId: $parent_trace_id, spanId: $parent_span_id}]}
+              else {} end)
+          )]
+        }]
+      }]
+    }')
+
+  # Headers: split DELEGATE_OTEL_HEADERS on `,` and add each as a -H flag.
+  # Per OTel SDK convention, header values containing commas (or any
+  # reserved char) are url-encoded by the caller and decoded by the
+  # script before the -H emission, so values like `Cookie: a=1, b=2` (sent
+  # as `a%3D1%2C%20b%3D2`) reach the collector intact instead of being
+  # fragmented into malformed flags. Decoding uses core perl only — no
+  # URI::Escape dependency — so the change works on stripped CI images.
+  # Header NAMES are not decoded; RFC 7230 forbids reserved characters in
+  # field names so any encoding there would be a caller bug worth letting
+  # curl surface.
+  local timeout="${DELEGATE_OTEL_TIMEOUT:-5}"
+  local -a header_args=()
+  if [[ -n "${DELEGATE_OTEL_HEADERS:-}" ]]; then
+    local IFS=','
+    local hdr
+    for hdr in $DELEGATE_OTEL_HEADERS; do
+      hdr="${hdr#"${hdr%%[![:space:]]*}"}"
+      hdr="${hdr%"${hdr##*[![:space:]]}"}"
+      [[ -z "$hdr" ]] && continue
+      if [[ "$hdr" == *":"* ]]; then
+        local hname="${hdr%%:*}"
+        local hvalue="${hdr#*:}"
+        hvalue="${hvalue# }"
+        hvalue=$(printf '%s' "$hvalue" | perl -pe 's/%([0-9A-Fa-f]{2})/chr(hex($1))/ge')
+        header_args+=("-H" "${hname}: ${hvalue}")
+      else
+        header_args+=("-H" "$hdr")
+      fi
+    done
+  fi
+
+  if [[ "${DELEGATE_OTEL_VERBOSE:-}" == "1" ]]; then
+    local curl_err
+    curl_err=$(printf '%s' "$payload" | \
+      curl -sS --fail --max-time "$timeout" \
+        -X POST "${DELEGATE_OTEL_ENDPOINT}" \
+        -H 'Content-Type: application/json' \
+        "${header_args[@]+"${header_args[@]}"}" \
+        -d @- 2>&1 >/dev/null) || \
+        echo "delegate-feedback: OTLP export failed: ${curl_err}" >&2
+  else
+    printf '%s' "$payload" | \
+      curl -sS --fail --max-time "$timeout" \
+        -X POST "${DELEGATE_OTEL_ENDPOINT}" \
+        -H 'Content-Type: application/json' \
+        "${header_args[@]+"${header_args[@]}"}" \
+        -d @- >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
 if [[ -n "$override_ts" ]]; then
   # Validate that the override matches an actual delegate row. Without
   # this check, a typoed --ts would silently attach to a non-existent
@@ -108,6 +304,14 @@ if [[ -n "$override_ts" ]]; then
     exit 1
   fi
   ref_ts="$override_ts"
+  # Capture model + trace/span IDs from the pinned delegate row so the OTel
+  # feedback span (Phase 11 Track A) can name the parent. Empty when the
+  # row pre-dates the exporter (Track E #157 backfills these later).
+  parent_meta=$(jq -r --arg ts "$override_ts" \
+    'select((.source // "delegate") == "delegate" and .ts == $ts)
+     | [(.otel_trace_id // ""), (.otel_span_id // ""), (.model // "")]
+     | @tsv' \
+    "$metrics_file" | head -n 1)
 else
   # Find the most recent delegate event ts. Stream the JSONL through jq
   # (no `-s` slurp) and pipe the matching ts column through `tail -n 1`.
@@ -118,6 +322,16 @@ else
     echo "no recent delegate event found in $metrics_file" >&2
     exit 1
   fi
+  # Look up the matched delegate row's trace/span IDs and model for the OTel
+  # feedback-as-linked-span (Phase 11 Track A). Rows that pre-date the
+  # exporter return empty strings; the OTel emission code path treats empty
+  # parent IDs as "no link" and still emits the feedback span (Track E #157
+  # backfills the parent IDs later, at which point links become available).
+  parent_meta=$(jq -r --arg ts "$ref_ts" \
+    'select((.source // "delegate") == "delegate" and .ts == $ts)
+     | [(.otel_trace_id // ""), (.otel_span_id // ""), (.model // "")]
+     | @tsv' \
+    "$metrics_file" | tail -n 1)
   # Stale-window check: refuse to silently attach to a row that almost
   # certainly isn't the delegation the caller meant. The 5-minute default
   # bounds "I just delegated" without forcing tight clock discipline; set
@@ -153,6 +367,20 @@ else
 fi
 
 verdict_word=$([[ "$kept" == "true" ]] && echo "HIT" || echo "MISS")
+
+# Emit OTel feedback-as-linked-span (Phase 11 Track A #134). The split
+# variables come from the parent_meta TSV captured during the ref_ts lookup
+# above. Empty fields are tolerated — emit_otel_feedback_span omits link
+# attributes when the parent IDs are unknown (row pre-dates the exporter).
+parent_trace_id=""
+parent_span_id=""
+parent_model=""
+if [[ -n "${parent_meta:-}" ]]; then
+  IFS=$'\t' read -r parent_trace_id parent_span_id parent_model <<< "$parent_meta"
+fi
+verdict_lower=$([[ "$kept" == "true" ]] && echo "hit" || echo "miss")
+emit_otel_feedback_span "$ts" "$verdict_lower" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model"
+
 echo "$verdict_word recorded against delegate ts=$ref_ts${reason:+ ($reason)}"
 
 # Trigger-on-MISS nudge — when a MISS is recorded and the reason has token

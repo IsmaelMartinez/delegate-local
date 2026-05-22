@@ -96,10 +96,51 @@
 #                                           #   requires max_tokens. Raise
 #                                           #   for long-context tier or
 #                                           #   verbose models.
+#   DELEGATE_OTEL_ENDPOINT=<url>            # Phase 11 Track A (#134). When
+#                                           #   set, POST one OTLP/HTTP span
+#                                           #   per invocation to this URL
+#                                           #   (e.g. https://otlp.example
+#                                           #   /v1/traces) after the metrics
+#                                           #   row is written. Off when
+#                                           #   unset — zero overhead. The
+#                                           #   POST is SYNCHRONOUS: a hung
+#                                           #   collector adds up to
+#                                           #   DELEGATE_OTEL_TIMEOUT seconds
+#                                           #   of user-visible latency per
+#                                           #   call. If delegations feel
+#                                           #   sluggish, set DELEGATE_OTEL
+#                                           #   _VERBOSE=1 to see export
+#                                           #   failures or unset the
+#                                           #   endpoint to disable.
+#   DELEGATE_OTEL_TIMEOUT=<s>               # default 5. curl --max-time on
+#                                           #   the OTLP POST so a hung
+#                                           #   collector cannot block the
+#                                           #   caller's pipeline.
+#   DELEGATE_OTEL_VERBOSE=1                 # log exporter failures to stderr.
+#                                           #   Default silent — a misconfigured
+#                                           #   endpoint must not spam the
+#                                           #   caller's tool output. Use this
+#                                           #   to diagnose suspected exporter
+#                                           #   failures (timeouts, auth, DNS).
+#   DELEGATE_OTEL_HEADERS=<H: v,H: v>       # optional. Comma-separated
+#                                           #   Header: value pairs (matches
+#                                           #   OpenTelemetry SDK convention).
+#                                           #   Used for collector auth on
+#                                           #   Grafana Cloud, Langfuse, etc.
+#                                           #   Per OTel SDK convention, header
+#                                           #   values containing commas (or
+#                                           #   any reserved char) MUST be
+#                                           #   url-encoded — the script
+#                                           #   url-decodes each value before
+#                                           #   emitting -H flags so the on-
+#                                           #   wire header is the literal
+#                                           #   original (e.g. `a%2Cb` →
+#                                           #   `a,b`).
 #
 # Output:  model response on stdout (no ANSI; HTTP body is plain text)
 # Errors:  pick-model failures and HTTP errors propagate as non-zero exit.
-#          A metrics line is still appended with exit_status set.
+#          A metrics line is still appended with exit_status set. OTLP-export
+#          failures NEVER change exit status — telemetry is non-fatal.
 
 set -uo pipefail
 
@@ -194,7 +235,7 @@ compute_tokens_local() {
 
 log_metric() {
   [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" == "1" ]] && return 0
-  local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}"
+  local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}"
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$ochars")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -211,6 +252,13 @@ log_metric() {
   # contention shows up in metrics instead of being hidden inside the
   # generation phase. The two new fields always sum to duration_ms within
   # rounding.
+  # otel_trace_id / otel_span_id (#134) carry the trace and span identifiers
+  # the OTLP exporter generates so delegate-feedback.sh can join its later
+  # feedback-as-linked-span back to the parent delegation without a second
+  # lookup. They are always written when the exporter generated them (we
+  # generate them unconditionally — the cost is two perl invocations — so
+  # historical backfill (Track E #157) and the feedback-span linkage both
+  # have a stable identifier even when the exporter endpoint is unset).
   # jq builds the line so any quote, backslash, or newline in $model or
   # $recipe_name (recipe names are filename-safe today but model names come
   # from `ollama list` parsing and are not under our control) escapes
@@ -219,24 +267,217 @@ log_metric() {
     jq -nc \
       --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" \
       --arg model "$model" --arg recipe "$recipe_name" \
+      --arg trace_id "$trace_id" --arg span_id "$span_id" \
       --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
       --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
       --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
-      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, recipe:$recipe, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}' \
+      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, recipe:$recipe, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
+       + (if $trace_id != "" then {otel_trace_id:$trace_id} else {} end)
+       + (if $span_id != "" then {otel_span_id:$span_id} else {} end)' \
       >> "$metrics_file" 2>/dev/null || true
   else
     jq -nc \
       --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" --arg model "$model" \
+      --arg trace_id "$trace_id" --arg span_id "$span_id" \
       --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
       --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
       --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
-      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}' \
+      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
+       + (if $trace_id != "" then {otel_trace_id:$trace_id} else {} end)
+       + (if $span_id != "" then {otel_span_id:$span_id} else {} end)' \
       >> "$metrics_file" 2>/dev/null || true
   fi
 }
 
+# Generate a random hex string of $1 hex chars (so $1*4 bits of entropy).
+# Used for OTel trace IDs (32 hex = 128 bits) and span IDs (16 hex = 64 bits).
+# Perl rather than openssl because openssl is not a hard dep on the project
+# baseline (some CI images strip it); perl is already required by every other
+# timing helper here. /dev/urandom + unpack is bash 3.2-safe.
+otel_gen_id() {
+  local nhex="$1"
+  perl -e '
+    my $n = int(shift @ARGV);
+    my $bytes = int(($n + 1) / 2);
+    open(my $fh, "<", "/dev/urandom") or die "urandom: $!";
+    binmode $fh;
+    my $buf;
+    read($fh, $buf, $bytes) == $bytes or die "short read";
+    close $fh;
+    print substr(unpack("H*", $buf), 0, $n);
+  ' "$nhex"
+}
+
+# emit_otel_span <start_ms> <duration_ms> <status> <trace_id> <span_id>
+#   <model> <backend> <tier> <recipe_name> <pchars> <cchars> <ochars>
+#   <qwait_ms> <gen_ms> <tokens_avoided>
+#
+# Translate a delegate row into an OTLP/HTTP JSON payload matching ADR 0007
+# (schema in docs/otel-schema.md) and POST it to $DELEGATE_OTEL_ENDPOINT.
+# Failures are intentionally swallowed — telemetry must never change the
+# caller's exit status or pollute its stdout. When DELEGATE_OTEL_VERBOSE=1
+# the failure reason goes to stderr; default is silent so a misconfigured
+# endpoint doesn't spam every delegation.
+emit_otel_span() {
+  [[ -z "${DELEGATE_OTEL_ENDPOINT:-}" ]] && return 0
+  local start_ms="$1" dur_ms="$2" status="$3" trace_id="$4" span_id="$5"
+  local model="$6" backend="$7" tier="$8" recipe_name="$9" pchars="${10}"
+  local cchars="${11}" ochars="${12}" qwait_ms="${13}" gen_ms="${14}"
+  local tokens_avoided="${15}"
+
+  # Compute nanosecond timestamps. start_ms is the high-resolution
+  # millisecond epoch captured at script start (Time::HiRes), so ns = ms *
+  # 1e6 and end_ns = start_ns + dur_ms * 1e6. Bash arithmetic is signed
+  # long on every platform this script runs on (macOS bash 3.2 + Linux), so
+  # the values fit comfortably below 2^63 for any timestamp in this
+  # millennium. Strings (not numbers) are emitted to jq below because the
+  # OTLP/JSON spec encodes int64 fields as JSON strings (proto3 JSON
+  # mapping); doing the math here keeps it out of the perl process and
+  # avoids the second-precision truncation the ts_iso path used.
+  local start_ns end_ns
+  start_ns="${start_ms}000000"
+  end_ns="$(( start_ms + dur_ms ))000000"
+
+  # Span kind 3 = SPAN_KIND_CLIENT (OTel proto enum). Status code 1 = OK,
+  # 2 = ERROR per OTLP proto. Mapping per docs/otel-schema.md.
+  local span_kind=3 status_code=1
+  (( status != 0 )) && status_code=2
+
+  # Build attributes per the schema in docs/otel-schema.md. The OTLP/HTTP
+  # JSON encoding wraps each value in a typed envelope ({stringValue},
+  # {intValue}, {doubleValue}); jq handles the structure directly. Per the
+  # OTLP/JSON spec, AnyValue.int_value is an int64 field that MUST be
+  # encoded as a JSON string (proto3 JSON mapping) — so each int attribute
+  # is passed via --arg (string), not --argjson (raw number). The span
+  # kind and status code are int32 enums and stay JSON numbers (--argjson).
+  # delegate.recipe is only emitted when --recipe was used (the schema
+  # explicitly forbids the attribute with an empty string).
+  local payload
+  payload=$(jq -nc \
+    --arg trace_id "$trace_id" --arg span_id "$span_id" \
+    --arg model "$model" --arg backend "$backend" --arg tier "$tier" \
+    --arg recipe "$recipe_name" \
+    --arg start_ns "$start_ns" --arg end_ns "$end_ns" \
+    --argjson span_kind "$span_kind" --argjson status_code "$status_code" \
+    --arg pchars "$pchars" --arg cchars "$cchars" --arg ochars "$ochars" \
+    --arg dur_ms "$dur_ms" --arg qwait_ms "$qwait_ms" --arg gen_ms "$gen_ms" \
+    --arg exit_status "$status" --arg tokens_avoided "$tokens_avoided" \
+    '{
+      resourceSpans: [{
+        resource: {
+          attributes: [
+            {key: "service.name", value: {stringValue: "delegate-to-ollama"}}
+          ]
+        },
+        scopeSpans: [{
+          scope: {name: "delegate-to-ollama", version: "1.0"},
+          spans: [(
+            {
+              traceId: $trace_id,
+              spanId: $span_id,
+              name: ("chat " + $model),
+              kind: $span_kind,
+              startTimeUnixNano: $start_ns,
+              endTimeUnixNano: $end_ns,
+              attributes: ([
+                {key: "gen_ai.operation.name", value: {stringValue: "chat"}},
+                {key: "gen_ai.provider.name", value: {stringValue: $backend}},
+                {key: "gen_ai.request.model", value: {stringValue: $model}},
+                {key: "gen_ai.request.temperature", value: {doubleValue: 0}},
+                {key: "delegate.tier", value: {stringValue: $tier}},
+                {key: "delegate.prompt_chars", value: {intValue: $pchars}},
+                {key: "delegate.context_chars", value: {intValue: $cchars}},
+                {key: "delegate.output_chars", value: {intValue: $ochars}},
+                {key: "delegate.queue_wait_ms", value: {intValue: $qwait_ms}},
+                {key: "delegate.generation_ms", value: {intValue: $gen_ms}},
+                {key: "delegate.estimated_tokens_avoided", value: {intValue: $tokens_avoided}},
+                {key: "delegate.exit_status", value: {intValue: $exit_status}}
+              ] + (if $recipe != "" then [{key: "delegate.recipe", value: {stringValue: $recipe}}] else [] end)),
+              status: {code: $status_code}
+            }
+          )]
+        }]
+      }]
+    }')
+
+  # Build the curl command. DELEGATE_OTEL_HEADERS is a comma-separated list
+  # of `Header: value` pairs matching the OpenTelemetry SDK convention. The
+  # split is on `,`, which means a header value that legitimately contains
+  # a comma (e.g. `Cookie: a=1, b=2`) would otherwise fragment into two
+  # malformed `-H` flags. The OTel SDK convention is that callers url-
+  # encode reserved characters in values; we honour that by url-decoding
+  # each value (the part after the first `:`) before emitting the -H flag,
+  # so the on-wire header is the literal original. The header name itself
+  # is not decoded — RFC 7230 forbids reserved characters in field names,
+  # so encoding there would be a caller bug we don't paper over. The trim
+  # of surrounding whitespace lets `Auth: x, Tenant: y` work without
+  # surprises. Decoding uses core perl only (no URI::Escape dep) so the
+  # change works on stripped CI images.
+  local timeout="${DELEGATE_OTEL_TIMEOUT:-5}"
+  local -a header_args=()
+  if [[ -n "${DELEGATE_OTEL_HEADERS:-}" ]]; then
+    local IFS=','
+    local hdr
+    for hdr in $DELEGATE_OTEL_HEADERS; do
+      # Trim surrounding whitespace.
+      hdr="${hdr#"${hdr%%[![:space:]]*}"}"
+      hdr="${hdr%"${hdr##*[![:space:]]}"}"
+      [[ -z "$hdr" ]] && continue
+      # url-decode the value portion (everything after the first colon).
+      # Header lines without a colon are emitted as-is so curl can surface
+      # the malformed-input error rather than the script silently
+      # swallowing it. Empty values decode to empty; that's a valid header
+      # per RFC 7230 and curl handles it.
+      if [[ "$hdr" == *":"* ]]; then
+        local hname="${hdr%%:*}"
+        local hvalue="${hdr#*:}"
+        # Strip one leading space if present (OTel SDK convention is
+        # `Name: value`; the space is cosmetic and not part of the value).
+        hvalue="${hvalue# }"
+        hvalue=$(printf '%s' "$hvalue" | perl -pe 's/%([0-9A-Fa-f]{2})/chr(hex($1))/ge')
+        header_args+=("-H" "${hname}: ${hvalue}")
+      else
+        header_args+=("-H" "$hdr")
+      fi
+    done
+  fi
+
+  # POST. -sS keeps stderr clean unless we explicitly want errors. The
+  # entire pipeline is guarded by `|| true` and any stderr is conditionally
+  # redirected so a non-2xx response, timeout, or DNS failure cannot
+  # propagate. The verbose path lets users debugging a misconfigured
+  # endpoint see what's happening.
+  local curl_err
+  if [[ "${DELEGATE_OTEL_VERBOSE:-}" == "1" ]]; then
+    curl_err=$(printf '%s' "$payload" | \
+      curl -sS --fail --max-time "$timeout" \
+        -X POST "${DELEGATE_OTEL_ENDPOINT}" \
+        -H 'Content-Type: application/json' \
+        "${header_args[@]+"${header_args[@]}"}" \
+        -d @- 2>&1 >/dev/null) || \
+        echo "delegate: OTLP export failed: ${curl_err}" >&2
+  else
+    printf '%s' "$payload" | \
+      curl -sS --fail --max-time "$timeout" \
+        -X POST "${DELEGATE_OTEL_ENDPOINT}" \
+        -H 'Content-Type: application/json' \
+        "${header_args[@]+"${header_args[@]}"}" \
+        -d @- >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
 ts_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 start_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
+
+# Generate trace_id (32 hex / 128 bits) and span_id (16 hex / 64 bits) for
+# the OTel exporter and for the delegate-feedback.sh linkage. We generate
+# them unconditionally — the cost is two short perl invocations — so the
+# JSONL row always carries the identifiers even when the exporter is
+# disabled. That means historical backfill (Track E #157) and feedback-
+# as-linked-span (delegate-feedback.sh) both work without a second pass.
+otel_trace_id=$(otel_gen_id 32)
+otel_span_id=$(otel_gen_id 16)
 
 # Read stdin into a variable if anything is piped in (needed early so {{stdin}}
 # substitution can run before the model resolution, and so the recipe-driven
@@ -487,7 +728,12 @@ fi
 
 if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
   end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
-  log_metric "$ts_start" "$tier" "(none)" "$(( ${#recipe_template} + ${#prompt} ))" "${#context}" 0 $((end_epoch_ms - start_epoch_ms)) 1 "$recipe"
+  fail_dur_ms=$((end_epoch_ms - start_epoch_ms))
+  fail_pchars=$(( ${#recipe_template} + ${#prompt} ))
+  fail_cchars=${#context}
+  fail_toks=$(compute_tokens_local "$fail_pchars" "$fail_cchars" 0)
+  log_metric "$ts_start" "$tier" "(none)" "$fail_pchars" "$fail_cchars" 0 "$fail_dur_ms" 1 "$recipe" 0 "$fail_dur_ms" "$otel_trace_id" "$otel_span_id"
+  emit_otel_span "$start_epoch_ms" "$fail_dur_ms" 1 "$otel_trace_id" "$otel_span_id" "(none)" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks"
   echo "delegate: pick-model failed for tier '$tier'" >&2
   exit 1
 fi
@@ -519,7 +765,12 @@ if [[ -n "$recipe" ]] \
   canary_status=$?
   if (( canary_status != 0 )); then
     end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
-    log_metric "$ts_start" "$tier" "$model" "$(( ${#recipe_template} + ${#prompt} ))" "${#context}" 0 $((end_epoch_ms - start_epoch_ms)) 3 "$recipe"
+    canary_dur_ms=$((end_epoch_ms - start_epoch_ms))
+    canary_pchars=$(( ${#recipe_template} + ${#prompt} ))
+    canary_cchars=${#context}
+    canary_toks=$(compute_tokens_local "$canary_pchars" "$canary_cchars" 0)
+    log_metric "$ts_start" "$tier" "$model" "$canary_pchars" "$canary_cchars" 0 "$canary_dur_ms" 3 "$recipe" 0 "$canary_dur_ms" "$otel_trace_id" "$otel_span_id"
+    emit_otel_span "$start_epoch_ms" "$canary_dur_ms" 3 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$canary_pchars" "$canary_cchars" 0 0 "$canary_dur_ms" "$canary_toks"
     # Distinguish curl exit codes so the recovery advice points at the
     # right knob. 28 is the --max-time-fired timeout (the case the canary
     # was designed for); 7 is "can't reach host" (daemon down or wrong
@@ -669,7 +920,8 @@ context_chars=${#context}
 output_chars=${#output}
 tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$output_chars")
 
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms"
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id"
+emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to
 # read after every delegation, so it can tell the user which model handled

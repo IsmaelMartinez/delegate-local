@@ -2273,6 +2273,557 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
+# ---------------------------------------------------------------------------
+# Phase 11 Track A — OTLP/HTTP exporter (#134)
+# When DELEGATE_OTEL_ENDPOINT is set, delegate.sh POSTs one OTLP span per
+# invocation to that endpoint after the metrics row is written. The exporter
+# is off by default; failures never change exit status; payload shape matches
+# ADR 0007 / docs/otel-schema.md.
+# ---------------------------------------------------------------------------
+
+# Curl mock that distinguishes three call types by URL:
+#   - probe (/v1/models)      — exits 7 to fall back to ollama
+#   - dispatch (/api/generate or /v1/chat/completions) — returns canned body
+#   - otel    (/v1/traces)    — captures body to $sniff_otel, returns 200
+# Each invocation appends one "ARGS: ..." line to $invocations_log and one
+# "OTEL_BODY: ..." line per OTel call so the test can count call types and
+# assert OTel payload shape. Forced-failure on the OTel POST is controlled
+# by $otel_behaviour: "ok" returns 0, "fail" returns 22.
+make_mock_curl_otel_aware() {
+  local dir="$1" dispatch_sniff="${2:-/dev/null}" otel_sniff="${3:-/dev/null}" invocations_log="${4:-/dev/null}" otel_behaviour="${5:-ok}"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+url=""
+for arg in "\$@"; do
+  case "\$arg" in
+    http*|https*) url="\$arg" ;;
+  esac
+done
+case "\$url" in
+  *"/v1/models"*) exit 7 ;;
+  *"/v1/traces"*)
+    # OTel POST — log argv, capture body, return per behaviour.
+    echo "otel \$*" >> "${invocations_log}"
+    cat > "${otel_sniff}"
+    case "${otel_behaviour}" in
+      fail)    exit 22 ;;
+      timeout) exit 28 ;;
+      refused) exit 7 ;;
+      *)       exit 0 ;;
+    esac
+    ;;
+esac
+# Dispatch path: honour -o body_file -w "%{time_starttransfer}" (#170).
+echo "dispatch \$*" >> "${invocations_log}"
+out_file=""
+write_out=""
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+cat > "${dispatch_sniff}"
+body='{"response":"mock-model-output: ok\\n"}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
+EOF
+  chmod +x "$dir/curl"
+}
+
+# OT1. DELEGATE_OTEL_ENDPOINT unset → no OTLP POST attempted. The mock's
+# OTel path would never fire because the dispatch is the only http call
+# made (besides the auto-probe which exits 7).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT1: endpoint unset → exits 0"
+otel_count=$(grep -c '^otel' "$invocations" 2>/dev/null) || otel_count=0
+assert_eq 0 "$otel_count" "OT1: endpoint unset → zero OTel POSTs"
+# Metrics row still written (the exporter is opt-in, the JSONL is not).
+assert_eq 1 "$(grep -c '^' "$metrics")" "OT1: metrics row still written when exporter disabled"
+rm -rf "$tmp" "$metrics"
+
+# OT2. DELEGATE_OTEL_ENDPOINT set → exactly one OTLP POST per delegate call.
+# Asserts payload contains the spec's required gen_ai.* and delegate.*
+# attributes; the resourceSpans → scopeSpans → spans envelope; the span
+# kind/status; the traceId/spanId fields.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT2: endpoint set → exits 0"
+otel_count=$(grep -c '^otel' "$invocations" 2>/dev/null) || otel_count=0
+assert_eq 1 "$otel_count" "OT2: endpoint set → exactly one OTLP POST"
+# Shape assertions on the OTel body.
+otel_body=$(cat "$otel_sniff")
+assert_contains '"resourceSpans"' "$otel_body" "OT2: body has resourceSpans envelope"
+assert_contains '"scopeSpans"' "$otel_body" "OT2: body has scopeSpans"
+assert_contains '"spans"' "$otel_body" "OT2: body has spans array"
+assert_contains '"traceId":' "$otel_body" "OT2: body has traceId"
+assert_contains '"spanId":' "$otel_body" "OT2: body has spanId"
+# Validate it's actual JSON.
+if echo "$otel_body" | jq -e . >/dev/null 2>&1; then
+  echo "  PASS  OT2: body parses as JSON"
+  pass=$((pass+1))
+else
+  echo "  FAIL  OT2: body is not valid JSON"
+  fail=$((fail+1))
+fi
+# Required gen_ai.* attributes per docs/otel-schema.md.
+assert_contains '"gen_ai.operation.name"' "$otel_body" "OT2: gen_ai.operation.name"
+assert_contains '"chat"' "$otel_body" "OT2: operation.name value is 'chat'"
+assert_contains '"gen_ai.provider.name"' "$otel_body" "OT2: gen_ai.provider.name"
+assert_contains '"ollama"' "$otel_body" "OT2: provider.name value is 'ollama'"
+assert_contains '"gen_ai.request.model"' "$otel_body" "OT2: gen_ai.request.model"
+assert_contains '"qwen3.6:35b-a3b"' "$otel_body" "OT2: request.model is the resolved model"
+assert_contains '"gen_ai.request.temperature"' "$otel_body" "OT2: gen_ai.request.temperature"
+# Required delegate.* attributes per docs/otel-schema.md.
+assert_contains '"delegate.tier"' "$otel_body" "OT2: delegate.tier"
+assert_contains '"prose"' "$otel_body" "OT2: delegate.tier value is 'prose'"
+assert_contains '"delegate.prompt_chars"' "$otel_body" "OT2: delegate.prompt_chars"
+assert_contains '"delegate.context_chars"' "$otel_body" "OT2: delegate.context_chars"
+assert_contains '"delegate.output_chars"' "$otel_body" "OT2: delegate.output_chars"
+assert_contains '"delegate.queue_wait_ms"' "$otel_body" "OT2: delegate.queue_wait_ms"
+assert_contains '"delegate.generation_ms"' "$otel_body" "OT2: delegate.generation_ms"
+assert_contains '"delegate.estimated_tokens_avoided"' "$otel_body" "OT2: delegate.estimated_tokens_avoided"
+assert_contains '"delegate.exit_status"' "$otel_body" "OT2: delegate.exit_status"
+# Span kind 3 = CLIENT per the schema doc.
+assert_contains '"kind":3' "$otel_body" "OT2: span kind=3 (CLIENT)"
+# Status code 1 = OK on a successful call.
+assert_contains '"status":{"code":1}' "$otel_body" "OT2: span status OK on exit 0"
+# resource.service.name attribute.
+assert_contains '"service.name"' "$otel_body" "OT2: resource has service.name"
+assert_contains '"delegate-to-ollama"' "$otel_body" "OT2: resource service.name value"
+# Metrics row carries the same trace/span IDs (cross-correlation enabler).
+metric_line=$(cat "$metrics")
+assert_contains '"otel_trace_id":"' "$metric_line" "OT2: metrics row has otel_trace_id"
+assert_contains '"otel_span_id":"' "$metric_line" "OT2: metrics row has otel_span_id"
+# Same IDs in the OTel body and the metrics row (the linkage is the whole point).
+trace_in_metrics=$(echo "$metric_line" | jq -r '.otel_trace_id')
+trace_in_otel=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].traceId')
+assert_eq "$trace_in_metrics" "$trace_in_otel" "OT2: trace_id matches between metrics row and OTel body"
+span_in_metrics=$(echo "$metric_line" | jq -r '.otel_span_id')
+span_in_otel=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].spanId')
+assert_eq "$span_in_metrics" "$span_in_otel" "OT2: span_id matches between metrics row and OTel body"
+# trace_id is 32 hex chars, span_id is 16 hex chars.
+if [[ "$trace_in_otel" =~ ^[0-9a-f]{32}$ ]]; then
+  echo "  PASS  OT2: trace_id is 32 hex chars"
+  pass=$((pass+1))
+else
+  echo "  FAIL  OT2: trace_id is not 32 hex chars (got '$trace_in_otel')"
+  fail=$((fail+1))
+fi
+if [[ "$span_in_otel" =~ ^[0-9a-f]{16}$ ]]; then
+  echo "  PASS  OT2: span_id is 16 hex chars"
+  pass=$((pass+1))
+else
+  echo "  FAIL  OT2: span_id is not 16 hex chars (got '$span_in_otel')"
+  fail=$((fail+1))
+fi
+# Privacy assertion: ADR 0007's no-content rule means no prompt/output text
+# attributes are present, regardless of env-var settings.
+case "$otel_body" in
+  *'gen_ai.prompt'*)
+    echo "  FAIL  OT2: body must not contain gen_ai.prompt (no-content rule)"
+    fail=$((fail+1));;
+  *) echo "  PASS  OT2: body has no gen_ai.prompt"; pass=$((pass+1));;
+esac
+case "$otel_body" in
+  *'gen_ai.completion'*)
+    echo "  FAIL  OT2: body must not contain gen_ai.completion (no-content rule)"
+    fail=$((fail+1));;
+  *) echo "  PASS  OT2: body has no gen_ai.completion"; pass=$((pass+1));;
+esac
+case "$otel_body" in
+  *'delegate.prompt_text'*|*'delegate.output_text'*|*'delegate.context_text'*)
+    echo "  FAIL  OT2: body must not contain content-bearing attributes"
+    fail=$((fail+1));;
+  *) echo "  PASS  OT2: body has no content-bearing delegate.* attributes"; pass=$((pass+1));;
+esac
+rm -rf "$tmp" "$metrics"
+
+# OT3. OTel POST failure (curl exit non-zero) does NOT change delegate.sh's
+# exit status. The original prose response still lands on stdout. The
+# metrics JSONL row still gets written.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "fail"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT3: OTel HTTP error → delegate.sh STILL exits 0"
+assert_contains "mock-model-output: ok" "$out" "OT3: model output still reaches stdout"
+assert_eq 1 "$(grep -c '^' "$metrics")" "OT3: metrics row still written when OTel POST fails"
+# The OTel POST WAS attempted (we want failure to be silent, not skipped).
+otel_count=$(grep -c '^otel' "$invocations" 2>/dev/null) || otel_count=0
+assert_eq 1 "$otel_count" "OT3: OTel POST was attempted (one curl call to the endpoint)"
+rm -rf "$tmp" "$metrics"
+
+# OT4. OTel timeout (curl exit 28 from --max-time) also doesn't change exit
+# status. Same invariant as OT3 but exercises a different failure mode.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "timeout"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT4: OTel timeout → delegate.sh STILL exits 0"
+assert_contains "mock-model-output: ok" "$out" "OT4: model output still reaches stdout"
+rm -rf "$tmp" "$metrics"
+
+# OT5. DELEGATE_OTEL_TIMEOUT=1 flows into curl's --max-time argv. Capture
+# the OTel curl invocation's args and assert --max-time 1.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_TIMEOUT=1 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT5: timeout override → exits 0"
+otel_args_line=$(grep '^otel' "$invocations" | head -1)
+assert_contains "--max-time 1" "$otel_args_line" "OT5: --max-time 1 in OTel curl argv"
+rm -rf "$tmp" "$metrics"
+
+# OT6. DELEGATE_OTEL_HEADERS splits on comma and emits one -H per header.
+# This is the auth-pass-through path Grafana Cloud / Langfuse both use.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_HEADERS="Authorization: Bearer x, X-Tenant: y" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT6: headers → exits 0"
+otel_args_line=$(grep '^otel' "$invocations" | head -1)
+assert_contains "Authorization: Bearer x" "$otel_args_line" "OT6: first header in argv"
+assert_contains "X-Tenant: y" "$otel_args_line" "OT6: second header in argv"
+# Each header is preceded by -H so they're treated as separate flags.
+auth_h=$(echo "$otel_args_line" | grep -o "\-H Authorization" | head -1)
+tenant_h=$(echo "$otel_args_line" | grep -o "\-H X-Tenant" | head -1)
+assert_eq "-H Authorization" "$auth_h" "OT6: -H prefix on Authorization header"
+assert_eq "-H X-Tenant" "$tenant_h" "OT6: -H prefix on X-Tenant header"
+rm -rf "$tmp" "$metrics"
+
+# OT7. --recipe call emits delegate.recipe as a span attribute. Bare prose-
+# tier calls (OT2 above) explicitly omit the attribute per the schema.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+# probe-aware mock that ALSO recognises the OTel endpoint. Compose by
+# layering: dispatch/probe path same as make_mock_curl_probe_aware (with
+# canary=ok), then add the /v1/traces branch.
+cat > "$tmp/curl" <<EOF
+#!/usr/bin/env bash
+url=""
+for arg in "\$@"; do
+  case "\$arg" in
+    http*|https*) url="\$arg" ;;
+  esac
+done
+case "\$url" in
+  *"/v1/models"*) exit 7 ;;
+  *"/v1/traces"*)
+    echo "otel \$*" >> "${invocations}"
+    cat > "${otel_sniff}"
+    exit 0
+    ;;
+esac
+out_file=""
+write_out=""
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+payload=\$(cat)
+if echo "\$payload" | grep -qE '"num_predict":1|"max_tokens":1[,}]'; then
+  echo "canary" >> "${invocations}"
+  printf '%s' '{"response":"ok"}'
+  exit 0
+fi
+echo "dispatch" >> "${invocations}"
+echo "\$payload" > "${sniff}"
+body='{"response":"mock-model-output: ok\\n"}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
+EOF
+chmod +x "$tmp/curl"
+prompts="$tmp/prompts"
+mkdir -p "$prompts"
+cat > "$prompts/otel-recipe.md" <<'RECIPE'
+# otel-recipe
+
+## When to use
+test
+
+## Prompt template
+
+```
+RECIPE BODY
+```
+
+## Calibration notes
+n/a
+RECIPE
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" --recipe otel-recipe prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT7: recipe call → exits 0"
+otel_body=$(cat "$otel_sniff")
+assert_contains '"delegate.recipe"' "$otel_body" "OT7: recipe call → delegate.recipe attribute present"
+assert_contains '"otel-recipe"' "$otel_body" "OT7: delegate.recipe value matches recipe name"
+# Metrics row carries the recipe too.
+assert_contains '"recipe":"otel-recipe"' "$(cat "$metrics")" "OT7: metrics row carries recipe field"
+rm -rf "$tmp" "$metrics"
+
+# OT8. Pick-model failure → exit 1 still happens, OTel span is emitted with
+# status ERROR (code 2). The metrics row also has exit_status:1.
+tmp=$(mktemp -d)
+cat > "$tmp/ollama" <<'EOF'
+#!/usr/bin/env bash
+[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
+unrelated:model  zz 5 GB   1 day ago"
+EOF
+chmod +x "$tmp/ollama"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 1 "$EC" "OT8: pick-model failure → exit 1"
+otel_count=$(grep -c '^otel' "$invocations" 2>/dev/null) || otel_count=0
+assert_eq 1 "$otel_count" "OT8: OTel span emitted even on pick-model failure"
+otel_body=$(cat "$otel_sniff")
+assert_contains '"status":{"code":2}' "$otel_body" "OT8: span status ERROR (code 2) on non-zero exit"
+assert_contains '"delegate.exit_status"' "$otel_body" "OT8: exit_status attribute present on failure span"
+rm -rf "$tmp" "$metrics"
+
+# OT9. DELEGATE_OTEL_VERBOSE=1 + failing endpoint → stderr names the failure.
+# Default (verbose unset) is silent — caller doesn't see the error.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "fail"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_VERBOSE=1 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "OT9: verbose + failure → exits 0 (failure non-fatal)"
+stderr_content=$(cat "$stderr_file")
+assert_contains "OTLP export failed" "$stderr_content" "OT9: verbose logs failure to stderr"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# OT10. Default (verbose unset) + failing endpoint → no OTLP-error mention
+# on stderr. Pin the silent-by-default behaviour so a future change doesn't
+# accidentally spam the caller's tool output.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "fail"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "OT10: default verbose + failure → exits 0"
+stderr_content=$(cat "$stderr_file")
+case "$stderr_content" in
+  *"OTLP export failed"*)
+    echo "  FAIL  OT10: default-verbose should NOT log OTLP-error to stderr"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT10: default-verbose is silent on OTLP failure"
+    pass=$((pass+1));;
+esac
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# OT11. Always-emit metrics IDs: trace_id / span_id are written to the
+# JSONL row even when DELEGATE_OTEL_ENDPOINT is unset. This is what lets
+# delegate-feedback.sh emit a linked feedback span even on rows where the
+# original delegation didn't export (e.g. exporter was turned on between
+# the delegation and the verdict).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT11: endpoint unset → exits 0"
+line=$(cat "$metrics")
+assert_contains '"otel_trace_id":"' "$line" "OT11: metrics row carries otel_trace_id even with exporter unset"
+assert_contains '"otel_span_id":"' "$line" "OT11: metrics row carries otel_span_id even with exporter unset"
+rm -rf "$tmp" "$metrics"
+
+# OT12. DELEGATE_OTEL_HEADERS url-decodes header values per the OTel SDK
+# convention, so a header value carrying a literal comma (encoded as %2C)
+# round-trips to the on-wire header without fragmenting the comma-split.
+# This is the self-review correctness gap caught during PR #182 review:
+# unencoded `Cookie: a=1, b=2` would fragment into two malformed -H flags;
+# the documented fix is for callers to url-encode the value (`a%3D1%2C%20b%3D2`)
+# and rely on the script to decode it before emitting -H.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+EC=0
+# `a%3D1%2C%20b%3D2` decodes to `a=1, b=2` — a literal comma in the value.
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_OTEL_HEADERS="Cookie: a%3D1%2C%20b%3D2, X-Tenant: y" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT12: url-encoded comma in header → exits 0"
+otel_args_line=$(grep '^otel' "$invocations" | head -1)
+# The decoded value must contain the literal `,` and `=` — proving the
+# perl url-decode ran and the comma was NOT mistaken for a header
+# separator. The X-Tenant header following the comma in the env var
+# must also still be present, proving the script's split is on the
+# OUTER comma (between header pairs) and the inner %2C was preserved.
+assert_contains "Cookie: a=1, b=2" "$otel_args_line" "OT12: header value's literal comma round-trips after url-decode"
+assert_contains "X-Tenant: y" "$otel_args_line" "OT12: second header still parsed after comma-bearing first header"
+# Three -H flags total: Content-Type (always present), Cookie, X-Tenant.
+# A fragmented Cookie header would push the count to four; the literal
+# `,` proves the value was NOT split.
+h_count=$(echo "$otel_args_line" | grep -oE '\-H ' | wc -l | tr -d ' ')
+assert_eq 3 "$h_count" "OT12: exactly three -H flags (Content-Type + Cookie + X-Tenant) — not four (would mean Cookie fragmented)"
+rm -rf "$tmp" "$metrics"
+
+# OT13. OTLP/JSON int64 attribute values are encoded as JSON strings per the
+# proto3 JSON mapping (AnyValue.int_value is int64). The exporter passes
+# integer attribute values via jq --arg (not --argjson) so they emerge as
+# quoted strings in the wire payload. status.code and span.kind are int32
+# enums and stay JSON numbers.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+dispatch_sniff="$tmp/dispatch.json"
+otel_sniff="$tmp/otel.json"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "OT13: int64-as-string export → exits 0"
+otel_body=$(cat "$otel_sniff")
+# delegate.exit_status is always 0 here (successful call); the OTLP int64
+# encoding must wrap that 0 in quotes. Same for the other int attributes.
+# Use jq to inspect the actual JSON type rather than substring-matching
+# the wire bytes (which would conflate `"0"` and `0` if the surrounding
+# tokens overlap). pchars/cchars/ochars are non-zero for the prompt
+# `"Summarise"` and the canned mock response.
+exit_status_type=$(echo "$otel_body" | jq -r '
+  .resourceSpans[0].scopeSpans[0].spans[0].attributes
+  | map(select(.key == "delegate.exit_status"))
+  | .[0].value.intValue | type')
+assert_eq "string" "$exit_status_type" "OT13: delegate.exit_status intValue is JSON string"
+pchars_type=$(echo "$otel_body" | jq -r '
+  .resourceSpans[0].scopeSpans[0].spans[0].attributes
+  | map(select(.key == "delegate.prompt_chars"))
+  | .[0].value.intValue | type')
+assert_eq "string" "$pchars_type" "OT13: delegate.prompt_chars intValue is JSON string"
+tokens_type=$(echo "$otel_body" | jq -r '
+  .resourceSpans[0].scopeSpans[0].spans[0].attributes
+  | map(select(.key == "delegate.estimated_tokens_avoided"))
+  | .[0].value.intValue | type')
+assert_eq "string" "$tokens_type" "OT13: delegate.estimated_tokens_avoided intValue is JSON string"
+# span.kind and status.code stay int32 (JSON numbers) — they're enums
+# in the proto, not int64 fields.
+kind_type=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].kind | type')
+assert_eq "number" "$kind_type" "OT13: span.kind stays a JSON number (int32 enum)"
+status_code_type=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].status.code | type')
+assert_eq "number" "$status_code_type" "OT13: status.code stays a JSON number (int32 enum)"
+# startTimeUnixNano / endTimeUnixNano are fixed64 — also JSON strings.
+start_type=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].startTimeUnixNano | type')
+assert_eq "string" "$start_type" "OT13: startTimeUnixNano is JSON string (fixed64)"
+end_type=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].endTimeUnixNano | type')
+assert_eq "string" "$end_type" "OT13: endTimeUnixNano is JSON string (fixed64)"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
