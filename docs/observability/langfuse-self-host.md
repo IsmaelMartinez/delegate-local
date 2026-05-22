@@ -79,6 +79,10 @@ export DELEGATE_OTEL_HEADERS="Authorization: Basic <base64-encoded-public-key:se
 
 Substitute the base64 string from the auth step. Once exported, the next `delegate.sh` call posts one span per invocation; the matching `delegate-feedback.sh hit|miss` call posts the feedback span, and Langfuse renders it as a [score](https://langfuse.com/docs/scores/overview) attached to the parent trace via the OTLP span `links` field — making the hit/miss verdict a first-class object in the UI rather than a buried attribute.
 
+## Dashboards (committed in `dashboards/langfuse/`)
+
+Langfuse dashboards are session-views configured per-project through the web UI, not file-as-code artefacts the way Grafana ships — there is no portable dashboard JSON to import. The equivalent reproducible-from-scratch artefact is [`dashboards/langfuse/README.md`](../../dashboards/langfuse/README.md), which names the three views (Overview, Calibration, Errors) the Grafana JSON dashboards in `dashboards/grafana/` cover and explains how to recreate each one in Langfuse from saved filters, the Scores view, and a couple of sample public-API SQL queries. Follow the README after the exporter is wired and the first few spans have landed in the project.
+
 ## See also
 
 - [docs/observability/grafana-cloud.md](grafana-cloud.md) — hosted alternative with pre-built GenAI dashboards when on-device storage is not a requirement.

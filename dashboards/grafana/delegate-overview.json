@@ -1,0 +1,201 @@
+{
+  "title": "delegate-to-ollama — Overview",
+  "uid": "delegate-overview",
+  "tags": ["delegate-to-ollama", "genai", "otel"],
+  "schemaVersion": 38,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 0,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "tier",
+        "type": "custom",
+        "label": "delegate.tier",
+        "query": "*,code,prose,reasoning,long-context,vision,embedding,premium-general,reasoning-vision",
+        "current": {"selected": false, "text": "*", "value": "*"},
+        "options": [],
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "backend",
+        "type": "custom",
+        "label": "gen_ai.provider.name",
+        "query": "*,ollama,mlx",
+        "current": {"selected": false, "text": "*", "value": "*"},
+        "options": [],
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Call volume by tier",
+      "description": "Count of delegate.sh spans over time, grouped by delegate.tier. Filter to a single tier via the dashboard variable; the query keys off the resource attribute service.name=\"delegate-to-ollama\" so spans from other GenAI workloads on the same collector do not bleed in.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | rate() by (span.delegate.tier)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "reqps"},
+        "overrides": []
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Call volume by recipe",
+      "description": "Count of delegate.sh spans grouped by delegate.recipe. Bare (no-recipe) calls do not carry the attribute and are excluded — the no-recipe count is visible in the by-tier panel above.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{resource.service.name=\"delegate-to-ollama\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "reqps"},
+        "overrides": []
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Call volume by backend (Ollama vs MLX)",
+      "description": "Count of delegate.sh spans grouped by gen_ai.provider.name. On a single-backend host one series is flat at zero; on the auto-default host the split shows MLX-when-available versus Ollama-fallback ratios.",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | rate() by (span.gen_ai.provider.name)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "reqps"},
+        "overrides": []
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+    },
+    {
+      "id": 4,
+      "type": "histogram",
+      "title": "delegate.queue_wait_ms",
+      "description": "Wall-clock from delegate.sh invoking the backend HTTP endpoint to the first byte returned. Parallel-caller contention surfaces here rather than being hidden in the duration_ms total. A heavy right tail on this histogram with a stable generation_ms histogram means queue pressure.",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(span.delegate.queue_wait_ms)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "ms"},
+        "overrides": []
+      },
+      "options": {"bucketOffset": 0, "combine": false}
+    },
+    {
+      "id": 5,
+      "type": "histogram",
+      "title": "delegate.generation_ms",
+      "description": "First byte to response-complete — the model's own decode time. Slowness here is model-side rather than queue-side. The companion queue_wait_ms histogram on the left isolates the two.",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(span.delegate.generation_ms)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "ms"},
+        "overrides": []
+      },
+      "options": {"bucketOffset": 0, "combine": false}
+    },
+    {
+      "id": 6,
+      "type": "histogram",
+      "title": "gen_ai.client.operation.duration",
+      "description": "End-to-end delegate.sh wall-clock per Phase 11 Track G's planned histogram metric. Until Track G ships the dedicated metric, this panel keys off the span duration intrinsic — equivalent to `queue_wait_ms + generation_ms` since both attributes derive from the same start/end timestamps.",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(duration)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "ms"},
+        "overrides": []
+      },
+      "options": {"bucketOffset": 0, "combine": false}
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Tokens kept local (estimated)",
+      "description": "Sum of delegate.estimated_tokens_avoided across the selected time range. The skill's README headlines this as one of the two core values alongside on-device privacy; this stat is the rollup version of `scripts/metrics-summary.sh`'s `estimated_tokens_avoided` line, surfaced in the observability backend.",
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 24},
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | sum(span.delegate.estimated_tokens_avoided)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}},
+        "overrides": []
+      },
+      "options": {"reduceOptions": {"calcs": ["sum"]}, "textMode": "auto"}
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Delegations in range",
+      "description": "Total count of chat spans from the delegate.sh service in the selected time range. Sanity check that the exporter is wired and emitting.",
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 24},
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | count_over_time()"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "short"},
+        "overrides": []
+      },
+      "options": {"reduceOptions": {"calcs": ["sum"]}, "textMode": "auto"}
+    }
+  ]
+}
