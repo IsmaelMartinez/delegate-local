@@ -59,6 +59,20 @@
 #                                         each value before emitting -H
 #                                         flags so the on-wire header is
 #                                         the literal original.
+#   DELEGATE_OTEL_INCLUDE_CONTENT         Phase 11 Track F (#158). When =1,
+#                                         include the free-text
+#                                         `delegate.feedback.reason`
+#                                         attribute on the feedback span.
+#                                         Default unset = redact: only
+#                                         metadata (verdict, parent IDs)
+#                                         leaves the host. WARNING: the
+#                                         reason field is user-authored
+#                                         free text and may carry PII,
+#                                         API keys, internal URLs, or
+#                                         model output excerpts; only
+#                                         enable this against trusted
+#                                         collectors. See ADR 0007 +
+#                                         docs/otel-schema.md.
 # Exit:   0 OK, 1 file/event missing or stale, 2 usage error. OTLP-export
 #         failures NEVER change the exit status — telemetry is non-fatal.
 
@@ -162,10 +176,16 @@ otel_gen_id() {
 # delegate-feedback.sh's exit status. The JSONL feedback row has already
 # been written by the time this function runs, so the user's verdict is
 # always durable on disk.
+#
+# The `delegate.feedback.reason` content attribute is only emitted when
+# DELEGATE_OTEL_INCLUDE_CONTENT=1. Track F (#158) inverted the default:
+# verdict + parent IDs always travel (they are metadata), but the free-
+# text reason stays on-host unless the operator explicitly opts in.
 emit_otel_feedback_span() {
   [[ -z "${DELEGATE_OTEL_ENDPOINT:-}" ]] && return 0
   local fb_ts="$1" verdict="$2" reason="$3" parent_trace_id="$4"
   local parent_span_id="$5" parent_model="$6"
+  local include_content="${DELEGATE_OTEL_INCLUDE_CONTENT:-0}"
 
   # Generate this span's own identifiers. Per ADR 0007, the feedback is in a
   # new trace because the parent trace has already been flushed by the time
@@ -202,12 +222,19 @@ emit_otel_feedback_span() {
   # are known; for rows that pre-date the exporter (no otel_trace_id in the
   # JSONL), the span is emitted without a link but with the parent_trace_id
   # attribute left empty — Track E #157 backfills these later.
+  #
+  # `delegate.feedback.reason` is content (user-authored free text) and so
+  # is gated on DELEGATE_OTEL_INCLUDE_CONTENT=1. Default is to omit it
+  # entirely — the verdict, parent IDs, and span itself still go through
+  # so dashboards keep counting hits and misses; only the reason text is
+  # held back unless the operator opts in.
   local payload
   payload=$(jq -nc \
     --arg trace_id "$trace_id" --arg span_id "$span_id" \
     --arg parent_trace_id "$parent_trace_id" --arg parent_span_id "$parent_span_id" \
     --arg model "$parent_model" --arg verdict "$verdict" --arg reason "$reason" \
     --arg start_ns "$start_ns" --arg end_ns "$end_ns" \
+    --arg include_content "$include_content" \
     --argjson span_kind "$span_kind" --argjson status_code "$status_code" \
     '{
       resourceSpans: [{
@@ -230,7 +257,7 @@ emit_otel_feedback_span() {
                 {key: "delegate.feedback.verdict", value: {stringValue: $verdict}},
                 {key: "delegate.feedback.parent_trace_id", value: {stringValue: $parent_trace_id}},
                 {key: "delegate.feedback.parent_span_id", value: {stringValue: $parent_span_id}}
-              ] + (if $reason != "" then [{key: "delegate.feedback.reason", value: {stringValue: $reason}}] else [] end)),
+              ] + (if $include_content == "1" and $reason != "" then [{key: "delegate.feedback.reason", value: {stringValue: $reason}}] else [] end)),
               status: {code: $status_code}
             }
             + (if $parent_trace_id != "" and $parent_span_id != "" then

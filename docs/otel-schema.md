@@ -1,6 +1,15 @@
 # OpenTelemetry export schema — attribute reference
 
-Companion to ADR [0007 — OpenTelemetry export schema](adr/0007-otel-schema.md), which records the three decisions this reference encodes (the `gen_ai.*` vs `delegate.*` namespace split, the feedback-as-linked-span pattern, the no-content rule). Treat the ADR as the rationale and this file as the wire-payload contract: Track A's exporter (issue [#134](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/134)) emits exactly the attributes listed below, and Track F's privacy-redaction test (issue #158) asserts no other content-bearing attribute is ever present.
+Companion to ADR [0007 — OpenTelemetry export schema](adr/0007-otel-schema.md), which records the four decisions this reference encodes (the `gen_ai.*` vs `delegate.*` namespace split, the feedback-as-linked-span pattern, the no-content-by-default rule, and the opt-in `DELEGATE_OTEL_INCLUDE_CONTENT` flag). Treat the ADR as the rationale and this file as the wire-payload contract: Track A's exporter (issue [#134](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/134)) emits the metadata attributes below unconditionally, and Track F's privacy-redaction default (issue [#158](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/158)) gates content attributes behind an explicit opt-in.
+
+## Default vs opt-in attributes
+
+The schema splits into two tiers:
+
+- **Metadata** — tier, model, recipe name, char counts, durations, exit status, verdict (`hit`/`miss`), parent IDs. These travel unconditionally so dashboards have the routing signal they need to count hits, misses, latencies, and tokens-avoided. None of these carry arbitrary user text.
+- **Content** — the prompt the model sees, the piped context, the model's output, and the user-authored MISS reason. These are gated behind `DELEGATE_OTEL_INCLUDE_CONTENT=1` and are omitted entirely from the wire payload when the flag is unset.
+
+The default is redact: only metadata leaves the host. Operators who explicitly want content (typically because they are pointing the exporter at a local Phoenix instance, a vetted private backend, or a debugging session) set `DELEGATE_OTEL_INCLUDE_CONTENT=1`. The flag is described in detail in the env-var docstrings inside `scripts/delegate.sh` and `scripts/delegate-feedback.sh`; the warning that content may carry PII / API keys / internal URLs lives there in lock-step with the wire schema.
 
 The source for every attribute is one of:
 
@@ -66,6 +75,10 @@ Notes on each:
 
 Attributes the OTel WG does not cover. The `delegate.*` prefix follows the SemConv guidance that vendors and applications use a custom namespace for fields outside the canonical conventions. Rationale for the namespace boundary lives in ADR 0007.
 
+#### Metadata attributes (unconditional)
+
+These always travel — they are structured routing signal, not arbitrary user text.
+
 | Attribute | Type | Source | Reference | Example |
 |-----------|------|--------|-----------|---------|
 | `delegate.tier` | string | JSONL `tier` | private | `prose` |
@@ -82,10 +95,27 @@ Notes on each:
 
 - `delegate.tier` is the routing tier `pick-model.sh` resolved (`code`, `prose`, `reasoning`, `long-context`, or one of the scaffolded tiers once they go live). Dashboards group by tier to track per-tier hit rate and per-tier tokens-avoided.
 - `delegate.recipe` is present only when the caller used `delegate.sh --recipe NAME`. Bare-prose-tier calls omit it; the exporter SHOULD NOT emit the attribute with an empty string. The `delegate.recipe` attribute is what dashboards group by to track per-recipe hit/miss rates, which is the load-bearing signal for the prompt-library calibration work.
-- `delegate.prompt_chars` / `delegate.context_chars` / `delegate.output_chars` are character counts only. They are NOT a stand-in for the content itself — ADR 0007's no-content rule is strict and Track F's redaction test asserts the rule as a tested invariant. The three counts let dashboards correlate latency and verdict against input/output size without leaking anything sensitive.
+- `delegate.prompt_chars` / `delegate.context_chars` / `delegate.output_chars` are character counts only. They travel unconditionally as the metadata replacement for the content fields — dashboards correlate latency and verdict against input/output size without needing the text itself. The matching `delegate.prompt` / `delegate.context` / `delegate.output` content attributes are gated separately (see below).
 - `delegate.queue_wait_ms` and `delegate.generation_ms` split the JSONL `duration_ms` total per the gotcha #170 telemetry fix: `queue_wait_ms` is the wall-clock from `delegate.sh` invoking the backend HTTP endpoint to the first byte returned (parallel-caller contention surfaces here), and `generation_ms` is first-byte to response-complete (the model's own decode time). The two sum to `duration_ms` within rounding. Dashboards keep both histograms so a slow tail can be attributed to queue pressure versus generation pressure rather than being hidden in a single `duration_ms` blob.
 - `delegate.estimated_tokens_avoided` is the tokens-avoided counter the skill's README headlines as one of the two core values (the other being on-device privacy). It is the central rollup metric for the per-tier and per-recipe panels in Track D's dashboards.
 - `delegate.exit_status` is critical to surface as a filterable attribute because `exit_status:3` rows are the canary-failure case (preflight probe timed out — see the canary mitigation note in CLAUDE.md). Track D's dashboard set includes an exit-status-3 rate panel that filters on this attribute. The span status is independently set to `ERROR` when `exit_status != 0`, so backends that don't easily filter by attribute can still surface failures via the standard mechanism.
+
+#### Content attributes (gated on `DELEGATE_OTEL_INCLUDE_CONTENT=1`)
+
+These carry arbitrary user text and only travel when the operator explicitly opts in. When the flag is unset or `0`, the attributes are omitted from the wire payload entirely — no `<redacted>` sentinel, just absence. The char-count metadata above is the unconditional replacement so dashboards keep working without the leak.
+
+| Attribute | Type | Source | Reference | Example |
+|-----------|------|--------|-----------|---------|
+| `delegate.prompt` | string | `recipe_template` + `prompt` arg (matches `prompt_chars`) | private, gated | `Draft a git commit message from the staged diff …` |
+| `delegate.context` | string | piped stdin (matches `context_chars`) | private, gated | `diff --git a/scripts/delegate.sh …` |
+| `delegate.output` | string | model response (matches `output_chars`) | private, gated | `feat: privacy redaction default for OTel exporter` |
+
+Notes on each:
+
+- `delegate.prompt` is the prompt the model sees — the recipe template (when `--recipe` is used) concatenated with the trailing prompt argument. The char count for this field is `delegate.prompt_chars`.
+- `delegate.context` is the piped stdin content. The char count is `delegate.context_chars`. When `{{stdin}}` is used inside a recipe template, the content is duplicated into `delegate.prompt`'s post-substitution form; the raw stdin is still emitted here for completeness.
+- `delegate.output` is the model's response text (the bytes that landed on stdout for the caller). The char count is `delegate.output_chars`.
+- Why this is opt-in: any of these three may contain PII, API keys, internal URLs, customer data, or anything else that happened to be in the caller's clipboard / repo / shell context. The skill's README and SKILL.md both frame on-device privacy as a primary value; gating these fields keeps the default behaviour consistent with that framing. Operators with a vetted local-only collector (a Phoenix instance, a Langfuse-self-hosted deployment, a dev-only OTLP endpoint behind a firewall) can flip the flag for richer debugging.
 
 ## Feedback span
 
@@ -108,25 +138,36 @@ The feedback span is short by design — it is a marker event, not a unit of wor
 
 ### Feedback-specific attributes
 
+#### Metadata attributes (unconditional)
+
 | Attribute | Type | Source | Reference | Example |
 |-----------|------|--------|-----------|---------|
 | `delegate.feedback.verdict` | string (`hit` or `miss`) | feedback JSONL `kept` (true → `hit`, false → `miss`) | private | `hit` |
-| `delegate.feedback.reason` | string | feedback JSONL `reason` | private | `clean prose, no padding tails, one spelling fix needed (labeled → labelled for UK English)` |
 | `delegate.feedback.parent_trace_id` | string | parent delegation's JSONL `otel_trace_id` | private (fallback for backends that don't render `links` well) | 32 hex chars |
 | `delegate.feedback.parent_span_id` | string | parent delegation's JSONL `otel_span_id` | private (fallback for backends that don't render `links` well) | 16 hex chars |
 
 Notes on each:
 
 - `delegate.feedback.verdict` collapses the JSONL `kept` boolean to a string. The string form makes dashboard group-by clauses readable (`group by delegate.feedback.verdict` reads as `hit` / `miss` rather than `true` / `false`).
-- `delegate.feedback.reason` carries the free-text reason the user typed. The reason field is the input to the miss-reason word cloud and top-N panels in Track D. It is the only free-text content that travels to the collector — and it is content the user explicitly authored as feedback, not content the model produced or the user prompted with, so the no-content rule (which targets prompt/output text) does not apply.
 - `delegate.feedback.parent_trace_id` and `delegate.feedback.parent_span_id` duplicate the `links` array as plain string attributes for backends that do not render `links` well in their default trace view. Backends that handle `links` correctly use the standard mechanism; backends that don't can still filter and join on the attribute. The fallback is intentionally redundant.
+
+#### Content attributes (gated on `DELEGATE_OTEL_INCLUDE_CONTENT=1`)
+
+| Attribute | Type | Source | Reference | Example |
+|-----------|------|--------|-----------|---------|
+| `delegate.feedback.reason` | string | feedback JSONL `reason` | private, gated | `clean prose, no padding tails, one spelling fix needed (labeled → labelled for UK English)` |
+
+Notes on each:
+
+- `delegate.feedback.reason` carries the free-text reason the user typed when recording a MISS (or a HIT, when the caller chose to annotate it). The reason field is the input to the miss-reason word cloud and top-N panels in Track D. It is gated behind `DELEGATE_OTEL_INCLUDE_CONTENT=1` because the field is user-authored free text and historically callers have pasted prompt fragments, model output excerpts, file paths, and customer identifiers into MISS reasons when debugging. When the flag is unset the verdict and parent IDs still travel (the dashboard still counts hits and misses); the reason text stays on-host in the JSONL row.
+- Backwards-compat note: prior to Track F (issue #158, 2026-05-22) the reason was emitted unconditionally. Callers who already export feedback to a trusted collector and want the reason in the dashboard must set `DELEGATE_OTEL_INCLUDE_CONTENT=1` to restore the previous behaviour.
 
 ## What the exporter does NOT emit
 
-Per ADR 0007's no-content rule, the following OTel-defined attributes are NEVER present in the payload, regardless of env-var settings:
+The following OTel-defined attribute names are NEVER present in the payload, regardless of env-var settings, because Phase 11 chose a private namespace for content rather than the WG-defined attributes:
 
-- `gen_ai.prompt` (opt-in in the SemConv; unconditionally rejected here)
-- `gen_ai.completion` (opt-in in the SemConv; unconditionally rejected here)
-- Any `delegate.prompt_text`, `delegate.output_text`, `delegate.context_text`, or similar content-bearing attribute
+- `gen_ai.prompt` (opt-in in the SemConv; not used by this skill — content travels as `delegate.prompt` when enabled)
+- `gen_ai.completion` (opt-in in the SemConv; not used by this skill — content travels as `delegate.output` when enabled)
+- Any `delegate.prompt_text`, `delegate.output_text`, `delegate.context_text` attribute name (deprecated drafts during Track A review; the final names are `delegate.prompt`, `delegate.context`, `delegate.output`)
 
-Track F's redaction test (issue #158) is the tested invariant that backs this rule. It asserts that no attribute key matching these patterns is ever present in the OTLP body for any code path through the exporter. If a future change ever needs to emit content for a specific debugging workflow, the change has to update the test in lock-step, which forces an explicit decision rather than letting content leak in by accident.
+Track F's redaction test (issue #158) is the tested invariant that backs the gated-by-default rule. It asserts that with `DELEGATE_OTEL_INCLUDE_CONTENT` unset, no `delegate.prompt`, `delegate.context`, `delegate.output`, or `delegate.feedback.reason` attribute is present in the OTLP body. With the flag set, those four attributes are present and carry their JSONL-row values verbatim. A future change that wants to add a new content-bearing attribute must extend the same gate in lock-step.
