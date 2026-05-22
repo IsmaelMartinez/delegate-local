@@ -149,6 +149,27 @@ skill_body=$(cat "$REPO/SKILL.md")
 assert_contains "## Recipes" "$skill_body" "SKILL.md has '## Recipes' section"
 assert_contains "prompts/" "$skill_body" "SKILL.md '## Recipes' references prompts/"
 
+# 6. Recipe-specific structural pins. Each entry names the recipe and the
+# named directives that calibration history shows must survive future
+# "simplification" passes — without these pins a refactor can silently drop
+# a guard whose absence cost real session iterations to add.
+summarise_issue_body=$(cat "$PROMPTS_DIR/summarise-issue.md")
+assert_contains "OMIT-EMPTY-SECTION" "$summarise_issue_body" \
+  "summarise-issue.md names OMIT-EMPTY-SECTION rule"
+assert_contains "COMMENT-N-CITATION" "$summarise_issue_body" \
+  "summarise-issue.md names COMMENT-N-CITATION rule"
+# The Anti-hallucination guards section must explicitly enumerate both rules
+# so the calibration provenance for each guard is anchored in the document.
+guards_section=$(awk '
+  /^## Anti-hallucination guards/ { in_section=1; next }
+  /^## / && in_section { in_section=0 }
+  in_section { print }
+' "$PROMPTS_DIR/summarise-issue.md")
+assert_contains "OMIT-EMPTY-SECTION" "$guards_section" \
+  "summarise-issue.md '## Anti-hallucination guards' names OMIT-EMPTY-SECTION"
+assert_contains "COMMENT-N-CITATION" "$guards_section" \
+  "summarise-issue.md '## Anti-hallucination guards' names COMMENT-N-CITATION"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
