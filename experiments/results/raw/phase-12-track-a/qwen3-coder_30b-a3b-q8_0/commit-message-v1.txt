@@ -1,0 +1,56 @@
+MODEL: qwen3-coder:30b-a3b-q8_0
+VARIANT: v1
+RECIPE: commit-message
+DATE: 2026-05-22T07:28:11Z
+REPS: 5
+
+===== T4-commit-message rep 1 =====
+DURATION_SEC: 8
+RUN_STATUS: 0
+OUTPUT:
+feat: delegate.sh recipe loading and placeholder validation
+
+Adds the T4 fixture to the empirical-accuracy framework by introducing a commit-message drafting task that evaluates model outputs against six deterministic structural checks. The new score-t4.sh script applies validation rules derived from past MISS patterns, ensuring outputs conform to conventional-commit format and avoid common prose pitfalls.
+
+The experiments/runner.sh gains a --t4-snapshot DATE flag to enable versioned fixture runs, aligning with the existing T3 snapshotting convention. This allows for reproducible measurements of commit-message quality across different model versions and training states.
+
+===== T4-commit-message rep 2 =====
+DURATION_SEC: 2
+RUN_STATUS: 0
+OUTPUT:
+feat: delegate.sh recipe loading and placeholder validation
+
+Adds the T4 fixture to the empirical-accuracy framework by introducing a commit-message drafting task that evaluates model outputs against six deterministic structural checks. The new score-t4.sh script applies validation rules derived from past MISS patterns, ensuring outputs conform to conventional-commit format and avoid common prose pitfalls.
+
+The experiments/runner.sh gains a --t4-snapshot DATE flag to enable versioned fixture runs, aligning with the existing T3 snapshotting convention. This allows for reproducible measurements of commit-message quality across different model versions and training states.
+
+===== T4-commit-message rep 3 =====
+DURATION_SEC: 3
+RUN_STATUS: 0
+OUTPUT:
+feat: delegate.sh recipe loading and placeholder validation
+
+Adds the T4 fixture to the empirical-accuracy framework by introducing a commit-message drafting task that evaluates model outputs against six deterministic structural checks. The new score-t4.sh script applies validation rules derived from past MISS patterns, ensuring outputs conform to conventional-commit format and avoid common prose pitfalls.
+
+The experiments/runner.sh gains a --t4-snapshot DATE flag to enable versioned fixture runs, aligning with the existing T3 snapshotting convention. This allows for reproducible measurements of commit-message quality across different model versions and training states.
+
+===== T4-commit-message rep 4 =====
+DURATION_SEC: 4
+RUN_STATUS: 0
+OUTPUT:
+feat: delegate.sh recipe loading and placeholder validation
+
+Adds the T4 fixture to the empirical-accuracy framework by introducing a commit-message drafting task that evaluates model outputs against six deterministic structural checks. The new score-t4.sh script applies validation rules derived from past MISS patterns, ensuring outputs conform to conventional-commit format and avoid common prose pitfalls.
+
+The experiments/runner.sh gains a --t4-snapshot DATE flag to enable versioned fixture runs, aligning with the existing T3 snapshotting convention. This allows for reproducible measurements of commit-message quality across different model versions and training states.
+
+===== T4-commit-message rep 5 =====
+DURATION_SEC: 3
+RUN_STATUS: 0
+OUTPUT:
+feat: delegate.sh recipe loading and placeholder validation
+
+Adds the T4 fixture to the empirical-accuracy framework by introducing a commit-message drafting task that evaluates model outputs against six deterministic structural checks. The new score-t4.sh script applies validation rules derived from past MISS patterns, ensuring outputs conform to conventional-commit format and avoid common prose pitfalls.
+
+The experiments/runner.sh gains a --t4-snapshot DATE flag to enable versioned fixture runs, aligning with the existing T3 snapshotting convention. This allows for reproducible measurements of commit-message quality across different model versions and training states.
+
