@@ -24,6 +24,14 @@
 #   The trailing positional <tier> stays required; <prompt> becomes optional
 #   when --recipe is set (the recipe carries the instruction).
 #
+#   Optional frontmatter `inputs:` block (Phase 12 Track B, issue #161) lets
+#   a recipe declare flat `key: type` pairs that get validated pre-flight.
+#   Supported types: integer, string, integer?, string? (the `?` suffix means
+#   optional). Recipes without a frontmatter inputs: block skip the check
+#   (lazy migration). Undeclared --var keys pass through untouched (strict
+#   mode deferred). Type-check failure or a missing required input exits 2
+#   with a clear error before the model is contacted.
+#
 # Env:
 #   DELEGATE_BACKEND=auto|ollama|mlx        # default auto. auto probes
 #                                           #   ${MLX_HOST:-http://localhost:8080}/v1/models
@@ -256,6 +264,135 @@ if [[ -n "$recipe" ]]; then
     echo "delegate: recipe '$recipe' not found at $recipe_file" >&2
     exit 2
   fi
+
+  # Optional frontmatter `inputs:` block (Phase 12 Track B, issue #161).
+  # Extracts flat `key: type` pairs only — no nesting, no anchors, no flow
+  # style — so `awk` parses it without `yq` and the "two bash scripts" rule
+  # holds. Supported types: integer, string, integer?, string? (the `?`
+  # suffix means optional). Anything richer is deferred until needed.
+  # Pre-flight type-validation runs BEFORE placeholder substitution so the
+  # caller gets a clear type error rather than an opaque "missing placeholder"
+  # downstream message. Recipes without a frontmatter block (today's
+  # majority) skip the validation entirely — full back-compat.
+  inputs_block=$(awk '
+    BEGIN { in_fm=0; in_inputs=0 }
+    NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
+    in_fm && /^---[[:space:]]*$/ { exit }
+    in_fm && /^inputs:[[:space:]]*$/ { in_inputs=1; next }
+    in_fm && in_inputs && /^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*[a-zA-Z?]+[[:space:]]*$/ { print; next }
+    in_fm && in_inputs && /^[a-zA-Z_]/ { in_inputs=0 }
+  ' "$recipe_file")
+
+  if [[ -n "$inputs_block" ]]; then
+    # Build parallel arrays: declared_keys[i] / declared_types[i] / declared_optional[i].
+    # Bash 3.2 has no associative arrays, so we use indexed arrays and a
+    # linear scan — recipes have at most a handful of inputs so O(n*m) is
+    # fine. The `?` suffix is parsed off the type into a separate optional
+    # flag so the type-check itself stays a clean enum (integer | string).
+    declared_keys=()
+    declared_types=()
+    declared_optional=()
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      # Trim leading whitespace and split on colon.
+      trimmed="${line#"${line%%[![:space:]]*}"}"
+      ikey="${trimmed%%:*}"
+      itype_raw="${trimmed#*:}"
+      # Trim whitespace around the type token.
+      itype_raw="${itype_raw#"${itype_raw%%[![:space:]]*}"}"
+      itype_raw="${itype_raw%"${itype_raw##*[![:space:]]}"}"
+      iopt=0
+      if [[ "$itype_raw" == *"?" ]]; then
+        iopt=1
+        itype="${itype_raw%?}"
+      else
+        itype="$itype_raw"
+      fi
+      case "$itype" in
+        integer|string) ;;
+        *)
+          echo "delegate: recipe '$recipe' inputs:$ikey declares unsupported type '$itype_raw'" >&2
+          echo "         supported types: integer, string, integer?, string?" >&2
+          exit 2
+          ;;
+      esac
+      declared_keys+=("$ikey")
+      declared_types+=("$itype")
+      declared_optional+=("$iopt")
+    done <<< "$inputs_block"
+
+    # Build a map of provided --var keys (and {{stdin}} when stdin is piped)
+    # so we can both type-check each value and detect missing required inputs.
+    # provided_keys is a newline-delimited list; matching uses grep -Fxq for
+    # an exact-line match so a key like `pr` doesn't accidentally match `pr_number`.
+    provided_keys=""
+    for kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
+      if [[ "$kv" != *"="* ]]; then
+        echo "delegate: --var must be key=value, got '$kv'" >&2
+        exit 2
+      fi
+      pkey="${kv%%=*}"
+      pvalue="${kv#*=}"
+      if [[ -z "$pkey" ]]; then
+        echo "delegate: --var has empty key in '$kv'" >&2
+        exit 2
+      fi
+      # Type-check against the declared inputs (if any). Undeclared --var
+      # keys pass through untouched — lazy migration means most recipes
+      # don't declare types yet, and a strict-mode rejection would break
+      # them. Strict mode is deferred until migration is more complete.
+      idx=0
+      for dk in "${declared_keys[@]}"; do
+        if [[ "$dk" == "$pkey" ]]; then
+          dtype="${declared_types[$idx]}"
+          case "$dtype" in
+            integer)
+              if ! [[ "$pvalue" =~ ^-?[0-9]+$ ]]; then
+                echo "delegate: --var $pkey expected type 'integer', got '$pvalue'" >&2
+                exit 2
+              fi
+              ;;
+            string)
+              # Any value is a valid string. Empty string is permitted so
+              # callers can pass `--var name=` for an intentional blank.
+              :
+              ;;
+          esac
+          break
+        fi
+        idx=$((idx + 1))
+      done
+      provided_keys="${provided_keys}${pkey}"$'\n'
+    done
+
+    # `{{stdin}}` satisfies a declared `stdin: string` input when piped, so
+    # a recipe can require stdin via the typed surface without forcing the
+    # caller to pass it twice (once as --var, once piped).
+    if [[ -n "$context" ]]; then
+      provided_keys="${provided_keys}stdin"$'\n'
+    fi
+
+    # Required-input check: any declared input without the `?` optional
+    # marker MUST be provided. List every missing key in one error so the
+    # caller can fix them in one pass rather than discovering them one at
+    # a time.
+    missing_required=""
+    idx=0
+    for dk in "${declared_keys[@]}"; do
+      if (( declared_optional[idx] == 0 )); then
+        if ! printf '%s' "$provided_keys" | grep -Fxq "$dk"; then
+          missing_required="${missing_required}${dk} "
+        fi
+      fi
+      idx=$((idx + 1))
+    done
+    if [[ -n "${missing_required// /}" ]]; then
+      echo "delegate: recipe '$recipe' missing required inputs: $missing_required" >&2
+      echo "         pass them via --var key=value" >&2
+      exit 2
+    fi
+  fi
+
   # Extract the first ``` fenced code block under the '## Prompt template'
   # heading. awk-based — bash 3 / BSD awk safe. The section-end check
   # `/^## /` is gated on `!in_block` so a markdown heading inside the

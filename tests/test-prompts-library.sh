@@ -52,11 +52,46 @@ for recipe in "$PROMPTS_DIR"/*.md; do
   recipe_count=$((recipe_count + 1))
   body=$(cat "$recipe")
   # Title must match filename: prompts/foo.md → "# foo" as the first heading.
+  # Optional YAML frontmatter (Phase 12 Track B, #161) is stripped first so a
+  # recipe declaring an inputs: block still passes the title-prefix check.
   expected_title="# ${base%.md}"
-  if [[ "$body" == "$expected_title"* ]]; then
+  body_after_fm="$body"
+  if [[ "$body" == "---"$'\n'* ]]; then
+    body_after_fm=$(awk 'BEGIN{c=0} /^---[[:space:]]*$/{c++; if (c==2) {f=1; next}} f' "$recipe")
+  fi
+  if [[ "$body_after_fm" == "$expected_title"* ]]; then
     echo "  PASS  $base: title matches filename"; pass=$((pass+1))
   else
-    echo "  FAIL  $base: expected first line '$expected_title'"; fail=$((fail+1))
+    echo "  FAIL  $base: expected first line '$expected_title' after optional frontmatter"; fail=$((fail+1))
+  fi
+  # If the recipe has frontmatter with an `inputs:` block, validate it
+  # against the flat `key: type` constraint Convention 2 (Phase 12 Track B,
+  # #161) imposes. Nested keys, anchors, or flow style are rejected by the
+  # convention so `awk` in delegate.sh stays small. Supported types:
+  # integer | string | integer? | string?.
+  if [[ "$body" == "---"$'\n'* ]]; then
+    inputs_lines=$(awk '
+      BEGIN { in_fm=0; in_inputs=0 }
+      NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
+      in_fm && /^---[[:space:]]*$/ { exit }
+      in_fm && /^inputs:[[:space:]]*$/ { in_inputs=1; next }
+      in_fm && in_inputs && /^[[:space:]]/ { print }
+      in_fm && in_inputs && /^[a-zA-Z_]/ { in_inputs=0 }
+    ' "$recipe")
+    if [[ -n "$inputs_lines" ]]; then
+      bad_inputs=0
+      while IFS= read -r iline; do
+        [[ -z "$iline" ]] && continue
+        # Each non-empty inputs line must match the flat `  key: type[?]` shape.
+        if ! [[ "$iline" =~ ^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*(integer|string)\??[[:space:]]*$ ]]; then
+          bad_inputs=1
+          echo "  FAIL  $base: inputs: line violates flat key:type convention: '$iline'"; fail=$((fail+1))
+        fi
+      done <<< "$inputs_lines"
+      if (( bad_inputs == 0 )); then
+        echo "  PASS  $base: inputs: block uses only supported flat key:type pairs"; pass=$((pass+1))
+      fi
+    fi
   fi
   for section in "${required_sections[@]}"; do
     assert_contains "$section" "$body" "$base: contains '$section'"
