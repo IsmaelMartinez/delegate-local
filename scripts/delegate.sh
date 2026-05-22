@@ -434,7 +434,7 @@ emit_otel_span() {
                   {key: "delegate.prompt", value: {stringValue: $prompt_text}},
                   {key: "delegate.context", value: {stringValue: $context_text}},
                   {key: "delegate.output", value: {stringValue: $output_text}}
-                ] else [] end)),
+                ] | map(select(.value.stringValue != "")) else [] end)),
               status: {code: $status_code}
             }
           )]

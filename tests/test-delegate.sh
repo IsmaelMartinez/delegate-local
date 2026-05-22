@@ -3022,11 +3022,15 @@ case "$otel_body" in
 esac
 rm -rf "$tmp" "$metrics"
 
-# OT18. Pick-model failure path with content-include opt-in: even on the
-# failure span, prompt content is emitted (the prompt was real, the model
-# resolution failed). Output is empty (no model response was generated)
-# but the attribute should still be present with an empty string so the
-# schema stays consistent across success and failure paths.
+# OT18. Pick-model failure path with content-include opt-in: prompt
+# content is emitted (the prompt was real, the model resolution failed).
+# Empty-string content attributes are OMITTED entirely, not emitted as
+# `stringValue: ""` — gemini-code-assist review on PR #188 flagged this
+# inconsistency: `delegate.recipe` is omitted when empty, so the content
+# attributes should follow the same convention. Consumers can rely on
+# attribute presence as a meaningful signal that content exists. On the
+# failure path, output_text is "" so `delegate.output` is absent; the
+# success-path test (OT15) covers the non-empty case.
 tmp=$(mktemp -d)
 cat > "$tmp/ollama" <<'EOF'
 #!/usr/bin/env bash
@@ -3047,15 +3051,30 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "FailurePathSentinel" </dev/null 2>&1) || EC=$?
 assert_eq 1 "$EC" "OT18: pick-model failure with opt-in → exit 1"
 otel_body=$(cat "$otel_sniff")
-# Content attributes still emitted on failure span (consistent shape).
+# delegate.prompt still emitted (the prompt text is non-empty on failure span).
 assert_contains '"delegate.prompt"' "$otel_body" "OT18: delegate.prompt present on failure span with opt-in"
 assert_contains 'FailurePathSentinel' "$otel_body" "OT18: prompt content matches input on failure span"
-# Output is empty (no model response).
-output_val=$(echo "$otel_body" | jq -r '
-  .resourceSpans[0].scopeSpans[0].spans[0].attributes
-  | map(select(.key == "delegate.output"))
-  | .[0].value.stringValue')
-assert_eq "" "$output_val" "OT18: delegate.output is empty string on failure span"
+# delegate.output should be ABSENT because output_text is empty on the
+# failure path (no model response was generated). Empty-string content
+# attributes are omitted per the gemini consistency fix.
+case "$otel_body" in
+  *'"delegate.output"'*)
+    echo "  FAIL  OT18: delegate.output MUST be absent when output is empty (gemini consistency fix)"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT18: delegate.output omitted when output_text is empty (consistent with delegate.recipe)"
+    pass=$((pass+1));;
+esac
+# delegate.context is also empty on this failure-path call (no stdin), so
+# it should also be absent.
+case "$otel_body" in
+  *'"delegate.context"'*)
+    echo "  FAIL  OT18: delegate.context MUST be absent when context is empty"
+    fail=$((fail+1));;
+  *)
+    echo "  PASS  OT18: delegate.context omitted when context_text is empty"
+    pass=$((pass+1));;
+esac
 rm -rf "$tmp" "$metrics"
 
 echo
