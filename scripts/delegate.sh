@@ -221,9 +221,18 @@ start_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 
 # Read stdin into a variable if anything is piped in (needed early so {{stdin}}
 # substitution can run before the model resolution, and so the recipe-driven
-# error paths still surface with a clean metric line).
+# error paths still surface with a clean metric line). The probe is
+# `-p /dev/stdin || -s /dev/stdin` rather than the more obvious `! -t 0`
+# because the latter returns true for unix sockets and FIFOs that hold no
+# data, and `cat` on such an FD then blocks forever waiting for EOF that
+# never arrives — the failure mode hit by Agent SDK `run_in_background`
+# callers on 2026-05-22 (#169). `-p` covers ordinary pipes (so the
+# `echo data | delegate.sh ...` flow works whether or not bytes have landed
+# yet), `-s` covers regular files and heredocs that have content, and both
+# are bash 3.2 compatible (the issue's suggested `read -t 0 -N 0` is bash
+# 4+ only — verified on macOS-shipped /bin/bash 3.2.57).
 context=""
-if [[ ! -t 0 ]]; then
+if [[ -p /dev/stdin || -s /dev/stdin ]]; then
   context=$(cat)
 fi
 
