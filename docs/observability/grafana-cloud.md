@@ -47,7 +47,7 @@ The `Authorization` header is `Basic <base64(instanceID:apiToken)>`. On macOS / 
 # Replace with your instance ID and token from the portal
 INSTANCE_ID="123456"
 ACCESS_TOKEN="glc_eyJv..."  # pasted from the portal
-AUTH_B64=$(printf '%s:%s' "$INSTANCE_ID" "$ACCESS_TOKEN" | base64)
+AUTH_B64=$(printf '%s:%s' "$INSTANCE_ID" "$ACCESS_TOKEN" | base64 | tr -d '\n')
 # On GNU systems with long tokens, prevent line wrapping: base64 -w 0
 ```
 
@@ -64,7 +64,7 @@ Import them from your stack's **Apps → AI Observability** tile. The dashboard 
 After generating the auth string above, export the two variables `delegate.sh` reads:
 
 ```bash
-export DELEGATE_OTEL_ENDPOINT="https://otlp-gateway-prod-<region>.grafana.net/otlp"
+export DELEGATE_OTEL_ENDPOINT="https://otlp-gateway-prod-<region>.grafana.net/otlp/v1/traces"
 export DELEGATE_OTEL_HEADERS="Authorization: Basic <base64-encoded-instance-id:token>"
 ```
 

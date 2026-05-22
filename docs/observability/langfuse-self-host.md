@@ -64,7 +64,7 @@ Langfuse exposes an OTLP-compatible ingest at `/api/public/otel/v1/traces` (sign
 ```bash
 PUBLIC_KEY="pk-lf-1234567890"     # from the UI
 SECRET_KEY="sk-lf-1234567890"     # from the UI
-AUTH_B64=$(printf '%s:%s' "$PUBLIC_KEY" "$SECRET_KEY" | base64)
+AUTH_B64=$(printf '%s:%s' "$PUBLIC_KEY" "$SECRET_KEY" | base64 | tr -d '\n')
 # On GNU systems: base64 -w 0  to suppress wrapping
 ```
 
