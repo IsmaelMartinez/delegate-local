@@ -48,11 +48,22 @@
 #                                           #   reminder printed after each
 #                                           #   successful call pointing at
 #                                           #   delegate-feedback.sh. Off-by-
-#                                           #   default; the nudge is the
-#                                           #   intervention that closes the
-#                                           #   untracked-verdict gap (see the
-#                                           #   2026-05-18 calibration finding
-#                                           #   in ROADMAP).
+#                                           #   default; the nudge fires
+#                                           #   unconditionally on success
+#                                           #   when metrics are on,
+#                                           #   regardless of stdin/stdout
+#                                           #   shape (Agent SDK tool calls,
+#                                           #   CI scripts, and other non-
+#                                           #   TTY callers are the highest-
+#                                           #   volume users and their
+#                                           #   verdicts are what closes the
+#                                           #   training-loop gap — see
+#                                           #   issue #149). Three escape
+#                                           #   hatches: this env var (opt
+#                                           #   out per call), NO_METRICS
+#                                           #   (no row to verdict against),
+#                                           #   non-zero exit (failure has
+#                                           #   no output to judge).
 #   DELEGATE_PREFLIGHT_TIMEOUT=<s>          # default 10. Only consulted when
 #                                           #   --recipe is set. A 1-token
 #                                           #   canary probe hits the resolved
@@ -995,9 +1006,16 @@ fi
 
 # Verdict nudge — without it the metrics file accumulates "untracked" rows
 # (delegate row with no matching feedback row) and the recipe library can't
-# self-correct from production data. Conditions: only after a successful call
-# (status==0), only when a metrics row was actually written (NO_METRICS off),
-# and silenceable via NO_VERDICT_NUDGE for callers who want clean stderr.
+# self-correct from production data. Fires unconditionally on success when
+# metrics are on, regardless of stdin/stdout shape. A TTY-only gate was
+# considered (issue #139 / PR #140) to avoid noisy CI stderr, but the cost
+# of the silent-skip on Agent SDK callers — the highest-volume users of
+# delegate.sh and the only ones whose verdicts feed future recipe iterations
+# — proved higher than the cost of an extra stderr line in CI logs. Lifetime
+# coverage was 47.8% under the TTY-gate approach; removing the gate is the
+# fix for issue #149. The three escape hatches stay: NO_VERDICT_NUDGE (opt
+# out per call), NO_METRICS (no metrics row → nothing to verdict against),
+# and non-zero exit (failed calls have no model output to judge).
 if [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" != "1" ]] \
    && [[ "${DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE:-}" != "1" ]] \
    && (( status == 0 )); then
