@@ -74,30 +74,18 @@ t4_fixture_file="$repo_root/experiments/fixtures/task-4-commit-message-2026-05-2
 extract_t4_var() {
   local marker="$1" body
   body=$(awk -v m="$marker" '
-    $0 == "=== " m " ===" || $0 == "=== " m " ===" { capture=1; next }
+    $0 == "=== " m " ===" { capture=1; next }
     /^=== / && capture { capture=0 }
     capture { print }
-  ' "$t4_fixture_file" | sed -E '/^[[:space:]]*$/d; /^[[:space:]]*$/N')
+  ' "$t4_fixture_file")
   printf '%s' "$body"
 }
 
 # Read inputs once. recent_commits = "Recent commit examples to match",
 # diff_stat = "This commit (changes)", why = "Context for the WHY paragraph".
-t4_recent_commits=$(awk '
-  /^=== Recent commit examples to match ===$/ { capture=1; next }
-  /^=== / && capture { capture=0 }
-  capture { print }
-' "$t4_fixture_file")
-t4_diff_stat=$(awk '
-  /^=== This commit \(changes\) ===$/ { capture=1; next }
-  /^=== / && capture { capture=0 }
-  capture { print }
-' "$t4_fixture_file")
-t4_why=$(awk '
-  /^=== Context for the WHY paragraph ===$/ { capture=1; next }
-  /^=== / && capture { capture=0 }
-  capture { print }
-' "$t4_fixture_file")
+t4_recent_commits=$(extract_t4_var "Recent commit examples to match")
+t4_diff_stat=$(extract_t4_var "This commit (changes)")
+t4_why=$(extract_t4_var "Context for the WHY paragraph")
 
 t7_input=$(cat "$t7_input_file")
 t8_input=$(cat "$t8_input_file")
@@ -144,7 +132,7 @@ run_one_rep() {
     --recipe "$recipe_name" \
     ${var_args[@]+"${var_args[@]}"} \
     "$tier" "$trailing_prompt" \
-    <<< "$stdin_input" 2>/dev/null)
+    <<< "$stdin_input")
   local status=$?
   local rep_end
   rep_end=$(date +%s)

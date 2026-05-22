@@ -101,11 +101,11 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 # Extract each T8 rep's OUTPUT section into a temp file.
-awk '
+awk -v work="$work" '
   /^===== T8-summarise-issue rep [0-9]+ =====$/ {
     if (in_rep && capture) close(out)
     rep = $4
-    out = "'"$work"'/rep-" rep ".txt"
+    out = work "/rep-" rep ".txt"
     in_rep = 1
     capture = 0
     next
