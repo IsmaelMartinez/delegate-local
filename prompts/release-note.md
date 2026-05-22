@@ -22,7 +22,9 @@ The PR title and body carry the "what" and "why"; the recipe extracts the user-f
 
 ```
 Draft a single release-note entry for the merged PR below.
-Skip commits that are entirely internal, CI, tests, refactors, dependency bumps, docs-only typos, lint fixes, or formatter runs — anything not user-facing. A release note's audience is the consumer / installer / integrator, not a future maintainer reading git log. If this PR is entirely internal by that test, output the single token `SKIP` (no bullet, no preamble) so the caller knows to drop it from the release rollup rather than emit a fabricated user-facing claim.
+Skip internal changes (CI, tests, refactors, dependency bumps, docs-only typos, lint fixes, formatter runs) — anything not user-facing. The audience is the consumer / installer / integrator, not a future maintainer reading git log.
+If the PR is entirely internal by that test, output the single token SKIP on a line by itself (no backticks, no bullet, no preamble, no PR number) so the caller can drop it from the release rollup rather than emit a fabricated user-facing claim.
+Otherwise:
 Output ONE bullet starting with "- " and a past-tense verb (Added, Fixed, Changed, Removed, Renamed, Documented).
 The bullet describes the change from the reader's perspective — what they can now do, or what no longer breaks, or what behaviour shifted. Do NOT describe the implementation.
 Length: one sentence, ≤ 200 chars. A second sentence is allowed only when the change has a non-obvious consequence the reader needs to know to use it.
