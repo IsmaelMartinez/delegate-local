@@ -31,7 +31,7 @@ Four gotcha tickets surfaced during the parallel pass and got filed (each a smal
 
 One recipe-design principle captured in `prompts/release-note.md` calibration notes during PR #173 review: when separating rules from few-shot examples (per gemini-code-assist's prompt-engineering suggestion), the example set needs to anchor BOTH outcomes (HIT case AND SKIP case) — a single example over-anchors the model toward whichever case it demonstrates. Worth applying to future recipe iterations.
 
-**Next-pickup order:**
+**Next-pickup order (round-1 snapshot — superseded by the round-2 section above, retained as historical record):**
 
 1. **Phase 11 Track A — OTLP exporter MVP (#134, now unblocked).** The schema ADR + reference doc (#154/#164) landed and frames the wire payload exactly, so the implementation work is bounded: a `curl` POST per `delegate.sh` call when `DELEGATE_OTEL_ENDPOINT` is set, plus a feedback-as-linked-span POST per `delegate-feedback.sh`. The pre-existing tests in `tests/test-delegate.sh` mock `curl` already; extending them to assert OTLP payload shape and that exporter failures don't change exit status is the test surface. Estimated single-PR scope.
 2. **Gotcha #169 — `delegate.sh` stdin hardening.** Small fix (one `read -t 0` probe before `cat`), unblocks parallel-agent dispatch reliability for the next batched pass. Add a regression test in `tests/test-delegate.sh`.
