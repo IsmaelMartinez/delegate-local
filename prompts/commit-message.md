@@ -1,3 +1,9 @@
+---
+inputs:
+  recent_commits: string
+  diff_stat: string
+  why: string
+---
 # commit-message
 
 ## When to use
@@ -19,6 +25,8 @@ The `--pretty=fuller` flag is load-bearing — the model learns the project's bo
 ## Prompt template
 
 ```
+Draft a git commit message from the staged diff and recent-commit anchors below. Do not invent file paths, PR numbers, or features that are not present in the diff.
+
 Draft a git commit message in EXACTLY the same shape as these recent examples.
 Subject ≤ 72 chars starting with '<TYPE>:' (feat, fix, ci, docs, chore, refactor, test).
 Then a blank line, then 1-2 short flowing-prose paragraphs (NO bullet lists, NO indentation).
@@ -175,3 +183,7 @@ The fix extends both enumerations only — the recipe already carries a Wrong/Co
 T4 re-measurement: regenerated the fixture as `experiments/fixtures/task-4-commit-message-2026-05-21.txt` by substituting the scorer-aligned template into a copy of the 2026-05-13 fixture's `recent_commits`/`diff_stat`/`why` anchors, then bumped `experiments/runner.sh`'s `t4_snapshot` default from `2026-05-13` to `2026-05-21`. Three reps of `qwen3.6:35b-a3b-q8_0` on Ollama scored 18/18 — up from the 15/18 2026-05-13 baseline where all three reps had failed SUBJECT_LEN at 77 chars. The scorer-aligned extension is empirically net-positive: subject came in at 67 chars across all three reps (`feat: add commit-message fixture and scoring for empirical accuracy`), body checks all pass, no padding tails of any enumerated shape. Surprising direction — the earlier minimal-extension iteration (which named only `This prevents` + `, keeping` + `, reflecting` + `, supporting`) had stayed at the 15/18 baseline, while the fuller alignment with the scorer's regex set flipped to 18/18. Speculative reading: the broader enumeration shifts the model's prior on what "restating" means and incidentally nudges the subject toward a tighter, more abstract phrasing rather than the verbose 77-char form the earlier prompts produced. Not relying on that interpretation — the empirical signal is the gate, and the gate cleared.
 
 Provenance for this recipe also lives in the `feedback_delegate_prose_prompt_anchoring.md` memory file.
+
+### 2026-05-22 — worked example for Phase 12 Track B conventions (#161)
+
+This recipe is the first to adopt the two optional conventions documented in `prompts/README.md` "How to add a new recipe — Optional conventions for new recipes (Phase 12 Track B, #161)". The frontmatter `inputs:` block declares the three required string inputs (`recent_commits`, `diff_stat`, `why`) so `delegate.sh --recipe commit-message` validates them pre-flight rather than letting a missing `--var` surface later as an unsubstituted-placeholder error. The one-sentence identity-and-scope opener at the top of the template body ("Draft a git commit message from the staged diff and recent-commit anchors below. Do not invent file paths, PR numbers, or features that are not present in the diff.") consolidates the recipe's most-repeated forbidden actions — invent-file-paths and invent-PR-numbers — into one upfront sentence the model encounters before the structural directives. The existing `(#NN)` guard and the Wrong/Correct contrastive example remain load-bearing and are NOT removed by the opener; the opener is additive rather than a replacement, on the principle that established calibration evidence outweighs untested condensation. T4 re-measurement remains the empirical gate; whether the opener visibly changes output quality is logged via dogfood verdict, not asserted in advance.

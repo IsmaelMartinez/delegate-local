@@ -62,6 +62,37 @@ When you spot a recurring task pattern that doesn't have a recipe yet:
 3. Add an entry to the SKILL.md "Recipes" pointer so the agent knows the recipe exists.
 4. Where it makes sense, mirror the task shape into `evals/eval-set.json` as a positive paraphrase so the trigger eval ensures the description still fires on the pattern.
 
+### Optional conventions for new recipes (Phase 12 Track B, #161)
+
+Two conventions are recommended for new recipes — both optional. Existing recipes keep their current shape and migrate only when touched for other reasons. No bulk reformat. The conventions and their rationales:
+
+#### Convention 1 — One-sentence identity-and-scope opener at the top of `## Prompt template`
+
+Open the template body with a single sentence that names the task and explicitly forbids the most common drift. NOT a persona. The persona idiom ("You are an expert X", "Act as a senior Y") is rejected in this library on empirical grounds — see "What this library does NOT adopt" below for the Zheng et al. and Wharton replication evidence. The identity-and-scope opener does a different job: it consolidates directives that today are scattered across `## Anti-hallucination guards` into one short up-front sentence the model encounters before the structural directives. Task plus forbidden actions, e.g.:
+
+> "Draft a single commit message subject line from the staged diff below. Do not invent file paths."
+
+Empirically the recipes that already calibrate well (commit-message.md, polish-reply.md) repeat the same forbidden-action callouts across multiple guards; surfacing them once at the top of the template prevents the guard list from inflating linearly with every new failure mode. Anchor every forbidden action in a real past MISS, the same way the existing guards do, so the opener doesn't drift into speculative restriction.
+
+#### Convention 2 — Optional `inputs:` block in YAML frontmatter for pre-flight type validation
+
+A recipe MAY declare its expected `--var` types via a flat YAML frontmatter block at the top of the file. `delegate.sh --recipe NAME` validates each provided `--var key=value` against the declared type before contacting the model, exiting 2 with a clear error if a required input is missing or a value fails its type check. Example frontmatter:
+
+```yaml
+---
+inputs:
+  pr_number: integer
+  body: string
+  anchor: string?
+---
+```
+
+Supported types: `integer`, `string`, `integer?`, `string?`. The `?` suffix marks the input as optional (absent `--var` is allowed; if provided, the value is still type-checked). The block is constrained to flat `key: type` pairs only — no nesting, no anchors, no flow style — so `awk` parses it without pulling in `yq` and the "two bash scripts" rule holds. Heavier YAML features (block scalars, arrays, anchors) stay rejected by design rather than imported by accident, mirroring the Microsoft Prompty rejection rationale in "What this library does NOT adopt" below.
+
+The validator passes undeclared `--var` keys through untouched — strict-mode rejection of unknown keys is deferred until lazy migration is more complete, so a recipe that declares only `pr_number` doesn't break callers passing `--var notes=...`. Recipes without an `inputs:` block skip the validation entirely (the back-compat path), so the convention is genuinely opt-in.
+
+The `{{stdin}}` placeholder maps to a declared `stdin: string` input — a recipe can require piped context via the typed surface without forcing the caller to pass it twice. Validation runs before placeholder substitution so the caller sees the type error rather than an opaque "missing placeholder" downstream message. See `prompts/commit-message.md` for a worked example combining both conventions.
+
 ## Cross-machine signal: graduating an issue into a recipe
 
 The hit/miss log is single-machine. When a MISS surfaces a task shape this library does not yet cover, the cross-machine path is a `prompt-pattern` issue (`.github/ISSUE_TEMPLATE/prompt-pattern.md`). The template captures the task shape, tier and resolved model, the verbatim prompt and model output, and — when known — the prompt that turned the MISS into a HIT. The diff between broken and working prompt is the calibration signal a maintainer needs to draft a recipe without re-running the original session.

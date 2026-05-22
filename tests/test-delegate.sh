@@ -1833,6 +1833,444 @@ line=$(cat "$metrics")
 assert_contains '"queue_wait_ms":' "$line" "queue-wait split on pick-model failure: queue_wait_ms still emitted"
 assert_contains '"generation_ms":' "$line" "queue-wait split on pick-model failure: generation_ms still emitted"
 assert_eq 0 "$(echo "$line" | jq -r '.queue_wait_ms')" "queue-wait split on pick-model failure: queue_wait_ms == 0"
+
+# 27. Pre-flight inputs: type validation (Phase 12 Track B, issue #161).
+# Optional frontmatter `inputs:` block declares flat key:type pairs that
+# delegate.sh validates before contacting the model. Supported types:
+# integer | string | integer? | string? (the `?` suffix means optional).
+# Lazy migration: recipes without a frontmatter inputs: block keep their
+# pre-existing behaviour, and undeclared --var keys pass through.
+
+# Helper: write a recipe with optional frontmatter + inputs block. Body uses
+# {{key}} placeholders that --var will substitute.
+make_typed_recipe() {
+  local path="$1" frontmatter="$2"
+  cat > "$path" <<RECIPE
+${frontmatter}# typed-recipe
+
+## When to use
+test
+
+## Prompt template
+
+\`\`\`
+pr_number={{pr_number}}
+body={{body}}
+\`\`\`
+
+## Variables
+
+- \`{{pr_number}}\` — PR number
+- \`{{body}}\` — body
+
+## Calibration notes
+n/a
+RECIPE
+}
+
+# 27a. Valid inputs: block + all required --var provided → success.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+make_typed_recipe "$prompts/typed-recipe.md" $'---\ninputs:\n  pr_number: integer\n  body: string\n---\n'
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe typed-recipe --var pr_number=123 --var body=hello prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "inputs: valid integer + string → exits 0"
+assert_contains "mock-model-output: ok" "$out" "inputs: dispatch reached the model"
+rm -rf "$tmp" "$metrics"
+
+# 27b. Required --var missing → exit 2 with clear error listing missing key.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); : > "$metrics"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+make_typed_recipe "$prompts/typed-recipe.md" $'---\ninputs:\n  pr_number: integer\n  body: string\n---\n'
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe typed-recipe --var pr_number=123 prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "inputs: missing required --var → exit 2"
+assert_contains "missing required inputs" "$out" "inputs: error names the failure mode"
+assert_contains "body" "$out" "inputs: error names the missing key"
+rm -rf "$tmp" "$metrics"
+
+# 27c. --var integer fails type check → exit 2 with key/type/value named.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); : > "$metrics"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+make_typed_recipe "$prompts/typed-recipe.md" $'---\ninputs:\n  pr_number: integer\n  body: string\n---\n'
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe typed-recipe --var pr_number=abc --var body=hi prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "inputs: integer type-check failure → exit 2"
+assert_contains "pr_number" "$out" "inputs: type error names the key"
+assert_contains "integer" "$out" "inputs: type error names the declared type"
+assert_contains "abc" "$out" "inputs: type error names the offending value"
+rm -rf "$tmp" "$metrics"
+
+# 27d. Optional `string?` --var missing → success (lazy migration friendly).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+# Recipe declares anchor: string? as optional; body of template references
+# {{pr_number}} only so the missing --var anchor doesn't fail placeholder
+# substitution.
+cat > "$prompts/typed-recipe.md" <<'RECIPE'
+---
+inputs:
+  pr_number: integer
+  anchor: string?
+---
+# typed-recipe
+
+## When to use
+test
+
+## Prompt template
+
+```
+pr_number={{pr_number}}
+```
+
+## Variables
+
+- `{{pr_number}}` — PR number
+
+## Calibration notes
+n/a
+RECIPE
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe typed-recipe --var pr_number=42 prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "inputs: optional --var missing → exits 0"
+rm -rf "$tmp" "$metrics"
+
+# 27e. Recipe without a frontmatter inputs: block → back-compat path, no
+# type-check runs. This is the lazy-migration safety net so existing recipes
+# work unchanged until they're touched for other reasons.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/legacy.md" <<'RECIPE'
+# legacy
+
+## When to use
+test
+
+## Prompt template
+
+```
+body={{body}}
+```
+
+## Variables
+
+- `{{body}}` — body
+
+## Calibration notes
+n/a
+RECIPE
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe legacy --var body=hello prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "inputs: no inputs: block → exits 0 (back-compat)"
+rm -rf "$tmp" "$metrics"
+
+# 27f. Undeclared --var passes through untouched (lazy migration — strict
+# mode is deferred). A recipe declaring only `body: string` accepts a
+# caller-supplied --var extra=value without complaint.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/typed-recipe.md" <<'RECIPE'
+---
+inputs:
+  body: string
+---
+# typed-recipe
+
+## When to use
+test
+
+## Prompt template
+
+```
+body={{body}} extra={{extra}}
+```
+
+## Variables
+
+- `{{body}}` — body
+- `{{extra}}` — extra
+
+## Calibration notes
+n/a
+RECIPE
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe typed-recipe --var body=hi --var extra=undeclared prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "inputs: undeclared --var passes through → exits 0"
+rm -rf "$tmp" "$metrics"
+
+# 27g. Optional `integer?` --var present but invalid → exit 2 (the `?` only
+# affects whether it's required, not whether the type check applies).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); : > "$metrics"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/typed-recipe.md" <<'RECIPE'
+---
+inputs:
+  age: integer?
+---
+# typed-recipe
+
+## When to use
+test
+
+## Prompt template
+
+```
+age={{age}}
+```
+
+## Variables
+
+- `{{age}}` — age
+
+## Calibration notes
+n/a
+RECIPE
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe typed-recipe --var age=notanint prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "inputs: optional --var still type-checked when provided → exit 2"
+assert_contains "age" "$out" "inputs: optional type error names key"
+assert_contains "integer" "$out" "inputs: optional type error names integer"
+rm -rf "$tmp" "$metrics"
+
+# 27h. Unsupported type in inputs: block → exit 2 (recipe authoring error).
+# Today only integer/string and their `?` forms are supported.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); : > "$metrics"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/bad-type.md" <<'RECIPE'
+---
+inputs:
+  count: number
+---
+# bad-type
+
+## When to use
+test
+
+## Prompt template
+
+```
+count={{count}}
+```
+
+## Variables
+
+- `{{count}}` — count
+
+## Calibration notes
+n/a
+RECIPE
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe bad-type --var count=5 prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "inputs: unsupported type → exit 2"
+assert_contains "unsupported type" "$out" "inputs: error names the failure mode"
+assert_contains "count" "$out" "inputs: error names the offending input"
+rm -rf "$tmp" "$metrics"
+
+# 27i. Negative integer is accepted (real-world: error codes, offsets).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/typed-recipe.md" <<'RECIPE'
+---
+inputs:
+  offset: integer
+---
+# typed-recipe
+
+## When to use
+test
+
+## Prompt template
+
+```
+offset={{offset}}
+```
+
+## Variables
+
+- `{{offset}}` — offset
+
+## Calibration notes
+n/a
+RECIPE
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe typed-recipe --var offset=-42 prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "inputs: negative integer accepted → exits 0"
+rm -rf "$tmp" "$metrics"
+
+# 27j. {{stdin}} satisfies a declared `stdin: string` input. Lets a recipe
+# require the piped context via the typed surface without forcing the
+# caller to pass it twice (--var + pipe).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/stdin-required.md" <<'RECIPE'
+---
+inputs:
+  stdin: string
+---
+# stdin-required
+
+## When to use
+test
+
+## Prompt template
+
+```
+LOG: {{stdin}}
+```
+
+## Calibration notes
+n/a
+RECIPE
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash -c 'echo "piped" | bash "$0" --recipe stdin-required prose "tail"' "$SCRIPT" 2>&1) || EC=$?
+assert_eq 0 "$EC" "inputs: stdin: string satisfied by pipe → exits 0"
+rm -rf "$tmp" "$metrics"
+
+# 23k. stdin: integer type-checks the piped value. Numeric piped value
+# satisfies; non-numeric exits 2.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/stdin-int.md" <<'RECIPE'
+---
+inputs:
+  stdin: integer
+---
+# stdin-int
+
+## When to use
+test
+
+## Prompt template
+
+```
+N: {{stdin}}
+```
+
+## Calibration notes
+n/a
+RECIPE
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash -c 'echo "42" | bash "$0" --recipe stdin-int prose "tail"' "$SCRIPT" 2>&1) || EC=$?
+assert_eq 0 "$EC" "inputs: stdin: integer satisfied by numeric pipe → exits 0"
+
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash -c 'echo "not a number" | bash "$0" --recipe stdin-int prose "tail"' "$SCRIPT" 2>&1) || EC=$?
+assert_eq 2 "$EC" "inputs: stdin: integer rejects non-numeric pipe → exits 2"
+assert_contains "stdin expected type 'integer'" "$out" "inputs: stdin: integer error names the type"
+rm -rf "$tmp" "$metrics"
+
+# 23l. Missing-required error message has no trailing space (cosmetic
+# fix). Pin so a future refactor doesn't re-introduce the dangling space.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/required-foo.md" <<'RECIPE'
+---
+inputs:
+  foo: string
+---
+# required-foo
+
+## When to use
+test
+
+## Prompt template
+
+```
+F: {{foo}}
+```
+
+## Calibration notes
+n/a
+RECIPE
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash -c 'bash "$0" --recipe required-foo prose "tail"' "$SCRIPT" 2>&1) || EC=$?
+assert_eq 2 "$EC" "inputs: missing required exits 2"
+# Capture just the first error line and assert no trailing space.
+first_line=$(printf '%s\n' "$out" | grep -F 'missing required inputs:' | head -1)
+if [[ "$first_line" == *' ' ]]; then
+  echo "  FAIL  inputs: missing-required error has trailing whitespace"
+  echo "        first_line=[$first_line]"
+  fail=$((fail+1))
+else
+  echo "  PASS  inputs: missing-required error has no trailing whitespace"
+  pass=$((pass+1))
+fi
 rm -rf "$tmp" "$metrics"
 
 echo
