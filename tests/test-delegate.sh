@@ -1483,6 +1483,80 @@ assert_eq 0 "$EC" "delegate-meta with --recipe: exits 0"
 assert_contains 'recipe="meta-test"' "$(cat "$stderr_file")" "delegate-meta: recipe field present and quoted when --recipe used"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
+# 23. Stdin probe regression for #169. The original `[[ ! -t 0 ]]` check
+# returned true for unix-socket FDs (and other non-tty, non-pipe FDs) that
+# hold no data, then `cat` blocked forever on them — hit on 2026-05-22 by
+# Agent SDK callers running delegate.sh with `run_in_background:true`.
+# These tests pin the new `-p /dev/stdin || -s /dev/stdin` probe.
+
+# 23a. </dev/null redirect: not a pipe, holds no data — cat is skipped,
+# context_chars==0, no hang. This is the workaround the parallel agents
+# manually applied; the script now does it implicitly.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  perl -e 'alarm 5; exec @ARGV' \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "stdin probe: </dev/null exits 0 (no hang)"
+assert_contains '"context_chars":0' "$(cat "$metrics")" "stdin probe: </dev/null skips cat (context_chars=0)"
+rm -rf "$tmp" "$metrics"
+
+# 23b. Real piped stdin still works — the fix must not break the documented
+# `echo data | delegate.sh ...` flow. Mirrors test 5 but with the explicit
+# perl-alarm wrapper to assert no-hang.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  perl -e 'alarm 5; exec @ARGV' \
+  bash -c 'printf "%s" "piped-data" | bash "$0" prose "Summarise"' "$SCRIPT" 2>&1) || EC=$?
+assert_eq 0 "$EC" "stdin probe: piped data exits 0"
+assert_contains '"context_chars":10' "$(cat "$metrics")" "stdin probe: piped data captured (10 chars)"
+rm -rf "$tmp" "$metrics"
+
+# 23c. Socket-FD simulation — the actual bug-mode regression test. perl's
+# socketpair() gives a real AF_UNIX SOCK_STREAM pair; we hand one end to
+# delegate.sh as stdin and keep the other end open in a child process
+# without ever writing or closing it. Under the old `! -t 0` check, `cat`
+# would block waiting for an EOF that never arrives; under the new probe,
+# the script sees neither a pipe nor data and skips cat. The perl alarm
+# kills the run after 5s if the bug returns — exit 142 from a hang is a
+# clear regression signal versus exit 0 with context_chars=0 from the fix.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  perl -e '
+use Socket;
+socketpair(my $a, my $b, AF_UNIX, SOCK_STREAM, PF_UNSPEC) or die "socketpair: $!";
+my $pid = fork();
+if ($pid == 0) {
+  close($b);
+  sleep 30;
+  exit 0;
+}
+close($a);
+open(STDIN, "<&", fileno($b)) or die "dup: $!";
+$SIG{ALRM} = sub { kill 9, $pid; exit 142 };
+alarm 5;
+my $rc = system(@ARGV);
+kill 9, $pid;
+exit($rc >> 8);
+' bash "$SCRIPT" prose "Summarise" 2>&1) || EC=$?
+assert_eq 0 "$EC" "stdin probe: empty unix socket exits 0 (no hang, #169 regression)"
+assert_contains '"context_chars":0' "$(cat "$metrics")" "stdin probe: empty unix socket skips cat (context_chars=0)"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
