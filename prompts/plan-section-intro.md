@@ -60,6 +60,22 @@ it ships, and references the anchors or constraints from the FACTS block.
 NO bullet lists, NO sub-track enumeration — sub-tracks belong below this
 intro in the actual document, not inside the intro itself.
 
+NO-HEADING-LINE (priority 1, non-negotiable): the first character of your
+output must be the first letter of the first sentence of the paragraph.
+NOT `#`, NOT `*`, NOT `-`, NOT a bullet marker, NOT a numbered-list prefix,
+NOT a heading line of any depth (`#`, `##`, `###`, `####`). Do NOT emit
+`### Phase NN — title`, `## Phase NN — title`, or any formatting prefix
+before the paragraph. The agent positions the heading separately in the
+target document; the recipe output is the prose paragraph only.
+Wrong (heading line prepended, observed on dogfood ts=2026-05-22T11:12:12Z
+and reproduced on dogfood ts=2026-05-22T11:43:18Z):
+  ### Phase 13 — Cross-machine calibration aggregation
+
+  This phase extends Phase 11's OTLP exporter with…
+Correct (paragraph only, heading omitted): the output begins with
+  `This phase extends Phase 11's OTLP exporter with…` and contains no
+  `###`/`##`/`#` line anywhere.
+
 The STYLE ANCHOR below is provided ONLY to calibrate voice, length, British
 vs American spelling, prose-vs-bullets balance, technical density, and
 paragraph rhythm. Do NOT echo any of its sentences. Do NOT repeat its scope.
@@ -70,6 +86,25 @@ is style guidance, not content.
 Wrong: "Phase 8 was about telemetry. Phase NN will [new content]…"
 Wrong: "[verbatim anchor paragraph]. In contrast, Phase NN…"
 Correct: "[NEW paragraph describing only Phase NN, in the anchor's voice]"
+
+FACTS-BLOCK-REPHRASE (priority 2, non-negotiable): each line under SCOPE,
+ANCHORS, and SUB-TRACKS in the FACTS block is a CONSTRAINT, not a sentence
+to copy. Restate every fact in your own voice using the STYLE ANCHOR's
+vocabulary and rhythm. Do NOT include any FACTS sentence verbatim or
+near-verbatim in the output. The FACTS block tells you WHAT the phase is
+about; the STYLE ANCHOR tells you HOW to phrase it. Both channels apply
+simultaneously — the anti-echo rule applies to the FACTS block too, not
+only to the STYLE ANCHOR.
+Wrong (verbatim FACTS-sentence echo, observed on dogfood
+ts=2026-05-22T11:43:18Z where the SCOPE last sentence was passed through
+unchanged): FACTS contains `SCOPE: The aggregator is opt-in, single-user,
+and writes to a local rollup file.` and the output paragraph contains the
+sentence `The aggregator is opt-in, single-user, and writes to a local
+rollup file.` verbatim.
+Correct (rephrased in anchor's voice): the same fact is rewritten as
+`An opt-in single-user aggregator collects each host's rollup into a
+local file, keeping the cross-machine path under one workstation's
+control.` — same content, the anchor's prose rhythm.
 
 Match the STYLE ANCHOR exactly in: spelling variant (American vs British),
 prose-vs-bullets balance, paragraph length, technical density, and tone.
@@ -126,6 +161,10 @@ bash scripts/delegate.sh --recipe plan-section-intro \
 The trailing prompt arg reinforces the highest-signal rule — the anti-echo directive — because that was the failure mode that triggered this recipe. The recipe template carries the structural directives and the anti-padding guard.
 
 ## Anti-hallucination guards (each line addresses a real observed drift)
+
+- NO-HEADING-LINE (priority 1, non-negotiable) with positive-shape directive ("the first character of your output must be the first letter of the first sentence") and Wrong/Correct contrastive example grounded in the actual 2026-05-22 dogfood outputs — addresses the heading-line drift confirmed across two independent dogfoods (ts=2026-05-22T11:12:12Z and ts=2026-05-22T11:43:18Z, both verdicts recorded MISS at ts=2026-05-22T11:12:47Z and ts=2026-05-22T11:43:47Z respectively). The original buried negation at the end of the "Output ONLY..." line did not bind; promoting the prohibition to its own priority-1 directive line with a v5/v7 directive-rule-plus-example pattern follows the discipline the commit-message recipe's `(#NN)` and SUBJECT_LEN iterations established. The positive-shape framing ("first character must be the first letter of the first sentence — NOT `#`, NOT `*`, NOT a bullet marker") gives the model a concrete construction rule rather than relying on the model to infer the prohibition from a negated descriptor.
+
+- FACTS-BLOCK-REPHRASE (priority 2, non-negotiable) with Wrong/Correct contrastive example — addresses the FACTS-block-echo drift observed on dogfood ts=2026-05-22T11:12:12Z (both output paragraphs near-verbatim copies of the SCOPE/ANCHORS blocks) and reproduced in weaker form on dogfood ts=2026-05-22T11:43:18Z (one SCOPE sentence passed through unchanged). The original directive frame told the model to calibrate voice from the STYLE ANCHOR but did not name the FACTS block as content-to-rewrite; the model honoured the anti-echo rule against the STYLE ANCHOR (the named target) and silently passed FACTS through as a separate channel that no rule covered. Same compliance-literally-with-the-rule-it-knows pattern that the 2026-05-11 declarative-form extension in `commit-message.md` was filed against. The fix names the FACTS block as a constraint-to-rephrase, makes the anti-echo rule symmetric across both channels (STYLE ANCHOR for voice, FACTS for content), and anchors the rule to the actual observed Wrong shape (the verbatim SCOPE last sentence from the second dogfood).
 
 - "The STYLE ANCHOR below is provided ONLY to calibrate voice... Do NOT echo any of its sentences" with the Wrong/Correct contrastive example — addresses the 2026-05-21 MISS where the prose-tier model interpreted a verbatim Phase 8 anchor as content and emitted it verbatim at the head of the output before appending the new Phase 11 content. Same v5/v7 directive-rule-plus-example pattern that closed the `(#NN)` gap in `commit-message.md`. The bare "match the style" framing did not bind; the explicit "this is calibration data, not content; do NOT echo" directive plus contrastive examples does.
 
@@ -192,3 +231,29 @@ A PR-review-time dogfood against the real Phase 8 intro as STYLE ANCHOR and an i
 - **FACTS-block echo without rephrasing — weaker second observation (1/4 sentences near-verbatim vs 2/2 in dogfood 1).** The second dogfood's output rewrote three of four FACTS-derived sentences in prose voice and left one (the closing "The aggregator is opt-in, single-user…") near-verbatim from the SCOPE block. The first dogfood was more severe (both paragraphs near-verbatim). The directional improvement may reflect the FACTS block's structural difference (this dogfood's SCOPE was a single sentence, dogfood 1's SCOPE was richer) rather than calibration progress; a third dogfood with a SCOPE block more comparable to dogfood 1's would discriminate. The drift remains logged for future iteration but the second observation is not as cleanly confirming as the heading-line drift.
 
 Both dogfoods together establish the heading-line drift as the higher-priority guard to add next; the FACTS-echo drift remains a single strong observation plus one partial. The recipe's calibration history now matches the library discipline pattern (`commit-message.md`'s pre-PR-#85 anti-padding work waited for repeated declarative-form evidence before promoting it to a guard separate from the participial one).
+
+### 2026-05-22 — heading-line and FACTS-echo tightening
+
+Two confirming observations across the first two dogfoods (ts=2026-05-22T11:12:12Z with feedback verdict at ts=2026-05-22T11:12:47Z; ts=2026-05-22T11:43:18Z with feedback verdict at ts=2026-05-22T11:43:47Z) cleared the recipe's own calibration-notes-stated bar for sharpening: pattern-level rather than session-specific, the second observation reproduced the same failure shape as the first. The heading-line drift is the load-bearing failure — both dogfoods emitted `### Phase NN — title` as the first output line despite the original buried `no heading line` directive at the end of the "Output ONLY..." line. The FACTS-echo drift is the weaker pattern — first dogfood was two paragraphs near-verbatim from the FACTS block, second dogfood was one SCOPE-last-sentence passed through unchanged.
+
+The fix applies the v5/v7 directive-rule-plus-Wrong/Correct-example pattern that closed the `(#NN)` gap in `commit-message.md` and the OMIT-EMPTY gap in `summarise-issue.md`, promoted to two priority-ordered standalone directives at the head of the template body:
+
+- **NO-HEADING-LINE (priority 1).** Recast from the buried negation into a promoted directive line with a positive-shape construction rule ("the first character of your output must be the first letter of the first sentence — NOT `#`, NOT `*`, NOT a bullet marker, NOT a numbered-list prefix") plus a Wrong/Correct contrastive example grounded in the actual observed failure (the `### Phase 13 — Cross-machine calibration aggregation` heading from the first dogfood, cited verbatim alongside the second dogfood's `Phase 14 —` reproduction). Positive shape + Wrong/Correct contrastive together rather than either alone — the positive shape gives the model a concrete construction rule, the Wrong/Correct grounds it in real failure rather than abstract prohibition.
+
+- **FACTS-BLOCK-REPHRASE (priority 2).** New directive naming the FACTS block as a constraint-to-rephrase rather than content to copy. The original template only framed the STYLE ANCHOR as calibration data and did not name the FACTS block as a separate channel subject to its own anti-echo rule; the model honoured the directive it knew (anchor anti-echo bound on both dogfoods) and silently passed FACTS through. The fix makes the anti-echo rule symmetric across both channels and anchors the Wrong shape to the actual observed verbatim sentence from the second dogfood's SCOPE block. Severity is weaker than the heading-line drift (the recipe lists this as priority 2 rather than priority 1), but the second observation still clears the "two confirming data points" bar the library applies before promoting a failure mode to a guard.
+
+The two new directives sit at the head of the structural-directives block, ahead of the existing STYLE-ANCHOR anti-echo directive, so they survive any future preamble inflation that nudges the model's attention away from later content in the template. Same directive-promotion pattern that `commit-message.md`'s 2026-05-10 `(#NN)` iteration applied to its own buried-negation history.
+
+If the heading-line drift recurs a third time after both v5/v7-pattern guards have been applied, the next iteration's plan is to either gate the recipe to a specific known-good model rather than a tier, or accept the failure mode as fundamental and document a post-processing strip in the recipe's invocation example. The third-dogfood result below answers the empirical question.
+
+### 2026-05-22 — third dogfood verdict (HIT on NO-HEADING-LINE, MISS on FACTS-BLOCK-REPHRASE)
+
+The post-sharpening dogfood ran against the real Phase 9 intro as STYLE ANCHOR and an invented Phase 15 "Recipe coverage gap auto-discovery" scope as FACTS, delegated to `qwen3.6:35b-a3b-q8_0` (prose tier) at `ts=2026-05-22T12:53:05Z` (verdict recorded MISS at the same ref_ts). Both anchor and facts were intentionally distinct from the first two dogfoods (Phase 11 anchor + Phase 13 facts on dogfood 1; Phase 8 anchor + Phase 14 facts on dogfood 2) so the heading-line and FACTS-echo drifts could be discriminated from session-specific artefacts. The two new directives split cleanly on the empirical gate:
+
+- **NO-HEADING-LINE — HIT.** The output's first character was the letter `P` (the start of `Phase 15 closes the recipe coverage gap by automating…`), with no `### Phase 15 —` heading, no `**Phase 15:**` markdown bold prefix, no bullet marker, no preamble. Both prior dogfoods produced exactly the prepended `### Phase NN — title` heading the recipe was filed against; the third dogfood under the promoted priority-1 directive plus Wrong/Correct contrastive example produced none. Same v5/v7 directive-rule-plus-example pattern that closed the `(#NN)` gap in `commit-message.md` after a 3-of-3 MISS reproduction — promoted to priority 1, grounded in the actual observed Wrong shape, paired with a positive-shape construction rule ("the first character of your output must be the first letter of the first sentence"). Single-dogfood evidence rather than the 5-of-5 reproduction the `commit-message.md` PR #74 fix measured, but the directional signal is strong: the buried negation did not bind on either prior dogfood, the promoted directive bound on the first post-sharpening dogfood.
+
+- **FACTS-BLOCK-REPHRASE — MISS.** The output contained at least eight distinct sentences or clauses near-verbatim from the FACTS block: the SCOPE statement "scan the rolling 30-day MISS window for task-shape clusters that no existing recipe covers" appeared unchanged; the ANCHORS sentence "The Phase 8 recurring-MISS nudge (#91) established the directive-rule shape the new gap-detector follows" appeared unchanged; the three SUB-TRACK descriptions ("extends `scripts/audit-metrics.sh` with a clustering pass over MISS reasons that match no current `prompts/<task>.md` filename token", "pre-targets the `prompt-pattern` label and pre-fills the issue body from the cluster's representative MISS reasons", "introduces the `DELEGATE_FEEDBACK_NO_GAP_NUDGE=1` opt-out env var") were each near-verbatim from the SUB-TRACKS list, only superficially rewritten into third-person enumeration. The model honoured the now-promoted NO-HEADING-LINE rule and silently passed FACTS content through as a separate channel — same compliance-literally-with-the-rule-it-knows pattern that the original recipe's STYLE-ANCHOR anti-echo directive triggered when FACTS was not yet named as a parallel constraint. The new FACTS-BLOCK-REPHRASE directive named the FACTS block as constraint-to-rephrase, but its Wrong/Correct example anchored only ONE specific verbatim sentence ("The aggregator is opt-in, single-user…") rather than describing the family of paraphrases the model produces. The single-literal anchor functions as a copyable crib — the model recognises THAT specific sentence as the rejected shape and avoids it, but does not generalise the rule to other FACTS sentences of similar shape. Same verbatim-crib hypothesis the `summarise-issue.md` 2026-05-22 PR #180 review-pass mitigation surfaced and fixed via the family-of-paraphrases framing.
+
+The split outcome is informative rather than contradictory. The two failure modes have different shapes: heading-line drift is a single literal token prepended to the output (an easy-to-anchor structural prohibition), where FACTS-block echo is a content-mapping decision the model makes per-sentence (a semantic rephrase requirement). The promoted-directive-plus-Wrong/Correct pattern that closed the heading-line gap is necessary but not sufficient for the FACTS-echo gap — the FACTS-echo directive needs a different shape, mirroring how `summarise-issue.md`'s OMIT-EMPTY-SECTION rule needed the family-of-paraphrases framing on PR #180 after the substring-blocklist and positive-form recasts both failed. The next iteration's FACTS-BLOCK-REPHRASE refinement should replace the single-literal Wrong anchor with a family-of-paraphrases description listing the actual observed near-verbatim sentences from this dogfood, framing them as a shape pattern rather than a specific forbidden string.
+
+The heading-line drift can be declared converged on single-dogfood evidence (the failure shape was binary — emit a heading or not — and the post-sharpening dogfood unambiguously did not emit one). The FACTS-echo drift requires a fourth dogfood after the family-of-paraphrases refinement to confirm whether the same pattern that closed the OMIT-EMPTY-SECTION verbatim-crib bypass on `summarise-issue.md` transfers to this recipe. The deferred action item is filed in the calibration history rather than blocking this PR — the heading-line sharpening is the higher-severity failure mode (two dogfoods produced it; one PR-iteration fix closed it), and the FACTS-echo refinement has a clear directional pattern from `summarise-issue.md`'s parallel calibration history rather than needing fresh discovery.
