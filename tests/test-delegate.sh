@@ -1071,6 +1071,299 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
+# 17a. DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=N redirects the nudge to fd N
+# instead of fd 2. Closes issue #139 (parallel-capture callers contaminating
+# stdout via 2>&1) without re-introducing the TTY-gate that the #149
+# reversal showed dropped lifetime verdict coverage from 82% interactive to
+# 47.8% lifetime. The recipe a parallel-capture caller wants is:
+#   DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 bash delegate.sh prose "X" \
+#     > out.txt 2>&1 3>>nudge.log
+# stdout+stderr go to out.txt unaffected; the nudge lands on nudge.log via
+# fd 3 so coverage tracking stays intact.
+
+# 17a-1. Happy path: fd 3 redirected to a file; nudge lands on the file, not
+# on fd 2.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+nudge_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
+assert_eq 0 "$EC" "verdict-nudge FD=3: happy path exits 0"
+stderr_content=$(cat "$stderr_file")
+nudge_content=$(cat "$nudge_file")
+if echo "$stderr_content" | grep -q "record verdict"; then
+  echo "  FAIL  verdict-nudge FD=3: nudge leaked into fd 2 instead of fd 3"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge FD=3: fd 2 stays clean"; pass=$((pass+1))
+fi
+assert_contains "delegate: record verdict" "$nudge_content" "verdict-nudge FD=3: nudge lands on fd 3"
+# Belt-and-braces: stdout still carries only the model output.
+if echo "$out" | grep -q "record verdict"; then
+  echo "  FAIL  verdict-nudge FD=3: nudge leaked into stdout"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge FD=3: stdout unaffected"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics" "$stderr_file" "$nudge_file"
+
+# 17a-2. fd 3 set but NOT redirected → silent write-failure. The call still
+# succeeds (the model output is on stdout, exit 0) but the nudge has nowhere
+# to go and the failed write is absorbed via `2>/dev/null` on the echo so
+# the gotcha-mode caller doesn't see "Bad file descriptor" noise back on
+# the fd 2 they were trying to keep clean.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "verdict-nudge FD=3 no redirect: still exits 0"
+stderr_content=$(cat "$stderr_file")
+if echo "$stderr_content" | grep -q "record verdict"; then
+  echo "  FAIL  verdict-nudge FD=3 no redirect: nudge leaked into fd 2"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge FD=3 no redirect: fd 2 stays clean"; pass=$((pass+1))
+fi
+# The "Bad file descriptor" stderr from the failed write is suppressed by
+# the `2>/dev/null` redirect on the echo in delegate.sh — this assertion
+# pins that behaviour so a future refactor can't silently regress it.
+if echo "$stderr_content" | grep -qi "bad file descriptor"; then
+  echo "  FAIL  verdict-nudge FD=3 no redirect: 'Bad file descriptor' leaked back to fd 2"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge FD=3 no redirect: failed write absorbed silently"; pass=$((pass+1))
+fi
+# Metrics row was still written; coverage tracking against the JSONL surface
+# stays intact regardless of where the nudge landed.
+assert_eq 1 "$(grep -c '^' "$metrics")" "verdict-nudge FD=3 no redirect: metrics row still written"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 17a-3. FD=2 is the default-equivalent — back-compat check that explicitly
+# setting the env var to the default value behaves the same as leaving it
+# unset (the test in 14/14a covers unset; this pins the explicit-2 path).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=2 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "verdict-nudge FD=2 (default-equivalent): exits 0"
+stderr_content=$(cat "$stderr_file")
+assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge FD=2: nudge lands on fd 2 (back-compat)"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 17a-4. FD=1 is allowed — some callers may want the nudge inline with the
+# model output on stdout. Unusual but harmless; the validation accepts any
+# positive integer.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=1 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "verdict-nudge FD=1: exits 0"
+if echo "$out" | grep -q "record verdict"; then
+  echo "  PASS  verdict-nudge FD=1: nudge lands on stdout"; pass=$((pass+1))
+else
+  echo "  FAIL  verdict-nudge FD=1: nudge missing from stdout"; fail=$((fail+1))
+fi
+stderr_content=$(cat "$stderr_file")
+if echo "$stderr_content" | grep -q "record verdict"; then
+  echo "  FAIL  verdict-nudge FD=1: nudge also leaked into fd 2"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge FD=1: fd 2 stays clean"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 17a-5. FD=0 (stdin) is rejected — writing to stdin is nonsense, so a clear
+# error fires before the model is contacted. exit 2.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=0 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 2 "$EC" "verdict-nudge FD=0: exits 2 (stdin rejected)"
+stderr_content=$(cat "$stderr_file")
+assert_contains "DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=0: error names the env var"
+assert_contains "valid: 1-9" "$stderr_content" "verdict-nudge FD=0: error mentions the valid shape (1-9 single-digit range)"
+# No metrics row should have been written — validation fires before model
+# contact, so no delegation row exists to verdict against.
+if [[ -s "$metrics" ]]; then
+  echo "  FAIL  verdict-nudge FD=0: metrics row written despite pre-flight rejection"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge FD=0: no metrics row (rejection fires pre-flight)"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 17a-6. FD=foo (non-numeric) is rejected. exit 2.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=foo \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 2 "$EC" "verdict-nudge FD=foo: exits 2 (non-numeric rejected)"
+stderr_content=$(cat "$stderr_file")
+assert_contains "DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=foo: error names the env var"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 17a-7. FD=-1 (negative) is rejected. The regex `^[1-9]$` matches single-
+# digit positive integers only — the leading `-` makes the match fail,
+# same path as the non-numeric case but worth pinning explicitly because
+# a future relaxation of the regex (e.g. accidentally adding a `-?` to
+# handle "0 or negative") would silently break this.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=-1 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 2 "$EC" "verdict-nudge FD=-1: exits 2 (negative rejected)"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 17a-7b. FD=10 (multi-digit) is rejected. bash 3.2 — the project's
+# portability floor — does not reliably support `>&$N` for N>=10 because
+# the `{var}>file` form is bash 4+. Restricting validation to single
+# digits makes the failure mode loud (exit 2 here) instead of silent
+# (write fails at nudge time, absorbed by the 2>/dev/null guard).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=10 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 2 "$EC" "verdict-nudge FD=10: exits 2 (multi-digit rejected)"
+stderr_content=$(cat "$stderr_file")
+assert_contains "DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=10: error names the env var"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 17a-7c. FD=99 (larger multi-digit) is also rejected. Same reasoning as
+# 17a-7b — anchors the regex tightness against future relaxation.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=99 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 2 "$EC" "verdict-nudge FD=99: exits 2 (multi-digit rejected)"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 17a-8. FD set AND NO_VERDICT_NUDGE=1 → NO_VERDICT_NUDGE wins. Suppression
+# beats redirect.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+nudge_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 \
+  DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
+assert_eq 0 "$EC" "verdict-nudge FD=3 + NO_VERDICT_NUDGE: exits 0"
+nudge_content=$(cat "$nudge_file")
+if [[ -n "$nudge_content" ]]; then
+  echo "  FAIL  verdict-nudge FD=3 + NO_VERDICT_NUDGE: nudge still emitted to fd 3"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge FD=3 + NO_VERDICT_NUDGE: NO_VERDICT_NUDGE wins (no nudge on fd 3)"; pass=$((pass+1))
+fi
+stderr_content=$(cat "$stderr_file")
+if echo "$stderr_content" | grep -q "record verdict"; then
+  echo "  FAIL  verdict-nudge FD=3 + NO_VERDICT_NUDGE: nudge leaked into fd 2"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge FD=3 + NO_VERDICT_NUDGE: fd 2 also stays clean"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics" "$stderr_file" "$nudge_file"
+
+# 17a-9. FD set AND NO_METRICS=1 → NO_METRICS wins (no metrics row → nothing
+# to verdict against, same as today's NO_METRICS behaviour).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); rm -f "$metrics"
+stderr_file=$(mktemp)
+nudge_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 \
+  DELEGATE_TO_OLLAMA_NO_METRICS=1 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
+assert_eq 0 "$EC" "verdict-nudge FD=3 + NO_METRICS: exits 0"
+nudge_content=$(cat "$nudge_file")
+if [[ -n "$nudge_content" ]]; then
+  echo "  FAIL  verdict-nudge FD=3 + NO_METRICS: nudge emitted despite no metrics row"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge FD=3 + NO_METRICS: NO_METRICS wins (no nudge on fd 3)"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$stderr_file" "$nudge_file"
+
+# 17a-10. FD set on non-zero exit (pick-model failure) → no nudge. Same as
+# today's non-zero-exit behaviour; failed calls have no model output to
+# judge, so no verdict should be invited.
+tmp=$(mktemp -d)
+cat > "$tmp/ollama" <<'EOF'
+#!/usr/bin/env bash
+[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
+unrelated:model  zz 5 GB   1 day ago"
+EOF
+chmod +x "$tmp/ollama"
+metrics=$(mktemp); : > "$metrics"
+stderr_file=$(mktemp)
+nudge_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
+assert_eq 1 "$EC" "verdict-nudge FD=3 on failure: still exits 1"
+nudge_content=$(cat "$nudge_file")
+if [[ -n "$nudge_content" ]]; then
+  echo "  FAIL  verdict-nudge FD=3 on failure: nudge emitted despite non-zero exit"; fail=$((fail+1))
+else
+  echo "  PASS  verdict-nudge FD=3 on failure: silenced"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics" "$stderr_file" "$nudge_file"
+
 # 18. Pre-flight canary on --recipe. Issue #110 documented stalls of 6–10
 # minutes when a 35B-class prose-tier model was hit with a recipe-shaped
 # prompt; the canary is a 1-token probe that fails loud before the input
