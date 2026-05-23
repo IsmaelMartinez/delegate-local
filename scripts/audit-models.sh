@@ -165,4 +165,8 @@ cat <<'EOF'
 - After any pull, edit scripts/pick-model.sh prefs if the model-name pattern
   changed, then re-run this script.
 - Prefer the smallest model sufficient for the task (speed + energy).
+
+To validate any suggested upgrade against the recipe library before
+adopting, run:
+    bash scripts/model-change-audit.sh <model> [<tier>]
 EOF

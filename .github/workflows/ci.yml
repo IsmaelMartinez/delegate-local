@@ -80,6 +80,9 @@ jobs:
       - name: Eval-skill-triggers tests
         run: bash tests/test-eval-skill-triggers.sh
 
+      - name: Model-change-audit tests
+        run: bash tests/test-model-change-audit.sh
+
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh
 
