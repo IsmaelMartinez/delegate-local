@@ -1,3 +1,9 @@
+---
+inputs:
+  slide_title: string
+  facts: string
+  sentence_count: integer
+---
 # presentation-slide-prose
 
 ## When to use

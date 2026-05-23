@@ -1,3 +1,10 @@
+---
+inputs:
+  hash: string
+  verdict: string
+  comment: string
+  fix_summary: string
+---
 # pr-review-reply
 
 ## When to use

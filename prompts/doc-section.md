@@ -1,3 +1,9 @@
+---
+inputs:
+  topic: string
+  facts: string
+  max_sentences: integer
+---
 # doc-section
 
 ## When to use

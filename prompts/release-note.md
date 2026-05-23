@@ -1,3 +1,10 @@
+---
+inputs:
+  title: string
+  number: integer
+  body: string
+  anchor: string
+---
 # release-note
 
 ## When to use

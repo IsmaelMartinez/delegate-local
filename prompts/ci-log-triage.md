@@ -1,3 +1,7 @@
+---
+inputs:
+  stdin: string
+---
 # ci-log-triage
 
 ## When to use

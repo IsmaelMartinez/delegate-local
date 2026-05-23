@@ -1,3 +1,9 @@
+---
+inputs:
+  recent_prs: string
+  diff_stat: string
+  context: string
+---
 # pr-description
 
 ## When to use

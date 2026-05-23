@@ -1,3 +1,7 @@
+---
+inputs:
+  stdin: string
+---
 # polish-reply
 
 ## When to use
