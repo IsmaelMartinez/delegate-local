@@ -649,7 +649,9 @@ fi
 # reject. Greedy is the empirically-validated default; the env-vars stay so
 # callers can experiment with non-greedy sampling on prose-shaped tasks
 # where temperature-induced variety helps. Qwen-family detection still runs
-# so audit-metrics can pivot on model_family in the JSONL row.
+# and sets a `model_family` variable as a hook for future audit-metrics
+# work — the field is NOT currently emitted into the JSONL row; a follow-up
+# will wire it in once the calibration backlog needs the pivot.
 #
 # All overrides are validated as numeric (bash 3.2 case-pattern, no
 # associative arrays). Numeric pattern: optional leading minus, digits,
@@ -832,8 +834,9 @@ trap 'rm -f "$body_file"' EXIT
 if [[ "$backend" == "ollama" ]]; then
   # think:false suppresses chain-of-thought for thinking-capable models —
   # see DELEGATE_THINK above. The sampler-profile overlay is built via jq
-  # additions so non-Qwen models keep the bare {temperature:0} shape and
-  # Qwen models get the full top_p / top_k / presence_penalty triple.
+  # additions so the dispatch payload carries only the keys the caller
+  # opted into via env vars; with no overrides the payload is the bare
+  # {temperature:0} greedy shape regardless of model family.
   payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson th "$think" \
     --argjson temp "$sampling_temperature" \
     --arg top_p "$sampling_top_p" --arg top_k "$sampling_top_k" --arg pp "$sampling_presence_penalty" \
