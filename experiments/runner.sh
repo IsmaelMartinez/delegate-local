@@ -157,29 +157,28 @@ slug="$(echo "$model" | tr '/:.' '___')"
 out="$out_dir/$slug.txt"
 
 # Mirror scripts/delegate.sh sampler-profile resolution so the runner's A/B
-# behaviour matches production. Qwen3-family models get Alibaba's
-# instruct/non-thinking profile (temperature 0.7, top_p 0.8, top_k 20,
-# presence_penalty 1.3) by default; non-Qwen stays greedy. Env-var overrides
-# (DELEGATE_TEMPERATURE / DELEGATE_TOP_P / DELEGATE_TOP_K /
-# DELEGATE_PRESENCE_PENALTY) flow through so a baseline run can force greedy
-# via `DELEGATE_TEMPERATURE=0 bash experiments/runner.sh ...`.
-sampling_is_qwen=0
-case "$model" in
-  *[Qq][Ww][Ee][Nn]3.6*|*[Qq][Ww][Ee][Nn]3-[Cc][Oo][Dd][Ee][Rr]*|*[Qq][Ww][Ee][Nn]3-[Nn][Ee][Xx][Tt]*|*[Qq][Ww][Ee][Nn]3.5*)
-    sampling_is_qwen=1
+# behaviour matches production. Default for all models is greedy
+# (temperature=0, no top_p/top_k/presence_penalty in the payload). Env-var
+# overrides (DELEGATE_TEMPERATURE / DELEGATE_TOP_P / DELEGATE_TOP_K /
+# DELEGATE_PRESENCE_PENALTY) let callers opt INTO non-greedy sampling — the
+# Alibaba-recommended Qwen3 instruct profile is `DELEGATE_TEMPERATURE=0.7
+# DELEGATE_TOP_P=0.8 DELEGATE_TOP_K=20 DELEGATE_PRESENCE_PENALTY=1.3`. An
+# earlier iteration auto-applied that profile on Qwen3-family models; the
+# T4 A/B (see experiments/results/2026-05-22-track-a-qwen-sampling-ab.md)
+# found it regresses commit-message output because temperature=0.7 produces
+# the participial-padding tails the recipe's guards reject. Qwen-family
+# detection still runs so future calibration work can branch on it.
+model_family=""
+model_lc=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
+case "$model_lc" in
+  *qwen3.6*|*qwen3-coder*|*qwen3-next*|*qwen3.5*)
+    model_family="qwen3"
     ;;
 esac
-if (( sampling_is_qwen )); then
-  sampling_temperature="0.7"
-  sampling_top_p="0.8"
-  sampling_top_k="20"
-  sampling_presence_penalty="1.3"
-else
-  sampling_temperature="0"
-  sampling_top_p=""
-  sampling_top_k=""
-  sampling_presence_penalty=""
-fi
+sampling_temperature="0"
+sampling_top_p=""
+sampling_top_k=""
+sampling_presence_penalty=""
 [[ -n "${DELEGATE_TEMPERATURE:-}" ]] && sampling_temperature="$DELEGATE_TEMPERATURE"
 [[ -n "${DELEGATE_TOP_P:-}" ]] && sampling_top_p="$DELEGATE_TOP_P"
 [[ -n "${DELEGATE_TOP_K:-}" ]] && sampling_top_k="$DELEGATE_TOP_K"

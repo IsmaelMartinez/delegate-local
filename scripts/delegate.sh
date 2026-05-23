@@ -108,24 +108,24 @@
 #                                           #   for long-context tier or
 #                                           #   verbose models.
 #   DELEGATE_TEMPERATURE=<float>            # override sampler temperature.
-#                                           #   Qwen3-family models default to
-#                                           #   0.7 (the Qwen-recommended
-#                                           #   instruct/non-thinking profile);
-#                                           #   non-Qwen models default to 0
-#                                           #   (greedy). Setting this var
-#                                           #   restores greedy on Qwen models
-#                                           #   (DELEGATE_TEMPERATURE=0) or
-#                                           #   activates sampling on non-Qwen.
+#                                           #   Default for all models is 0
+#                                           #   (greedy). Set to opt INTO
+#                                           #   non-greedy sampling per-call;
+#                                           #   the Alibaba-recommended Qwen
+#                                           #   instruct profile is
+#                                           #   DELEGATE_TEMPERATURE=0.7
+#                                           #   DELEGATE_TOP_P=0.8
+#                                           #   DELEGATE_TOP_K=20
+#                                           #   DELEGATE_PRESENCE_PENALTY=1.3.
 #                                           #   Non-numeric value exits 2.
-#   DELEGATE_TOP_P=<float>                  # override top_p. Qwen default 0.8;
-#                                           #   non-Qwen default unset.
+#   DELEGATE_TOP_P=<float>                  # override top_p. Default unset (no
+#                                           #   top_p key sent in payload).
 #                                           #   Non-numeric exits 2.
-#   DELEGATE_TOP_K=<int>                    # override top_k. Qwen default 20;
-#                                           #   non-Qwen default unset.
+#   DELEGATE_TOP_K=<int>                    # override top_k. Default unset.
 #                                           #   Non-numeric exits 2.
-#   DELEGATE_PRESENCE_PENALTY=<float>       # override presence_penalty. Qwen
-#                                           #   default 1.3; non-Qwen default
-#                                           #   unset. Non-numeric exits 2.
+#   DELEGATE_PRESENCE_PENALTY=<float>       # override presence_penalty.
+#                                           #   Default unset. Non-numeric
+#                                           #   exits 2.
 #   DELEGATE_OTEL_ENDPOINT=<url>            # Phase 11 Track A (#134). When
 #                                           #   set, POST one OTLP/HTTP span
 #                                           #   per invocation to this URL
@@ -635,35 +635,49 @@ if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
   exit 1
 fi
 
-# Resolve the sampler profile for the dispatch call. Qwen3-family models
-# benefit from the instruct/non-thinking profile (temperature=0.7, top_p=0.8,
-# top_k=20, presence_penalty=1.3) per Alibaba's published recommendation —
-# greedy decoding produces lower-quality T4-style commit-message output on
-# qwen3.6:35b-a3b-q8_0. Non-Qwen models (deepseek-r1, llama, gemma, phi, qwq,
-# glm) keep the prior greedy default. Per-call overrides via env vars; all
-# are validated as numeric (bash 3.2 case-pattern, no associative arrays).
-# Numeric pattern: optional leading minus, digits, optional decimal point
-# and more digits — covers 0, 0.7, 1.3, -42, .5, 1. (top_k is sent as int
-# but the same pattern is used for the validation surface so the error
-# message shape stays consistent across all four overrides).
-sampling_is_qwen=0
-case "$model" in
-  *[Qq][Ww][Ee][Nn]3.6*|*[Qq][Ww][Ee][Nn]3-[Cc][Oo][Dd][Ee][Rr]*|*[Qq][Ww][Ee][Nn]3-[Nn][Ee][Xx][Tt]*|*[Qq][Ww][Ee][Nn]3.5*)
-    sampling_is_qwen=1
+# Resolve the sampler profile for the dispatch call. Default for all models
+# is greedy (temperature=0, no top_p/top_k/presence_penalty in the payload).
+# Per-call overrides via DELEGATE_TEMPERATURE / DELEGATE_TOP_P / DELEGATE_TOP_K
+# / DELEGATE_PRESENCE_PENALTY let callers opt INTO non-greedy sampling — the
+# Alibaba-recommended Qwen3 instruct profile is `DELEGATE_TEMPERATURE=0.7
+# DELEGATE_TOP_P=0.8 DELEGATE_TOP_K=20 DELEGATE_PRESENCE_PENALTY=1.3`. An
+# earlier iteration of this code path auto-applied the Qwen profile on
+# Qwen3-family models, but the T4 A/B (see experiments/results/2026-05-22-
+# track-a-qwen-sampling-ab.md) found that profile regresses commit-message
+# output: temperature=0.7 reintroduces lexical variety that lands on the
+# participial-padding tails the commit-message recipe's guards explicitly
+# reject. Greedy is the empirically-validated default; the env-vars stay so
+# callers can experiment with non-greedy sampling on prose-shaped tasks
+# where temperature-induced variety helps. Qwen-family detection still runs
+# so audit-metrics can pivot on model_family in the JSONL row.
+#
+# All overrides are validated as numeric (bash 3.2 case-pattern, no
+# associative arrays). Numeric pattern: optional leading minus, digits,
+# optional decimal point and more digits — covers 0, 0.7, 1.3, -42, .5, 1.
+# (top_k is sent as int but the same pattern is used for the validation
+# surface so the error message shape stays consistent across all four
+# overrides).
+model_family=""
+model_lc=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
+case "$model_lc" in
+  *qwen3.6*|*qwen3-coder*|*qwen3-next*|*qwen3.5*)
+    model_family="qwen3"
     ;;
 esac
 
-if (( sampling_is_qwen )); then
-  sampling_temperature="0.7"
-  sampling_top_p="0.8"
-  sampling_top_k="20"
-  sampling_presence_penalty="1.3"
-else
-  sampling_temperature="0"
-  sampling_top_p=""
-  sampling_top_k=""
-  sampling_presence_penalty=""
-fi
+# Dispatch-side defaults: greedy. The variables holding what actually goes
+# into the wire payload are populated below; the parallel `metric_*` set
+# captures only what the caller explicitly opted into, so a bare greedy
+# invocation writes no sampling_* keys to the JSONL row (back-compat with
+# pre-Phase-13 rows). When an env var is set, both surfaces carry it.
+sampling_temperature="0"
+sampling_top_p=""
+sampling_top_k=""
+sampling_presence_penalty=""
+metric_sampling_temperature=""
+metric_sampling_top_p=""
+metric_sampling_top_k=""
+metric_sampling_presence_penalty=""
 
 validate_numeric() {
   # Bash 3.2 =~ POSIX ERE — same idiom as the canary's preflight_timeout
@@ -682,18 +696,22 @@ validate_numeric() {
 if [[ -n "${DELEGATE_TEMPERATURE:-}" ]]; then
   validate_numeric "DELEGATE_TEMPERATURE" "$DELEGATE_TEMPERATURE"
   sampling_temperature="$DELEGATE_TEMPERATURE"
+  metric_sampling_temperature="$DELEGATE_TEMPERATURE"
 fi
 if [[ -n "${DELEGATE_TOP_P:-}" ]]; then
   validate_numeric "DELEGATE_TOP_P" "$DELEGATE_TOP_P"
   sampling_top_p="$DELEGATE_TOP_P"
+  metric_sampling_top_p="$DELEGATE_TOP_P"
 fi
 if [[ -n "${DELEGATE_TOP_K:-}" ]]; then
   validate_numeric "DELEGATE_TOP_K" "$DELEGATE_TOP_K"
   sampling_top_k="$DELEGATE_TOP_K"
+  metric_sampling_top_k="$DELEGATE_TOP_K"
 fi
 if [[ -n "${DELEGATE_PRESENCE_PENALTY:-}" ]]; then
   validate_numeric "DELEGATE_PRESENCE_PENALTY" "$DELEGATE_PRESENCE_PENALTY"
   sampling_presence_penalty="$DELEGATE_PRESENCE_PENALTY"
+  metric_sampling_presence_penalty="$DELEGATE_PRESENCE_PENALTY"
 fi
 
 # Pre-flight canary — only fires when --recipe is set. Issue #110 documented
@@ -733,7 +751,7 @@ if [[ -n "$recipe" ]] \
     canary_pchars=$(( ${#recipe_template} + ${#prompt} ))
     canary_cchars=${#context}
     canary_toks=$(compute_tokens_local "$canary_pchars" "$canary_cchars" 0)
-    log_metric "$ts_start" "$tier" "$model" "$canary_pchars" "$canary_cchars" 0 "$canary_dur_ms" 3 "$recipe" 0 "$canary_dur_ms" "$otel_trace_id" "$otel_span_id" "$sampling_temperature" "$sampling_top_p" "$sampling_top_k" "$sampling_presence_penalty"
+    log_metric "$ts_start" "$tier" "$model" "$canary_pchars" "$canary_cchars" 0 "$canary_dur_ms" 3 "$recipe" 0 "$canary_dur_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty"
     emit_otel_span "$start_epoch_ms" "$canary_dur_ms" 3 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$canary_pchars" "$canary_cchars" 0 0 "$canary_dur_ms" "$canary_toks" "${recipe_template}${prompt}" "$context" ""
     # Distinguish curl exit codes so the recovery advice points at the
     # right knob. 28 is the --max-time-fired timeout (the case the canary
@@ -898,7 +916,7 @@ context_chars=${#context}
 output_chars=${#output}
 tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$output_chars")
 
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$sampling_temperature" "$sampling_top_p" "$sampling_top_k" "$sampling_presence_penalty"
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty"
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to

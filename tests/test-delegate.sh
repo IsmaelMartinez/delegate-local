@@ -139,17 +139,38 @@ if [[ -s "$sniff" ]]; then
   assert_contains '"model":"qwen3.6:35b-a3b"' "$payload" "payload: model field"
   assert_contains '"think":false' "$payload" "payload: think:false default"
   assert_contains '"stream":false' "$payload" "payload: stream:false"
-  # The mock resolves to qwen3.6:35b-a3b, which trips the Qwen-family
-  # sampler profile (temperature 0.7, top_p 0.8, top_k 20, presence_penalty
-  # 1.3). Substring-match tolerates trailing decimal precision (jq may emit
-  # 0.7 or 0.7000000 depending on locale; either contains "0.7").
-  assert_contains '"temperature":0.7' "$payload" "payload: Qwen temperature=0.7"
-  assert_contains '"top_p":0.8' "$payload" "payload: Qwen top_p=0.8"
-  assert_contains '"top_k":20' "$payload" "payload: Qwen top_k=20"
-  assert_contains '"presence_penalty":1.3' "$payload" "payload: Qwen presence_penalty=1.3"
+  # Default sampling is greedy for ALL models (Qwen3 included) since the
+  # T4 A/B in 2026-05-22-track-a-qwen-sampling-ab.md found the Alibaba-
+  # recommended profile regresses commit-message output. Env vars opt INTO
+  # non-greedy sampling — bare invocation must have bare temperature:0 and
+  # NO top_p/top_k/presence_penalty.
+  assert_contains '"options":{"temperature":0}' "$payload" "payload: bare greedy options.temperature:0"
+  case "$payload" in
+    *'"top_p"'*) echo "  FAIL  payload: bare greedy must NOT carry top_p"; fail=$((fail+1));;
+    *) echo "  PASS  payload: bare greedy omits top_p"; pass=$((pass+1));;
+  esac
+  case "$payload" in
+    *'"top_k"'*) echo "  FAIL  payload: bare greedy must NOT carry top_k"; fail=$((fail+1));;
+    *) echo "  PASS  payload: bare greedy omits top_k"; pass=$((pass+1));;
+  esac
+  case "$payload" in
+    *'"presence_penalty"'*) echo "  FAIL  payload: bare greedy must NOT carry presence_penalty"; fail=$((fail+1));;
+    *) echo "  PASS  payload: bare greedy omits presence_penalty"; pass=$((pass+1));;
+  esac
 else
   echo "  FAIL  payload sniff: file empty"; fail=$((fail+1))
 fi
+# Bare greedy invocation must NOT write any sampling_* keys to the metrics
+# row (back-compat with pre-Phase-13 rows). Env-var opt-in adds them; absent
+# any env var the row carries no sampling fields.
+case "$line" in
+  *'"sampling_temperature"'*) echo "  FAIL  metrics: bare greedy must omit sampling_temperature"; fail=$((fail+1));;
+  *) echo "  PASS  metrics: bare greedy omits sampling_temperature"; pass=$((pass+1));;
+esac
+case "$line" in
+  *'"sampling_top_p"'*) echo "  FAIL  metrics: bare greedy must omit sampling_top_p"; fail=$((fail+1));;
+  *) echo "  PASS  metrics: bare greedy omits sampling_top_p"; pass=$((pass+1));;
+esac
 rm -rf "$tmp" "$metrics"
 
 # 3. Opt-out env var suppresses metrics writing.
@@ -680,11 +701,21 @@ esac
 payload=$(cat "$payload_sniff")
 assert_contains '"model":"mlx-community/Qwen3.6-35B-A3B-Instruct-4bit"' "$payload" "MLX payload: model field"
 assert_contains '"max_tokens":' "$payload" "MLX payload: max_tokens (OpenAI shape)"
-# Qwen-family model → Qwen-recommended sampler profile (also on MLX).
-assert_contains '"temperature":0.7' "$payload" "MLX payload: Qwen temperature=0.7"
-assert_contains '"top_p":0.8' "$payload" "MLX payload: Qwen top_p=0.8"
-assert_contains '"top_k":20' "$payload" "MLX payload: Qwen top_k=20"
-assert_contains '"presence_penalty":1.3' "$payload" "MLX payload: Qwen presence_penalty=1.3"
+# MLX bare invocation also stays greedy (default flipped 2026-05-23). Env
+# vars opt INTO sampling per call on either backend.
+assert_contains '"temperature":0' "$payload" "MLX payload: bare greedy temperature=0"
+case "$payload" in
+  *'"top_p"'*) echo "  FAIL  MLX payload: bare greedy must NOT carry top_p"; fail=$((fail+1));;
+  *) echo "  PASS  MLX payload: bare greedy omits top_p"; pass=$((pass+1));;
+esac
+case "$payload" in
+  *'"top_k"'*) echo "  FAIL  MLX payload: bare greedy must NOT carry top_k"; fail=$((fail+1));;
+  *) echo "  PASS  MLX payload: bare greedy omits top_k"; pass=$((pass+1));;
+esac
+case "$payload" in
+  *'"presence_penalty"'*) echo "  FAIL  MLX payload: bare greedy must NOT carry presence_penalty"; fail=$((fail+1));;
+  *) echo "  PASS  MLX payload: bare greedy omits presence_penalty"; pass=$((pass+1));;
+esac
 assert_contains '"messages":' "$payload" "MLX payload: messages array (chat-completions shape)"
 assert_contains '"role":"user"' "$payload" "MLX payload: user-role message"
 assert_contains '"enable_thinking":false' "$payload" "MLX payload: enable_thinking:false by default (mirrors Ollama think:false)"
@@ -3072,17 +3103,24 @@ esac
 rm -rf "$tmp" "$metrics"
 
 # ---------------------------------------------------------------------------
-# Track A of #193 — Qwen3-family sampler defaults (delegate.sh)
-# Qwen3-family models (qwen3.6, qwen3-coder, qwen3-next, qwen3.5) get
-# Alibaba's recommended instruct profile (temperature 0.7, top_p 0.8,
-# top_k 20, presence_penalty 1.3). Non-Qwen models stay greedy. Env vars
-# DELEGATE_TEMPERATURE / DELEGATE_TOP_P / DELEGATE_TOP_K /
-# DELEGATE_PRESENCE_PENALTY override per call (numeric only — non-numeric
-# exits 2). Canary preflight stays greedy regardless.
+# Track A of #193 — opt-in sampler overrides (delegate.sh)
+# Default sampler is greedy for ALL models (temperature=0, no top_p/top_k/
+# presence_penalty in the payload, no sampling_* keys in the metrics row).
+# An earlier iteration of this code path auto-applied the Alibaba-recommended
+# Qwen3 instruct profile (temperature=0.7, top_p=0.8, top_k=20,
+# presence_penalty=1.3) on Qwen3-family models, but the T4 A/B in
+# experiments/results/2026-05-22-track-a-qwen-sampling-ab.md found the
+# profile regresses commit-message output. The default flipped back to
+# greedy 2026-05-23; the four env-var overrides (DELEGATE_TEMPERATURE /
+# DELEGATE_TOP_P / DELEGATE_TOP_K / DELEGATE_PRESENCE_PENALTY) remain so
+# callers can opt INTO the Qwen profile (or any other profile) per call.
+# Non-numeric env vars exit 2 with a named error. Canary preflight stays
+# greedy regardless. The metrics row carries sampling_* keys only when the
+# caller explicitly set the corresponding env var.
 # ---------------------------------------------------------------------------
 
-# QS1. Qwen-family resolution → Qwen profile on Ollama dispatch payload AND
-# on the JSONL metrics row.
+# QS1. Qwen-family model with no overrides → bare greedy on the Ollama
+# dispatch payload AND on the JSONL metrics row (no sampling_* keys at all).
 tmp=$(mktemp -d)
 make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
@@ -3092,26 +3130,51 @@ EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "QS1: Qwen model exits 0"
+assert_eq 0 "$EC" "QS1: Qwen model with no overrides exits 0"
 payload=$(cat "$sniff")
-assert_contains '"temperature":0.7' "$payload" "QS1: payload carries Qwen temperature=0.7"
-assert_contains '"top_p":0.8' "$payload" "QS1: payload carries Qwen top_p=0.8"
-assert_contains '"top_k":20' "$payload" "QS1: payload carries Qwen top_k=20"
-assert_contains '"presence_penalty":1.3' "$payload" "QS1: payload carries Qwen presence_penalty=1.3"
+assert_contains '"options":{"temperature":0}' "$payload" "QS1: bare greedy payload has options.temperature:0"
+case "$payload" in
+  *'"temperature":0.7'*) echo "  FAIL  QS1: Qwen model must NOT auto-apply temperature=0.7 (default flipped)"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: Qwen model stays greedy by default"; pass=$((pass+1));;
+esac
+case "$payload" in
+  *'"top_p"'*) echo "  FAIL  QS1: bare invocation must NOT carry top_p"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare invocation omits top_p"; pass=$((pass+1));;
+esac
+case "$payload" in
+  *'"top_k"'*) echo "  FAIL  QS1: bare invocation must NOT carry top_k"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare invocation omits top_k"; pass=$((pass+1));;
+esac
+case "$payload" in
+  *'"presence_penalty"'*) echo "  FAIL  QS1: bare invocation must NOT carry presence_penalty"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare invocation omits presence_penalty"; pass=$((pass+1));;
+esac
 line=$(cat "$metrics")
-assert_contains '"sampling_temperature":0.7' "$line" "QS1: metrics row carries sampling_temperature"
-assert_contains '"sampling_top_p":0.8' "$line" "QS1: metrics row carries sampling_top_p"
-assert_contains '"sampling_top_k":20' "$line" "QS1: metrics row carries sampling_top_k"
-assert_contains '"sampling_presence_penalty":1.3' "$line" "QS1: metrics row carries sampling_presence_penalty"
+# Metrics row carries NO sampling_* keys on bare greedy — back-compat with
+# pre-Phase-13 JSONL rows.
+case "$line" in
+  *'"sampling_temperature"'*) echo "  FAIL  QS1: bare metrics row must omit sampling_temperature"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare metrics row omits sampling_temperature"; pass=$((pass+1));;
+esac
+case "$line" in
+  *'"sampling_top_p"'*) echo "  FAIL  QS1: bare metrics row must omit sampling_top_p"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare metrics row omits sampling_top_p"; pass=$((pass+1));;
+esac
+case "$line" in
+  *'"sampling_top_k"'*) echo "  FAIL  QS1: bare metrics row must omit sampling_top_k"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare metrics row omits sampling_top_k"; pass=$((pass+1));;
+esac
+case "$line" in
+  *'"sampling_presence_penalty"'*) echo "  FAIL  QS1: bare metrics row must omit sampling_presence_penalty"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare metrics row omits sampling_presence_penalty"; pass=$((pass+1));;
+esac
 rm -rf "$tmp" "$metrics"
 
-# QS2. Non-Qwen model resolution → bare temperature:0, no top_p/top_k/
-# presence_penalty in the payload or metrics row.
+# QS2. Non-Qwen model also stays greedy by default (same default for all
+# models). Verifies the default-flip applies uniformly, not just to non-Qwen.
 tmp=$(mktemp -d)
 cat > "$tmp/ollama" <<'EOF'
 #!/usr/bin/env bash
-# Mock that exposes only a deepseek-r1 model — pick-model resolves the
-# reasoning tier against it.
 case "${1:-}" in
   list)
     cat <<'LIST'
@@ -3132,7 +3195,6 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "QS2: non-Qwen model exits 0"
 payload=$(cat "$sniff")
 assert_contains '"model":"deepseek-r1:32b"' "$payload" "QS2: model resolved to deepseek-r1"
-# Use a regex-style check: temperature must be 0 but NOT 0.something.
 assert_contains '"options":{"temperature":0}' "$payload" "QS2: non-Qwen payload has bare options.temperature:0"
 case "$payload" in
   *'"top_p"'*) echo "  FAIL  QS2: non-Qwen payload must NOT carry top_p"; fail=$((fail+1));;
@@ -3146,26 +3208,16 @@ case "$payload" in
   *'"presence_penalty"'*) echo "  FAIL  QS2: non-Qwen payload must NOT carry presence_penalty"; fail=$((fail+1));;
   *) echo "  PASS  QS2: non-Qwen payload omits presence_penalty"; pass=$((pass+1));;
 esac
-# Metrics row: sampling_temperature present (=0), but the three optional
-# sampling fields are omitted (the line-builder skips them when unset).
 line=$(cat "$metrics")
-assert_contains '"sampling_temperature":0' "$line" "QS2: metrics row records sampling_temperature=0"
 case "$line" in
-  *'"sampling_top_p"'*) echo "  FAIL  QS2: metrics row must omit sampling_top_p"; fail=$((fail+1));;
-  *) echo "  PASS  QS2: metrics row omits sampling_top_p"; pass=$((pass+1));;
-esac
-case "$line" in
-  *'"sampling_top_k"'*) echo "  FAIL  QS2: metrics row must omit sampling_top_k"; fail=$((fail+1));;
-  *) echo "  PASS  QS2: metrics row omits sampling_top_k"; pass=$((pass+1));;
-esac
-case "$line" in
-  *'"sampling_presence_penalty"'*) echo "  FAIL  QS2: metrics row must omit sampling_presence_penalty"; fail=$((fail+1));;
-  *) echo "  PASS  QS2: metrics row omits sampling_presence_penalty"; pass=$((pass+1));;
+  *'"sampling_temperature"'*) echo "  FAIL  QS2: bare metrics row must omit sampling_temperature"; fail=$((fail+1));;
+  *) echo "  PASS  QS2: bare metrics row omits sampling_temperature"; pass=$((pass+1));;
 esac
 rm -rf "$tmp" "$metrics"
 
-# QS3. DELEGATE_TEMPERATURE=0 on a Qwen model restores greedy temperature
-# but the other three Qwen sampler keys stay in place — opt-in per knob.
+# QS3. Full Qwen profile opt-in via the four env vars on a Qwen model. The
+# env vars provide both the dispatch payload sampler and the metrics row
+# entries — surfacing what the caller chose to set.
 tmp=$(mktemp -d)
 make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
@@ -3174,22 +3226,51 @@ metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TEMPERATURE=0 \
+  DELEGATE_TEMPERATURE=0.7 \
+  DELEGATE_TOP_P=0.8 \
+  DELEGATE_TOP_K=20 \
+  DELEGATE_PRESENCE_PENALTY=1.3 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "QS3: Qwen + override temperature=0 exits 0"
+assert_eq 0 "$EC" "QS3: full Qwen-profile opt-in exits 0"
 payload=$(cat "$sniff")
-# temperature is 0 (greedy restored) but the other Qwen keys remain.
-assert_contains '"temperature":0' "$payload" "QS3: payload carries override temperature=0"
-case "$payload" in
-  *'"temperature":0.7'*) echo "  FAIL  QS3: override should set temperature=0 (not 0.7)"; fail=$((fail+1));;
-  *) echo "  PASS  QS3: override actually replaced 0.7 with 0"; pass=$((pass+1));;
-esac
-assert_contains '"top_p":0.8' "$payload" "QS3: top_p stays at Qwen default when only temperature overridden"
-assert_contains '"top_k":20' "$payload" "QS3: top_k stays at Qwen default"
-assert_contains '"presence_penalty":1.3' "$payload" "QS3: presence_penalty stays at Qwen default"
+assert_contains '"temperature":0.7' "$payload" "QS3: opt-in payload carries temperature=0.7"
+assert_contains '"top_p":0.8' "$payload" "QS3: opt-in payload carries top_p=0.8"
+assert_contains '"top_k":20' "$payload" "QS3: opt-in payload carries top_k=20"
+assert_contains '"presence_penalty":1.3' "$payload" "QS3: opt-in payload carries presence_penalty=1.3"
 line=$(cat "$metrics")
-assert_contains '"sampling_temperature":0' "$line" "QS3: metrics records the overridden temperature=0"
-assert_contains '"sampling_top_p":0.8' "$line" "QS3: metrics records top_p still at Qwen default"
+assert_contains '"sampling_temperature":0.7' "$line" "QS3: opt-in metrics row carries sampling_temperature"
+assert_contains '"sampling_top_p":0.8' "$line" "QS3: opt-in metrics row carries sampling_top_p"
+assert_contains '"sampling_top_k":20' "$line" "QS3: opt-in metrics row carries sampling_top_k"
+assert_contains '"sampling_presence_penalty":1.3' "$line" "QS3: opt-in metrics row carries sampling_presence_penalty"
+rm -rf "$tmp" "$metrics"
+
+# QS3b. Partial opt-in — only DELEGATE_TEMPERATURE is set. The dispatch
+# payload carries the override but no top_p/top_k/presence_penalty (those
+# stay unset because the caller didn't request them). Metrics row mirrors:
+# sampling_temperature present, others omitted.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TEMPERATURE=0.5 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "QS3b: partial opt-in exits 0"
+payload=$(cat "$sniff")
+assert_contains '"temperature":0.5' "$payload" "QS3b: partial opt-in payload carries the override"
+case "$payload" in
+  *'"top_p"'*) echo "  FAIL  QS3b: partial opt-in must NOT carry top_p (not opted into)"; fail=$((fail+1));;
+  *) echo "  PASS  QS3b: partial opt-in omits top_p"; pass=$((pass+1));;
+esac
+line=$(cat "$metrics")
+assert_contains '"sampling_temperature":0.5' "$line" "QS3b: partial opt-in metrics row carries sampling_temperature"
+case "$line" in
+  *'"sampling_top_p"'*) echo "  FAIL  QS3b: partial opt-in metrics must omit sampling_top_p"; fail=$((fail+1));;
+  *) echo "  PASS  QS3b: partial opt-in metrics omits sampling_top_p"; pass=$((pass+1));;
+esac
 rm -rf "$tmp" "$metrics"
 
 # QS4. Non-numeric DELEGATE_TEMPERATURE exits 2 with a clear stderr.
@@ -3266,8 +3347,10 @@ for good in "0" "1" "-1" "0.7" "1.3" ".5" "1." "-42" "-0.5"; do
   rm -rf "$tmp" "$metrics"
 done
 
-# QS5. Same shape on the MLX path — Qwen profile lands on /v1/chat/completions
-# as top-level keys (OpenAI shape), not inside an `options` object.
+# QS5. MLX backend, Qwen3 model, full opt-in via env vars. Profile lands on
+# /v1/chat/completions as top-level keys (OpenAI shape), not inside an
+# `options` object. Mirror QS3 to confirm MLX dispatch honours the same
+# env-var surface as Ollama.
 tmp=$(mktemp -d)
 snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
 mkdir -p "$snap"
@@ -3279,13 +3362,17 @@ EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
   DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TEMPERATURE=0.7 \
+  DELEGATE_TOP_P=0.8 \
+  DELEGATE_TOP_K=20 \
+  DELEGATE_PRESENCE_PENALTY=1.3 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "QS5: MLX + Qwen exits 0"
+assert_eq 0 "$EC" "QS5: MLX + full opt-in exits 0"
 payload=$(cat "$payload_sniff")
-assert_contains '"temperature":0.7' "$payload" "QS5: MLX payload has Qwen temperature"
-assert_contains '"top_p":0.8' "$payload" "QS5: MLX payload has Qwen top_p"
-assert_contains '"top_k":20' "$payload" "QS5: MLX payload has Qwen top_k"
-assert_contains '"presence_penalty":1.3' "$payload" "QS5: MLX payload has Qwen presence_penalty"
+assert_contains '"temperature":0.7' "$payload" "QS5: MLX payload has opt-in temperature"
+assert_contains '"top_p":0.8' "$payload" "QS5: MLX payload has opt-in top_p"
+assert_contains '"top_k":20' "$payload" "QS5: MLX payload has opt-in top_k"
+assert_contains '"presence_penalty":1.3' "$payload" "QS5: MLX payload has opt-in presence_penalty"
 rm -rf "$tmp" "$metrics"
 
 # QS5b. Non-numeric override on MLX path also exits 2 (same validator runs

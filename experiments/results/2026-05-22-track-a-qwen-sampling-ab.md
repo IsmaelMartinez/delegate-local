@@ -73,7 +73,34 @@ profile as default and tighten the commit-message recipe guards further,
 or (b) flip the default back to greedy and keep the env-var override for
 opt-in.
 
+## Outcome — greedy retained as default
+
+After reviewing the A/B numbers, the default sampler was flipped back to
+greedy for all models (Qwen3 family included). The four env-var overrides
+(`DELEGATE_TEMPERATURE`, `DELEGATE_TOP_P`, `DELEGATE_TOP_K`,
+`DELEGATE_PRESENCE_PENALTY`) remain — they now let callers opt INTO the
+Qwen profile (or any other profile) per call rather than receiving it
+automatically. The empirical reasoning: T4 mean dropped from 1.0000 to
+0.8666 under the auto-applied Qwen profile because three of the five
+treatment reps emitted participial-padding tails that greedy decoding
+never produces (the same commit message landed verbatim across all five
+greedy reps), and one rep exceeded the 72-character subject ceiling. The
+commit-message recipe's anti-padding directive holds under greedy and
+breaks under `temperature=0.7` because the introduced lexical variety
+tends to land on the exact participial clauses the directive forbids —
+the calibration is binding at temperature=0 but not at temperature=0.7.
+Treatment-2 (greedy default after the fix) restores the original 1.00
+mean, confirming the regression was sampler-induced rather than caused
+by an unrelated recipe or fixture change.
+
+Treatment-2 (greedy default after the fix):
+
+```
+T4_SUMMARY: reps=5 total_passed=30 total_checks=30 mean=1.0000 stdev=0.0000 min=1.0000 max=1.0000
+```
+
 ## Raw artefacts
 
-- `experiments/results/raw/qwen3_6_35b-a3b-q8_0-greedy.txt`
-- `experiments/results/raw/qwen3_6_35b-a3b-q8_0-qwen-profile.txt`
+- `experiments/results/raw/qwen3_6_35b-a3b-q8_0-greedy.txt` (Treatment-1 baseline, greedy via `DELEGATE_TEMPERATURE=0`)
+- `experiments/results/raw/qwen3_6_35b-a3b-q8_0-qwen-profile.txt` (regression run, Qwen profile auto-applied)
+- `experiments/results/raw/qwen3_6_35b-a3b-q8_0-greedy-default-after-fix.txt` (Treatment-2, greedy is now the default — no env vars set)
