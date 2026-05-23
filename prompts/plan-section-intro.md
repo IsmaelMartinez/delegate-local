@@ -114,6 +114,8 @@ Detect from the anchor; do NOT default to either.
 
 Stop after the substantive content. Do NOT add a trailing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling", "highlighting", "underscoring"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "To summarise", "This ensures", "This enables", "This guarantees", "This delivers"). Do NOT end with restating phrases ("this distinction is crucial", "this is crucial", "this is essential", "across diverse environments", "closes the gap", "closing the gap", "closes the loop", "closing the loop", "going forward", "moving forward"). End on a finite verb introducing new content, or stop.
 
+Forward-looking phase intros are factual planning prose; closing-flourish sentences like "ensuring proper rollout" or "going forward" read especially wrong in this genre.
+
 Preserve every phase number, PR reference, and identifier from the FACTS
 block exactly as written. Do NOT invent phase numbers; do NOT invent PR
 numbers; do NOT round identifiers. If the FACTS block names "Phase 13" and
