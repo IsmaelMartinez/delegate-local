@@ -32,18 +32,12 @@ fi
 tiers_line=$(grep -E '^TIERS="' "$pick" | head -1)
 tiers=$(echo "$tiers_line" | sed -E 's/^TIERS="([^"]+)".*/\1/' | tr '|' ' ')
 
-# Extract the shipped prefs list for a given tier by parsing the case
-# statement in pick-model.sh. Avoids duplicating the prefs lists here so
-# the init output stays in sync if the shipped order changes.
+# Extract the shipped prefs list for a given tier via pick-model.sh's
+# --print-prefs surface. Sources the list from the single tier-definition
+# point in pick-model.sh rather than re-parsing its case statement.
 shipped_prefs() {
   local tier="$1"
-  perl -ne '
-    if (/^\s*\Q'"$tier"'\E\)\s*prefs=\(([^)]*)\)/) {
-      my $list = $1;
-      while ($list =~ /"([^"]+)"/g) { print "$1\n"; }
-      exit;
-    }
-  ' "$pick"
+  bash "$pick" --print-prefs 2>/dev/null | grep "^$tier:" | head -1 | sed 's/^[^:]*://' | tr ' ' '\n'
 }
 
 cat <<'EOF'

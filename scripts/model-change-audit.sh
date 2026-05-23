@@ -68,6 +68,11 @@ eval_script="$repo_root/scripts/eval-skill-triggers.sh"
 baseline_script="$repo_root/experiments/run-baseline.sh"
 raw_dir="$repo_root/experiments/results/raw"
 
+# Single tmpdir for all gate logs. One trap, removes everything on exit
+# regardless of which gate added what — robust to future gate additions.
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
 # Confirm the model is installed via ollama list. Substring matching
 # against `ollama list` output mirrors how pick-model.sh resolves prefs;
 # require an exact tag match here so a user typo doesn't silently audit
@@ -85,31 +90,22 @@ fi
 # Tier inference: probe each tier's prefs list for a case-insensitive
 # substring match against $new_model. First tier whose prefs contain a
 # matching substring wins. Mirror pick-model.sh's prefs arrays here
-# rather than parsing pick-model.sh — the prefs lists are short and the
-# duplication is the price of running this inference without exec'ing
-# pick-model.sh once per tier (each call would shell-out to ollama list).
+# Sources prefs from pick-model.sh --print-prefs so the tier definitions stay
+# single-sourced. Each call shells out once (not once per tier) and parses
+# the resulting tier:prefs lines locally.
 infer_tier() {
   local model_lc
   model_lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
-  local tier_prefs
-  for tier_prefs in \
-      "code:qwen3-coder-next qwen3-coder deepseek-r1 qwen3.5" \
-      "prose:qwen3.6 qwen3-next gemma4:latest gemma4 llama4 qwen3.5" \
-      "reasoning:deepseek-r1:32b phi4-reasoning qwq glm-4" \
-      "long-context:qwen3.6 qwen3-next llama4:scout qwen3-coder-next llama4 glm-4" \
-      "vision:qwen3-vl:30b-a3b-thinking qwen3-vl" \
-      "embedding:nomic-embed-text bge-large" \
-      "premium-general:qwen3.5:122b" \
-      "reasoning-vision:phi4-reasoning-vision qwen3-vl:30b-a3b-thinking"; do
-    local t="${tier_prefs%%:*}"
-    local prefs="${tier_prefs#*:}"
-    local p
+  local line t prefs p
+  while IFS= read -r line; do
+    t="${line%%:*}"
+    prefs="${line#*:}"
     for p in $prefs; do
       case "$model_lc" in
         *"$p"*) echo "$t"; return 0 ;;
       esac
     done
-  done
+  done < <(bash "$pick" --print-prefs)
   return 1
 }
 
@@ -152,8 +148,7 @@ fi
 
 echo
 echo "=== gate 1: trigger eval against $new_model ==="
-gate1_log=$(mktemp)
-trap 'rm -f "$gate1_log"' EXIT
+gate1_log="$tmpdir/gate1.log"
 bash "$eval_script" --ollama "$new_model" >"$gate1_log" 2>&1
 gate1_rc=$?
 cat "$gate1_log"
@@ -187,8 +182,7 @@ fi
 
 echo
 echo "=== gate 2: empirical scorers (reps=3) ==="
-gate2_log=$(mktemp)
-trap 'rm -f "$gate1_log" "$gate2_log"' EXIT
+gate2_log="$tmpdir/gate2.log"
 bash "$baseline_script" --reps 3 "$new_model" >"$gate2_log" 2>&1
 gate2_rc=$?
 cat "$gate2_log"
@@ -328,11 +322,20 @@ verdict="ADOPT"
 exit_code=0
 if (( gate1_pass == 0 && gate1_marginal == 0 )); then
   verdict="REJECT"; exit_code=2
+elif [[ "$t4_status" == "MISSING" || "$t5_status" == "MISSING" || "$t6_status" == "MISSING" ]]; then
+  # Core scorer produced no result — verdict cannot be validated against
+  # the recipe library on this dimension. Fail closed.
+  verdict="REJECT"; exit_code=2
 elif [[ "$t4_status" == "FAIL" || "$t5_status" == "FAIL" || "$t6_status" == "FAIL" || "$t7_status" == "FAIL" || "$t8_status" == "FAIL" ]]; then
   verdict="REJECT"; exit_code=2
 elif (( template_compatible == 0 )); then
   verdict="REJECT"; exit_code=2
 elif (( gate1_marginal == 1 )); then
+  verdict="INVESTIGATE"; exit_code=1
+elif [[ "$t7_status" == "MISSING" || "$t8_status" == "MISSING" ]]; then
+  # Optional scorer is available but produced no result for this raw file —
+  # not a strict REJECT (T7/T8 are not yet core invariants), but worth
+  # surfacing for manual review.
   verdict="INVESTIGATE"; exit_code=1
 elif [[ "$t4_status" == "MARGINAL" || "$t5_status" == "MARGINAL" || "$t6_status" == "MARGINAL" || "$t7_status" == "MARGINAL" || "$t8_status" == "MARGINAL" ]]; then
   verdict="INVESTIGATE"; exit_code=1

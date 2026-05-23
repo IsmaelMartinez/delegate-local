@@ -289,6 +289,7 @@ make_ollama_mock "$tmp" "qwen3-coder:30b-a3b-q8_0" "TEMPLATE \"\"\"x\"\"\""
 # that and shows up on stdout.
 mkdir -p "$tmp/sandbox-repo/scripts"
 cp "$SCRIPT" "$tmp/sandbox-repo/scripts/model-change-audit.sh"
+ln -s "$REPO/scripts/pick-model.sh" "$tmp/sandbox-repo/scripts/pick-model.sh"
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" bash "$tmp/sandbox-repo/scripts/model-change-audit.sh" qwen3-coder:30b-a3b-q8_0 2>&1) || EC=$?
 assert_contains "inferred tier: code" "$out" "tier inference: qwen3-coder -> code"

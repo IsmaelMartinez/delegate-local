@@ -41,14 +41,47 @@ set -euo pipefail
 # header comment are derived from this.
 TIERS="code|prose|reasoning|long-context|vision|embedding|premium-general|reasoning-vision"
 
+# Single source of truth for tier preference lists. The case statement below
+# selects which list applies; the --print-prefs path emits all of them.
+# Per-tier values are space-separated substrings (no quoting required because
+# none contain whitespace). External callers query this surface to avoid
+# duplicating the prefs in their own code (e.g. scripts/model-change-audit.sh
+# uses it for tier inference from a model name).
+CODE_PREFS="qwen3-coder-next qwen3-coder deepseek-r1 qwen3.5"
+PROSE_PREFS="qwen3.6 qwen3-next gemma4:latest gemma4 llama4 qwen3.5"
+REASONING_PREFS="deepseek-r1:32b phi4-reasoning qwq glm-4"
+LONG_CONTEXT_PREFS="qwen3.6 qwen3-next llama4:scout qwen3-coder-next llama4 glm-4"
+VISION_PREFS="qwen3-vl:30b-a3b-thinking qwen3-vl"
+EMBEDDING_PREFS="nomic-embed-text bge-large"
+PREMIUM_GENERAL_PREFS="qwen3.5:122b"
+REASONING_VISION_PREFS="phi4-reasoning-vision qwen3-vl:30b-a3b-thinking"
+
 dry_run=0
+print_prefs=0
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --dry-run) dry_run=1 ;;
+    --print-prefs) print_prefs=1 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
 done
+
+# Emit all tier:prefs lines and exit. External callers (e.g.
+# scripts/model-change-audit.sh) use this surface to avoid hardcoding the
+# preference lists; keeps a single source of truth for tier definitions.
+if (( print_prefs )); then
+  printf 'code:%s\n' "$CODE_PREFS"
+  printf 'prose:%s\n' "$PROSE_PREFS"
+  printf 'reasoning:%s\n' "$REASONING_PREFS"
+  printf 'long-context:%s\n' "$LONG_CONTEXT_PREFS"
+  printf 'vision:%s\n' "$VISION_PREFS"
+  printf 'embedding:%s\n' "$EMBEDDING_PREFS"
+  printf 'premium-general:%s\n' "$PREMIUM_GENERAL_PREFS"
+  printf 'reasoning-vision:%s\n' "$REASONING_VISION_PREFS"
+  exit 0
+fi
+
 
 trace() {
   (( dry_run )) && printf "dry-run: %s\n" "$*" >&2
@@ -62,14 +95,14 @@ if [[ -z "$tier" ]]; then
 fi
 
 case "$tier" in
-  code)             prefs=("qwen3-coder-next" "qwen3-coder" "deepseek-r1" "qwen3.5") ;;
-  prose)            prefs=("qwen3.6" "qwen3-next" "gemma4:latest" "gemma4" "llama4" "qwen3.5") ;;
-  reasoning)        prefs=("deepseek-r1:32b" "phi4-reasoning" "qwq" "glm-4") ;;
-  long-context)     prefs=("qwen3.6" "qwen3-next" "llama4:scout" "qwen3-coder-next" "llama4" "glm-4") ;;
-  vision)           prefs=("qwen3-vl:30b-a3b-thinking" "qwen3-vl") ;;
-  embedding)        prefs=("nomic-embed-text" "bge-large") ;;
-  premium-general)  prefs=("qwen3.5:122b") ;;
-  reasoning-vision) prefs=("phi4-reasoning-vision" "qwen3-vl:30b-a3b-thinking") ;;
+  code)             prefs=($CODE_PREFS) ;;
+  prose)            prefs=($PROSE_PREFS) ;;
+  reasoning)        prefs=($REASONING_PREFS) ;;
+  long-context)     prefs=($LONG_CONTEXT_PREFS) ;;
+  vision)           prefs=($VISION_PREFS) ;;
+  embedding)        prefs=($EMBEDDING_PREFS) ;;
+  premium-general)  prefs=($PREMIUM_GENERAL_PREFS) ;;
+  reasoning-vision) prefs=($REASONING_VISION_PREFS) ;;
   *) echo "unknown tier: $tier (valid: $TIERS)" >&2; exit 2 ;;
 esac
 
