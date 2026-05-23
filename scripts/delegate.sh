@@ -107,6 +107,25 @@
 #                                           #   requires max_tokens. Raise
 #                                           #   for long-context tier or
 #                                           #   verbose models.
+#   DELEGATE_TEMPERATURE=<float>            # override sampler temperature.
+#                                           #   Default for all models is 0
+#                                           #   (greedy). Set to opt INTO
+#                                           #   non-greedy sampling per-call;
+#                                           #   the Alibaba-recommended Qwen
+#                                           #   instruct profile is
+#                                           #   DELEGATE_TEMPERATURE=0.7
+#                                           #   DELEGATE_TOP_P=0.8
+#                                           #   DELEGATE_TOP_K=20
+#                                           #   DELEGATE_PRESENCE_PENALTY=1.3.
+#                                           #   Non-numeric value exits 2.
+#   DELEGATE_TOP_P=<float>                  # override top_p. Default unset (no
+#                                           #   top_p key sent in payload).
+#                                           #   Non-numeric exits 2.
+#   DELEGATE_TOP_K=<int>                    # override top_k. Default unset.
+#                                           #   Non-numeric exits 2.
+#   DELEGATE_PRESENCE_PENALTY=<float>       # override presence_penalty.
+#                                           #   Default unset. Non-numeric
+#                                           #   exits 2.
 #   DELEGATE_OTEL_ENDPOINT=<url>            # Phase 11 Track A (#134). When
 #                                           #   set, POST one OTLP/HTTP span
 #                                           #   per invocation to this URL
@@ -266,7 +285,8 @@ compute_tokens_local() {
 
 log_metric() {
   [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" == "1" ]] && return 0
-  local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}"
+  local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
+    s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}"
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$ochars")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -290,6 +310,11 @@ log_metric() {
   # generate them unconditionally — the cost is two perl invocations — so
   # historical backfill (Track E #157) and the feedback-span linkage both
   # have a stable identifier even when the exporter endpoint is unset).
+  # sampling_temperature / sampling_top_p / sampling_top_k /
+  # sampling_presence_penalty (Track A of #193) record the dispatch sampler
+  # profile so audit-metrics can pivot on greedy-vs-Qwen-profile runs.
+  # Non-Qwen models emit only sampling_temperature (always 0); Qwen models
+  # emit all four; env-var overrides surface as whatever the caller set.
   # jq builds the line so any quote, backslash, or newline in $model or
   # $recipe_name (recipe names are filename-safe today but model names come
   # from `ollama list` parsing and are not under our control) escapes
@@ -299,23 +324,33 @@ log_metric() {
       --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" \
       --arg model "$model" --arg recipe "$recipe_name" \
       --arg trace_id "$trace_id" --arg span_id "$span_id" \
+      --arg s_temp "$s_temp" --arg s_top_p "$s_top_p" --arg s_top_k "$s_top_k" --arg s_pp "$s_pp" \
       --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
       --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
       --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
       '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, recipe:$recipe, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
        + (if $trace_id != "" then {otel_trace_id:$trace_id} else {} end)
-       + (if $span_id != "" then {otel_span_id:$span_id} else {} end)' \
+       + (if $span_id != "" then {otel_span_id:$span_id} else {} end)
+       + (if $s_temp != "" then {sampling_temperature:($s_temp|tonumber)} else {} end)
+       + (if $s_top_p != "" then {sampling_top_p:($s_top_p|tonumber)} else {} end)
+       + (if $s_top_k != "" then {sampling_top_k:($s_top_k|tonumber)} else {} end)
+       + (if $s_pp != "" then {sampling_presence_penalty:($s_pp|tonumber)} else {} end)' \
       >> "$metrics_file" 2>/dev/null || true
   else
     jq -nc \
       --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" --arg model "$model" \
       --arg trace_id "$trace_id" --arg span_id "$span_id" \
+      --arg s_temp "$s_temp" --arg s_top_p "$s_top_p" --arg s_top_k "$s_top_k" --arg s_pp "$s_pp" \
       --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
       --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
       --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
       '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
        + (if $trace_id != "" then {otel_trace_id:$trace_id} else {} end)
-       + (if $span_id != "" then {otel_span_id:$span_id} else {} end)' \
+       + (if $span_id != "" then {otel_span_id:$span_id} else {} end)
+       + (if $s_temp != "" then {sampling_temperature:($s_temp|tonumber)} else {} end)
+       + (if $s_top_p != "" then {sampling_top_p:($s_top_p|tonumber)} else {} end)
+       + (if $s_top_k != "" then {sampling_top_k:($s_top_k|tonumber)} else {} end)
+       + (if $s_pp != "" then {sampling_presence_penalty:($s_pp|tonumber)} else {} end)' \
       >> "$metrics_file" 2>/dev/null || true
   fi
 }
@@ -594,10 +629,91 @@ if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
   fail_pchars=$(( ${#recipe_template} + ${#prompt} ))
   fail_cchars=${#context}
   fail_toks=$(compute_tokens_local "$fail_pchars" "$fail_cchars" 0)
-  log_metric "$ts_start" "$tier" "(none)" "$fail_pchars" "$fail_cchars" 0 "$fail_dur_ms" 1 "$recipe" 0 "$fail_dur_ms" "$otel_trace_id" "$otel_span_id"
+  log_metric "$ts_start" "$tier" "(none)" "$fail_pchars" "$fail_cchars" 0 "$fail_dur_ms" 1 "$recipe" 0 "$fail_dur_ms" "$otel_trace_id" "$otel_span_id" "" "" "" ""
   emit_otel_span "$start_epoch_ms" "$fail_dur_ms" 1 "$otel_trace_id" "$otel_span_id" "(none)" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks" "${recipe_template}${prompt}" "$context" ""
   echo "delegate: pick-model failed for tier '$tier'" >&2
   exit 1
+fi
+
+# Resolve the sampler profile for the dispatch call. Default for all models
+# is greedy (temperature=0, no top_p/top_k/presence_penalty in the payload).
+# Per-call overrides via DELEGATE_TEMPERATURE / DELEGATE_TOP_P / DELEGATE_TOP_K
+# / DELEGATE_PRESENCE_PENALTY let callers opt INTO non-greedy sampling — the
+# Alibaba-recommended Qwen3 instruct profile is `DELEGATE_TEMPERATURE=0.7
+# DELEGATE_TOP_P=0.8 DELEGATE_TOP_K=20 DELEGATE_PRESENCE_PENALTY=1.3`. An
+# earlier iteration of this code path auto-applied the Qwen profile on
+# Qwen3-family models, but the T4 A/B (see experiments/results/2026-05-22-
+# track-a-qwen-sampling-ab.md) found that profile regresses commit-message
+# output: temperature=0.7 reintroduces lexical variety that lands on the
+# participial-padding tails the commit-message recipe's guards explicitly
+# reject. Greedy is the empirically-validated default; the env-vars stay so
+# callers can experiment with non-greedy sampling on prose-shaped tasks
+# where temperature-induced variety helps. Qwen-family detection still runs
+# and sets a `model_family` variable as a hook for future audit-metrics
+# work — the field is NOT currently emitted into the JSONL row; a follow-up
+# will wire it in once the calibration backlog needs the pivot.
+#
+# All overrides are validated as numeric (bash 3.2 case-pattern, no
+# associative arrays). Numeric pattern: optional leading minus, digits,
+# optional decimal point and more digits — covers 0, 0.7, 1.3, -42, .5, 1.
+# (top_k is sent as int but the same pattern is used for the validation
+# surface so the error message shape stays consistent across all four
+# overrides).
+model_family=""
+model_lc=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
+case "$model_lc" in
+  *qwen3.6*|*qwen3-coder*|*qwen3-next*|*qwen3.5*)
+    model_family="qwen3"
+    ;;
+esac
+
+# Dispatch-side defaults: greedy. The variables holding what actually goes
+# into the wire payload are populated below; the parallel `metric_*` set
+# captures only what the caller explicitly opted into, so a bare greedy
+# invocation writes no sampling_* keys to the JSONL row (back-compat with
+# pre-Phase-13 rows). When an env var is set, both surfaces carry it.
+sampling_temperature="0"
+sampling_top_p=""
+sampling_top_k=""
+sampling_presence_penalty=""
+metric_sampling_temperature=""
+metric_sampling_top_p=""
+metric_sampling_top_k=""
+metric_sampling_presence_penalty=""
+
+validate_numeric() {
+  # Bash 3.2 =~ POSIX ERE — same idiom as the canary's preflight_timeout
+  # check at line 711. Accepts: optional leading minus, then digits, or
+  # digits.digits, or digits., or .digits. Rejects strings like `1-2`,
+  # `5-`, `.-` that an earlier permissive `case` pattern passed through
+  # and pushed to jq as garbage --argjson input (the failure surfaced as
+  # an obscure 'invalid JSON text' rather than the script's own clean error).
+  local name="$1" value="$2"
+  if ! [[ "$value" =~ ^-?([0-9]+(\.[0-9]*)?|\.[0-9]+)$ ]]; then
+    echo "delegate: $name='$value' is not numeric" >&2
+    exit 2
+  fi
+}
+
+if [[ -n "${DELEGATE_TEMPERATURE:-}" ]]; then
+  validate_numeric "DELEGATE_TEMPERATURE" "$DELEGATE_TEMPERATURE"
+  sampling_temperature="$DELEGATE_TEMPERATURE"
+  metric_sampling_temperature="$DELEGATE_TEMPERATURE"
+fi
+if [[ -n "${DELEGATE_TOP_P:-}" ]]; then
+  validate_numeric "DELEGATE_TOP_P" "$DELEGATE_TOP_P"
+  sampling_top_p="$DELEGATE_TOP_P"
+  metric_sampling_top_p="$DELEGATE_TOP_P"
+fi
+if [[ -n "${DELEGATE_TOP_K:-}" ]]; then
+  validate_numeric "DELEGATE_TOP_K" "$DELEGATE_TOP_K"
+  sampling_top_k="$DELEGATE_TOP_K"
+  metric_sampling_top_k="$DELEGATE_TOP_K"
+fi
+if [[ -n "${DELEGATE_PRESENCE_PENALTY:-}" ]]; then
+  validate_numeric "DELEGATE_PRESENCE_PENALTY" "$DELEGATE_PRESENCE_PENALTY"
+  sampling_presence_penalty="$DELEGATE_PRESENCE_PENALTY"
+  metric_sampling_presence_penalty="$DELEGATE_PRESENCE_PENALTY"
 fi
 
 # Pre-flight canary — only fires when --recipe is set. Issue #110 documented
@@ -614,6 +730,12 @@ if [[ -n "$recipe" ]] \
    && [[ "${DELEGATE_NO_PREFLIGHT:-}" != "1" ]] \
    && [[ "$preflight_timeout" =~ ^[0-9]+$ ]] \
    && (( preflight_timeout > 0 )); then
+  # The canary is a 1-token probe — "did the model respond at all" is the
+  # only signal we want. Keep it at temperature:0 / greedy so a single fast
+  # deterministic token comes back regardless of the dispatch profile. The
+  # Qwen sampler overrides (top_p, top_k, presence_penalty) are pointless
+  # at num_predict:1 / max_tokens:1 and would only add JSON noise to the
+  # smallest-possible health check.
   if [[ "$backend" == "ollama" ]]; then
     canary_payload=$(jq -nc --arg m "$model" --argjson th "$think" \
       '{model:$m, prompt:"hi", stream:false, think:$th, options:{num_predict:1, temperature:0}}')
@@ -631,7 +753,7 @@ if [[ -n "$recipe" ]] \
     canary_pchars=$(( ${#recipe_template} + ${#prompt} ))
     canary_cchars=${#context}
     canary_toks=$(compute_tokens_local "$canary_pchars" "$canary_cchars" 0)
-    log_metric "$ts_start" "$tier" "$model" "$canary_pchars" "$canary_cchars" 0 "$canary_dur_ms" 3 "$recipe" 0 "$canary_dur_ms" "$otel_trace_id" "$otel_span_id"
+    log_metric "$ts_start" "$tier" "$model" "$canary_pchars" "$canary_cchars" 0 "$canary_dur_ms" 3 "$recipe" 0 "$canary_dur_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty"
     emit_otel_span "$start_epoch_ms" "$canary_dur_ms" 3 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$canary_pchars" "$canary_cchars" 0 0 "$canary_dur_ms" "$canary_toks" "${recipe_template}${prompt}" "$context" ""
     # Distinguish curl exit codes so the recovery advice points at the
     # right knob. 28 is the --max-time-fired timeout (the case the canary
@@ -711,9 +833,17 @@ body_file=$(mktemp)
 trap 'rm -f "$body_file"' EXIT
 if [[ "$backend" == "ollama" ]]; then
   # think:false suppresses chain-of-thought for thinking-capable models —
-  # see DELEGATE_THINK above.
+  # see DELEGATE_THINK above. The sampler-profile overlay is built via jq
+  # additions so the dispatch payload carries only the keys the caller
+  # opted into via env vars; with no overrides the payload is the bare
+  # {temperature:0} greedy shape regardless of model family.
   payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson th "$think" \
-    '{model:$m, prompt:$p, stream:false, think:$th, options:{temperature:0}}')
+    --argjson temp "$sampling_temperature" \
+    --arg top_p "$sampling_top_p" --arg top_k "$sampling_top_k" --arg pp "$sampling_presence_penalty" \
+    '{model:$m, prompt:$p, stream:false, think:$th, options:({temperature:$temp}
+      + (if $top_p != "" then {top_p:($top_p|tonumber)} else {} end)
+      + (if $top_k != "" then {top_k:($top_k|tonumber)} else {} end)
+      + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end))}')
   ttfb_s=$(curl -sS --fail -X POST "$ollama_host/api/generate" -d @- \
     -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
   status=$?
@@ -736,9 +866,16 @@ else
   # $think is already the normalised "true"/"false" string from lines
   # 111-115; enable_thinking maps to it directly (think:true -> reasoning
   # on, same semantic as Ollama's think field, just expressed through the
-  # chat-template kwarg).
+  # chat-template kwarg). MLX honours top_p / top_k / presence_penalty on
+  # the top-level options (OpenAI-compatible chat-completions shape — same
+  # field names, different envelope from Ollama's nested options object).
   payload=$(jq -nc --arg m "$model" --arg p "$full_input" --argjson mt "$max_tokens" --argjson et "$think" \
-    '{model:$m, messages:[{role:"user", content:$p}], stream:false, temperature:0, max_tokens:$mt, chat_template_kwargs:{enable_thinking:$et}}')
+    --argjson temp "$sampling_temperature" \
+    --arg top_p "$sampling_top_p" --arg top_k "$sampling_top_k" --arg pp "$sampling_presence_penalty" \
+    '{model:$m, messages:[{role:"user", content:$p}], stream:false, temperature:$temp, max_tokens:$mt, chat_template_kwargs:{enable_thinking:$et}}
+      + (if $top_p != "" then {top_p:($top_p|tonumber)} else {} end)
+      + (if $top_k != "" then {top_k:($top_k|tonumber)} else {} end)
+      + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end)')
   ttfb_s=$(curl -sS --fail -X POST "$mlx_host/v1/chat/completions" -d @- \
     -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
   status=$?
@@ -782,7 +919,7 @@ context_chars=${#context}
 output_chars=${#output}
 tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$output_chars")
 
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id"
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty"
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to

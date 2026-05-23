@@ -1,7 +1,7 @@
 MODEL: qwen3.6:35b-a3b-q8_0
 BACKEND: ollama
 OLLAMA_API: 1
-DATE: 2026-05-23T07:51:30Z
+DATE: 2026-05-22T21:59:55Z
 REPS: 5
 T3_SNAPSHOT: 2026-04-28
 T4_SNAPSHOT: 2026-05-21
@@ -9,7 +9,7 @@ T5_SNAPSHOT: 2026-05-11
 T6_SNAPSHOT: 2026-05-11
 
 ===== T1-doc-drift rep 1 =====
-DURATION_SEC: 10
+DURATION_SEC: 3
 RUN_STATUS: 0
 OUTPUT:
 CLAIM_A: still-open — No "How we did" retrospective page or related code exists in the repo.
@@ -90,7 +90,7 @@ Phase 7 of the roadmap requires measuring the accuracy of commit-message draftin
 The scoring logic verifies that body text is flush-left and free of bullet lists. It also rejects participial-padding tails and declarative restatements. The runner gains a --t4-snapshot flag to version the fixture per the existing T3 convention. This setup allows direct comparison of model pass rates against the recipe's calibration history.
 
 ===== T5-json-shape rep 2 =====
-DURATION_SEC: 4
+DURATION_SEC: 3
 RUN_STATUS: 0
 OUTPUT:
 {
@@ -109,7 +109,7 @@ OUTPUT:
 ^\d{5}(-\d{4})?$
 
 ===== T1-doc-drift rep 3 =====
-DURATION_SEC: 3
+DURATION_SEC: 2
 RUN_STATUS: 0
 OUTPUT:
 CLAIM_A: still-open — No "How we did" retrospective page or related code exists in the repo.
@@ -118,19 +118,19 @@ CLAIM_C: already-done — scripts/apply-party-positions.ts:60 uses yaml.stringif
 CLAIM_D: already-done — src/lib/data.ts shows six cached loaders all use shallow Object.freeze with no deep-freeze.
 
 ===== T2-party-config rep 3 =====
-DURATION_SEC: 5
+DURATION_SEC: 4
 RUN_STATUS: 0
 OUTPUT:
 CLEAN
 
 ===== T3-merge-patterns rep 3 =====
-DURATION_SEC: 1
+DURATION_SEC: 2
 RUN_STATUS: 0
 OUTPUT:
 NONE
 
 ===== T4-commit-message rep 3 =====
-DURATION_SEC: 5
+DURATION_SEC: 4
 RUN_STATUS: 0
 OUTPUT:
 feat: add commit-message fixture and scoring for empirical accuracy
@@ -140,7 +140,7 @@ Phase 7 of the roadmap requires measuring the accuracy of commit-message draftin
 The scoring logic verifies that body text is flush-left and free of bullet lists. It also rejects participial-padding tails and declarative restatements. The runner gains a --t4-snapshot flag to version the fixture per the existing T3 convention. This setup allows direct comparison of model pass rates against the recipe's calibration history.
 
 ===== T5-json-shape rep 3 =====
-DURATION_SEC: 3
+DURATION_SEC: 4
 RUN_STATUS: 0
 OUTPUT:
 {
@@ -153,13 +153,13 @@ OUTPUT:
 }
 
 ===== T6-regex-generation rep 3 =====
-DURATION_SEC: 0
+DURATION_SEC: 1
 RUN_STATUS: 0
 OUTPUT:
 ^\d{5}(-\d{4})?$
 
 ===== T1-doc-drift rep 4 =====
-DURATION_SEC: 3
+DURATION_SEC: 2
 RUN_STATUS: 0
 OUTPUT:
 CLAIM_A: still-open — No "How we did" retrospective page or related code exists in the repo.
@@ -168,7 +168,7 @@ CLAIM_C: already-done — scripts/apply-party-positions.ts:60 uses yaml.stringif
 CLAIM_D: already-done — src/lib/data.ts shows six cached loaders all use shallow Object.freeze with no deep-freeze.
 
 ===== T2-party-config rep 4 =====
-DURATION_SEC: 4
+DURATION_SEC: 5
 RUN_STATUS: 0
 OUTPUT:
 CLEAN
@@ -180,7 +180,7 @@ OUTPUT:
 NONE
 
 ===== T4-commit-message rep 4 =====
-DURATION_SEC: 5
+DURATION_SEC: 4
 RUN_STATUS: 0
 OUTPUT:
 feat: add commit-message fixture and scoring for empirical accuracy
@@ -190,7 +190,7 @@ Phase 7 of the roadmap requires measuring the accuracy of commit-message draftin
 The scoring logic verifies that body text is flush-left and free of bullet lists. It also rejects participial-padding tails and declarative restatements. The runner gains a --t4-snapshot flag to version the fixture per the existing T3 convention. This setup allows direct comparison of model pass rates against the recipe's calibration history.
 
 ===== T5-json-shape rep 4 =====
-DURATION_SEC: 3
+DURATION_SEC: 4
 RUN_STATUS: 0
 OUTPUT:
 {
@@ -209,7 +209,7 @@ OUTPUT:
 ^\d{5}(-\d{4})?$
 
 ===== T1-doc-drift rep 5 =====
-DURATION_SEC: 3
+DURATION_SEC: 2
 RUN_STATUS: 0
 OUTPUT:
 CLAIM_A: still-open — No "How we did" retrospective page or related code exists in the repo.
@@ -218,7 +218,7 @@ CLAIM_C: already-done — scripts/apply-party-positions.ts:60 uses yaml.stringif
 CLAIM_D: already-done — src/lib/data.ts shows six cached loaders all use shallow Object.freeze with no deep-freeze.
 
 ===== T2-party-config rep 5 =====
-DURATION_SEC: 4
+DURATION_SEC: 5
 RUN_STATUS: 0
 OUTPUT:
 CLEAN

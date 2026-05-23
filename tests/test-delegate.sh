@@ -139,10 +139,38 @@ if [[ -s "$sniff" ]]; then
   assert_contains '"model":"qwen3.6:35b-a3b"' "$payload" "payload: model field"
   assert_contains '"think":false' "$payload" "payload: think:false default"
   assert_contains '"stream":false' "$payload" "payload: stream:false"
-  assert_contains '"temperature":0' "$payload" "payload: temperature:0"
+  # Default sampling is greedy for ALL models (Qwen3 included) since the
+  # T4 A/B in 2026-05-22-track-a-qwen-sampling-ab.md found the Alibaba-
+  # recommended profile regresses commit-message output. Env vars opt INTO
+  # non-greedy sampling — bare invocation must have bare temperature:0 and
+  # NO top_p/top_k/presence_penalty.
+  assert_contains '"options":{"temperature":0}' "$payload" "payload: bare greedy options.temperature:0"
+  case "$payload" in
+    *'"top_p"'*) echo "  FAIL  payload: bare greedy must NOT carry top_p"; fail=$((fail+1));;
+    *) echo "  PASS  payload: bare greedy omits top_p"; pass=$((pass+1));;
+  esac
+  case "$payload" in
+    *'"top_k"'*) echo "  FAIL  payload: bare greedy must NOT carry top_k"; fail=$((fail+1));;
+    *) echo "  PASS  payload: bare greedy omits top_k"; pass=$((pass+1));;
+  esac
+  case "$payload" in
+    *'"presence_penalty"'*) echo "  FAIL  payload: bare greedy must NOT carry presence_penalty"; fail=$((fail+1));;
+    *) echo "  PASS  payload: bare greedy omits presence_penalty"; pass=$((pass+1));;
+  esac
 else
   echo "  FAIL  payload sniff: file empty"; fail=$((fail+1))
 fi
+# Bare greedy invocation must NOT write any sampling_* keys to the metrics
+# row (back-compat with pre-Phase-13 rows). Env-var opt-in adds them; absent
+# any env var the row carries no sampling fields.
+case "$line" in
+  *'"sampling_temperature"'*) echo "  FAIL  metrics: bare greedy must omit sampling_temperature"; fail=$((fail+1));;
+  *) echo "  PASS  metrics: bare greedy omits sampling_temperature"; pass=$((pass+1));;
+esac
+case "$line" in
+  *'"sampling_top_p"'*) echo "  FAIL  metrics: bare greedy must omit sampling_top_p"; fail=$((fail+1));;
+  *) echo "  PASS  metrics: bare greedy omits sampling_top_p"; pass=$((pass+1));;
+esac
 rm -rf "$tmp" "$metrics"
 
 # 3. Opt-out env var suppresses metrics writing.
@@ -673,7 +701,21 @@ esac
 payload=$(cat "$payload_sniff")
 assert_contains '"model":"mlx-community/Qwen3.6-35B-A3B-Instruct-4bit"' "$payload" "MLX payload: model field"
 assert_contains '"max_tokens":' "$payload" "MLX payload: max_tokens (OpenAI shape)"
-assert_contains '"temperature":0' "$payload" "MLX payload: temperature:0"
+# MLX bare invocation also stays greedy (default flipped 2026-05-23). Env
+# vars opt INTO sampling per call on either backend.
+assert_contains '"temperature":0' "$payload" "MLX payload: bare greedy temperature=0"
+case "$payload" in
+  *'"top_p"'*) echo "  FAIL  MLX payload: bare greedy must NOT carry top_p"; fail=$((fail+1));;
+  *) echo "  PASS  MLX payload: bare greedy omits top_p"; pass=$((pass+1));;
+esac
+case "$payload" in
+  *'"top_k"'*) echo "  FAIL  MLX payload: bare greedy must NOT carry top_k"; fail=$((fail+1));;
+  *) echo "  PASS  MLX payload: bare greedy omits top_k"; pass=$((pass+1));;
+esac
+case "$payload" in
+  *'"presence_penalty"'*) echo "  FAIL  MLX payload: bare greedy must NOT carry presence_penalty"; fail=$((fail+1));;
+  *) echo "  PASS  MLX payload: bare greedy omits presence_penalty"; pass=$((pass+1));;
+esac
 assert_contains '"messages":' "$payload" "MLX payload: messages array (chat-completions shape)"
 assert_contains '"role":"user"' "$payload" "MLX payload: user-role message"
 assert_contains '"enable_thinking":false' "$payload" "MLX payload: enable_thinking:false by default (mirrors Ollama think:false)"
@@ -3057,6 +3099,438 @@ case "$otel_body" in
   *)
     echo "  PASS  OT17: only literal '1' enables include-content (typo-safe)"
     pass=$((pass+1));;
+esac
+rm -rf "$tmp" "$metrics"
+
+# ---------------------------------------------------------------------------
+# Track A of #193 — opt-in sampler overrides (delegate.sh)
+# Default sampler is greedy for ALL models (temperature=0, no top_p/top_k/
+# presence_penalty in the payload, no sampling_* keys in the metrics row).
+# An earlier iteration of this code path auto-applied the Alibaba-recommended
+# Qwen3 instruct profile (temperature=0.7, top_p=0.8, top_k=20,
+# presence_penalty=1.3) on Qwen3-family models, but the T4 A/B in
+# experiments/results/2026-05-22-track-a-qwen-sampling-ab.md found the
+# profile regresses commit-message output. The default flipped back to
+# greedy 2026-05-23; the four env-var overrides (DELEGATE_TEMPERATURE /
+# DELEGATE_TOP_P / DELEGATE_TOP_K / DELEGATE_PRESENCE_PENALTY) remain so
+# callers can opt INTO the Qwen profile (or any other profile) per call.
+# Non-numeric env vars exit 2 with a named error. Canary preflight stays
+# greedy regardless. The metrics row carries sampling_* keys only when the
+# caller explicitly set the corresponding env var.
+# ---------------------------------------------------------------------------
+
+# QS1. Qwen-family model with no overrides → bare greedy on the Ollama
+# dispatch payload AND on the JSONL metrics row (no sampling_* keys at all).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "QS1: Qwen model with no overrides exits 0"
+payload=$(cat "$sniff")
+assert_contains '"options":{"temperature":0}' "$payload" "QS1: bare greedy payload has options.temperature:0"
+case "$payload" in
+  *'"temperature":0.7'*) echo "  FAIL  QS1: Qwen model must NOT auto-apply temperature=0.7 (default flipped)"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: Qwen model stays greedy by default"; pass=$((pass+1));;
+esac
+case "$payload" in
+  *'"top_p"'*) echo "  FAIL  QS1: bare invocation must NOT carry top_p"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare invocation omits top_p"; pass=$((pass+1));;
+esac
+case "$payload" in
+  *'"top_k"'*) echo "  FAIL  QS1: bare invocation must NOT carry top_k"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare invocation omits top_k"; pass=$((pass+1));;
+esac
+case "$payload" in
+  *'"presence_penalty"'*) echo "  FAIL  QS1: bare invocation must NOT carry presence_penalty"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare invocation omits presence_penalty"; pass=$((pass+1));;
+esac
+line=$(cat "$metrics")
+# Metrics row carries NO sampling_* keys on bare greedy — back-compat with
+# pre-Phase-13 JSONL rows.
+case "$line" in
+  *'"sampling_temperature"'*) echo "  FAIL  QS1: bare metrics row must omit sampling_temperature"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare metrics row omits sampling_temperature"; pass=$((pass+1));;
+esac
+case "$line" in
+  *'"sampling_top_p"'*) echo "  FAIL  QS1: bare metrics row must omit sampling_top_p"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare metrics row omits sampling_top_p"; pass=$((pass+1));;
+esac
+case "$line" in
+  *'"sampling_top_k"'*) echo "  FAIL  QS1: bare metrics row must omit sampling_top_k"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare metrics row omits sampling_top_k"; pass=$((pass+1));;
+esac
+case "$line" in
+  *'"sampling_presence_penalty"'*) echo "  FAIL  QS1: bare metrics row must omit sampling_presence_penalty"; fail=$((fail+1));;
+  *) echo "  PASS  QS1: bare metrics row omits sampling_presence_penalty"; pass=$((pass+1));;
+esac
+rm -rf "$tmp" "$metrics"
+
+# QS2. Non-Qwen model also stays greedy by default (same default for all
+# models). Verifies the default-flip applies uniformly, not just to non-Qwen.
+tmp=$(mktemp -d)
+cat > "$tmp/ollama" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  list)
+    cat <<'LIST'
+NAME             ID SIZE   MODIFIED
+deepseek-r1:32b  aa 30 GB  1 day ago
+LIST
+    ;;
+esac
+EOF
+chmod +x "$tmp/ollama"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" reasoning "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "QS2: non-Qwen model exits 0"
+payload=$(cat "$sniff")
+assert_contains '"model":"deepseek-r1:32b"' "$payload" "QS2: model resolved to deepseek-r1"
+assert_contains '"options":{"temperature":0}' "$payload" "QS2: non-Qwen payload has bare options.temperature:0"
+case "$payload" in
+  *'"top_p"'*) echo "  FAIL  QS2: non-Qwen payload must NOT carry top_p"; fail=$((fail+1));;
+  *) echo "  PASS  QS2: non-Qwen payload omits top_p"; pass=$((pass+1));;
+esac
+case "$payload" in
+  *'"top_k"'*) echo "  FAIL  QS2: non-Qwen payload must NOT carry top_k"; fail=$((fail+1));;
+  *) echo "  PASS  QS2: non-Qwen payload omits top_k"; pass=$((pass+1));;
+esac
+case "$payload" in
+  *'"presence_penalty"'*) echo "  FAIL  QS2: non-Qwen payload must NOT carry presence_penalty"; fail=$((fail+1));;
+  *) echo "  PASS  QS2: non-Qwen payload omits presence_penalty"; pass=$((pass+1));;
+esac
+line=$(cat "$metrics")
+case "$line" in
+  *'"sampling_temperature"'*) echo "  FAIL  QS2: bare metrics row must omit sampling_temperature"; fail=$((fail+1));;
+  *) echo "  PASS  QS2: bare metrics row omits sampling_temperature"; pass=$((pass+1));;
+esac
+rm -rf "$tmp" "$metrics"
+
+# QS3. Full Qwen profile opt-in via the four env vars on a Qwen model. The
+# env vars provide both the dispatch payload sampler and the metrics row
+# entries — surfacing what the caller chose to set.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TEMPERATURE=0.7 \
+  DELEGATE_TOP_P=0.8 \
+  DELEGATE_TOP_K=20 \
+  DELEGATE_PRESENCE_PENALTY=1.3 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "QS3: full Qwen-profile opt-in exits 0"
+payload=$(cat "$sniff")
+assert_contains '"temperature":0.7' "$payload" "QS3: opt-in payload carries temperature=0.7"
+assert_contains '"top_p":0.8' "$payload" "QS3: opt-in payload carries top_p=0.8"
+assert_contains '"top_k":20' "$payload" "QS3: opt-in payload carries top_k=20"
+assert_contains '"presence_penalty":1.3' "$payload" "QS3: opt-in payload carries presence_penalty=1.3"
+line=$(cat "$metrics")
+assert_contains '"sampling_temperature":0.7' "$line" "QS3: opt-in metrics row carries sampling_temperature"
+assert_contains '"sampling_top_p":0.8' "$line" "QS3: opt-in metrics row carries sampling_top_p"
+assert_contains '"sampling_top_k":20' "$line" "QS3: opt-in metrics row carries sampling_top_k"
+assert_contains '"sampling_presence_penalty":1.3' "$line" "QS3: opt-in metrics row carries sampling_presence_penalty"
+rm -rf "$tmp" "$metrics"
+
+# QS3b. Partial opt-in — only DELEGATE_TEMPERATURE is set. The dispatch
+# payload carries the override but no top_p/top_k/presence_penalty (those
+# stay unset because the caller didn't request them). Metrics row mirrors:
+# sampling_temperature present, others omitted.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TEMPERATURE=0.5 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "QS3b: partial opt-in exits 0"
+payload=$(cat "$sniff")
+assert_contains '"temperature":0.5' "$payload" "QS3b: partial opt-in payload carries the override"
+case "$payload" in
+  *'"top_p"'*) echo "  FAIL  QS3b: partial opt-in must NOT carry top_p (not opted into)"; fail=$((fail+1));;
+  *) echo "  PASS  QS3b: partial opt-in omits top_p"; pass=$((pass+1));;
+esac
+line=$(cat "$metrics")
+assert_contains '"sampling_temperature":0.5' "$line" "QS3b: partial opt-in metrics row carries sampling_temperature"
+case "$line" in
+  *'"sampling_top_p"'*) echo "  FAIL  QS3b: partial opt-in metrics must omit sampling_top_p"; fail=$((fail+1));;
+  *) echo "  PASS  QS3b: partial opt-in metrics omits sampling_top_p"; pass=$((pass+1));;
+esac
+rm -rf "$tmp" "$metrics"
+
+# QS4. Non-numeric DELEGATE_TEMPERATURE exits 2 with a clear stderr.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); : > "$metrics"
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TEMPERATURE=not-a-number \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 2 "$EC" "QS4: non-numeric temperature exits 2"
+stderr_content=$(cat "$stderr_file")
+assert_contains "DELEGATE_TEMPERATURE" "$stderr_content" "QS4: stderr names the bad env var"
+assert_contains "not numeric" "$stderr_content" "QS4: stderr names the failure mode"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# QS4b. Each of the four overrides validates independently — non-numeric
+# DELEGATE_TOP_P / DELEGATE_TOP_K / DELEGATE_PRESENCE_PENALTY all exit 2.
+for vname in DELEGATE_TOP_P DELEGATE_TOP_K DELEGATE_PRESENCE_PENALTY; do
+  tmp=$(mktemp -d)
+  make_mock_ollama "$tmp"
+  make_mock_curl_ok "$tmp"
+  metrics=$(mktemp); : > "$metrics"
+  stderr_file=$(mktemp)
+  EC=0
+  out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_METRICS_FILE="$metrics" \
+    "$vname"="garbage" \
+    bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+  assert_eq 2 "$EC" "QS4b/$vname: non-numeric exits 2"
+  assert_contains "$vname" "$(cat "$stderr_file")" "QS4b/$vname: stderr names env var"
+  rm -rf "$tmp" "$metrics" "$stderr_file"
+done
+
+# QS4c. Edge-case rejected values. The validator must catch shapes that
+# `[!0-9.-]` character-class checks would let through but jq --argjson
+# rejects (`1-2`, `5-`, `.-`, `1.5.6`). Each must exit 2 with the script's
+# own clean error, not jq's 'invalid JSON text' surface. Pins the
+# bash-3.2-compatible `=~` regex against regression to the permissive
+# case-pattern form.
+for bad in "1-2" "5-" ".-" "1.5.6" "-" "."; do
+  tmp=$(mktemp -d)
+  make_mock_ollama "$tmp"
+  make_mock_curl_ok "$tmp"
+  metrics=$(mktemp); : > "$metrics"
+  stderr_file=$(mktemp)
+  EC=0
+  out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_METRICS_FILE="$metrics" \
+    DELEGATE_TEMPERATURE="$bad" \
+    bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+  assert_eq 2 "$EC" "QS4c/'$bad': exit 2"
+  assert_contains "not numeric" "$(cat "$stderr_file")" "QS4c/'$bad': clean validator error (not jq's 'invalid JSON' surface)"
+  rm -rf "$tmp" "$metrics" "$stderr_file"
+done
+
+# QS4d. Valid numeric shapes the validator must continue to accept:
+# integers, negatives, floats, leading-dot decimals, trailing-dot integers.
+# Each should pass through to dispatch (exit 0).
+for good in "0" "1" "-1" "0.7" "1.3" ".5" "1." "-42" "-0.5"; do
+  tmp=$(mktemp -d)
+  make_mock_ollama "$tmp"
+  make_mock_curl_ok "$tmp"
+  metrics=$(mktemp)
+  EC=0
+  out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_METRICS_FILE="$metrics" \
+    DELEGATE_TEMPERATURE="$good" \
+    bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+  assert_eq 0 "$EC" "QS4d/'$good': accepted (exit 0)"
+  rm -rf "$tmp" "$metrics"
+done
+
+# QS5. MLX backend, Qwen3 model, full opt-in via env vars. Profile lands on
+# /v1/chat/completions as top-level keys (OpenAI shape), not inside an
+# `options` object. Mirror QS3 to confirm MLX dispatch honours the same
+# env-var surface as Ollama.
+tmp=$(mktemp -d)
+snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
+mkdir -p "$snap"
+touch "$snap/weights.safetensors"
+payload_sniff="$tmp/payload.json"
+make_mock_curl_mlx_ok "$tmp" "$payload_sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TEMPERATURE=0.7 \
+  DELEGATE_TOP_P=0.8 \
+  DELEGATE_TOP_K=20 \
+  DELEGATE_PRESENCE_PENALTY=1.3 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "QS5: MLX + full opt-in exits 0"
+payload=$(cat "$payload_sniff")
+assert_contains '"temperature":0.7' "$payload" "QS5: MLX payload has opt-in temperature"
+assert_contains '"top_p":0.8' "$payload" "QS5: MLX payload has opt-in top_p"
+assert_contains '"top_k":20' "$payload" "QS5: MLX payload has opt-in top_k"
+assert_contains '"presence_penalty":1.3' "$payload" "QS5: MLX payload has opt-in presence_penalty"
+rm -rf "$tmp" "$metrics"
+
+# QS5b. Non-numeric override on MLX path also exits 2 (same validator runs
+# before the dispatch envelope is built, regardless of backend).
+tmp=$(mktemp -d)
+snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
+mkdir -p "$snap"
+touch "$snap/weights.safetensors"
+make_mock_curl_mlx_ok "$tmp"
+metrics=$(mktemp); : > "$metrics"
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TOP_P=oops \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 2 "$EC" "QS5b: MLX + bad DELEGATE_TOP_P exits 2"
+assert_contains "DELEGATE_TOP_P" "$(cat "$stderr_file")" "QS5b: MLX validator stderr names env var"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# QS6. Canary preflight stays greedy regardless of dispatch profile. With
+# --recipe set the canary fires before dispatch; its payload must carry
+# temperature:0 (Ollama) or temperature:0 + max_tokens:1 (MLX) — never the
+# Qwen profile. Sanity test pins the contract documented in delegate.sh.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+canary_payload_sniff="$tmp/canary-payload.json"; : > "$canary_payload_sniff"
+cat > "$tmp/curl" <<EOF
+#!/usr/bin/env bash
+url=""
+for arg in "\$@"; do
+  case "\$arg" in
+    http*|https*) url="\$arg" ;;
+  esac
+done
+case "\$url" in
+  *"/v1/models"*) exit 7 ;;
+esac
+out_file=""
+write_out=""
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+payload=\$(cat)
+if echo "\$payload" | grep -q '"num_predict":1'; then
+  echo "\$payload" > "${canary_payload_sniff}"
+  printf '%s' '{"response":"k"}'
+  exit 0
+fi
+body='{"response":"mock-model-output: ok\\n"}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
+EOF
+chmod +x "$tmp/curl"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "QS6: canary + dispatch exits 0"
+canary_payload=$(cat "$canary_payload_sniff")
+assert_contains '"num_predict":1' "$canary_payload" "QS6: canary has num_predict:1"
+assert_contains '"temperature":0' "$canary_payload" "QS6: canary stays at temperature:0 (greedy)"
+case "$canary_payload" in
+  *'"top_p"'*) echo "  FAIL  QS6: canary payload must NOT carry top_p"; fail=$((fail+1));;
+  *) echo "  PASS  QS6: canary payload omits top_p"; pass=$((pass+1));;
+esac
+case "$canary_payload" in
+  *'"presence_penalty"'*) echo "  FAIL  QS6: canary payload must NOT carry presence_penalty"; fail=$((fail+1));;
+  *) echo "  PASS  QS6: canary payload omits presence_penalty"; pass=$((pass+1));;
+esac
+case "$canary_payload" in
+  *'"temperature":0.7'*) echo "  FAIL  QS6: canary must not inherit Qwen 0.7"; fail=$((fail+1));;
+  *) echo "  PASS  QS6: canary stays greedy"; pass=$((pass+1));;
+esac
+rm -rf "$tmp" "$metrics"
+
+# QS6b. MLX canary also stays greedy.
+tmp=$(mktemp -d)
+snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
+mkdir -p "$snap"
+touch "$snap/weights.safetensors"
+canary_payload_sniff="$tmp/canary-payload.json"; : > "$canary_payload_sniff"
+cat > "$tmp/curl" <<EOF
+#!/usr/bin/env bash
+url=""
+for arg in "\$@"; do
+  case "\$arg" in
+    http*|https*) url="\$arg" ;;
+  esac
+done
+case "\$url" in
+  *"/v1/models"*)
+    cat > /dev/null
+    printf '%s' '{"object":"list","data":[]}'
+    exit 0
+    ;;
+esac
+out_file=""
+write_out=""
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+payload=\$(cat)
+if echo "\$payload" | grep -qE '"max_tokens":1[,}]'; then
+  echo "\$payload" > "${canary_payload_sniff}"
+  printf '%s' '{"choices":[{"message":{"role":"assistant","content":"k"},"finish_reason":"stop"}]}'
+  exit 0
+fi
+body='{"choices":[{"message":{"role":"assistant","content":"mlx-ok"},"finish_reason":"stop"}]}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
+EOF
+chmod +x "$tmp/curl"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "QS6b: MLX canary + dispatch exits 0"
+canary_payload=$(cat "$canary_payload_sniff")
+assert_contains '"max_tokens":1' "$canary_payload" "QS6b: MLX canary has max_tokens:1"
+assert_contains '"temperature":0' "$canary_payload" "QS6b: MLX canary stays at temperature:0"
+case "$canary_payload" in
+  *'"top_p"'*) echo "  FAIL  QS6b: MLX canary must NOT carry top_p"; fail=$((fail+1));;
+  *) echo "  PASS  QS6b: MLX canary omits top_p"; pass=$((pass+1));;
+esac
+case "$canary_payload" in
+  *'"temperature":0.7'*) echo "  FAIL  QS6b: MLX canary must not inherit Qwen 0.7"; fail=$((fail+1));;
+  *) echo "  PASS  QS6b: MLX canary stays greedy"; pass=$((pass+1));;
 esac
 rm -rf "$tmp" "$metrics"
 
