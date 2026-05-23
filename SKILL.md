@@ -161,16 +161,18 @@ curl -s -H "Content-Type: application/json" http://localhost:11434/api/generate 
   | jq -r '.response'
 ```
 
-`embedding` uses `POST /api/embed` for the same reason — `ollama` has no `embed` subcommand:
+`embedding` has a wired-up primitive — `scripts/embed.sh` — that takes text on stdin (or via `--text "..."`) and prints the embedding vector to stdout as a compact JSON array of floats. It writes a `source:"embed"` row to the same metrics JSONL `delegate.sh` uses, so embedding traffic surfaces in `metrics-summary.sh` rollups alongside delegation traffic. The recipe `prompts/semantic-search.md` wraps `scripts/semantic-search.sh` (a thin cosine-similarity ranker built on `embed.sh`) and gives the agent a "find the doc that mentions X" surface that avoids reading every file:
 
 ```bash
-MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh embedding)
-curl -s -H "Content-Type: application/json" http://localhost:11434/api/embed \
-  -d "$(jq -n --arg m "$MODEL" --arg t "the text to embed" '{model:$m, input:$t}')" \
-  | jq '.embeddings[0]'
+# Primitive — embed a single string.
+echo "the text to embed" | bash ~/.claude/skills/delegate-to-ollama/scripts/embed.sh
+
+# Recipe — rank N files by cosine similarity to a query.
+bash ~/.claude/skills/delegate-to-ollama/scripts/semantic-search.sh \
+  "how do I run the test suite" prompts/*.md README.md
 ```
 
-Both bypass `delegate.sh` because the wrapper currently assumes text-in / text-out — `delegate.sh` itself uses `POST /api/generate`, but with no `images` parameter and no `/api/embed` route. Folding image and embed call shapes into the wrapper is future work — track it on the roadmap before doing it, since both shapes need different metrics and different output handling than the current pipe.
+`embed.sh` bypasses `delegate.sh` because the wrapper assumes text-in / text-out — embedding output is a vector and the metrics fields differ (`embedding_dim` rather than `output_chars`). MLX is out of scope for v1; `DELEGATE_BACKEND=mlx` exits 2 with an explanatory message. Image (`vision`, `reasoning-vision`) tiers still need the bespoke `curl` shape above — folding their call shapes into a wrapper is future work.
 
 ## Failure modes — concrete examples
 
