@@ -88,8 +88,10 @@ cosine_sim() {
 }
 
 # Score each file. Missing or empty files get a stderr warning and are
-# skipped rather than killing the whole search.
-results=""
+# skipped rather than killing the whole search. Use a bash array so the
+# accumulator is O(N) rather than the O(N^2) cost of repeated string
+# concatenation on large file sets.
+results=()
 for f in "${files[@]}"; do
   if [[ ! -f "$f" ]]; then
     echo "semantic-search: skipping '$f' (file not found)" >&2
@@ -108,14 +110,14 @@ for f in "${files[@]}"; do
   # printf with %.6f keeps the output stable across systems (jq's default
   # is ~17 sig figs which is overkill and varies with locale).
   printf -v score_fmt '%.6f' "$score"
-  results="${results}${score_fmt} ${f}"$'\n'
+  results+=("${score_fmt} ${f}")
 done
 
-if [[ -z "$results" ]]; then
+if (( ${#results[@]} == 0 )); then
   echo 'semantic-search: no files produced a usable embedding' >&2
   exit 1
 fi
 
 # Sort descending by score (LC_ALL=C keeps the locale-stable behaviour the
 # test suite expects across macOS and Linux) and take the top K.
-printf '%s' "$results" | LC_ALL=C sort -k1,1 -gr | head -n "$top_k"
+printf '%s\n' "${results[@]}" | LC_ALL=C sort -k1,1 -gr | head -n "$top_k"

@@ -74,12 +74,30 @@ while (($# > 0)); do
   esac
 done
 
+# Validate the char-budget env var before reading stdin so a malformed
+# DELEGATE_EMBED_MAX_CHARS fails fast rather than after pulling potentially
+# large content into memory. The validation also drives the read-side
+# byte cap below.
+max_chars="${DELEGATE_EMBED_MAX_CHARS:-6000}"
+if ! [[ "$max_chars" =~ ^[0-9]+$ ]]; then
+  echo "embed: DELEGATE_EMBED_MAX_CHARS='$max_chars' is not a non-negative integer" >&2
+  exit 2
+fi
+
 # Stdin takes precedence only when --text was not passed. Same -p / -s probe
 # delegate.sh uses to avoid the `! -t 0` foot-gun (FIFOs and unix sockets
-# that hold no data report as "stdin" to -t 0 and block cat forever).
+# that hold no data report as "stdin" to -t 0 and block cat forever). When
+# the budget is set, cap the read at 4× max_chars bytes — a multi-byte UTF-8
+# safety factor (worst case 4 bytes/char in UTF-8) so the post-read
+# defensive truncation below has enough source bytes to land on a valid
+# char-budget boundary without reading the entire stream when stdin is huge.
 if (( have_text_flag == 0 )); then
   if [[ -p /dev/stdin || -s /dev/stdin ]]; then
-    input_text=$(cat)
+    if (( max_chars > 0 )); then
+      input_text=$(head -c "$((max_chars * 4))")
+    else
+      input_text=$(cat)
+    fi
   fi
 fi
 
@@ -88,20 +106,17 @@ if [[ -z "$input_text" ]]; then
   exit 2
 fi
 
-# Defensive truncation against the embedding model's context window. nomic-
-# embed-text caps at 8192 tokens (~32k chars at the chars/4 estimate); the
-# default budget of 28000 leaves slack for token-vs-char drift on dense
-# code/log input. The upstream HTTP 400 ("input length exceeds the context
-# length") is curl --fail's silent path — the body never reaches stdout, so
-# callers get a much less actionable failure than a head-truncated input
-# would. The truncation point is the head of the file because the relevant
-# query-doc relevance signal usually lives near the start (titles,
-# headings) — taking the tail would discard the most discriminating tokens.
-max_chars="${DELEGATE_EMBED_MAX_CHARS:-6000}"
-if ! [[ "$max_chars" =~ ^[0-9]+$ ]]; then
-  echo "embed: DELEGATE_EMBED_MAX_CHARS='$max_chars' is not a non-negative integer" >&2
-  exit 2
-fi
+# Defensive char-budget truncation against the embedding model's context
+# window. nomic-embed-text caps at 8192 tokens (~32k chars at the chars/4
+# estimate); the default budget of 6000 chars leaves slack for token-vs-
+# char drift on dense code/log input. The upstream HTTP 400 ("input length
+# exceeds the context length") is curl --fail's silent path — the body
+# never reaches stdout, so callers get a much less actionable failure than
+# a head-truncated input would. The truncation point is the head of the
+# file because the relevant query-doc relevance signal usually lives near
+# the start (titles, headings) — taking the tail would discard the most
+# discriminating tokens. Runs after the read-side byte cap so the warning
+# is sized against the user-visible char count, not the byte budget.
 if (( max_chars > 0 )) && (( ${#input_text} > max_chars )); then
   echo "embed: input is ${#input_text} chars, truncating to first $max_chars (raise DELEGATE_EMBED_MAX_CHARS to keep more)" >&2
   input_text="${input_text:0:$max_chars}"
@@ -183,19 +198,20 @@ if (( status != 0 )); then
 fi
 
 # Parse the response: .embeddings is an array of vectors (one per input);
-# v1 only sends one input so we take .embeddings[0]. Compact JSON output
-# (-c) keeps the array on one line so downstream callers can use jq
-# arithmetic without re-flattening.
-vector=$(jq -c '.embeddings[0] // empty' < "$body_file")
-if [[ -z "$vector" ]]; then
+# v1 only sends one input so we take .embeddings[0]. One jq call emits
+# both the compact JSON vector and its length as a tab-separated row, so
+# the parse + dimensionality lookup share a single jq process instead of
+# the two-pass shape an earlier iteration used. `select(. != null)`
+# filters out the missing-key case so `read` sees an empty stream and
+# the variables stay empty for the post-read guard. `@json` re-emits the
+# vector as a compact JSON literal — same shape downstream jq arithmetic
+# expects.
+read -r vector embedding_dim < <(jq -r '.embeddings[0] | select(. != null) | [(@json), length] | @tsv' < "$body_file")
+if [[ -z "$vector" || "$vector" == "null" ]]; then
   log_metric "$ts_start" "embedding" "$model" "${#input_text}" 0 "$duration_ms" 1
   echo "embed: response did not contain .embeddings[0] (model '$model' may not be an embedding model)" >&2
   exit 1
 fi
-
-# embedding_dim is the vector length — fast jq query against the array
-# itself.
-embedding_dim=$(jq -r 'length' <<< "$vector")
 
 log_metric "$ts_start" "embedding" "$model" "${#input_text}" "$embedding_dim" "$duration_ms" 0
 
