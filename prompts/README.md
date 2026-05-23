@@ -116,6 +116,7 @@ The maintainer (or a future PR-bot) graduates a `prompt-pattern` issue by drafti
 - `doc-section.md` — one short paragraph of guidance for a technical-doc section, grounded in a bullet list of facts; ships v5-style hard rules (keyword-triggered closing-recap deletion) drawn from issue #132's repeated MISS pattern.
 - `jira-ticket-description.md` — 2-3 sentence Jira ticket description rewritten from a source paragraph; ships the verbatim-preservation directive, the British-spelling glossary guard, the comma-coordinated no-merge rule, and the closing-sentence opener blocklist.
 - `presentation-slide-prose.md` — 2-4 sentence narrative paragraph for a slide given a title + fact list; ships a list-completeness REFUSE hatch and the sharpened anti-padding directive. Parallel-invocation safe.
+- `semantic-search.md` — rank N files by cosine similarity against a query embedding. Shell-pipeline recipe (wraps `scripts/semantic-search.sh`, not `delegate.sh --recipe`) — unlocks the "find the doc that mentions X" pattern without reading every file. Uses the embedding tier via `scripts/embed.sh`.
 
 ## What this library does NOT adopt
 
