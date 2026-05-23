@@ -36,11 +36,7 @@ Plain UK English. No bullets, no headings, no bold, no inline code, no markdown.
 
 HARD RULES (non-negotiable; each addresses a real past MISS):
 
-1. Stop after the content sentences. Do not add a closing sentence
-   that restates the point. Do not append a participial clause
-   (beginning with -ing or "supported by", "leading to", "ensuring",
-   "reflecting") that summarises a downstream effect or implication.
-   End on a finite verb introducing new content, or stop.
+1. Stop after the substantive content. Do NOT add a trailing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling", "highlighting", "underscoring"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "To summarise", "This ensures", "This enables", "This guarantees", "This delivers"). Do NOT end with restating phrases ("this distinction is crucial", "this is crucial", "this is essential", "across diverse environments", "closes the gap", "closing the gap", "closes the loop", "closing the loop", "going forward", "moving forward"). End on a finite verb introducing new content, or stop.
 
 2. If a sentence you are about to write begins with any of these phrases, DELETE that sentence before emitting the response. The phrases trigger regardless of what follows them:
    - "This approach …"

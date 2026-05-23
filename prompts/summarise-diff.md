@@ -31,7 +31,18 @@ Mention the file path or feature name in each bullet so the reader can locate th
 Each bullet must describe a DISTINCT change — do NOT restate the same change with different wording.
 Do NOT invent files or features that are not in the diff.
 Do NOT include test-only changes unless the test file is the only thing that changed (and call that out explicitly).
-Output ONLY the bullets, no preamble, no trailing summary sentence.
+Output ONLY the bullets, no preamble.
+Stop after the substantive content. Do NOT add a trailing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling", "highlighting", "underscoring"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "To summarise", "This ensures", "This enables", "This guarantees", "This delivers"). Do NOT end with restating phrases ("this distinction is crucial", "this is crucial", "this is essential", "across diverse environments", "closes the gap", "closing the gap", "closes the loop", "closing the loop", "going forward", "moving forward"). End on a finite verb introducing new content, or stop.
+
+Example shape (do not copy literally — the input below is different):
+
+Wrong:
+- Adds `--recipe` flag to `delegate.sh` for loading prompt templates from `prompts/<name>.md`.
+- Adds placeholder-validation that exits 2 when `--var` keys are missing.
+- Updates `delegate.sh` to support templated recipe invocation with variable substitution.
+Correct:
+- Adds `--recipe` flag to `delegate.sh` for loading prompt templates from `prompts/<name>.md`.
+- Adds placeholder-validation that exits 2 when `--var` keys are missing.
 
 === Diff stat ===
 {{diff_stat}}

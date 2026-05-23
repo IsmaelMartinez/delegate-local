@@ -34,7 +34,13 @@ The reply MUST start with EXACTLY one of these three openers, chosen by the verd
   - "Partially applied in `{{hash}}` — " when verdict = partial
   - "Not applied — "                    when verdict = not_applied
 After the opener, add at most one short clause naming what was actually done (for applied/partial) or why it wasn't (for not_applied). No additional sentences beyond the opener and that single clause. No PR-author flattery ("Great catch!", "Thanks for the suggestion"). No restating the reviewer's comment back to them.
+Stop after the substantive content. Do NOT add a trailing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling", "highlighting", "underscoring"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "To summarise", "This ensures", "This enables", "This guarantees", "This delivers"). Do NOT end with restating phrases ("this distinction is crucial", "this is crucial", "this is essential", "across diverse environments", "closes the gap", "closing the gap", "closes the loop", "closing the loop", "going forward", "moving forward"). End on a finite verb introducing new content, or stop.
 Output ONLY the reply text, no markdown wrapper, no quoting.
+
+Example shape (do not copy literally — the input below is different):
+
+Wrong: Good point — the awk script was indeed fragile, so I switched to a perl-based parser. Thanks, this has been fixed in `8b3424a`.
+Correct: Applied in `8b3424a`. Switched the awk parser to perl so literal-newline SEARCH/REPLACE blocks no longer get split mid-block.
 
 === Verdict ===
 {{verdict}}
