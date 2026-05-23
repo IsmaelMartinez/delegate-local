@@ -94,9 +94,16 @@
 #                                           #   NO_METRICS wins (no row to
 #                                           #   verdict), non-zero exit wins
 #                                           #   (no output to judge). Valid
-#                                           #   values: positive integer in
-#                                           #   the shell-FD range (1-9 is
-#                                           #   typical). 0 (stdin), negative
+#                                           #   values: single-digit positive
+#                                           #   integer 1-9. Multi-digit FDs
+#                                           #   are rejected because bash 3.2
+#                                           #   (the project's portability
+#                                           #   floor) does not support the
+#                                           #   `{var}>file` form for high
+#                                           #   FDs and `>&$N` with N>=10
+#                                           #   can silently fail; tightening
+#                                           #   validation makes the failure
+#                                           #   mode loud. 0 (stdin), negative
 #                                           #   numbers, and non-numeric
 #                                           #   values exit 2 with a clear
 #                                           #   error before the model is
@@ -278,13 +285,18 @@ fi
 # before model resolution or the canary probe — a caller who fat-fingers
 # `DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=foo` shouldn't pay the cold-load cost
 # before discovering the typo. Default 2 (stderr) keeps the back-compat
-# behaviour the #149 reversal pinned. 0 (stdin) is rejected as nonsense;
-# 1 (stdout) is allowed for callers who genuinely want the nudge inline with
-# the model output. Larger integers (up to single-digit FDs in practice) are
-# accepted; the caller is responsible for redirecting them.
+# behaviour the #149 reversal pinned. The accepted range is 1-9 (single-
+# digit shell FDs): bash 3.2 — the project's portability floor, macOS-
+# shipped /bin/bash — only supports the `{var}>file` syntax for high FDs
+# from bash 4 onward, so multi-digit FDs via the `>&$N` form are unreliable
+# on the target platform. Restricting validation to 1-9 makes the failure
+# mode loud (clear error here) rather than silent (write-failure at nudge
+# time absorbed by the 2>/dev/null guard below). 0 (stdin) is rejected as
+# nonsense; 1 (stdout) is allowed for callers who genuinely want the nudge
+# inline with the model output.
 nudge_fd="${DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD:-2}"
-if ! [[ "$nudge_fd" =~ ^[0-9]+$ ]] || (( nudge_fd == 0 )); then
-  echo "delegate: DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD='${DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD:-}' is not a positive integer file descriptor (valid: 1, 2, 3, ...; 0 is stdin and is rejected)" >&2
+if ! [[ "$nudge_fd" =~ ^[1-9]$ ]]; then
+  echo "delegate: DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD='${DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD:-}' is not a single-digit positive file descriptor (valid: 1-9; 0 is stdin and is rejected, multi-digit FDs are unreliable on bash 3.2)" >&2
   exit 2
 fi
 

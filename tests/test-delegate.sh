@@ -1206,7 +1206,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 2 "$EC" "verdict-nudge FD=0: exits 2 (stdin rejected)"
 stderr_content=$(cat "$stderr_file")
 assert_contains "DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=0: error names the env var"
-assert_contains "positive integer" "$stderr_content" "verdict-nudge FD=0: error mentions the valid shape"
+assert_contains "valid: 1-9" "$stderr_content" "verdict-nudge FD=0: error mentions the valid shape (1-9 single-digit range)"
 # No metrics row should have been written — validation fires before model
 # contact, so no delegation row exists to verdict against.
 if [[ -s "$metrics" ]]; then
@@ -1232,11 +1232,11 @@ stderr_content=$(cat "$stderr_file")
 assert_contains "DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=foo: error names the env var"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 17a-7. FD=-1 (negative) is rejected. The regex `^[0-9]+$` matches positive
-# integers only — the leading `-` makes the match fail, same path as the
-# non-numeric case but worth pinning explicitly because a future relaxation
-# of the regex (e.g. accidentally adding a `-?` to handle "0 or negative")
-# would silently break this.
+# 17a-7. FD=-1 (negative) is rejected. The regex `^[1-9]$` matches single-
+# digit positive integers only — the leading `-` makes the match fail,
+# same path as the non-numeric case but worth pinning explicitly because
+# a future relaxation of the regex (e.g. accidentally adding a `-?` to
+# handle "0 or negative") would silently break this.
 tmp=$(mktemp -d)
 make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
@@ -1248,6 +1248,41 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=-1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 2 "$EC" "verdict-nudge FD=-1: exits 2 (negative rejected)"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 17a-7b. FD=10 (multi-digit) is rejected. bash 3.2 — the project's
+# portability floor — does not reliably support `>&$N` for N>=10 because
+# the `{var}>file` form is bash 4+. Restricting validation to single
+# digits makes the failure mode loud (exit 2 here) instead of silent
+# (write fails at nudge time, absorbed by the 2>/dev/null guard).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=10 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 2 "$EC" "verdict-nudge FD=10: exits 2 (multi-digit rejected)"
+stderr_content=$(cat "$stderr_file")
+assert_contains "DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=10: error names the env var"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 17a-7c. FD=99 (larger multi-digit) is also rejected. Same reasoning as
+# 17a-7b — anchors the regex tightness against future relaxation.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=99 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 2 "$EC" "verdict-nudge FD=99: exits 2 (multi-digit rejected)"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 17a-8. FD set AND NO_VERDICT_NUDGE=1 → NO_VERDICT_NUDGE wins. Suppression
