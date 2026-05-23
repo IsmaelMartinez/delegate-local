@@ -64,6 +64,45 @@
 #                                           #   (no row to verdict against),
 #                                           #   non-zero exit (failure has
 #                                           #   no output to judge).
+#   DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=<N> # redirect the verdict-nudge line
+#                                           #   to file descriptor N instead
+#                                           #   of fd 2 (stderr). Default
+#                                           #   unset → fd 2, preserving the
+#                                           #   unconditional-fire behaviour
+#                                           #   the #149 reversal pinned. The
+#                                           #   escape hatch for parallel-
+#                                           #   capture callers (issue #139)
+#                                           #   that want clean stdout AND
+#                                           #   coverage tracking: redirect
+#                                           #   stdout+stderr together into a
+#                                           #   single output file and route
+#                                           #   the nudge to a separate fd,
+#                                           #   e.g.
+#                                           #     DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 \
+#                                           #     bash delegate.sh prose "X" \
+#                                           #     > out.txt 2>&1 3>>nudge.log
+#                                           #   GOTCHA: the caller must
+#                                           #   redirect fd N to somewhere
+#                                           #   (file, pipe, or another fd).
+#                                           #   If fd N is closed when the
+#                                           #   nudge fires, the write fails
+#                                           #   silently — the call still
+#                                           #   succeeds but no nudge lands
+#                                           #   anywhere. Suppression rules
+#                                           #   still apply: NO_VERDICT_NUDGE
+#                                           #   wins (no nudge written),
+#                                           #   NO_METRICS wins (no row to
+#                                           #   verdict), non-zero exit wins
+#                                           #   (no output to judge). Valid
+#                                           #   values: positive integer in
+#                                           #   the shell-FD range (1-9 is
+#                                           #   typical). 0 (stdin), negative
+#                                           #   numbers, and non-numeric
+#                                           #   values exit 2 with a clear
+#                                           #   error before the model is
+#                                           #   contacted. 1 (stdout) and 2
+#                                           #   (stderr / the default) are
+#                                           #   both accepted.
 #   DELEGATE_PREFLIGHT_TIMEOUT=<s>          # default 10. Only consulted when
 #                                           #   --recipe is set. A 1-token
 #                                           #   canary probe hits the resolved
@@ -233,6 +272,20 @@ tier="${positional[0]:-}"
 prompt="${positional[1]:-}"
 if [[ -z "$tier" ]] || { [[ -z "$prompt" ]] && [[ -z "$recipe" ]]; }; then
   usage; exit 2
+fi
+
+# Validate the verdict-nudge FD env var up-front so a bad value fails fast,
+# before model resolution or the canary probe — a caller who fat-fingers
+# `DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=foo` shouldn't pay the cold-load cost
+# before discovering the typo. Default 2 (stderr) keeps the back-compat
+# behaviour the #149 reversal pinned. 0 (stdin) is rejected as nonsense;
+# 1 (stdout) is allowed for callers who genuinely want the nudge inline with
+# the model output. Larger integers (up to single-digit FDs in practice) are
+# accepted; the caller is responsible for redirecting them.
+nudge_fd="${DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD:-2}"
+if ! [[ "$nudge_fd" =~ ^[0-9]+$ ]] || (( nudge_fd == 0 )); then
+  echo "delegate: DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD='${DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD:-}' is not a positive integer file descriptor (valid: 1, 2, 3, ...; 0 is stdin and is rejected)" >&2
+  exit 2
 fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -961,11 +1014,34 @@ fi
 # coverage was 47.8% under the TTY-gate approach; removing the gate is the
 # fix for issue #149. The three escape hatches stay: NO_VERDICT_NUDGE (opt
 # out per call), NO_METRICS (no metrics row → nothing to verdict against),
-# and non-zero exit (failed calls have no model output to judge).
+# and non-zero exit (failed calls have no model output to judge). Issue #139
+# (parallel-capture callers contaminating stdout via 2>&1) is addressed
+# without re-introducing the coverage-losing gate by routing the nudge to a
+# caller-chosen file descriptor via DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=N
+# (default 2 = back-compat); the caller-side recipe is to redirect fd N
+# alongside the 2>&1 capture so coverage tracking stays intact while stdout
+# stays clean.
 if [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" != "1" ]] \
    && [[ "${DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE:-}" != "1" ]] \
    && (( status == 0 )); then
-  echo "delegate: record verdict → bash scripts/delegate-feedback.sh hit (or miss \"<reason>\")" >&2
+  # nudge_fd was validated up-front (see "Validate the verdict-nudge FD"
+  # block at the top); the value here is guaranteed to be a positive integer.
+  # The fd=2 path is the default, back-compat shape — write directly so the
+  # nudge can't be lost. The fd!=2 path wraps the echo + redirect in a
+  # compound `{ ...; } 2>/dev/null` so bash's "Bad file descriptor" error
+  # (emitted by the shell when the >&N redirect can't be set up against a
+  # closed fd, not by the echo command) is absorbed. A bare `echo ... >&"$N"
+  # 2>/dev/null` only catches what echo writes; the redirect-failure noise
+  # would still leak back to the very fd 2 the caller was trying to keep
+  # clean. The two branches keep fd=2 callers simple and only pay the
+  # absorption cost on the gotcha-prone redirect path. Pin verified on
+  # macOS bash 3.2.57.
+  nudge_msg='delegate: record verdict → bash scripts/delegate-feedback.sh hit (or miss "<reason>")'
+  if (( nudge_fd == 2 )); then
+    echo "$nudge_msg" >&2
+  else
+    { echo "$nudge_msg" >&"$nudge_fd"; } 2>/dev/null
+  fi
 fi
 
 printf '%s\n' "$output"
