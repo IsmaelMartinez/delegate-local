@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.0](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.5.0...v0.6.0) (2026-05-24)
+
+
+### Features
+
+* embedding tier wire-up — embed.sh + semantic-search.sh + recipe ([#204](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/204)) ([e1af2cd](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/e1af2cd02a5a343ccc84d986b6b4ab4523afd46f))
+* prompts/bulk-file-summary.md — one-line-per-file across N files ([#205](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/205)) ([51f067e](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/51f067e5df00e3c2ecfe6a865a3359f7ac50b9cb))
+* prompts/long-thread-distillation.md — action items / blockers / consensus ([#206](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/206)) ([2d1fef2](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/2d1fef216cbe28cc1a66983bf48e883647a0083a))
+
+
+### Bug Fixes
+
+* verdict-nudge FD redirect for clean parallel-capture (closes [#139](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/139)) ([#203](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/203)) ([b0c0c14](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/b0c0c142118b4769275e99149e8b183f5020639f))
+
+
+### Documentation
+
+* ROADMAP Phase 14 entry + commit-message prefix-hint promotion ([#202](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/202)) ([0f9dcba](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/0f9dcbab3fa64d1e3536c658ac49921a924584fb))
+
 ## [0.5.0](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.4.0...v0.5.0) (2026-05-23)
 
 
