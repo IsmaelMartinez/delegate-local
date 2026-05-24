@@ -112,7 +112,7 @@ done
 
 model="${1:-}"
 if [[ -z "$model" ]]; then
-  echo "usage: runner.sh [--backend ollama|mlx] [--ollama-cli] [--reps N] [--t3-snapshot DATE] <model-name>" >&2
+  echo "usage: runner.sh [--backend ollama|mlx] [--ollama-cli] [--reps N] [--t3-snapshot DATE] [--t4-snapshot DATE] [--t5-snapshot DATE] [--t6-snapshot DATE] <model-name>" >&2
   exit 2
 fi
 
