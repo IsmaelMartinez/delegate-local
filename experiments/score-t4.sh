@@ -87,11 +87,18 @@ PADDING_REGEXES=(
   # The comma anchor distinguishes participial-tail padding from
   # legitimate sentence-initial uses like "Replacing the SDK requires X"
   # (verified against test 14k's negative corpus). The {3,} minimum on
-  # the prefix excludes coincidental bare-noun matches on words like
-  # `ring`, `wing`, `king`, `sing`, `bring`, `string`, `sting`, `swing`,
-  # `cling`, `fling` that could occur in lists after a comma. All five
-  # 2026-05-24 dogfood MISSes (`, lifting`, `, confirming`, `, moving`,
-  # `, including`, plus existing `, exemplified`) clear the floor.
+  # the prefix excludes coincidental bare-noun matches on five-char-or-
+  # shorter `-ing` nouns like `ring`, `wing`, `king`, `sing`, `bring`,
+  # `sting`, `swing`, `cling`, `fling` that could occur in lists after
+  # a comma. Known false positive (acknowledged via PR #213 review):
+  # `string` (6 chars, `str` prefix meets the 3-char floor) IS matched
+  # — a `feat: support integer, string, and boolean` body would trip
+  # the regex. Tightening the floor to {4,} would also exclude `moving`,
+  # one of the five MUST-catch positives from the 2026-05-24 dogfood
+  # corpus, so the trade-off favours the false positive over the false
+  # negative. All five 2026-05-24 dogfood MISSes (`, lifting`,
+  # `, confirming`, `, moving`, `, including`, plus existing
+  # `, exemplified`) clear the floor.
   ',[[:space:]]+[a-z]{3,}ing([[:space:]]|[.!?,])'
 )
 

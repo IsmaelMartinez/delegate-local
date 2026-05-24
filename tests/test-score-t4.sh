@@ -436,12 +436,14 @@ assert_contains "BODY_NO_PADDING" "$out" "test 14l: ', exemplified' caught (per-
 rm -rf "$sandbox"
 
 # --- Test 14l negative supplement: the generalised matcher's `[a-z]{3,}`
-# minimum prefix excludes coincidental bare-noun matches that could appear
-# in legitimate lists after a comma. None of these should be flagged:
-# `bring` (5), `ring` (4), `wing` (4), `king` (4), `sing` (4), `cling` (5),
-# `fling` (5), `sting` (5), `string` (6), `swing` (5). The {3,} prefix on
-# the participial verb requires at least 6 characters total (e.g. `lifting`,
-# `moving`, `including`), so `, ring` does not match.
+# minimum prefix excludes coincidental bare-noun matches on five-char-or-
+# shorter `-ing` nouns that could appear in legitimate lists after a comma.
+# None of these should be flagged: `bring` (5, `br` prefix), `ring` (4,
+# `r` prefix), `wing` (4, `w` prefix), `king` (4, `k` prefix), `sing` (4,
+# `s` prefix), `cling` (5, `cl` prefix), `fling` (5, `fl` prefix),
+# `sting` (5, `st` prefix), `swing` (5, `sw` prefix). The {3,} prefix on
+# the participial verb requires the prefix itself to be 3+ chars (so
+# total word length 6+, e.g. `lifting`, `moving`, `including`).
 sandbox=$(mktemp -d)
 raw="$sandbox/raw.txt"
 build_raw "$raw" "feat: short-word coordination list
@@ -449,6 +451,22 @@ build_raw "$raw" "feat: short-word coordination list
 The schema covers ring, wing, and king geometries used by the calibration suite."
 out=$(run_score "$raw")
 assert_contains "rep 1: 6/6" "$out" "test 14l: short-word coordination list not flagged by generalised matcher"
+rm -rf "$sandbox"
+
+# --- Test 14l acknowledged-false-positive: `string` (6 chars, `str` prefix
+# meets the 3-char floor) IS matched by the generalised regex. This test
+# documents the false positive so future regex tightening regressions
+# surface immediately. The trade-off was chosen on PR #213 review: bumping
+# the floor to {4,} would also exclude `moving` — one of the five
+# MUST-catch positives from the 2026-05-24 dogfood corpus — so the
+# coordination-list-of-types false positive is accepted.
+sandbox=$(mktemp -d)
+raw="$sandbox/raw.txt"
+build_raw "$raw" "feat: support multiple primitive types
+
+The schema accepts integer, string, and boolean inputs from the upstream parser."
+out=$(run_score "$raw")
+assert_contains "BODY_NO_PADDING" "$out" "test 14l: ', string' acknowledged false-positive (matches due to 3-char prefix floor)"
 rm -rf "$sandbox"
 
 # --- Test 15: machine-parseable T4_SUMMARY line shape ---
