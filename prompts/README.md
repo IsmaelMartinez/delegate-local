@@ -135,6 +135,18 @@ Two recipe-authoring rules for the field:
 
 The opt-out env var `DELEGATE_FORCE_FLAKY=1` exists specifically so callers can capture fresh evidence that the flaky-class behaviour has changed across model upgrades. If a future Qwen3.7 release behaves better on the pr-description shape, override the gate once, measure, and update the frontmatter — don't silently rip the gate out.
 
+#### Convention 5 — Scaffold-then-polish for prose-tier delegations against digests (Phase 17 Track C)
+
+When a recipe ingests a structured digest (action items, fact list, metrics rollup, multi-source summary) and needs to emit flowing prose, the prompt verb matters more than the prompt detail. Prefer asking the model to `polish` a scaffold over asking it to `write` a paragraph from a digest, on 35B-class prose-tier hosts. The discriminator is the verb: `write` invites invention; `polish` preserves substance.
+
+The scaffold the agent hand-writes should encode the facts as positions inside sentences, e.g. `[T4 baseline was X] then [the intervention was Y] then [the measurement was Z]`. Not a bullet list of facts the model is free to reorder or omit. Scaffold positions are guard rails — the model fills them as prose without authority to drop or reorder them.
+
+On 2026-05-24, during construction of an audio-podcast script from a digest of factual data, prose-tier `qwen3.6:35b-a3b-q8_0` hallucinated supporting detail when asked to `write` the script: fabricated ablation statistics, fabricated experiment counts, invented quotation attributions. Two consecutive MISSes were recorded on the same prose-tier model on this same task shape. The successful third attempt switched the prompt framing — the agent hand-wrote a scaffold (paragraph skeleton with topic-sentence positions and fact positions), then asked the same model to `polish` it (smooth the prose, vary sentence shape, preserve all named facts verbatim, invent nothing). Result: HIT verbatim, zero hallucination.
+
+Recipes that produce closed-form structured output (commit-message subject, JSON shape extraction, regex generation) are not in this convention's scope — they have their own per-recipe shape rules. Scaffold-then-polish applies only to free-prose output from a structured input.
+
+A concrete adoption candidate is `prompts/file-summary.md` extended for multi-paragraph output, or a future `prompts/digest-prose.md` recipe. Existing recipes do not migrate. The convention is OPTIONAL like Conventions 1-4.
+
 ## Cross-machine signal: graduating an issue into a recipe
 
 The hit/miss log is single-machine. When a MISS surfaces a task shape this library does not yet cover, the cross-machine path is a `prompt-pattern` issue (`.github/ISSUE_TEMPLATE/prompt-pattern.md`). The template captures the task shape, tier and resolved model, the verbatim prompt and model output, and — when known — the prompt that turned the MISS into a HIT. The diff between broken and working prompt is the calibration signal a maintainer needs to draft a recipe without re-running the original session.
