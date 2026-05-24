@@ -16,7 +16,12 @@ This recipe is the action-oriented sibling of `summarise-issue.md`. Pick this on
 ```bash
 # For a GitHub PR thread: body + every review + every comment, oldest first.
 gh pr view <pr-number> --json title,body,comments,reviews \
-  --jq '{title, body, reviews: [.reviews[] | {author: .author.login, state, body: .body, submittedAt: .submittedAt}], comments: [.comments[] | {author: .author.login, body: .body, createdAt: .createdAt}]}'
+  --jq '{title, body, reviews: [.reviews[] | {author: .author.login, state, body: .body, submittedAt: .submittedAt, comments: [.comments[] | {author: .author.login, body: .body, createdAt: .createdAt}]}], comments: [.comments[] | {author: .author.login, body: .body, createdAt: .createdAt}]}'
+# Inline review comments (the diff-line annotations gemini and human
+# reviewers leave) often carry the load-bearing action items — fetch
+# them too and merge into the digest:
+gh api repos/<owner>/<repo>/pulls/<pr-number>/comments \
+  --jq '[.[] | {author: .user.login, path: .path, line: (.line // .original_line), body: .body, in_reply_to: .in_reply_to_id, created_at: .created_at}]'
 
 # For a GitHub issue thread: body + every comment, oldest first.
 gh issue view <issue-number> --json title,body,comments \
@@ -181,7 +186,7 @@ The other guards bound cleanly on first dogfood:
 The recipe ships in this first-pass state. Five of six guards bound on first dogfood; the resistant guard (OMIT-EMPTY) is the same shape resistant on `summarise-issue.md` against the same model, so the calibration limit is a model-prior property rather than a recipe-phrasing property. Concrete next options for future iterations (mirroring `summarise-issue.md`'s 2026-05-22 next-options list):
 
 1. **Tier reroute experiment.** The `code` tier with `qwen3-coder-next:latest` or the `prose` tier with `qwen3.6:35b-a3b-q8_0` may bind the OMIT-EMPTY rule differently — neither has been measured for this task shape. Worth testing as a one-off probe before treating the limit as fundamental.
-2. **Post-processing strip in recipe documentation.** Document `sed` filter for the known artefact shapes: `sed -i '/^- No .* (stated|reached|pending|mentioned|specified).*$/d; /^## (Action items|Blocked|Consensus)$/{N;/\n$/d;}' <<< output` as a documented post-process when the upstream recipe's MISS shape recurs on the user's host.
+2. **Post-processing strip in recipe documentation.** Document `sed` filter for the known artefact shapes: `sed -E '/^- No .* (stated|reached|pending|mentioned|specified).*$/d; /^## (Action items|Blocked|Consensus)$/{N;/\n$/d;}' <<< "$output"` as a documented post-process when the upstream recipe's MISS shape recurs on the user's host. (Three corrections from the first draft: `-E` for the alternation regex, `$output` for the variable expansion, no `-i` since a herestring isn't a file.)
 3. **Accept HIT-with-edits status** and let users strip placeholder bullets by hand (current de-facto state, consistent with the 2026-05-22 ship of `summarise-issue.md` in the same condition).
 
 The dogfood is logged as MISS rather than HIT-with-edits because the OMIT-EMPTY bypass is the recipe's load-bearing structural property — without it, the agent picking up the thread cannot trust "no Blocked section" to mean "no blockers", and the action-oriented use case the recipe is built for degrades. Future calibration work tracks against this verdict, not a paraphrase of it.
