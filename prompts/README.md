@@ -118,6 +118,7 @@ The maintainer (or a future PR-bot) graduates a `prompt-pattern` issue by drafti
 - `presentation-slide-prose.md` — 2-4 sentence narrative paragraph for a slide given a title + fact list; ships a list-completeness REFUSE hatch and the sharpened anti-padding directive. Parallel-invocation safe.
 - `semantic-search.md` — rank N files by cosine similarity against a query embedding. Shell-pipeline recipe (wraps `scripts/semantic-search.sh`, not `delegate.sh --recipe`) — unlocks the "find the doc that mentions X" pattern without reading every file. Uses the embedding tier via `scripts/embed.sh`.
 - `bulk-file-summary.md` — one-line description per file for a batch of N files (5-50 typical). Per-file loop variant of `file-summary.md`; each delegation stays independently small to fit the prose-tier ceiling per issue #110. Adds a cross-file-relationship guard so the model doesn't invent links between batch siblings. Useful when orienting in a new repo or area of an existing one.
+- `long-thread-distillation.md` — three-section structured distillation of a long PR / issue / MR thread into outstanding action items, blockers, and current consensus. Action-oriented complement to `summarise-issue.md` (timeline format); picks the same input shape but emits the "where does this stand right now" view rather than the "how did we get here" view. Most likely trigger surface is `/address-pr-comments` on a thread with many prior rounds of review.
 
 ## What this library does NOT adopt
 
