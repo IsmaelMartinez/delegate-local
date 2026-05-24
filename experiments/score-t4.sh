@@ -82,6 +82,17 @@ PADDING_REGEXES=(
   '(^|[.!?,][[:space:]]+)this[[:space:]]+provides([[:space:]]|[.!?,])'
   'clos(es|ing)[[:space:]]+the[[:space:]]+(gap|loop)([[:space:]]|[.!?,])'
   '(going|moving)[[:space:]]+forward([[:space:]]|[.!?,])'
+  # Phase 17 Track B generalised participial-tail matcher — catches the
+  # broad `, [a-z]+ing X` shape past the per-verb enumeration treadmill.
+  # The comma anchor distinguishes participial-tail padding from
+  # legitimate sentence-initial uses like "Replacing the SDK requires X"
+  # (verified against test 14k's negative corpus). The {3,} minimum on
+  # the prefix excludes coincidental bare-noun matches on words like
+  # `ring`, `wing`, `king`, `sing`, `bring`, `string`, `sting`, `swing`,
+  # `cling`, `fling` that could occur in lists after a comma. All five
+  # 2026-05-24 dogfood MISSes (`, lifting`, `, confirming`, `, moving`,
+  # `, including`, plus existing `, exemplified`) clear the floor.
+  ',[[:space:]]+[a-z]{3,}ing([[:space:]]|[.!?,])'
 )
 
 # Conventional-commit type allowlist (subject prefix before the first ':').
