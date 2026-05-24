@@ -28,7 +28,7 @@ Optional pre-filter for very large N (> 20 files) via the embedding tier — the
 # Rank 50 candidate files against the question first, then summarise only
 # the top 10. Saves ~80% of the per-file delegations on the long tail.
 bash scripts/semantic-search.sh --top 10 "where is the auth middleware" src/**/*.ts \
-  | awk '{print $2}' \
+  | cut -d' ' -f2- \
   | while read -r f; do
       printf '%s — ' "$f"
       cat "$f" | bash scripts/delegate.sh --recipe bulk-file-summary \
