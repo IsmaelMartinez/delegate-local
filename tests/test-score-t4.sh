@@ -347,11 +347,13 @@ Added a substantive change. The team will iterate on this $phrase."
   rm -rf "$sandbox"
 done
 
-# --- Test 14i: Phase 16 Track B — next-batch participial verbs caught
-# (replacing, supporting, reflecting, keeping, exemplified). The verbs were
-# observed as the model's substitutes-for-enumerated-verbs across 2026-05-23
-# / -24 metrics MISSes (see prompts/commit-message.md Phase 16 calibration).
-for verb in "replacing" "supporting" "reflecting" "keeping" "exemplified"; do
+# --- Test 14i: Phase 16 Track B — Phase 13 scorer-recipe parity restored
+# for the full enumerated participial set (`making`, `highlighting`,
+# `underscoring` plus the new batch `replacing`, `supporting`, `reflecting`,
+# `keeping`, `exemplified`). The recipe enumerates all eight; the scorer
+# now matches. Gemini-code-assist's PR #209 review caught the three older
+# omissions that pre-dated Phase 16 — fixed in the same PR for parity.
+for verb in "making" "highlighting" "underscoring" "replacing" "supporting" "reflecting" "keeping" "exemplified"; do
   sandbox=$(mktemp -d)
   raw="$sandbox/raw.txt"
   build_raw "$raw" "feat: phase 16 enum extension

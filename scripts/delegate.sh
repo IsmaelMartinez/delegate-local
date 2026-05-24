@@ -736,17 +736,18 @@ if [[ -n "$recipe" ]] && [[ "${DELEGATE_FORCE_FLAKY:-}" != "1" ]]; then
     in_fm && /^flaky_on_models:[[:space:]]*$/ { in_flaky=1; next }
     in_fm && in_flaky && /^[[:space:]]+-[[:space:]]+[^[:space:]]/ {
       sub(/^[[:space:]]+-[[:space:]]+/, "")
+      sub(/[[:space:]]+$/, "")
       print
       next
     }
     in_fm && in_flaky && /^[a-zA-Z_]/ { in_flaky=0 }
   ' "$recipe_file")
   if [[ -n "$flaky_list" ]]; then
-    model_lower=$(printf '%s' "$model" | tr 'A-Z' 'a-z')
+    model_lower=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
     matched_pat=""
     while IFS= read -r pat; do
       [[ -z "$pat" ]] && continue
-      pat_lower=$(printf '%s' "$pat" | tr 'A-Z' 'a-z')
+      pat_lower=$(printf '%s' "$pat" | tr '[:upper:]' '[:lower:]')
       if [[ "$model_lower" == *"$pat_lower"* ]]; then
         matched_pat="$pat"
         break
