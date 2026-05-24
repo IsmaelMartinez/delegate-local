@@ -347,6 +347,48 @@ Added a substantive change. The team will iterate on this $phrase."
   rm -rf "$sandbox"
 done
 
+# --- Test 14i: Phase 16 Track B — next-batch participial verbs caught
+# (replacing, supporting, reflecting, keeping, exemplified). The verbs were
+# observed as the model's substitutes-for-enumerated-verbs across 2026-05-23
+# / -24 metrics MISSes (see prompts/commit-message.md Phase 16 calibration).
+for verb in "replacing" "supporting" "reflecting" "keeping" "exemplified"; do
+  sandbox=$(mktemp -d)
+  raw="$sandbox/raw.txt"
+  build_raw "$raw" "feat: phase 16 enum extension
+
+The wrapper accepts JSON inputs and returns structured errors, $verb the legacy plaintext path."
+  out=$(run_score "$raw")
+  assert_contains "BODY_NO_PADDING" "$out" "test 14i: ', $verb X' flagged as padding"
+  rm -rf "$sandbox"
+done
+
+# --- Test 14j: Phase 16 Track B — "This provides" declarative restating
+# tail (the unenumerated declarative cousin of "This ensures") is caught.
+sandbox=$(mktemp -d)
+raw="$sandbox/raw.txt"
+build_raw "$raw" "feat: this-provides declarative
+
+Added a substantive change. This provides downstream consumers with extra context."
+out=$(run_score "$raw")
+assert_contains "BODY_NO_PADDING" "$out" "test 14j: 'This provides' declarative flagged as padding"
+rm -rf "$sandbox"
+
+# --- Test 14k: Phase 16 Track B negative case — legitimate mid-sentence
+# uses of the same verbs (NOT padding tails) do NOT false-positive. The
+# regex's comma-anchor is load-bearing here.
+for clause in "Replacing the legacy SDK requires the new env var." \
+              "Supporting the new locale needs two extra translation keys." \
+              "Reflecting state changes through the websocket happens on every event."; do
+  sandbox=$(mktemp -d)
+  raw="$sandbox/raw.txt"
+  build_raw "$raw" "feat: legitimate mid-sentence use
+
+$clause The rest of the body adds substantive context."
+  out=$(run_score "$raw")
+  assert_not_contains "BODY_NO_PADDING" "$out" "test 14k: '$clause' not flagged as padding (legitimate use)"
+  rm -rf "$sandbox"
+done
+
 # --- Test 15: machine-parseable T4_SUMMARY line shape ---
 sandbox=$(mktemp -d)
 raw="$sandbox/raw.txt"

@@ -125,6 +125,22 @@
 #                                           #   in issue #110.
 #   DELEGATE_NO_PREFLIGHT=1                 # alternate disable for the canary
 #                                           #   (equivalent to TIMEOUT=0).
+#   DELEGATE_FORCE_FLAKY=1                  # override the recipe-level flaky-
+#                                           #   on-model gate (Phase 16 Track
+#                                           #   A). When a recipe declares
+#                                           #   `flaky_on_models:` in its
+#                                           #   frontmatter and the resolved
+#                                           #   model matches any listed
+#                                           #   substring (case-insensitive),
+#                                           #   delegate.sh exits 4 with a
+#                                           #   stderr message naming the
+#                                           #   recipe's documented mitigation
+#                                           #   (typically hand-writing). Set
+#                                           #   this env var to send the
+#                                           #   request anyway — useful for
+#                                           #   capturing fresh evidence the
+#                                           #   flaky-class behaviour has
+#                                           #   changed across model upgrades.
 #   DELEGATE_TO_OLLAMA_NO_META=1            # silence the structured
 #                                           #   `delegate-meta:` summary line
 #                                           #   printed to stderr after each
@@ -698,6 +714,63 @@ if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
   emit_otel_span "$start_epoch_ms" "$fail_dur_ms" 1 "$otel_trace_id" "$otel_span_id" "(none)" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks" "${recipe_template}${prompt}" "$context" ""
   echo "delegate: pick-model failed for tier '$tier'" >&2
   exit 1
+fi
+
+# Recipe-level flaky-on-model gate (Phase 16 Track A). Recipes that have a
+# documented flaky-on-class can declare a frontmatter `flaky_on_models:`
+# list of case-insensitive substrings; when the resolved model matches any
+# of them, the wrapper refuses (exit 4) with a stderr message naming the
+# recipe's documented mitigation. Opt-out via DELEGATE_FORCE_FLAKY=1 for
+# callers who want to capture fresh evidence that the flaky-class behaviour
+# has changed across model upgrades. Backwards-compat: recipes without a
+# `flaky_on_models:` frontmatter block skip the check entirely. Sits before
+# the pre-flight canary because the gate is structural ("this recipe won't
+# work reliably on this model class") while the canary is dynamic ("the
+# model isn't responding right now") — no point probing a model the recipe
+# already classifies as unreliable.
+if [[ -n "$recipe" ]] && [[ "${DELEGATE_FORCE_FLAKY:-}" != "1" ]]; then
+  flaky_list=$(awk '
+    BEGIN { in_fm=0; in_flaky=0 }
+    NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
+    in_fm && /^---[[:space:]]*$/ { exit }
+    in_fm && /^flaky_on_models:[[:space:]]*$/ { in_flaky=1; next }
+    in_fm && in_flaky && /^[[:space:]]+-[[:space:]]+[^[:space:]]/ {
+      sub(/^[[:space:]]+-[[:space:]]+/, "")
+      print
+      next
+    }
+    in_fm && in_flaky && /^[a-zA-Z_]/ { in_flaky=0 }
+  ' "$recipe_file")
+  if [[ -n "$flaky_list" ]]; then
+    model_lower=$(printf '%s' "$model" | tr 'A-Z' 'a-z')
+    matched_pat=""
+    while IFS= read -r pat; do
+      [[ -z "$pat" ]] && continue
+      pat_lower=$(printf '%s' "$pat" | tr 'A-Z' 'a-z')
+      if [[ "$model_lower" == *"$pat_lower"* ]]; then
+        matched_pat="$pat"
+        break
+      fi
+    done <<< "$flaky_list"
+    if [[ -n "$matched_pat" ]]; then
+      end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
+      fail_dur_ms=$((end_epoch_ms - start_epoch_ms))
+      fail_pchars=$(( ${#recipe_template} + ${#prompt} ))
+      fail_cchars=${#context}
+      fail_toks=$(compute_tokens_local "$fail_pchars" "$fail_cchars" 0)
+      log_metric "$ts_start" "$tier" "$model" "$fail_pchars" "$fail_cchars" 0 "$fail_dur_ms" 4 "$recipe" 0 "$fail_dur_ms" "$otel_trace_id" "$otel_span_id" "" "" "" ""
+      emit_otel_span "$start_epoch_ms" "$fail_dur_ms" 4 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks" "${recipe_template}${prompt}" "$context" ""
+      {
+        echo "delegate: recipe '$recipe' is flagged as flaky on model '$model'"
+        echo "         (matched frontmatter pattern '$matched_pat'; see prompts/$recipe.md calibration notes)"
+        echo "         Options:"
+        echo "         - hand-write the output (recommended — the recipe documents this as the active mitigation)"
+        echo "         - route to a different tier (e.g. --tier code) and retry"
+        echo "         - override with DELEGATE_FORCE_FLAKY=1 (sends the request; expect known-flaky behaviour)"
+      } >&2
+      exit 4
+    fi
+  fi
 fi
 
 # Resolve the sampler profile for the dispatch call. Default for all models
