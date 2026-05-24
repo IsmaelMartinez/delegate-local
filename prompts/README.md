@@ -109,6 +109,32 @@ Tier escalation as a lever was tested empirically in Phase 15 Track B (same sess
 
 The order-of-operations for a recipe whose directive enumeration is saturating: contrastive Wrong/Correct anchor with domain-neutral content first; call-site reinforcement appended to the trailing prompt second (the 2026-05-23 prefix-hint promotion on `commit-message.md` is the worked example); structural scorer extension third; tier escalation only after empirical per-recipe measurement, not by default.
 
+#### Convention 4 — `flaky_on_models:` frontmatter tier-gate (Phase 16 Track A)
+
+When a recipe has documented empirical evidence of unreliable behaviour on a specific model class (typically: parameter-count-driven stalls, structural-output budget overruns, or known-hallucination shapes), declare a `flaky_on_models:` list in the recipe's YAML frontmatter. Entries are case-insensitive substrings matched against the resolved model name. When the wrapper resolves a tier to a model matching any listed substring, `scripts/delegate.sh` exits 4 with a stderr message naming the recipe, the resolved model, the matched pattern, and three recovery options (hand-write, route to a different tier, override via `DELEGATE_FORCE_FLAKY=1`). The metrics JSONL row is tagged `exit_status:4` so `audit-metrics.sh` can pivot on flaky-gate refusals later. Example frontmatter:
+
+```yaml
+---
+inputs:
+  recent_prs: string
+  diff_stat: string
+  context: string
+flaky_on_models:
+  - qwen3.6:35b
+  - qwen3-next:80b
+---
+```
+
+The gate runs BEFORE the pre-flight canary because the refusal is structural ("this recipe will not work reliably on this model class") rather than dynamic ("the model isn't responding right now") — no point probing a model the recipe already classifies as unreliable. Back-compat: recipes without a `flaky_on_models:` block skip the check entirely; the convention is genuinely opt-in.
+
+Two recipe-authoring rules for the field:
+
+1. **Anchor every listed substring in measured evidence.** A flaky_on_models entry is a structural claim that this recipe will not work reliably on this model class; the recipe's calibration notes must cite the empirical observation that justified the entry. `prompts/pr-description.md` is the worked example — the 35B-class entries are grounded in 2026-05-10/11/12/13 stall measurements across Ollama and MLX, on inputs ranging from 612 bytes to 5.2 KB.
+
+2. **List substrings, not exact model names.** Model names vary by quantisation suffix, backend (Ollama `:`, HuggingFace `/`), and underscore/hyphen conventions; a substring like `qwen3.6:35b` matches `qwen3.6:35b-a3b-q8_0`, `qwen3.6:35b-instruct`, and (case-insensitively) `Qwen3.6:35B`. List all naming conventions you've observed in your own host's `pick-model.sh` resolution so the gate adapts across upgrades. Don't list full quantisation suffixes — they change too often.
+
+The opt-out env var `DELEGATE_FORCE_FLAKY=1` exists specifically so callers can capture fresh evidence that the flaky-class behaviour has changed across model upgrades. If a future Qwen3.7 release behaves better on the pr-description shape, override the gate once, measure, and update the frontmatter — don't silently rip the gate out.
+
 ## Cross-machine signal: graduating an issue into a recipe
 
 The hit/miss log is single-machine. When a MISS surfaces a task shape this library does not yet cover, the cross-machine path is a `prompt-pattern` issue (`.github/ISSUE_TEMPLATE/prompt-pattern.md`). The template captures the task shape, tier and resolved model, the verbatim prompt and model output, and — when known — the prompt that turned the MISS into a HIT. The diff between broken and working prompt is the calibration signal a maintainer needs to draft a recipe without re-running the original session.

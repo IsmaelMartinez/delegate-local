@@ -3882,6 +3882,214 @@ case "$otel_body" in
 esac
 rm -rf "$tmp" "$metrics"
 
+# --- Phase 16 Track A: flaky_on_models tier-gate ---
+# A recipe with a flaky_on_models frontmatter list refuses (exit 4) when
+# the resolved model matches any case-insensitive substring. The match is
+# logged via metrics row with exit_status:4 so audit-metrics can pivot.
+# DELEGATE_FORCE_FLAKY=1 overrides the gate and sends the request.
+
+setup_flaky_recipe() {
+  local dir="$1"
+  mkdir -p "$dir"
+  cat > "$dir/flaky-recipe.md" <<'RECIPE'
+---
+flaky_on_models:
+  - qwen3.6:35b
+  - other-flaky-substring
+---
+# flaky-recipe
+
+## When to use
+test
+
+## Prompt template
+
+```
+FLAKY-TEST TEMPLATE BODY
+```
+
+## Calibration notes
+n/a
+RECIPE
+}
+
+setup_safe_flaky_recipe() {
+  local dir="$1"
+  mkdir -p "$dir"
+  cat > "$dir/safe-recipe.md" <<'RECIPE'
+---
+flaky_on_models:
+  - nonexistent-model-name
+  - another-nonmatching-string
+---
+# safe-recipe
+
+## When to use
+test
+
+## Prompt template
+
+```
+SAFE TEMPLATE BODY
+```
+
+## Calibration notes
+n/a
+RECIPE
+}
+
+# F1. Resolved model matches a flaky pattern → exit 4, no canary call,
+# stderr names the recipe + model + matched pattern + recovery options.
+# The mock ollama exposes `qwen3.6:35b-a3b` which pick-model.sh resolves
+# for the prose tier; the recipe's frontmatter pattern `qwen3.6:35b` is a
+# case-insensitive substring of that, so the gate fires.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"; : > "$sniff"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "success"
+prompts="$tmp/prompts"
+setup_flaky_recipe "$prompts"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe flaky-recipe prose "tail" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 4 "$EC" "flaky-gate: exit 4 when resolved model matches frontmatter pattern"
+canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
+dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
+assert_eq 0 "$canary_count" "flaky-gate: canary was NOT called (refusal is before pre-flight)"
+assert_eq 0 "$dispatch_count" "flaky-gate: dispatch was NOT called"
+stderr_content=$(cat "$stderr_file")
+assert_contains "flagged as flaky" "$stderr_content" "flaky-gate: stderr names flaky status"
+assert_contains "'flaky-recipe'" "$stderr_content" "flaky-gate: stderr names the recipe"
+assert_contains "'qwen3.6:35b-a3b'" "$stderr_content" "flaky-gate: stderr names the resolved model"
+assert_contains "qwen3.6:35b" "$stderr_content" "flaky-gate: stderr names the matched pattern"
+assert_contains "DELEGATE_FORCE_FLAKY=1" "$stderr_content" "flaky-gate: stderr names the override env var"
+# Metrics row recorded with exit_status:4.
+if [[ -s "$metrics" ]]; then
+  metrics_row=$(tail -1 "$metrics")
+  assert_contains '"exit_status":4' "$metrics_row" "flaky-gate: metrics row tagged exit_status:4"
+  assert_contains '"recipe":"flaky-recipe"' "$metrics_row" "flaky-gate: metrics row names the recipe"
+else
+  echo "  FAIL  flaky-gate: metrics row not written"
+  fail=$((fail+1))
+fi
+rm -rf "$tmp" "$metrics"
+
+# F2. DELEGATE_FORCE_FLAKY=1 overrides the gate — request flows through to
+# the canary + dispatch even when the model matches a flaky pattern.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"; : > "$sniff"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "success"
+prompts="$tmp/prompts"
+setup_flaky_recipe "$prompts"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  DELEGATE_FORCE_FLAKY=1 \
+  bash "$SCRIPT" --recipe flaky-recipe prose "tail" </dev/null 2>/dev/null) || EC=$?
+assert_eq 0 "$EC" "flaky-gate override: exit 0 (full happy path) with DELEGATE_FORCE_FLAKY=1"
+canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
+dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
+assert_eq 1 "$canary_count" "flaky-gate override: canary was called"
+assert_eq 1 "$dispatch_count" "flaky-gate override: dispatch was called"
+rm -rf "$tmp" "$metrics"
+
+# F3. Resolved model does NOT match any flaky pattern → no refusal, full
+# request proceeds (canary + dispatch). The recipe's flaky_on_models lists
+# only non-matching strings; the mock's qwen3.6:35b-a3b is unaffected.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"; : > "$sniff"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "success"
+prompts="$tmp/prompts"
+setup_safe_flaky_recipe "$prompts"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe safe-recipe prose "tail" </dev/null 2>/dev/null) || EC=$?
+assert_eq 0 "$EC" "flaky-gate non-match: exit 0 when no flaky_on_models pattern matches the model"
+canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
+dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
+assert_eq 1 "$canary_count" "flaky-gate non-match: canary was called"
+assert_eq 1 "$dispatch_count" "flaky-gate non-match: dispatch was called"
+rm -rf "$tmp" "$metrics"
+
+# F4. Recipe WITHOUT flaky_on_models frontmatter skips the gate entirely
+# (back-compat — recipes that pre-date the convention keep working).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"; : > "$sniff"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "success"
+prompts="$tmp/prompts"
+setup_recipe_prompts "$prompts"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>/dev/null) || EC=$?
+assert_eq 0 "$EC" "flaky-gate back-compat: recipe without frontmatter passes the gate"
+canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
+dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
+assert_eq 1 "$canary_count" "flaky-gate back-compat: canary was called"
+assert_eq 1 "$dispatch_count" "flaky-gate back-compat: dispatch was called"
+rm -rf "$tmp" "$metrics"
+
+# F5. Match is case-insensitive — the recipe pattern is lowercase
+# `qwen3.6:35b` and the resolved model is lowercase `qwen3.6:35b-a3b`
+# (mock); they match by substring. (Coverage for the uppercase-on-uppercase
+# case would require a different mock model name; the case-fold path is
+# exercised by the lowercase-on-lowercase match in F1 because the code
+# always tr's both to lowercase before comparing.)
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"; : > "$sniff"
+invocations="$tmp/invocations.log"; : > "$invocations"
+make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "success"
+prompts="$tmp/prompts"
+mkdir -p "$prompts"
+cat > "$prompts/case-test-recipe.md" <<'RECIPE'
+---
+flaky_on_models:
+  - QWEN3.6:35B
+---
+# case-test-recipe
+
+## When to use
+test
+
+## Prompt template
+
+```
+CASE TEST TEMPLATE
+```
+
+## Calibration notes
+n/a
+RECIPE
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe case-test-recipe prose "tail" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 4 "$EC" "flaky-gate case-insensitive: uppercase pattern matches lowercase resolved model"
+assert_contains "QWEN3.6:35B" "$(cat "$stderr_file")" "flaky-gate case-insensitive: stderr preserves the original-case pattern"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

@@ -3,6 +3,14 @@ inputs:
   recent_prs: string
   diff_stat: string
   context: string
+flaky_on_models:
+  - qwen3.6:35b
+  - qwen3.6-35b
+  - qwen3_6-35b
+  - qwen3.6_35b
+  - qwen3-next:80b
+  - qwen3-next-80b
+  - qwen3_next-80b
 ---
 # pr-description
 
@@ -140,6 +148,16 @@ The 2026-05-11 framing above ("if the body alone is > 1 KB, expect a stall") was
 The discriminator is **model parameter count at recipe-sized prompts**, not the backend and not the body-size threshold. Both backends hang the 35B-class prose-tier model on the recipe's combined input + structured output budget; a 0.6B-class model handles the same prompt shape in seconds with quality good enough for the "summarise this PR" task. The 1 KB body framing in the 2026-05-11 note is retracted as not the right axis.
 
 Active mitigation on hosts where the 35B is the prose-tier leader: treat the recipe as known-flaky regardless of body size and hand-write the PR description. The `~6 paragraphs` heuristic from issue #110's closing comment covers the small-PR end of the range where the setup-vs-payoff ratio is unfavourable; the recipe also stalls on larger inputs because of the combined input + structured output budget, so the same conclusion (hand-write) holds at both ends of the size range.
+
+### 2026-05-24 — Phase 16 Track A: flaky-on-models tier-gate ships
+
+The "promote the recipe to a tier-gated form (refuse on prose tier above N params)" follow-up named in the 2026-05-10 calibration note above and queued as a Phase 11 round-3 leftover is now shipped. The recipe's frontmatter declares a `flaky_on_models:` list of case-insensitive substrings (`qwen3.6:35b`, `qwen3-next:80b`, plus underscore/dash variants for cross-naming-convention coverage). `scripts/delegate.sh` parses the list after model resolution and exits 4 with a stderr message naming the recipe, the resolved model, the matched pattern, and three recovery options (hand-write, route to a different tier, override with `DELEGATE_FORCE_FLAKY=1`). The gate runs BEFORE the pre-flight canary because the refusal is structural ("this recipe will not work reliably on this model class") rather than dynamic ("the model isn't responding right now") — no point probing a model the recipe already classifies as unreliable. The metrics JSONL row is tagged `exit_status:4` so `audit-metrics.sh` can pivot on flaky-gate refusals later.
+
+Empirical verification: on the reference host where prose tier resolves to `qwen3.6:35b-a3b-q8_0` and long-context tier to `qwen3-next:80b-a3b-instruct-q8_0`, both tiers are now refused with exit 4 (matched-pattern `qwen3.6:35b` and `qwen3-next:80b` respectively). Code tier (`qwen3-coder-next:latest`) is NOT refused and the request flows through to dispatch, demonstrating the gate is recipe-specific rather than a wholesale prose-tier ban. The `DELEGATE_FORCE_FLAKY=1` override sends the request anyway, useful for capturing fresh evidence that the flaky-class behaviour has changed across model upgrades. 21 new test assertions in `tests/test-delegate.sh` (467 → 477) cover the match/non-match/back-compat/override/case-insensitive paths.
+
+Why this lands now: the recipe's 45% hit rate (5 HIT / 6 MISS over 11 verdicts in the 22-day rolling window) was the standout weak point in the Phase 15 trend report. The mitigation has been documented since 2026-05-10 but the wiring stayed deferred under "not urgent". Phase 16 Track A operationalises the documented mitigation; the recipe still works on tiers where the empirical evidence supports it and now refuses cleanly on tiers where it doesn't.
+
+The new convention (recipe-level `flaky_on_models:` frontmatter, the `delegate.sh` parser + gate + opt-out env var) is documented in `prompts/README.md` "Convention 4 — flaky_on_models gate" so future recipes can adopt it when a model-class flakiness pattern emerges.
 
 ### 2026-05-18 — pre-flight canary ships
 
