@@ -33,7 +33,7 @@
 # --t3-snapshot DATE  (default 2026-04-28) selects which dated T3 fixture
 #                     under experiments/fixtures/task-3-merge-patterns-<DATE>.txt
 #                     to use. T1 and T2 fixtures are stable across baselines.
-# --t4-snapshot DATE  (default 2026-05-21) selects which dated T4 fixture
+# --t4-snapshot DATE  (default 2026-05-24) selects which dated T4 fixture
 #                     under experiments/fixtures/task-4-commit-message-<DATE>.txt
 #                     to use. T4 benchmarks the commit-message recipe against
 #                     structural checks (subject length, conventional-commit
@@ -57,7 +57,7 @@ reps=1
 backend="ollama"
 ollama_api=1
 t3_snapshot="2026-04-28"
-t4_snapshot="2026-05-21"
+t4_snapshot="2026-05-24"
 t5_snapshot="2026-05-11"
 t6_snapshot="2026-05-11"
 
@@ -112,7 +112,7 @@ done
 
 model="${1:-}"
 if [[ -z "$model" ]]; then
-  echo "usage: runner.sh [--backend ollama|mlx] [--ollama-cli] [--reps N] [--t3-snapshot DATE] <model-name>" >&2
+  echo "usage: runner.sh [--backend ollama|mlx] [--ollama-cli] [--reps N] [--t3-snapshot DATE] [--t4-snapshot DATE] [--t5-snapshot DATE] [--t6-snapshot DATE] <model-name>" >&2
   exit 2
 fi
 
