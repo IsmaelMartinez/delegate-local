@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.8.0...v0.9.0) (2026-05-25)
+
+
+### Features
+
+* delegate.project attribution in JSONL metrics and OTLP spans ([#222](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/222)) ([4281522](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/428152205f1c97563109458106fe65a1f0ad1597))
+
 ## [0.8.0](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.7.0...v0.8.0) (2026-05-25)
 
 
