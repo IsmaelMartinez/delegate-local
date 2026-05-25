@@ -20,7 +20,7 @@ Phase 16 bundles two recipe-iteration tracks selected from the 22-day trend repo
 
 **Track C — `prompts/README.md` Convention 4** documents the `flaky_on_models:` frontmatter pattern as a recipe-authoring convention with two rules: anchor every listed substring in measured evidence, and list substrings (not exact model names) so the gate adapts across quantisation suffixes and naming-convention drift.
 
-Up Next: PR delivering Tracks A, B, C in one round. The verb-substitution treadmill confirmation positions the generalised `, [a-z]+ing` trailing-clause structural matcher (named in the Phase 15 calibration note) as the highest-leverage open lever, with the legitimate-mid-sentence-not-flagged negative cases in `tests/test-score-t4.sh` line ~378 as the seed for the false-positive corpus the matcher would need to clear. Deferred to a future iteration because the test surface is bigger than Phase 16's scope.
+Phase 16 shipped via PR `#209` (squash `d03c14f`, merged 2026-05-24). The generalised `, [a-z]{3,}ing` structural matcher shipped in Phase 17 Track B (PR `#213`, squash `c73e1e9`).
 
 ### Phase 15 — Contrastive-anchor sharpening past the directive-binding ceiling (2026-05-24)
 
@@ -34,7 +34,7 @@ Phase 15 Track B measured the same post-edit fixture against the code tier (`qwe
 
 Track C documents the directive-binding-ceiling pattern as a recipe-authoring convention in `prompts/README.md`. When enumeration alone reaches saturation under greedy decoding on small/local models, the three next-levers in priority order are: (1) contrastive Wrong/Correct anchors with domain-neutral content, (2) call-site reinforcement appended to the trailing prompt, (3) structural pattern matching in the scorer. Verb-level enumeration extension is the cheapest first move but caps out when the model substitutes an unenumerated structural equivalent. The convention codifies what `commit-message.md`'s 2026-05-10/12/22/24 calibration entries arrived at through three rounds of MISS evidence.
 
-Up Next: PR delivering the Phase 15 Track A recipe edit, Track C convention documentation, and the two new T4 fixtures. Track B's negative tier-escalation result is recorded in the calibration notes and does not require a recipe edit. Future Phase 15 follow-ups available — scorer regex set extension to `replacing`/`supporting`/`reflecting`/`keeping`, and pr-description tier-gating against 35B-class hallucination (carried over from Phase 13's Up Next).
+Phase 15 shipped via PR `#208` (squash `81c3d68`, merged 2026-05-24). The follow-up scorer regex extension shipped in Phase 16 Track B; pr-description tier-gating shipped in Phase 16 Track A.
 
 ### Phase 14 — Model-change due-diligence (2026-05-23 — shipped)
 
@@ -42,7 +42,7 @@ Phase 14 shipped via PRs `#199` (squash `4d229d0`, merged 2026-05-23) and `#200`
 
 Track 14C (T-scorer coverage for `pr-review-reply` and `polish-reply`) is deferred because the recipe shapes do not decompose into deterministic structural checks the way commit-message, JSON-shape, and regex do. The two reply recipes produce free-form prose whose correctness depends on review-comment context the scorer cannot independently verify, so the calibration signal stays on HIT/MISS verdicts for now.
 
-Up Next: the 0.5.x release-please PR will carry the Phase 14 changes. Track 14C stays open as a recipe-iteration follow-up if a future MISS shape surfaces a structural anchor the scorer can pin against.
+Phase 14 shipped into v0.5.0. Track 14C stays open as a recipe-iteration follow-up if a future MISS shape surfaces a structural anchor the scorer can pin against.
 
 ### Phase 13 — Qwen3-family-tuned prompt-library optimisation (2026-05-23 — shipped)
 
@@ -50,7 +50,7 @@ Phase 13 shipped via PRs `#194` (squash `542da68`, merged 2026-05-23), `#195` (s
 
 Empirical T4 findings on qwen3.6:35b-a3b-q8_0 showed auto-applying the Qwen-recommended profile (temperature=0.7, top_p=0.8, top_k=20, presence_penalty=1.3) regressed T4 mean from 1.00 to 0.87 against the 2026-05-21 commit-message fixture, with 3/5 treatment reps emitting participial-padding tails and 1/5 exceeding the SUBJECT_LEN ceiling; greedy decoding restored T4 to 1.00, confirming greedy as the right default for this recipe library while the env-var surface keeps the option open for callers who want sampling variance per-call. Calibration insight from the c73c72a commit-message draft emitted "This ensures that model misses..." in its body under greedy, the exact pattern the extended canonical block had just promoted to forbidden, recorded via `delegate-feedback.sh miss` as fresh data that directive-text-only enumeration has a ceiling and the next move on commit-message will need a sharper Wrong/Correct anchor or a different lever. Tests grew from 769 to 1281 assertions across the 19 test scripts.
 
-Up Next: release-please PR `#192` carries the three Phase 13 changes into 0.5.0. Recipe-iteration follow-ups available — commit-message Wrong/Correct sharpening to address the directive-binding ceiling, pr-description tier-gating to mitigate 35B-class hallucination.
+Phase 13 shipped into v0.5.0 (PR `#192`). The commit-message Wrong/Correct sharpening shipped in Phase 15; pr-description tier-gating shipped in Phase 16 Track A.
 
 ### Phase 11 Track A + recipe-iteration round-3 pass (2026-05-22 — shipped)
 
