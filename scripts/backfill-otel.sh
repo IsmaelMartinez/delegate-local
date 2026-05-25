@@ -220,11 +220,12 @@ emit_delegate_row() {
     .exit_status // 0,
     .estimated_tokens_avoided // 0,
     .otel_trace_id // "",
-    .otel_span_id // ""
+    .otel_span_id // "",
+    .project // ""
   ] | map(tostring) | join("\u001f")' <<< "$row")
   IFS=$'\x1f' read -r ts source backend tier model recipe \
     pchars cchars ochars dur_ms qwait_ms gen_ms status tokens_avoided \
-    existing_trace existing_span <<< "$fields"
+    existing_trace existing_span project <<< "$fields"
 
   if [[ -n "$existing_trace" && -n "$existing_span" ]]; then
     ROW_RESULT="SKIP"
@@ -283,7 +284,7 @@ emit_delegate_row() {
   # exporter's existing exit-status-neutral contract.
   emit_otel_span "$start_ms" "$dur_ms" "$status" "$trace_id" "$span_id" \
     "$model" "$backend" "$tier" "$recipe" "$pchars" "$cchars" "$ochars" \
-    "$qwait_ms" "$gen_ms" "$tokens_avoided"
+    "$qwait_ms" "$gen_ms" "$tokens_avoided" "" "" "" "$project"
   ROW_RESULT="OK"
   return 0
 }
