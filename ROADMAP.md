@@ -6,11 +6,9 @@ The skill works today as a personal tool. To make it dependable for shared use, 
 
 Going-public completed in May 2026 (trigger-eval gate enforced on every PR, community-health files, release-please pipeline, doc-drift cleanup). See `git log`, the GitHub releases page, the per-phase summaries below, and the ADRs under `docs/adr/` for the full PR-by-PR history.
 
-### Phase 17 — Round-5 parallel-agent pass (2026-05-24)
+### Phase 17 — Round-5 parallel-agent pass (2026-05-24 — shipped)
 
-Five tracks operate in parallel without merged outcomes at the time of this entry. Track A constructs an ADR backfill for decisions made between Phase 12 and Phase 16 via a separate agent pull request. Track B implements the generalised `, [a-z]+ing` trailing-clause structural matcher for the T4 scorer, which the Phase 15 and Phase 16 calibration notes identified as the highest-leverage open move. Track C establishes recipe-authoring Convention 5 (scaffold-then-polish) through a distinct agent pull request.
-
-Track D prunes stale entries from the Other-open-priorities section of the ROADMAP within this pull request. Track E conducts a bucketing analysis for the UNCATEGORIZED MISS category using a separate agent with an analysis-only scope. The round is in flight; each track is independently shippable and the outcomes feed the next iteration of the scoring and recipe-refinement cycle.
+Phase 17 executed five parallel tracks derived from the Phase 16 calibration notes and the ongoing trend report. Track A (PR #212, squash `d2a4ef4`) constructed an ADR backfill capturing the architectural decisions made between Phase 12 and Phase 16. Track B (PR #213, squash `c73e1e9`) implemented the generalised `, [a-z]{3,}ing` trailing-clause structural matcher in `experiments/score-t4.sh`, the highest-leverage open move named in the Phase 15 and Phase 16 calibration notes. Track C (PR #210, squash `2c9df9b`) established recipe-authoring Convention 5 (scaffold-then-polish) in `prompts/README.md`. Track D (PR #211, squash `fcf175b`) pruned stale entries from earlier Other-open-priorities and Recipe-library-expansion sections in this same kind of ROADMAP-pruning round. Track E remained analysis-only with no PR, as the UNCATEGORIZED MISS bucketing analysis identified two real clusters — numeric-cap-non-binding (3 members) and semantic-distortion-of-preserved-entities (4 or more members) — both queued for prompt-pattern issue filings as a separate track.
 
 ### Phase 16 — Recipe-iteration round 4: tier-gate + verb-substitution treadmill (2026-05-24)
 
@@ -60,23 +58,9 @@ Phase 11 Track A (OTLP exporter MVP, `#134`) shipped via `#182`. The exporter is
 
 Round 3 also shipped recipe-iteration work: `prompts/plan-section-intro.md` (`#150` via `#181`) as a forward-looking ROADMAP-phase-intro recipe (sibling of `roadmap-entry.md` for past-tense entries) and `prompts/summarise-issue.md` (`#148` via `#180`) sharpening with the OMIT-EMPTY positive-form directive plus the Comment-N hallucination guard for zero-comment issues. The summarise-issue iteration surfaced the "Wrong/Correct anchor reproduces forbidden literal" risk — the literal example anchor was being pattern-matched back into output — and the fix replaced the single-literal anchor with a family-of-paraphrases description grounded in four real prior MISS phrasings (2026-05-20, -21, -22, with-comments variant). PR `#179` documented the round-2 sweep for ROADMAP continuity.
 
-Phase 11 Tracks D (`#156` dashboards-as-code), E (`#157` JSONL backfill), F (`#158` privacy redaction), and G (`#159` metrics counters) are all now unblocked by Track A landing. Track F (redaction) is the load-bearing follow-up because the exporter ships unguarded — field values currently land on the wire as-is — and Phase 11 cannot be considered production-safe until that gap closes.
+Phase 11 Tracks D, E, and F shipped via PRs `#186` (squash `b9dccc7`, dashboards-as-code), `#191` (squash `db1bc47`, JSONL backfill), and `#188` (squash `fcea6ba`, privacy redaction default — closes `#158`) in the 2026-05-22 window. Track G (`#159`) — metrics counters — remains the single open Phase 11 ticket; it stays deferred until real-world usage signal arrives.
 
-**MISSes recorded during round 3 worth carrying forward into a recipe-tightening pass:**
-
-- **`commit-message.md` — SUBJECT_LEN recurring (87-char and 79-char subjects despite "72 chars or fewer" reinforcement, 2026-05-22 metrics).** The recipe's calibration notes already documented the trigger condition for promoting the subject-length directive into the template body with a v5/v7 Wrong/Correct one-shot — that trigger has now fired and the promotion should land.
-- **`commit-message.md` — wrong type-tag (`feat:` for a fix, 2026-05-22).** Add a directive (or expand the existing one) for conventional-commit type selection grounded in keyword triggers.
-- **`pr-description.md` — massive hallucination on 35B-class prose tier.** Documented as known-flaky in the recipe's calibration notes; the workaround is hand-writing on this host class. Promoting the recipe to a tier-gated form (refuse on prose tier above N params) is the cleaner long-term fix but not urgent.
-- **`plan-section-intro.md` — heading-line drift confirmed on second observation (2026-05-22 ×2).** Two data points clear the recipe's calibration-notes bar for tightening the "no heading line" directive into a stronger form.
-
-**Next-pickup order (post-round-3):**
-
-1. **Phase 11 Track F (`#158`) — privacy redaction guard.** Production-safety blocker for the now-shipped exporter. Field values currently leave the host as-is.
-2. **Phase 11 Track D (`#156`) — dashboards-as-code.** Makes the exporter useful end-to-end (the runbooks under `docs/observability/` describe deployments but the dashboards themselves are user-built today).
-3. **`commit-message.md` SUBJECT_LEN promotion.** Calibration-loop discipline — the trigger condition is met.
-4. **Phase 11 Track E (`#157`) — backfill script for pre-exporter JSONL rows.**
-5. **`plan-section-intro.md` heading-line directive tightening.** Two-observation calibration data is in.
-6. **Phase 11 Track G (`#159`) — metrics counters.** Speculative until real-world usage signal arrives.
+All round-3 carry-forward items shipped between 2026-05-22 and 2026-05-24, leaving only Phase 11 Track G (`#159`) — metrics counters — as the single remaining open item from this phase, deferred behind real-world signal. A round-3 MISS recorded the `commit-message.md` wrong-type-tag failure (`feat:` for a fix, 2026-05-22) which subsequently informed the TYPE-selection priority-list directive landed in PR `#208`.
 
 ### Phase 11 + 12 round-2 parallel-agent pass (2026-05-22 — shipped)
 
@@ -160,7 +144,6 @@ Vision is scaffold-only in Phase 4 (`pick-model.sh` resolution works); audio is 
 
 - **Dogfooding gap probe** continues empirically — eval-set additions p11–p14 shipped (#68), this session's metrics show 7 delegations × 5 HIT / 2 MISS, and the layer-1 recipe library is the concrete fix for the framing-not-eval-set hypothesis. No further explicit action until the next session shows whether recipes plus their SKILL.md pointer change real-session invocation rates.
 - **`prompts/pr-review-reply.md` — tighten the clause-default wording.** The recipe says `at most one short clause naming what was actually done` after the `Applied in <hash>.` opener. Measured behaviour on PR #100 was 1 of 4 deliveries kept the clause; the remaining 3 stripped to the minimal `Applied in <hash>.` shape, technically compliant but losing context for the reviewer. On PR #101 the same recipe with `Always include one short clause naming the fix` appended to the trailing reinforcement prompt scored 2 of 2 with the clause present. Workaround works; promoting the wording into the recipe's `## Invocation` example (and the corresponding line in the template directive) would make it the default. Defer the directive edit by itself; the load-bearing question is whether the trailing-prompt reinforcement is enough or the template body needs the change too — a one-PR experiment with the invocation-example-only first, then template if recurrence shows. Trigger: any future session where the agent finds itself hand-augmenting `pr-review-reply` output.
-- **`prompts/commit-message.md` — promote subject-length directive into the template body if recurrence shows.** The PR #101 calibration note already documents the policy: the trailing-prompt reinforcement (`Keep subject ≤ 72 chars`) closed the SUBJECT_LEN gap on PRs #96 and #102 after two prior misses (#85 80 chars, #94 74 chars). If a future session re-shows a SUBJECT_LEN miss despite the new invocation example, the next step is to promote the length reminder into a directive inside the template body (alongside the existing `Subject ≤ 72 chars starting with '<TYPE>:'` rule, perhaps with the v5/v7 contrastive Wrong/Correct one-shot pattern that closed the `(#NN)` gap). Trigger: the next observed SUBJECT_LEN MISS after this session.
 
 ### Recently shipped from the priority list
 
