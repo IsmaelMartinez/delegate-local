@@ -378,6 +378,13 @@ rm -rf "$sandbox"
 # --- Test 14k: Phase 16 Track B negative case — legitimate mid-sentence
 # uses of the same verbs (NOT padding tails) do NOT false-positive. The
 # regex's comma-anchor is load-bearing here.
+#
+# This test ALSO acts as the false-positive guard for the Phase 17 Track B
+# generalised `,[[:space:]]+[a-z]{3,}ing([[:space:]]|[.!?,])` matcher. The
+# sentence-initial uses below have NO leading comma before the participle,
+# so the generalised matcher must NOT flag them either. If a future
+# iteration regresses on these, the comma-anchor on the generalised matcher
+# has been weakened in a way that costs precision.
 for clause in "Replacing the legacy SDK requires the new env var." \
               "Supporting the new locale needs two extra translation keys." \
               "Reflecting state changes through the websocket happens on every event."; do
@@ -390,6 +397,77 @@ $clause The rest of the body adds substantive context."
   assert_not_contains "BODY_NO_PADDING" "$out" "test 14k: '$clause' not flagged as padding (legitimate use)"
   rm -rf "$sandbox"
 done
+
+# --- Test 14l: Phase 17 Track B — generalised `,[[:space:]]+[a-z]{3,}ing`
+# trailing-clause matcher catches participial-tail padding past the per-verb
+# enumeration treadmill. These five verbatim MISSes came from the
+# 2026-05-24 dogfood drafts where the model AVOIDED the enumerated verbs
+# (`ensuring`, `enabling`, etc.) and substituted structurally-equivalent
+# unenumerated verbs (`lifting`, `confirming`, `moving`, `including`).
+# `exemplified` is in the per-verb enumeration already; including it here
+# documents that the generalised matcher does NOT subsume `-ied` shapes
+# (it only handles `-ing`), so the per-verb regex remains load-bearing
+# for that shape.
+for clause in ", lifting the mean score from 0.67 to 1.00" \
+              ", confirming the need for a generalised structural matcher" \
+              ", moving the calibration from assertion to empirical data" \
+              ", including subject length, type prefix, fake suffixes"; do
+  sandbox=$(mktemp -d)
+  raw="$sandbox/raw.txt"
+  build_raw "$raw" "feat: phase 17 generalised matcher
+
+The change extends the scorer$clause."
+  out=$(run_score "$raw")
+  assert_contains "BODY_NO_PADDING" "$out" "test 14l: '$clause' flagged by generalised matcher"
+  rm -rf "$sandbox"
+done
+
+# --- Test 14l (verified existing): the `, exemplified` case from the
+# 2026-05-24 dogfood corpus is already caught by the per-verb regex
+# (the generalised `-ing` matcher does not subsume `-ied` forms). This
+# rep documents that coverage in this PR's test block for completeness.
+sandbox=$(mktemp -d)
+raw="$sandbox/raw.txt"
+build_raw "$raw" "feat: phase 17 generalised matcher exemplified
+
+The change extends the scorer, exemplified by the output 'No explicit blockers stated'."
+out=$(run_score "$raw")
+assert_contains "BODY_NO_PADDING" "$out" "test 14l: ', exemplified' caught (per-verb regex, not generalised)"
+rm -rf "$sandbox"
+
+# --- Test 14l negative supplement: the generalised matcher's `[a-z]{3,}`
+# minimum prefix excludes coincidental bare-noun matches on five-char-or-
+# shorter `-ing` nouns that could appear in legitimate lists after a comma.
+# None of these should be flagged: `bring` (5, `br` prefix), `ring` (4,
+# `r` prefix), `wing` (4, `w` prefix), `king` (4, `k` prefix), `sing` (4,
+# `s` prefix), `cling` (5, `cl` prefix), `fling` (5, `fl` prefix),
+# `sting` (5, `st` prefix), `swing` (5, `sw` prefix). The {3,} prefix on
+# the participial verb requires the prefix itself to be 3+ chars (so
+# total word length 6+, e.g. `lifting`, `moving`, `including`).
+sandbox=$(mktemp -d)
+raw="$sandbox/raw.txt"
+build_raw "$raw" "feat: short-word coordination list
+
+The schema covers ring, wing, and king geometries used by the calibration suite."
+out=$(run_score "$raw")
+assert_contains "rep 1: 6/6" "$out" "test 14l: short-word coordination list not flagged by generalised matcher"
+rm -rf "$sandbox"
+
+# --- Test 14l acknowledged-false-positive: `string` (6 chars, `str` prefix
+# meets the 3-char floor) IS matched by the generalised regex. This test
+# documents the false positive so future regex tightening regressions
+# surface immediately. The trade-off was chosen on PR #213 review: bumping
+# the floor to {4,} would also exclude `moving` — one of the five
+# MUST-catch positives from the 2026-05-24 dogfood corpus — so the
+# coordination-list-of-types false positive is accepted.
+sandbox=$(mktemp -d)
+raw="$sandbox/raw.txt"
+build_raw "$raw" "feat: support multiple primitive types
+
+The schema accepts integer, string, and boolean inputs from the upstream parser."
+out=$(run_score "$raw")
+assert_contains "BODY_NO_PADDING" "$out" "test 14l: ', string' acknowledged false-positive (matches due to 3-char prefix floor)"
+rm -rf "$sandbox"
 
 # --- Test 15: machine-parseable T4_SUMMARY line shape ---
 sandbox=$(mktemp -d)
