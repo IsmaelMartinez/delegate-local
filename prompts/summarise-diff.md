@@ -3,6 +3,14 @@ inputs:
   diff_stat: string
   diff: string
   count: integer
+flaky_on_models:
+  - qwen3.6:35b
+  - qwen3.6-35b
+  - qwen3_6-35b
+  - qwen3.6_35b
+  - qwen3-next:80b
+  - qwen3-next-80b
+  - qwen3_next-80b
 ---
 # summarise-diff
 
@@ -108,3 +116,7 @@ First-pass against `qwen3.6:35b-a3b-q8_0` (prose tier) summarising the 1-file di
 - Asking for 3 bullets on a 2-distinct-change diff produced a redundant third bullet paraphrasing the first. Added "Use FEWER bullets if the diff has fewer distinct semantic changes — never pad" plus "Each bullet must describe a DISTINCT change".
 
 Re-validated post-revision on the same input: produced 2 bullets (not 3), both verb-led with file paths, both describing distinct changes, no preamble, no trailing summary sentence. HIT verbatim.
+
+### 2026-05-25 — flaky_on_models tier-gate (issue #216)
+
+The prose tier fabricates facts on digest inputs per 8 observed MISSes (number-fabrication, entity-substitution, polarity-inversion). Same gate pattern as pr-description.md (Phase 16 Track A).

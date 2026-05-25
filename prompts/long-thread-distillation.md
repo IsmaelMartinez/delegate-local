@@ -2,6 +2,14 @@
 inputs:
   kind: string
   stdin: string
+flaky_on_models:
+  - qwen3.6:35b
+  - qwen3.6-35b
+  - qwen3_6-35b
+  - qwen3.6_35b
+  - qwen3-next:80b
+  - qwen3-next-80b
+  - qwen3_next-80b
 ---
 # long-thread-distillation
 
@@ -190,3 +198,7 @@ The recipe ships in this first-pass state. Five of six guards bound on first dog
 3. **Accept HIT-with-edits status** and let users strip placeholder bullets by hand (current de-facto state, consistent with the 2026-05-22 ship of `summarise-issue.md` in the same condition).
 
 The dogfood is logged as MISS rather than HIT-with-edits because the OMIT-EMPTY bypass is the recipe's load-bearing structural property — without it, the agent picking up the thread cannot trust "no Blocked section" to mean "no blockers", and the action-oriented use case the recipe is built for degrades. Future calibration work tracks against this verdict, not a paraphrase of it.
+
+### 2026-05-25 — flaky_on_models tier-gate (issue #216)
+
+The prose tier fabricates facts on digest inputs per 8 observed MISSes (number-fabrication, entity-substitution, polarity-inversion). Same gate pattern as pr-description.md (Phase 16 Track A).

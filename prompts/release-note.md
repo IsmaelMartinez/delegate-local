@@ -4,6 +4,14 @@ inputs:
   number: integer
   body: string
   anchor: string
+flaky_on_models:
+  - qwen3.6:35b
+  - qwen3.6-35b
+  - qwen3_6-35b
+  - qwen3.6_35b
+  - qwen3-next:80b
+  - qwen3-next-80b
+  - qwen3_next-80b
 ---
 # release-note
 
@@ -133,3 +141,7 @@ Same-day dogfood of the ported audience-filter on the five 2026-05-22 merge batc
 ### 2026-05-22 refinement: reorder + dual-example anchoring (gemini-code-assist PR #173 review)
 
 PR #173 review surfaced a prompt-engineering principle the first sharpening violated: the `Otherwise:` bullet-output rules were separated from the SKIP-output rule by the Wrong/Correct example, fragmenting the core instruction set. Reordered to group all rules together first, then a separate `=== Examples ===` reference section. Initial dogfood after reorder regressed PR #167: the lone example anchored the model toward "Documented..." bullets and it stopped SKIPping the contributor-facing README change. Fix: added a SECOND Wrong/Correct pair to the examples section where the correct answer is SKIP and the input is the actual PR #167 title — dual-direction anchoring. Re-dogfood: #166 → bullet, #167 → SKIP, #168 → SKIP, all three correct. Takeaway for future recipe iterations: when reordering rules-and-examples, the example set needs to anchor BOTH outcomes (HIT case AND SKIP case) or the model over-generalises to whichever case the single example demonstrates. Single examples are sufficient when the rules are inlined with the decision point; once the example moves to a separate section, dual anchoring is required.
+
+### 2026-05-25 — flaky_on_models tier-gate (issue #216)
+
+The prose tier fabricates facts on digest inputs per 8 observed MISSes (number-fabrication, entity-substitution, polarity-inversion). Same gate pattern as pr-description.md (Phase 16 Track A).
