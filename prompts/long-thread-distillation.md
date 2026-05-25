@@ -52,10 +52,10 @@ Output the three sections below in this exact order. OMIT any section that has n
 Bulleted list of concrete actions raised in the thread that have NOT been completed. Format: `- @reviewer asked X — unaddressed` or `- @author needs to Y per @reviewer's comment of <date>`. Each item must trace to a specific comment, review, or thread entry. Skip an action item if the same comment or a later one shows it has been resolved.
 
 ## Blocked
-Bulleted list naming who is waiting on whom and the specific blocker. Format: `- @author is waiting on @maintainer's review of the test changes from <date>` or `- @reviewer is waiting on a response to their question about X (asked <date>)`. Skip the section entirely if no participant has stated they are waiting, blocked, stalled, or stopped.
+Bulleted list naming who is waiting on whom and the specific blocker. At most 3 bullets. Stop after the 3rd bullet. Do not add a bullet that restates an earlier blocker in different words. Format: `- @author is waiting on @maintainer's review of the test changes from <date>` or `- @reviewer is waiting on a response to their question about X (asked <date>)`. Skip the section entirely if no participant has stated they are waiting, blocked, stalled, or stopped.
 
 ## Consensus
-Bulleted list of what participants have explicitly agreed on so far. Format: `- The TYPE-selection priority list stays load-bearing; the prefix-hint is additive, not a replacement (per @author's reply to @reviewer on <date>)`. Distinguish "asked" from "agreed" — a reviewer asking for X is NOT consensus that X will happen, only that X has been raised. Skip the section entirely if no explicit agreement has been stated.
+Bulleted list of what participants have explicitly agreed on so far. At most 3 bullets. Stop after the 3rd bullet. Do not add a bullet that restates an earlier agreement in different words. Format: `- The TYPE-selection priority list stays load-bearing; the prefix-hint is additive, not a replacement (per @author's reply to @reviewer on <date>)`. Distinguish "asked" from "agreed" — a reviewer asking for X is NOT consensus that X will happen, only that X has been raised. Skip the section entirely if no explicit agreement has been stated.
 
 Rules:
 - Every claim must point back to a specific comment, review, or thread entry. If you cannot, drop the claim. Anchor every claim to evidence in the input.
@@ -202,3 +202,7 @@ The dogfood is logged as MISS rather than HIT-with-edits because the OMIT-EMPTY 
 ### 2026-05-25 — flaky_on_models tier-gate (issue #216)
 
 The prose tier fabricates facts on digest inputs per 8 observed MISSes (number-fabrication, entity-substitution, polarity-inversion). Same gate pattern as pr-description.md (Phase 16 Track A).
+
+### 2026-05-25 — Wrong/Correct anchor for numeric cap (issue #215)
+
+Added constructive stop-after-3rd-bullet phrasing to the `## Blocked` and `## Consensus` sections, which had bare "At most 3 bullets" caps. Same lever that closed SUBJECT_LEN on `commit-message.md` (lines 34-40). The `## Action items` section is uncapped by design — the natural length of that section depends on the thread's review history and capping it risks dropping unaddressed items.

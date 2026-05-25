@@ -39,11 +39,16 @@ Summarise this {{kind}} thread as a timeline. Output the sections below in this 
 ## What happened
 {{N_FACTS}} bullets, each one event from the thread in chronological order. Format: "- <date or comment-N>: <one-line factual statement>". Quote short fragments (`like this`) when helpful; do not paraphrase commands or error messages.
 
+BULLET CAP — non-negotiable:
+Count the bullets under `## What happened`. If the count exceeds {{N_FACTS}}, DELETE bullets from the end until the count equals {{N_FACTS}}. The cap is a hard ceiling, not a guideline. Stop after the {{N_FACTS}}th bullet. Do not add a bullet that summarises or restates what the preceding bullets already said.
+Wrong (N_FACTS=5, output has 7 bullets under What happened): the model splits multi-clause events into separate bullets or appends summary bullets beyond the cap.
+Correct (N_FACTS=5, output has exactly 5 bullets under What happened): the model compresses multi-clause events into single bullets and stops at the cap.
+
 ## What's blocking
-At most 3 bullets naming concrete blockers stated in the thread.
+At most 3 bullets naming concrete blockers stated in the thread. Stop after the 3rd bullet. Do not add a bullet that restates an earlier blocker in different words.
 
 ## What's next
-At most 3 bullets naming concrete next actions stated by participants in the thread.
+At most 3 bullets naming concrete next actions stated by participants in the thread. Stop after the 3rd bullet. Do not add a bullet that restates an earlier action in different words.
 
 Rules:
 - Every claim must point back to a specific comment, date, or log line. If you cannot, drop the claim.
@@ -198,6 +203,10 @@ Concrete next options (refined from the 2026-05-11 list given the new MISS evide
 4. Accept HIT-with-edits status and let users strip by hand (current de-facto state).
 
 The 2026-05-22 iteration ships the recipe in the sharpened state regardless of the dogfood MISS — the directives are still strictly better calibration than the prior substring blocklist (the positive-form catches paraphrases the blocklist would not, even if the model can still bypass it on this specific tier+model), and the COMMENT-N-CITATION directive is the first explicit guard against the body-headings-as-comments fabrication shape. Future contributors get directive-form rules to iterate on rather than substring blocklists to extend. Option 2 (tier reroute) is the next experiment worth running and is filed as the action item against this calibration entry.
+
+### 2026-05-25 — Wrong/Correct anchor for numeric cap (issue #215)
+
+Added a BULLET CAP constructive-rule directive with Wrong/Correct description under `## What happened`, plus constructive stop-after-3rd-bullet phrasing on `## What's blocking` and `## What's next`. The Wrong/Correct anchor follows the same lever that closed SUBJECT_LEN on `commit-message.md` (lines 34-40). The 2026-05-23T23:23:55Z MISS (12-line target produced 18 lines from splitting multi-clause events) motivates the "compress multi-clause events into single bullets" phrasing in the Correct description.
 
 ### 2026-05-22 PR #180 review pass — verbatim-crib mitigation + What's-next symmetry
 
