@@ -743,6 +743,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "explicit ollama: exits 0"
 assert_contains '"backend":"ollama"' "$(cat "$metrics")" "explicit ollama tagged in metrics"
+assert_contains '"project":"' "$(cat "$metrics")" "metrics row contains project field"
 rm -rf "$tmp" "$metrics"
 
 # 12c. Unknown DELEGATE_BACKEND value -> exit 2 with informative stderr,

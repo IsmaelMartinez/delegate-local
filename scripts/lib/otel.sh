@@ -154,7 +154,7 @@ emit_otel_span() {
   local model="$6" backend="$7" tier="$8" recipe_name="$9" pchars="${10}"
   local cchars="${11}" ochars="${12}" qwait_ms="${13}" gen_ms="${14}"
   local tokens_avoided="${15}" prompt_text="${16:-}" context_text="${17:-}"
-  local output_text="${18:-}"
+  local output_text="${18:-}" project="${19:-}"
   local include_content="${DELEGATE_OTEL_INCLUDE_CONTENT:-0}"
 
   # Compute nanosecond timestamps. start_ms is the high-resolution
@@ -202,7 +202,7 @@ emit_otel_span() {
     --arg exit_status "$status" --arg tokens_avoided "$tokens_avoided" \
     --arg include_content "$include_content" \
     --arg prompt_text "$prompt_text" --arg context_text "$context_text" \
-    --arg output_text "$output_text" \
+    --arg output_text "$output_text" --arg project "$project" \
     '{
       resourceSpans: [{
         resource: {
@@ -235,6 +235,7 @@ emit_otel_span() {
                 {key: "delegate.exit_status", value: {intValue: $exit_status}}
               ]
               + (if $recipe != "" then [{key: "delegate.recipe", value: {stringValue: $recipe}}] else [] end)
+              + (if $project != "" then [{key: "delegate.project", value: {stringValue: $project}}] else [] end)
               + (if $include_content == "1" then [
                   {key: "delegate.prompt", value: {stringValue: $prompt_text}},
                   {key: "delegate.context", value: {stringValue: $context_text}},
