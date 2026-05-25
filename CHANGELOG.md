@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.0](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.6.0...v0.7.0) (2026-05-25)
+
+
+### Features
+
+* commit-message — contrastive anchors past directive ceiling ([#208](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/208)) ([81c3d68](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/81c3d681aec951c5b28544fc1e284f5be90667a8))
+* Phase 16 — pr-description tier-gate + verb-substitution treadmill ([#209](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/209)) ([d03c14f](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/d03c14fe31705b6b7e4f279a3d8e290bbafd0647))
+* Phase 17 Track B — generalised participial-tail structural matcher ([#213](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/213)) ([c73e1e9](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/c73e1e9ad314089cb2048f41ac9eb3d87972e386))
+
+
+### Documentation
+
+* ADR backfill for Phase 12-16 architectural decisions ([#212](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/212)) ([d2a4ef4](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/d2a4ef4d04c20f50c17240ffaaafc26d6aa16823))
+* Convention 5 — scaffold-then-polish for prose-tier delegations against digests ([#210](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/210)) ([2c9df9b](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/2c9df9b7bb17ca3f62c20a04c7c42be1af300626))
+* ROADMAP prune stale Recipe-library-expansion entries + Phase 17 framing ([#211](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/211)) ([fcf175b](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/fcf175bf3ba118e2483164ba20115c993031be3d))
+
 ## [0.6.0](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.5.0...v0.6.0) (2026-05-24)
 
 
