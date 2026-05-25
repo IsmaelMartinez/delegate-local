@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.7.0...v0.8.0) (2026-05-25)
+
+
+### Features
+
+* extend flaky_on_models tier-gate to digest-shape recipes ([#219](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/219)) ([7412e62](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/7412e6224294f1dd75979ece877fe388183099ce)), closes [#216](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/216)
+* Wrong/Correct anchors for numeric output caps ([#215](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/215)) ([#220](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/220)) ([79ba073](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/79ba07369e23085b46ff95e708e5a758da56bc83))
+
+
+### Documentation
+
+* append spans-only-for-v1 decision to OTel ADR ([#218](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/218)) ([9e56727](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/9e567274d0d75d34b8cc4c98c149ba9feb57139d)), closes [#159](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/159)
+* ROADMAP prune shipped items + Phase 17 framing ([#217](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/217)) ([a335dfe](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/a335dfe819cebd520303ba86ac6ce007244db777))
+
 ## [0.7.0](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.6.0...v0.7.0) (2026-05-25)
 
 
