@@ -52,6 +52,11 @@ HARD RULES (non-negotiable; each addresses a real past MISS):
 
 3. If the final sentence paraphrases or restates an earlier sentence (even without a trigger phrase from rule 2), omit it from your response.
 
+4. SENTENCE CAP — non-negotiable:
+Count the sentences in your output. If the count exceeds {{max_sentences}}, DELETE sentences from the end until the count equals {{max_sentences}}. The cap is a hard ceiling, not a guideline. Stop after the {{max_sentences}}th sentence. Do not add a sentence that summarises or restates what the preceding sentences already said.
+Wrong (max_sentences=4, output has 6 sentences): "The migration requires a database schema change before deploying the new service version. Run the migration script against the staging environment first to verify column additions succeed. The rollback procedure reverses only the schema additions without touching existing data. Teams should coordinate the deployment window with the on-call rotation. This ensures minimal disruption during the transition. The overall process is straightforward when the staging verification passes."
+Correct (max_sentences=4, output has exactly 4 sentences): "The migration requires a database schema change before deploying the new service version. Run the migration script against the staging environment first to verify column additions succeed. The rollback procedure reverses only the schema additions without touching existing data. Teams should coordinate the deployment window with the on-call rotation."
+
 Wrong (drafted with the closing recap pattern the rules above reject):
 "Tune these settings only when the current defaults do not suit your specific needs, rather than applying changes preemptively. The four key knobs are enforced via CI environment variables which take precedence over your `.pr_agent.toml`, meaning local adjustments to those specific parameters will not take effect until AI-61 is resolved. Consequently, any configuration changes for these fields are strictly opt-in and should be avoided if the existing values are adequate."
 
@@ -134,6 +139,10 @@ The same shape recurred in a later 2026-05-20 session (`ref_ts=2026-05-20T22:37:
 | HARD RULE 2 (keyword-triggered DELETE list) | New for this recipe. The phrase list is drawn from the actual MISS outputs in issue #132 and the broader metrics history's PADDING_RECAP rows (10 of 18 recent MISSes classified as recap-shaped on 2026-05-21 — see `metrics.jsonl` rows tagged `kept=false`). |
 | HARD RULE 3 (final-sentence paraphrase removal) | New for this recipe. Issue #132 noted that some MISSes used legitimate-looking opening clauses that still amounted to restatement (e.g. "should be avoided if the existing values are adequate" without a trigger phrase from rule 2). Rule 3 catches that residual shape. Phrased in natural language rather than "OUTPUT only the first N-1 sentences" because the prose-tier model in the 35B range parses mathematical variable notation unreliably (PR #135 review surfaced this — natural-language rewording is the load-bearing change). |
 | Wrong/Correct one-shot | Verbatim from issue #132's tuning-paragraph MISS (`ref_ts=2026-05-20T12:59:15Z`); the Correct version is the hand-edited form the user kept. |
+
+### 2026-05-25 — Wrong/Correct anchor for numeric cap (issue #215)
+
+Added HARD RULE 4 (SENTENCE CAP) with a Wrong/Correct one-shot anchor. The Wrong example shows 6 sentences when the cap is 4; the Correct example shows exactly 4. Same lever that closed SUBJECT_LEN on `commit-message.md` (lines 34-40). The constructive-rule phrasing ("Stop after the Nth sentence. Do not add a sentence that summarises or restates what the preceding sentences already said.") follows the issue #215 hypothesis that positive construction binds more reliably than bare numeric descriptors on greedy decoding.
 
 ### What's not yet measured
 
