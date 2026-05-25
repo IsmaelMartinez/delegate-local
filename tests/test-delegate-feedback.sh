@@ -87,6 +87,7 @@ last=$(tail -1 "$tmp/m.jsonl")
 assert_contains '"source":"feedback"' "$last" "hit: source field"
 assert_contains '"kept":true' "$last" "hit: kept=true"
 assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "hit: ref_ts is latest delegate"
+assert_contains '"project":"' "$last" "hit: project field present"
 [[ "$last" == *'"reason"'* ]] && { fail=$((fail+1)); echo "  FAIL  hit (no reason): reason field absent"; } || { pass=$((pass+1)); echo "  PASS  hit (no reason): reason field absent"; }
 rm -rf "$tmp"
 

@@ -321,6 +321,7 @@ pick="$script_dir/pick-model.sh"
 prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 
 metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}"
+delegate_project=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
 # Resolve auto backend by probing the MLX server. Cheap (sub-second
 # timeout, single GET) and runs once per invocation. Explicit ollama|mlx
 # skip the probe. The metrics line records the resolved backend, never
@@ -367,7 +368,7 @@ compute_tokens_local() {
 log_metric() {
   [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" == "1" ]] && return 0
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
-    s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}"
+    s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}"
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$ochars")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -403,13 +404,14 @@ log_metric() {
   if [[ -n "$recipe_name" ]]; then
     jq -nc \
       --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" \
-      --arg model "$model" --arg recipe "$recipe_name" \
+      --arg model "$model" --arg recipe "$recipe_name" --arg project "$project" \
       --arg trace_id "$trace_id" --arg span_id "$span_id" \
       --arg s_temp "$s_temp" --arg s_top_p "$s_top_p" --arg s_top_k "$s_top_k" --arg s_pp "$s_pp" \
       --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
       --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
       --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
       '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, recipe:$recipe, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
+       + (if $project != "" then {project:$project} else {} end)
        + (if $trace_id != "" then {otel_trace_id:$trace_id} else {} end)
        + (if $span_id != "" then {otel_span_id:$span_id} else {} end)
        + (if $s_temp != "" then {sampling_temperature:($s_temp|tonumber)} else {} end)
@@ -420,12 +422,14 @@ log_metric() {
   else
     jq -nc \
       --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" --arg model "$model" \
+      --arg project "$project" \
       --arg trace_id "$trace_id" --arg span_id "$span_id" \
       --arg s_temp "$s_temp" --arg s_top_p "$s_top_p" --arg s_top_k "$s_top_k" --arg s_pp "$s_pp" \
       --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
       --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
       --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
       '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
+       + (if $project != "" then {project:$project} else {} end)
        + (if $trace_id != "" then {otel_trace_id:$trace_id} else {} end)
        + (if $span_id != "" then {otel_span_id:$span_id} else {} end)
        + (if $s_temp != "" then {sampling_temperature:($s_temp|tonumber)} else {} end)
@@ -710,8 +714,8 @@ if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
   fail_pchars=$(( ${#recipe_template} + ${#prompt} ))
   fail_cchars=${#context}
   fail_toks=$(compute_tokens_local "$fail_pchars" "$fail_cchars" 0)
-  log_metric "$ts_start" "$tier" "(none)" "$fail_pchars" "$fail_cchars" 0 "$fail_dur_ms" 1 "$recipe" 0 "$fail_dur_ms" "$otel_trace_id" "$otel_span_id" "" "" "" ""
-  emit_otel_span "$start_epoch_ms" "$fail_dur_ms" 1 "$otel_trace_id" "$otel_span_id" "(none)" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks" "${recipe_template}${prompt}" "$context" ""
+  log_metric "$ts_start" "$tier" "(none)" "$fail_pchars" "$fail_cchars" 0 "$fail_dur_ms" 1 "$recipe" 0 "$fail_dur_ms" "$otel_trace_id" "$otel_span_id" "" "" "" "" "$delegate_project"
+  emit_otel_span "$start_epoch_ms" "$fail_dur_ms" 1 "$otel_trace_id" "$otel_span_id" "(none)" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks" "${recipe_template}${prompt}" "$context" "" "$delegate_project"
   echo "delegate: pick-model failed for tier '$tier'" >&2
   exit 1
 fi
@@ -759,8 +763,8 @@ if [[ -n "$recipe" ]] && [[ "${DELEGATE_FORCE_FLAKY:-}" != "1" ]]; then
       fail_pchars=$(( ${#recipe_template} + ${#prompt} ))
       fail_cchars=${#context}
       fail_toks=$(compute_tokens_local "$fail_pchars" "$fail_cchars" 0)
-      log_metric "$ts_start" "$tier" "$model" "$fail_pchars" "$fail_cchars" 0 "$fail_dur_ms" 4 "$recipe" 0 "$fail_dur_ms" "$otel_trace_id" "$otel_span_id" "" "" "" ""
-      emit_otel_span "$start_epoch_ms" "$fail_dur_ms" 4 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks" "${recipe_template}${prompt}" "$context" ""
+      log_metric "$ts_start" "$tier" "$model" "$fail_pchars" "$fail_cchars" 0 "$fail_dur_ms" 4 "$recipe" 0 "$fail_dur_ms" "$otel_trace_id" "$otel_span_id" "" "" "" "" "$delegate_project"
+      emit_otel_span "$start_epoch_ms" "$fail_dur_ms" 4 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks" "${recipe_template}${prompt}" "$context" "" "$delegate_project"
       {
         echo "delegate: recipe '$recipe' is flagged as flaky on model '$model'"
         echo "         (matched frontmatter pattern '$matched_pat'; see prompts/$recipe.md calibration notes)"
@@ -892,8 +896,8 @@ if [[ -n "$recipe" ]] \
     canary_pchars=$(( ${#recipe_template} + ${#prompt} ))
     canary_cchars=${#context}
     canary_toks=$(compute_tokens_local "$canary_pchars" "$canary_cchars" 0)
-    log_metric "$ts_start" "$tier" "$model" "$canary_pchars" "$canary_cchars" 0 "$canary_dur_ms" 3 "$recipe" 0 "$canary_dur_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty"
-    emit_otel_span "$start_epoch_ms" "$canary_dur_ms" 3 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$canary_pchars" "$canary_cchars" 0 0 "$canary_dur_ms" "$canary_toks" "${recipe_template}${prompt}" "$context" ""
+    log_metric "$ts_start" "$tier" "$model" "$canary_pchars" "$canary_cchars" 0 "$canary_dur_ms" 3 "$recipe" 0 "$canary_dur_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project"
+    emit_otel_span "$start_epoch_ms" "$canary_dur_ms" 3 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$canary_pchars" "$canary_cchars" 0 0 "$canary_dur_ms" "$canary_toks" "${recipe_template}${prompt}" "$context" "" "$delegate_project"
     # Distinguish curl exit codes so the recovery advice points at the
     # right knob. 28 is the --max-time-fired timeout (the case the canary
     # was designed for); 7 is "can't reach host" (daemon down or wrong
@@ -1058,8 +1062,8 @@ context_chars=${#context}
 output_chars=${#output}
 tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$output_chars")
 
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty"
-emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output"
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project"
+emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to
 # read after every delegation, so it can tell the user which model handled

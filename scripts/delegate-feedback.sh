@@ -220,16 +220,17 @@ MSG
 fi
 
 ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+feedback_project=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
 
 # Build the feedback row. `reason` is omitted when the caller didn't supply
 # one so empty-string entries don't pollute future filters.
 if [[ -n "$reason" ]]; then
-  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --arg reason "$reason" \
-    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept, reason:$reason}' \
+  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --arg reason "$reason" --arg project "$feedback_project" \
+    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept, reason:$reason} + (if $project != "" then {project:$project} else {} end)' \
     >> "$metrics_file"
 else
-  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" \
-    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept}' \
+  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --arg project "$feedback_project" \
+    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $project != "" then {project:$project} else {} end)' \
     >> "$metrics_file"
 fi
 
