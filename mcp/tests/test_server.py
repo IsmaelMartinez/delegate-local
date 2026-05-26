@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from delegate_to_ollama_mcp import server
+from delegate_local_mcp import server
 
 
 def _completed(stdout: str = "", stderr: str = "", returncode: int = 0):
@@ -23,7 +23,7 @@ def _completed(stdout: str = "", stderr: str = "", returncode: int = 0):
 
 
 def test_scripts_dir_defaults_to_repo_scripts(monkeypatch):
-    monkeypatch.delenv("DELEGATE_TO_OLLAMA_SCRIPTS", raising=False)
+    monkeypatch.delenv("DELEGATE_LOCAL_SCRIPTS", raising=False)
     path = server.scripts_dir()
     assert path.name == "scripts"
     assert (path / "pick-model.sh").exists(), (
@@ -32,7 +32,7 @@ def test_scripts_dir_defaults_to_repo_scripts(monkeypatch):
 
 
 def test_scripts_dir_respects_env_override(monkeypatch, tmp_path):
-    monkeypatch.setenv("DELEGATE_TO_OLLAMA_SCRIPTS", str(tmp_path))
+    monkeypatch.setenv("DELEGATE_LOCAL_SCRIPTS", str(tmp_path))
     assert server.scripts_dir() == tmp_path
 
 
@@ -380,7 +380,7 @@ def test_list_tiers_parses_pick_model(monkeypatch, tmp_path):
         'TIERS="code|prose|reasoning|long-context|vision"\n'
         '# rest of script...\n'
     )
-    monkeypatch.setenv("DELEGATE_TO_OLLAMA_SCRIPTS", str(tmp_path))
+    monkeypatch.setenv("DELEGATE_LOCAL_SCRIPTS", str(tmp_path))
     assert server.list_tiers() == [
         "code", "prose", "reasoning", "long-context", "vision",
     ]
@@ -405,7 +405,7 @@ def test_list_tiers_against_real_script():
 def test_list_tiers_missing_marker_raises(monkeypatch, tmp_path):
     fake_script = tmp_path / "pick-model.sh"
     fake_script.write_text("#!/usr/bin/env bash\n# no TIERS line here\n")
-    monkeypatch.setenv("DELEGATE_TO_OLLAMA_SCRIPTS", str(tmp_path))
+    monkeypatch.setenv("DELEGATE_LOCAL_SCRIPTS", str(tmp_path))
     with pytest.raises(RuntimeError, match="could not find TIERS"):
         server.list_tiers()
 

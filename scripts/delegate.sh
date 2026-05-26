@@ -43,8 +43,12 @@
 #                                           #   resolved backend, never "auto".
 #   DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT=<s> # override the auto probe timeout
 #                                           #   (default 1, integer seconds).
-#   DELEGATE_TO_OLLAMA_NO_METRICS=1         # opt out of metrics logging
-#   DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1   # silence the one-line stderr
+#   DELEGATE_LOCAL_NO_METRICS=1              # opt out of metrics logging
+#                                           #   (back-compat: DELEGATE_TO_OLLAMA_NO_METRICS
+#                                           #   is accepted if the new name is unset)
+#   DELEGATE_LOCAL_NO_VERDICT_NUDGE=1        # silence the one-line stderr
+#                                           #   (back-compat: DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE
+#                                           #   is accepted if the new name is unset)
 #                                           #   reminder printed after each
 #                                           #   successful call pointing at
 #                                           #   delegate-feedback.sh. Off-by-
@@ -64,7 +68,9 @@
 #                                           #   (no row to verdict against),
 #                                           #   non-zero exit (failure has
 #                                           #   no output to judge).
-#   DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=<N> # redirect the verdict-nudge line
+#   DELEGATE_LOCAL_VERDICT_NUDGE_FD=<N>      # redirect the verdict-nudge line
+#                                           #   (back-compat: DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD
+#                                           #   is accepted if the new name is unset)
 #                                           #   to file descriptor N instead
 #                                           #   of fd 2 (stderr). Default
 #                                           #   unset → fd 2, preserving the
@@ -78,7 +84,7 @@
 #                                           #   single output file and route
 #                                           #   the nudge to a separate fd,
 #                                           #   e.g.
-#                                           #     DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 \
+#                                           #     DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
 #                                           #     bash delegate.sh prose "X" \
 #                                           #     > out.txt 2>&1 3>>nudge.log
 #                                           #   GOTCHA: the caller must
@@ -141,7 +147,9 @@
 #                                           #   capturing fresh evidence the
 #                                           #   flaky-class behaviour has
 #                                           #   changed across model upgrades.
-#   DELEGATE_TO_OLLAMA_NO_META=1            # silence the structured
+#   DELEGATE_LOCAL_NO_META=1                 # silence the structured
+#                                           #   (back-compat: DELEGATE_TO_OLLAMA_NO_META
+#                                           #   is accepted if the new name is unset)
 #                                           #   `delegate-meta:` summary line
 #                                           #   printed to stderr after each
 #                                           #   successful call. SKILL.md
@@ -297,9 +305,15 @@ if [[ -z "$tier" ]] || { [[ -z "$prompt" ]] && [[ -z "$recipe" ]]; }; then
   usage; exit 2
 fi
 
+# Backwards compat: old env var names (rename delegate-to-ollama → delegate-local).
+DELEGATE_LOCAL_NO_METRICS="${DELEGATE_LOCAL_NO_METRICS:-${DELEGATE_TO_OLLAMA_NO_METRICS:-}}"
+DELEGATE_LOCAL_NO_VERDICT_NUDGE="${DELEGATE_LOCAL_NO_VERDICT_NUDGE:-${DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE:-}}"
+DELEGATE_LOCAL_VERDICT_NUDGE_FD="${DELEGATE_LOCAL_VERDICT_NUDGE_FD:-${DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD:-}}"
+DELEGATE_LOCAL_NO_META="${DELEGATE_LOCAL_NO_META:-${DELEGATE_TO_OLLAMA_NO_META:-}}"
+
 # Validate the verdict-nudge FD env var up-front so a bad value fails fast,
 # before model resolution or the canary probe — a caller who fat-fingers
-# `DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=foo` shouldn't pay the cold-load cost
+# `DELEGATE_LOCAL_VERDICT_NUDGE_FD=foo` shouldn't pay the cold-load cost
 # before discovering the typo. Default 2 (stderr) keeps the back-compat
 # behaviour the #149 reversal pinned. The accepted range is 1-9 (single-
 # digit shell FDs): bash 3.2 — the project's portability floor, macOS-
@@ -310,9 +324,9 @@ fi
 # time absorbed by the 2>/dev/null guard below). 0 (stdin) is rejected as
 # nonsense; 1 (stdout) is allowed for callers who genuinely want the nudge
 # inline with the model output.
-nudge_fd="${DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD:-2}"
+nudge_fd="${DELEGATE_LOCAL_VERDICT_NUDGE_FD:-2}"
 if ! [[ "$nudge_fd" =~ ^[1-9]$ ]]; then
-  echo "delegate: DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD='${DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD:-}' is not a single-digit positive file descriptor (valid: 1-9; 0 is stdin and is rejected, multi-digit FDs are unreliable on bash 3.2)" >&2
+  echo "delegate: DELEGATE_LOCAL_VERDICT_NUDGE_FD='${DELEGATE_LOCAL_VERDICT_NUDGE_FD:-}' is not a single-digit positive file descriptor (valid: 1-9; 0 is stdin and is rejected, multi-digit FDs are unreliable on bash 3.2)" >&2
   exit 2
 fi
 
@@ -320,7 +334,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}"
+metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
 delegate_project=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
 # Resolve auto backend by probing the MLX server. Cheap (sub-second
 # timeout, single GET) and runs once per invocation. Explicit ollama|mlx
@@ -366,7 +380,7 @@ compute_tokens_local() {
 }
 
 log_metric() {
-  [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" == "1" ]] && return 0
+  [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
     s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}"
   local tokens_avoided
@@ -1076,7 +1090,7 @@ emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$ote
 # tokenizer's view (chars/4 estimate, same number as the JSONL row's
 # `estimated_tokens_avoided`) — not Anthropic's tokenizer, hence "kept local"
 # framing in SKILL.md rather than "saved from Claude".
-if [[ "${DELEGATE_TO_OLLAMA_NO_META:-}" != "1" ]] \
+if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] \
    && (( status == 0 )); then
   # String-typed fields are quoted so a model or recipe name containing a
   # space stays a single token rather than ambiguating the format ("recipe=my
@@ -1107,12 +1121,12 @@ fi
 # and non-zero exit (failed calls have no model output to judge). Issue #139
 # (parallel-capture callers contaminating stdout via 2>&1) is addressed
 # without re-introducing the coverage-losing gate by routing the nudge to a
-# caller-chosen file descriptor via DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=N
+# caller-chosen file descriptor via DELEGATE_LOCAL_VERDICT_NUDGE_FD=N
 # (default 2 = back-compat); the caller-side recipe is to redirect fd N
 # alongside the 2>&1 capture so coverage tracking stays intact while stdout
 # stays clean.
-if [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" != "1" ]] \
-   && [[ "${DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE:-}" != "1" ]] \
+if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] \
+   && [[ "${DELEGATE_LOCAL_NO_VERDICT_NUDGE:-}" != "1" ]] \
    && (( status == 0 )); then
   # nudge_fd was validated up-front (see "Validate the verdict-nudge FD"
   # block at the top); the value here is guaranteed to be a positive integer.

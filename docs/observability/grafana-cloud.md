@@ -1,10 +1,10 @@
 # Grafana Cloud — OTLP runbook
 
-This is the recommended default backend for the `delegate-to-ollama` OTLP exporter once Phase 11 Track A lands. Hosted by Grafana Labs, free tier covers the workstation-scale telemetry volumes this skill produces, and the pre-built GenAI dashboards key off the same `gen_ai.*` semantic attributes the exporter emits — so you import the dashboards once and they populate automatically.
+This is the recommended default backend for the `delegate-local` OTLP exporter once Phase 11 Track A lands. Hosted by Grafana Labs, free tier covers the workstation-scale telemetry volumes this skill produces, and the pre-built GenAI dashboards key off the same `gen_ai.*` semantic attributes the exporter emits — so you import the dashboards once and they populate automatically.
 
 ## When to pick this
 
-Use Grafana Cloud as the default for delegate-to-ollama's OTLP exporter when you require immediate visibility into GenAI metrics without managing infrastructure. The free tier provides pre-built dashboards that consume the specific semantic attributes emitted by the exporter, such as operation names and model details. This setup removes the need for local Docker or ClickHouse instances while transmitting only anonymised metadata like char counts and model identifiers to the collector.
+Use Grafana Cloud as the default for delegate-local's OTLP exporter when you require immediate visibility into GenAI metrics without managing infrastructure. The free tier provides pre-built dashboards that consume the specific semantic attributes emitted by the exporter, such as operation names and model details. This setup removes the need for local Docker or ClickHouse instances while transmitting only anonymised metadata like char counts and model identifiers to the collector.
 
 ## Sign up for the free tier
 

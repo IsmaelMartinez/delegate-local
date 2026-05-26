@@ -21,7 +21,7 @@
 # doesn't kill the whole search.
 #
 # Env: inherits everything embed.sh honours (DELEGATE_BACKEND, OLLAMA_HOST,
-#      DELEGATE_TO_OLLAMA_NO_METRICS, DELEGATE_METRICS_FILE).
+#      DELEGATE_LOCAL_NO_METRICS, DELEGATE_METRICS_FILE).
 
 set -uo pipefail
 

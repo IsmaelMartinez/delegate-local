@@ -17,7 +17,7 @@
 Files this plan creates or modifies:
 
 ```
-delegate-to-ollama/
+delegate-local/
 ├── evals/
 │   ├── eval-set.json              [CREATE] tagged trigger queries (positive/negative)
 │   └── results/                   [CREATE, .gitkeep] runner output dir
@@ -90,12 +90,12 @@ git checkout -b feature/phase-2-hardening
 - Create: `evals/.gitkeep` placeholder for `results/` (committed empty dir)
 - Create: `evals/README.md` (1 paragraph explaining file shape)
 
-The seed file at `~/.claude/skills/delegate-to-ollama-workspace/trigger-eval.json` has 20 queries (10 positive, 10 negative) but lacks the `tag` field (`exact` / `paraphrase` / `adjacent` / `unrelated`) the runner will need. This task imports and tags them.
+The seed file at `~/.claude/skills/delegate-local-workspace/trigger-eval.json` has 20 queries (10 positive, 10 negative) but lacks the `tag` field (`exact` / `paraphrase` / `adjacent` / `unrelated`) the runner will need. This task imports and tags them.
 
 - [ ] **Step 1: Read the seed file.**
 
 ```bash
-cat ~/.claude/skills/delegate-to-ollama-workspace/trigger-eval.json
+cat ~/.claude/skills/delegate-local-workspace/trigger-eval.json
 ```
 
 Expected: 20 query objects, each with `query` and `should_trigger` fields.
@@ -108,7 +108,7 @@ Create `evals/eval-set.json`:
 
 ```json
 {
-  "skill": "delegate-to-ollama",
+  "skill": "delegate-local",
   "model": "claude-sonnet-4-6",
   "thresholds": {
     "positive_recall": 0.9,
@@ -197,7 +197,7 @@ git commit -m "feat(evals): seed trigger eval-set.json from workspace draft"
 `tests/fixtures/skill-good.md`:
 ```markdown
 ---
-name: delegate-to-ollama
+name: delegate-local
 description: A test skill description that satisfies the validator.
 ---
 
@@ -228,7 +228,7 @@ description: Name violates regex.
 `tests/fixtures/skill-no-description.md`:
 ```markdown
 ---
-name: delegate-to-ollama
+name: delegate-local
 ---
 ```
 
@@ -246,11 +246,11 @@ FIX="$REPO/tests/fixtures"
 pass=0
 fail=0
 
-# Build a temp dir whose basename is "delegate-to-ollama" so the dir-match check
+# Build a temp dir whose basename is "delegate-local" so the dir-match check
 # can succeed for the good fixture.
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
-mkdir -p "$WORKDIR/delegate-to-ollama"
+mkdir -p "$WORKDIR/delegate-local"
 
 assert_exit() {
   local expected="$1" actual="$2" name="$3"
@@ -265,31 +265,31 @@ assert_stderr() {
 }
 
 # 1. Good frontmatter -> exit 0.
-cp "$FIX/skill-good.md" "$WORKDIR/delegate-to-ollama/SKILL.md"
-out=$(bash "$SCRIPT" "$WORKDIR/delegate-to-ollama/SKILL.md" 2>&1); ec=$?
+cp "$FIX/skill-good.md" "$WORKDIR/delegate-local/SKILL.md"
+out=$(bash "$SCRIPT" "$WORKDIR/delegate-local/SKILL.md" 2>&1); ec=$?
 assert_exit 0 "$ec" "good frontmatter exits 0"
 
 # 2. Missing frontmatter -> exit 1.
-cp "$FIX/skill-no-frontmatter.md" "$WORKDIR/delegate-to-ollama/SKILL.md"
-out=$(bash "$SCRIPT" "$WORKDIR/delegate-to-ollama/SKILL.md" 2>&1); ec=$?
+cp "$FIX/skill-no-frontmatter.md" "$WORKDIR/delegate-local/SKILL.md"
+out=$(bash "$SCRIPT" "$WORKDIR/delegate-local/SKILL.md" 2>&1); ec=$?
 assert_exit 1 "$ec" "missing frontmatter exits 1"
 assert_stderr "no frontmatter" "$out" "missing frontmatter: informative error"
 
 # 3. Name mismatch -> exit 1.
-cp "$FIX/skill-name-mismatch.md" "$WORKDIR/delegate-to-ollama/SKILL.md"
-out=$(bash "$SCRIPT" "$WORKDIR/delegate-to-ollama/SKILL.md" 2>&1); ec=$?
+cp "$FIX/skill-name-mismatch.md" "$WORKDIR/delegate-local/SKILL.md"
+out=$(bash "$SCRIPT" "$WORKDIR/delegate-local/SKILL.md" 2>&1); ec=$?
 assert_exit 1 "$ec" "name mismatch exits 1"
 assert_stderr "wrong-name" "$out" "name mismatch: prints offending name"
 
 # 4. Bad name regex -> exit 1.
-cp "$FIX/skill-bad-name.md" "$WORKDIR/delegate-to-ollama/SKILL.md"
-out=$(bash "$SCRIPT" "$WORKDIR/delegate-to-ollama/SKILL.md" 2>&1); ec=$?
+cp "$FIX/skill-bad-name.md" "$WORKDIR/delegate-local/SKILL.md"
+out=$(bash "$SCRIPT" "$WORKDIR/delegate-local/SKILL.md" 2>&1); ec=$?
 assert_exit 1 "$ec" "bad name regex exits 1"
 assert_stderr "regex" "$out" "bad name regex: error mentions regex"
 
 # 5. Missing description -> exit 1.
-cp "$FIX/skill-no-description.md" "$WORKDIR/delegate-to-ollama/SKILL.md"
-out=$(bash "$SCRIPT" "$WORKDIR/delegate-to-ollama/SKILL.md" 2>&1); ec=$?
+cp "$FIX/skill-no-description.md" "$WORKDIR/delegate-local/SKILL.md"
+out=$(bash "$SCRIPT" "$WORKDIR/delegate-local/SKILL.md" 2>&1); ec=$?
 assert_exit 1 "$ec" "missing description exits 1"
 assert_stderr "description" "$out" "missing description: informative error"
 
@@ -402,7 +402,7 @@ The script scans `SKILL.md` (or any markdown) for seven categories of dangerous 
 
 `.content-check-allow`:
 ```
-# delegate-to-ollama content scan allowlist
+# delegate-local content scan allowlist
 #
 # Format: CATEGORY:path:line_no  # justification
 #         CATEGORY:sha256:<64-hex-of-line>  # justification
@@ -756,7 +756,7 @@ results_file="$results_dir/$run_id.jsonl"
 : > "$results_file"
 
 system_prompt=$(cat <<EOF
-You are a trigger judge. The following description belongs to a skill called "delegate-to-ollama". Read the user query and reply with EXACTLY one word — TRIGGER if the skill description's instructions mean it should fire on this query, or NOTRIGGER otherwise. No reasoning, no punctuation, no explanation.
+You are a trigger judge. The following description belongs to a skill called "delegate-local". Read the user query and reply with EXACTLY one word — TRIGGER if the skill description's instructions mean it should fire on this query, or NOTRIGGER otherwise. No reasoning, no punctuation, no explanation.
 
 Skill description:
 $description

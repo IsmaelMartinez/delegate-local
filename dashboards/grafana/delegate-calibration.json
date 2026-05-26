@@ -1,7 +1,7 @@
 {
-  "title": "delegate-to-ollama — Calibration (HIT/MISS)",
+  "title": "delegate-local — Calibration (HIT/MISS)",
   "uid": "delegate-calibration",
-  "tags": ["delegate-to-ollama", "genai", "otel", "feedback"],
+  "tags": ["delegate-local", "genai", "otel", "feedback"],
   "schemaVersion": 38,
   "version": 1,
   "editable": true,
@@ -38,7 +38,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.delegate.feedback.verdict=\"hit\"} | count_over_time() / {resource.service.name=\"delegate-to-ollama\" && span.delegate.feedback.verdict != \"\"} | count_over_time()"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"hit\"} | count_over_time() / {resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict != \"\"} | count_over_time()"
         }
       ],
       "fieldConfig": {
@@ -58,7 +58,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | count_over_time() - {resource.service.name=\"delegate-to-ollama\" && span.delegate.feedback.verdict != \"\"} | count_over_time()"
+          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | count_over_time() - {resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict != \"\"} | count_over_time()"
         }
       ],
       "fieldConfig": {
@@ -78,7 +78,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.delegate.feedback.verdict=\"miss\"} | count_over_time()"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"miss\"} | count_over_time()"
         }
       ],
       "fieldConfig": {
@@ -98,7 +98,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.delegate.feedback.verdict=\"hit\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe) / {resource.service.name=\"delegate-to-ollama\" && span.delegate.feedback.verdict != \"\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"hit\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe) / {resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict != \"\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)"
         }
       ],
       "fieldConfig": {
@@ -118,7 +118,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.delegate.feedback.verdict=\"miss\"} | select(span.delegate.recipe, span.delegate.feedback.reason)"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"miss\"} | select(span.delegate.recipe, span.delegate.feedback.reason)"
         }
       ],
       "options": {"showHeader": true, "sortBy": [{"displayName": "Time", "desc": true}]},

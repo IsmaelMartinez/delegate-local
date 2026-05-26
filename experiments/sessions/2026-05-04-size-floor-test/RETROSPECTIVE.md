@@ -34,7 +34,7 @@ F2 and F4 are both findings whose "design-intent qualifiers in the input" trigge
 
 ## Timing
 
-Cold-load 5.5 s (r1), warm ~1.5 s (r2/r3). The 14b beats the 19 GB deepseek-r1:32b on raw latency by ~2-3× (v6 recorded 4-5 s warm for the 32b), which is expected and reflected in the Phase 8 metrics (`tail -3` of `~/.claude/skills/delegate-to-ollama/metrics.jsonl` after this run shows three experiment-tagged cells, `prompt_tokens:459`, `eval_tokens:73`). Cheap cells, but the partial-score is the problem — a fast wrong answer isn't a useful trade.
+Cold-load 5.5 s (r1), warm ~1.5 s (r2/r3). The 14b beats the 19 GB deepseek-r1:32b on raw latency by ~2-3× (v6 recorded 4-5 s warm for the 32b), which is expected and reflected in the Phase 8 metrics (`tail -3` of `~/.claude/skills/delegate-local/metrics.jsonl` after this run shows three experiment-tagged cells, `prompt_tokens:459`, `eval_tokens:73`). Cheap cells, but the partial-score is the problem — a fast wrong answer isn't a useful trade.
 
 ## Interpretation
 

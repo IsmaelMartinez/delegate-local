@@ -10,7 +10,7 @@
 # Usage:  audit-metrics.sh
 # Env (shared names with the runtime nudge so a single tuning applies to both):
 #   DELEGATE_METRICS_FILE                 metrics JSONL path
-#                                         (default ~/.claude/skills/delegate-to-ollama/metrics.jsonl)
+#                                         (default ~/.claude/skills/delegate-local/metrics.jsonl)
 #   DELEGATE_FEEDBACK_NUDGE_WINDOW_DAYS   lookback in days (default 30; 0 disables)
 #   DELEGATE_FEEDBACK_NUDGE_AT            minimum bucket size to emit a draft
 #                                         (default 3)
@@ -38,7 +38,7 @@ if [[ $# -gt 0 ]]; then
   esac
 fi
 
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}"
+metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
 nudge_at="${DELEGATE_FEEDBACK_NUDGE_AT:-3}"
 window_days="${DELEGATE_FEEDBACK_NUDGE_WINDOW_DAYS:-30}"
 similar_threshold="${DELEGATE_FEEDBACK_SIMILAR_THRESHOLD:-0.4}"
@@ -202,7 +202,7 @@ printf '%s\n' "$out" | awk -F'\t' '
     body=body "See .github/ISSUE_TEMPLATE/prompt-pattern.md for the full template — paste the prompt, the model output, and a suggested fix if known."
     gsub(/\x27/, "\x27\\\x27\x27", body)
     printf "\nDraft issue command:\n"
-    printf "  gh issue create --repo IsmaelMartinez/delegate-to-ollama \\\n"
+    printf "  gh issue create --repo IsmaelMartinez/delegate-local \\\n"
     printf "    --label prompt-pattern \\\n"
     printf "    --title \x27%s\x27 \\\n", title
     printf "    --body \x27%s\x27\n\n", body

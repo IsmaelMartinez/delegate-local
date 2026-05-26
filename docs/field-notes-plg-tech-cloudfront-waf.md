@@ -1,6 +1,6 @@
-# Field notes: delegate-to-ollama in this repo
+# Field notes: delegate-local in this repo
 
-These are running notes from using the `delegate-to-ollama` skill (https://github.com/.../delegate-to-ollama) during the IP-146 share-readiness pass on this repo. Kept here because the repo owns the artefacts the skill was run against (commit messages, README edits, runbook drafts). The intent is to share this file back to the `delegate-to-ollama` project so its SKILL.md can absorb the bits that are genuinely portable.
+These are running notes from using the `delegate-local` skill (https://github.com/.../delegate-local) during the IP-146 share-readiness pass on this repo. Kept here because the repo owns the artefacts the skill was run against (commit messages, README edits, runbook drafts). The intent is to share this file back to the `delegate-local` project so its SKILL.md can absorb the bits that are genuinely portable.
 
 ## Environment
 
@@ -21,7 +21,7 @@ Long bundled prompts on `delegate.sh`. First attempt on the README Status rewrit
 
 Trailing-adverb padding. Every single prose-tier paragraph in this session had the same shape: two solid sentences stating the content, followed by one closing sentence restating the point with a participial clause — "ensuring proper notification routing is established", "this distinction is crucial for determining whether immediate infrastructure correction or security mitigation is required", "to address the identified on-call gap effectively". The content is fine; the close is dead weight. I stripped the last sentence of every generated paragraph. This is pattern-like enough that it could be prompted against directly with a hard rule.
 
-## Recommendations for delegate-to-ollama's SKILL.md
+## Recommendations for delegate-local's SKILL.md
 
 The skill already has the right shape. Two additions worth considering:
 
@@ -35,13 +35,13 @@ The skill already has the right shape. Two additions worth considering:
 
 ## Metrics JSONL — actually useful
 
-`~/.claude/skills/delegate-to-ollama/metrics.jsonl` captured one line per call with tier, model, prompt/context/output chars, duration, estimated tokens avoided. After this pass that file alone would answer "was ollama worth it?" without needing a separate log. The skill already produces this; worth surfacing more loudly in the SKILL.md because it turns the skill into a measurable experiment rather than a vibe call.
+`~/.claude/skills/delegate-local/metrics.jsonl` captured one line per call with tier, model, prompt/context/output chars, duration, estimated tokens avoided. After this pass that file alone would answer "was ollama worth it?" without needing a separate log. The skill already produces this; worth surfacing more loudly in the SKILL.md because it turns the skill into a measurable experiment rather than a vibe call.
 
 ## Token cost: are we actually saving money?
 
 Honest answer: the direct token cost is negligible on any realistic task — the token savings chart is a bad reason to reach for this skill. The real reasons to use it are privacy (text stays on-device) and parallelism (the local call doesn't contend for the managed-model context window). Money is a rounding error.
 
-Numbers from the IP-146 share-readiness pass (pulled from `~/.claude/skills/delegate-to-ollama/metrics.jsonl`):
+Numbers from the IP-146 share-readiness pass (pulled from `~/.claude/skills/delegate-local/metrics.jsonl`):
 
 - 21 calls across the session.
 - Total wall time against the local daemon: `88.1 s`.

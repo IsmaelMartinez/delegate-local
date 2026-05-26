@@ -24,7 +24,7 @@ The mirror change in `experiments/runner.sh` keeps the production code path and 
 
 The rejected alternative was keeping the Qwen profile as default and tightening the commit-message recipe guards further to block the new participial-padding shapes the treatment introduced. Rejected because the regression was not bounded to one shape — three of five reps emitted padding tails and one exceeded the subject ceiling, suggesting the sampler-induced variety would keep surfacing new failure shapes faster than the directive enumeration could absorb them. The directive-binding ceiling (later documented as Phase 15 / `prompts/README.md` Convention 3) was already a known phenomenon at this point; extending the enumeration to chase sampler-induced variety would have stacked an open-ended calibration cost on top of a default that delivered no measured quality benefit on the T4 axis.
 
-Phase 13 shipped via PR [#196](https://github.com/IsmaelMartinez/delegate-to-ollama/pull/196) (squash `1f0a86d`, merged 2026-05-23), with the default-flip-back commit (`1e8909e`) landing in the same PR.
+Phase 13 shipped via PR [#196](https://github.com/IsmaelMartinez/delegate-local/pull/196) (squash `1f0a86d`, merged 2026-05-23), with the default-flip-back commit (`1e8909e`) landing in the same PR.
 
 ## Consequences
 

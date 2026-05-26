@@ -1,7 +1,7 @@
 {
-  "title": "delegate-to-ollama — Overview",
+  "title": "delegate-local — Overview",
   "uid": "delegate-overview",
-  "tags": ["delegate-to-ollama", "genai", "otel"],
+  "tags": ["delegate-local", "genai", "otel"],
   "schemaVersion": 38,
   "version": 1,
   "editable": true,
@@ -41,14 +41,14 @@
       "id": 1,
       "type": "timeseries",
       "title": "Call volume by tier",
-      "description": "Count of delegate.sh spans over time, grouped by delegate.tier. Filter to a single tier via the dashboard variable; the query keys off the resource attribute service.name=\"delegate-to-ollama\" so spans from other GenAI workloads on the same collector do not bleed in.",
+      "description": "Count of delegate.sh spans over time, grouped by delegate.tier. Filter to a single tier via the dashboard variable; the query keys off the resource attribute service.name=\"delegate-local\" so spans from other GenAI workloads on the same collector do not bleed in.",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
       "datasource": {"type": "tempo", "uid": "tempo"},
       "targets": [
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | rate() by (span.delegate.tier)"
+          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | rate() by (span.delegate.tier)"
         }
       ],
       "fieldConfig": {
@@ -68,7 +68,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)"
         }
       ],
       "fieldConfig": {
@@ -88,7 +88,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | rate() by (span.gen_ai.provider.name)"
+          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | rate() by (span.gen_ai.provider.name)"
         }
       ],
       "fieldConfig": {
@@ -108,7 +108,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(span.delegate.queue_wait_ms)"
+          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(span.delegate.queue_wait_ms)"
         }
       ],
       "fieldConfig": {
@@ -128,7 +128,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(span.delegate.generation_ms)"
+          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(span.delegate.generation_ms)"
         }
       ],
       "fieldConfig": {
@@ -148,7 +148,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(duration)"
+          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(duration)"
         }
       ],
       "fieldConfig": {
@@ -168,7 +168,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | sum(span.delegate.estimated_tokens_avoided)"
+          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | sum(span.delegate.estimated_tokens_avoided)"
         }
       ],
       "fieldConfig": {
@@ -188,7 +188,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-to-ollama\" && span.gen_ai.operation.name=\"chat\"} | count_over_time()"
+          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | count_over_time()"
         }
       ],
       "fieldConfig": {

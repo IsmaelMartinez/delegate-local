@@ -1,4 +1,4 @@
-"""MCP server exposing delegate-to-ollama's routing scripts as tools.
+"""MCP server exposing delegate-local's routing scripts as tools.
 
 The tools are thin shells over scripts/pick-model.sh and scripts/audit-models.sh
 plus a recipe-recommendation tool that reads prompts/ and the local metrics
@@ -6,7 +6,7 @@ JSONL. No new business logic lives here — the bash scripts remain the source
 of truth for tier routing and upgrade-suggestion behaviour, and prompts/ remains
 the source of truth for recipe content.
 
-DELEGATE_TO_OLLAMA_SCRIPTS env var overrides the scripts directory location
+DELEGATE_LOCAL_SCRIPTS env var overrides the scripts directory location
 (useful when the package is installed outside its source tree).
 DELEGATE_PROMPTS_DIR overrides the prompts directory (same convention as
 scripts/delegate.sh). DELEGATE_METRICS_FILE overrides the metrics JSONL
@@ -35,11 +35,11 @@ def _default_prompts_dir() -> Path:
 
 
 def _default_metrics_file() -> Path:
-    return Path.home() / ".claude" / "skills" / "delegate-to-ollama" / "metrics.jsonl"
+    return Path.home() / ".claude" / "skills" / "delegate-local" / "metrics.jsonl"
 
 
 def scripts_dir() -> Path:
-    override = os.environ.get("DELEGATE_TO_OLLAMA_SCRIPTS")
+    override = os.environ.get("DELEGATE_LOCAL_SCRIPTS")
     return Path(override) if override else _default_scripts_dir()
 
 
@@ -53,7 +53,7 @@ def metrics_file() -> Path:
     return Path(override) if override else _default_metrics_file()
 
 
-app = FastMCP("delegate-to-ollama")
+app = FastMCP("delegate-local")
 
 # Bounded timeouts so a wedged ollama or llmfit can't hang the MCP client
 # indefinitely. pick-model.sh just shells `ollama list`; audit-models.sh

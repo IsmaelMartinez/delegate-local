@@ -17,7 +17,7 @@ fi
 # Determine the directory name to compare `name:` against. The naive choice
 # is the SKILL.md's parent directory, which works for the canonical layouts:
 #   ./SKILL.md                                 → repo root
-#   ~/.claude/skills/delegate-to-ollama/SKILL.md  → installed skill dir
+#   ~/.claude/skills/delegate-local/SKILL.md  → installed skill dir
 # But it breaks inside a git worktree (.claude/worktrees/<branch>/SKILL.md),
 # where the parent is the worktree name, not the skill name. Detect that
 # case via git's common-dir (shared across worktrees) and resolve to the

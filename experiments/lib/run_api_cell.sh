@@ -33,6 +33,9 @@ if [[ "${RUN_API_CELL_LIB_LOADED:-}" == "1" ]]; then
 fi
 RUN_API_CELL_LIB_LOADED=1
 
+# Backwards compat: old env var name (rename delegate-to-ollama → delegate-local).
+DELEGATE_LOCAL_NO_METRICS="${DELEGATE_LOCAL_NO_METRICS:-${DELEGATE_TO_OLLAMA_NO_METRICS:-}}"
+
 now_ms() {
   perl -MTime::HiRes=time -e 'printf "%d\n", time*1000'
 }
@@ -53,10 +56,10 @@ now_ms() {
 # under set -euo pipefail.
 #
 # Metrics: each call appends one JSON line to
-# ${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}
+# ${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}
 # with source:"experiment" so the rollup in scripts/metrics-summary.sh can
 # separate interactive delegations from experiment traffic. Opt out with
-# DELEGATE_TO_OLLAMA_NO_METRICS=1. Token counts come from Ollama's own
+# DELEGATE_LOCAL_NO_METRICS=1. Token counts come from Ollama's own
 # prompt_eval_count / eval_count fields (not char-based estimates) so the
 # "tokens avoided" headline reflects real model usage.
 run_api_cell() {
@@ -92,8 +95,8 @@ run_api_cell() {
 # read and so the metrics code can be disabled without touching the call site.
 _run_api_cell_log_metric() {
   local model="$1" response_file="$2" status="$3"
-  [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" == "1" ]] && return 0
-  local metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}"
+  [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
+  local metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
 
   # Session label = leaf directory of the runner's cwd, which is the

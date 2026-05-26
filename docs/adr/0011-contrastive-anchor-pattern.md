@@ -42,7 +42,7 @@ The 18/18 → 15/18 → 18/18 measurement sequence is the empirical evidence for
 
 Phase 15 Track C documents the asymmetry as `prompts/README.md` Convention 3 with the two recipe-authoring rules drawn from the measurement: domain-neutral Correct examples (the first iteration used recipe-adjacent phrasing about fixtures and anti-padding and the model copied the Correct sentence verbatim into the body because it was on-topic), and the asymmetric Correct form discipline keyed off Wrong-content shape (concrete-rephrased for participial-tail Wrong, parenthetical meta-description for declarative-restating Wrong).
 
-Phase 15 shipped via PR [#208](https://github.com/IsmaelMartinez/delegate-to-ollama/pull/208) (squash `81c3d68`, merged 2026-05-24).
+Phase 15 shipped via PR [#208](https://github.com/IsmaelMartinez/delegate-local/pull/208) (squash `81c3d68`, merged 2026-05-24).
 
 ## Consequences
 

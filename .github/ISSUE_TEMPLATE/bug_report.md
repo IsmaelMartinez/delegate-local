@@ -37,4 +37,4 @@ Paste the full output, ideally with `set -x` enabled so the resolved model and a
 
 ## Anything else
 
-Logs from `~/.claude/skills/delegate-to-ollama/metrics.jsonl` (last few lines) are useful when the bug is in routing or the wrapper. Redact any sensitive content first.
+Logs from `~/.claude/skills/delegate-local/metrics.jsonl` (last few lines) are useful when the bug is in routing or the wrapper. Redact any sensitive content first.

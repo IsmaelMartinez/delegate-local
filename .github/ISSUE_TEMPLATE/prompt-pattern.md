@@ -40,4 +40,4 @@ If you already found a prompt that turned the MISS into HIT, paste it here. A re
 
 ## Metrics row (optional)
 
-The `ts` field of the relevant line(s) in `~/.claude/skills/delegate-to-ollama/metrics.jsonl`. Lets the maintainer cross-check timing, output size, and any paired `delegate-feedback.sh miss` row.
+The `ts` field of the relevant line(s) in `~/.claude/skills/delegate-local/metrics.jsonl`. Lets the maintainer cross-check timing, output size, and any paired `delegate-feedback.sh miss` row.

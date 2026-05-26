@@ -35,7 +35,7 @@ make_eval_set() {
   local dir="$1"
   cat > "$dir/eval-set.json" <<'JSON'
 {
-  "skill": "delegate-to-ollama",
+  "skill": "delegate-local",
   "model": "claude-sonnet-4-6",
   "thresholds": {"positive_recall": 0.9, "negative_precision": 0.9},
   "queries": [
@@ -65,7 +65,7 @@ make_skill() {
   local dir="$1"
   cat > "$dir/SKILL.md" <<'MD'
 ---
-name: delegate-to-ollama
+name: delegate-local
 description: Use this skill to offload non-reasoning text work to local Ollama models. MUST use when the user asks to summarise, draft, triage, classify, extract, or rewrite text. Do NOT use for code correctness review or debugging.
 ---
 
@@ -313,7 +313,7 @@ assert_contains '"think":false' "$first_body" "--ollama body: think:false"
 assert_contains '"format":"json"' "$first_body" "--ollama body: format:json (batched JSON output)"
 assert_contains '"temperature":0' "$first_body" "--ollama body: temperature:0"
 assert_contains '"stream":false' "$first_body" "--ollama body: stream:false"
-assert_contains "delegate-to-ollama" "$first_body" "--ollama body: skill description leaks through"
+assert_contains "delegate-local" "$first_body" "--ollama body: skill description leaks through"
 assert_contains "summarise this log" "$first_body" "--ollama body: query in prompt"
 assert_contains '\"id\":\"p01\"' "$first_body" "--ollama body: ids in batched payload"
 rm -rf "$tmp"

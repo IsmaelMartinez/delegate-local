@@ -8,7 +8,7 @@ Thanks for taking the time to look. This repo is one Claude Code skill, two bash
 
 `scripts/pick-model.sh` is the single source of truth for tier-to-model routing. Each tier (`code`, `prose`, `reasoning`, `long-context`, plus the scaffolded `vision`, `embedding`, `premium-general`, `reasoning-vision`) holds a substring-matched preference list, highest capability first. When the installed model set changes, edit the `prefs` arrays in this script — never hardcode model names in `SKILL.md` or in shell pipes.
 
-`scripts/delegate.sh` wraps `pick-model.sh` plus Ollama's `POST /api/generate` and appends one JSON line per call to `~/.claude/skills/delegate-to-ollama/metrics.jsonl`. `scripts/audit-models.sh` is read-only and never pulls; it cross-checks `llmfit recommend --json` against `ollama list`. `scripts/metrics-summary.sh` is the read-only rollup over the metrics JSONL.
+`scripts/delegate.sh` wraps `pick-model.sh` plus Ollama's `POST /api/generate` and appends one JSON line per call to `~/.claude/skills/delegate-local/metrics.jsonl`. `scripts/audit-models.sh` is read-only and never pulls; it cross-checks `llmfit recommend --json` against `ollama list`. `scripts/metrics-summary.sh` is the read-only rollup over the metrics JSONL.
 
 `mcp/` is the optional Python MCP server that exposes three read-only tools (`pick_model`, `audit_models`, `list_tiers`) to non-Claude clients. It is a thin `subprocess.run` wrapper over the bash scripts, not a reimplementation. `experiments/` is the empirical accuracy framework — three fixtures, one runner, one orchestrator, one deterministic T3 scorer. `docs/adr/` records the load-bearing design decisions; read them before proposing changes that contradict one.
 

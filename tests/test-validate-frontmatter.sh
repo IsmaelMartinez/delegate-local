@@ -11,7 +11,7 @@ fail=0
 
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
-mkdir -p "$WORKDIR/delegate-to-ollama"
+mkdir -p "$WORKDIR/delegate-local"
 
 assert_exit() {
   local expected="$1" actual="$2" name="$3"
@@ -26,31 +26,31 @@ assert_stderr() {
 }
 
 # 1. Good frontmatter -> exit 0.
-cp "$FIX/skill-good.md" "$WORKDIR/delegate-to-ollama/SKILL.md"
-out=$(bash "$SCRIPT" "$WORKDIR/delegate-to-ollama/SKILL.md" 2>&1); ec=$?
+cp "$FIX/skill-good.md" "$WORKDIR/delegate-local/SKILL.md"
+out=$(bash "$SCRIPT" "$WORKDIR/delegate-local/SKILL.md" 2>&1); ec=$?
 assert_exit 0 "$ec" "good frontmatter exits 0"
 
 # 2. Missing frontmatter -> exit 1.
-cp "$FIX/skill-no-frontmatter.md" "$WORKDIR/delegate-to-ollama/SKILL.md"
-out=$(bash "$SCRIPT" "$WORKDIR/delegate-to-ollama/SKILL.md" 2>&1); ec=$?
+cp "$FIX/skill-no-frontmatter.md" "$WORKDIR/delegate-local/SKILL.md"
+out=$(bash "$SCRIPT" "$WORKDIR/delegate-local/SKILL.md" 2>&1); ec=$?
 assert_exit 1 "$ec" "missing frontmatter exits 1"
 assert_stderr "no frontmatter" "$out" "missing frontmatter: informative error"
 
 # 3. Name mismatch -> exit 1.
-cp "$FIX/skill-name-mismatch.md" "$WORKDIR/delegate-to-ollama/SKILL.md"
-out=$(bash "$SCRIPT" "$WORKDIR/delegate-to-ollama/SKILL.md" 2>&1); ec=$?
+cp "$FIX/skill-name-mismatch.md" "$WORKDIR/delegate-local/SKILL.md"
+out=$(bash "$SCRIPT" "$WORKDIR/delegate-local/SKILL.md" 2>&1); ec=$?
 assert_exit 1 "$ec" "name mismatch exits 1"
 assert_stderr "wrong-name" "$out" "name mismatch: prints offending name"
 
 # 4. Bad name regex -> exit 1.
-cp "$FIX/skill-bad-name.md" "$WORKDIR/delegate-to-ollama/SKILL.md"
-out=$(bash "$SCRIPT" "$WORKDIR/delegate-to-ollama/SKILL.md" 2>&1); ec=$?
+cp "$FIX/skill-bad-name.md" "$WORKDIR/delegate-local/SKILL.md"
+out=$(bash "$SCRIPT" "$WORKDIR/delegate-local/SKILL.md" 2>&1); ec=$?
 assert_exit 1 "$ec" "bad name regex exits 1"
 assert_stderr "regex" "$out" "bad name regex: error mentions regex"
 
 # 5. Missing description -> exit 1.
-cp "$FIX/skill-no-description.md" "$WORKDIR/delegate-to-ollama/SKILL.md"
-out=$(bash "$SCRIPT" "$WORKDIR/delegate-to-ollama/SKILL.md" 2>&1); ec=$?
+cp "$FIX/skill-no-description.md" "$WORKDIR/delegate-local/SKILL.md"
+out=$(bash "$SCRIPT" "$WORKDIR/delegate-local/SKILL.md" 2>&1); ec=$?
 assert_exit 1 "$ec" "missing description exits 1"
 assert_stderr "description" "$out" "missing description: informative error"
 

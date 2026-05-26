@@ -181,7 +181,7 @@ metrics=$(mktemp); rm -f "$metrics"  # ensure file does not exist
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_NO_METRICS=1 \
+  DELEGATE_LOCAL_NO_METRICS=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "opt-out: still exits 0"
 if [[ -f "$metrics" ]]; then
@@ -1001,7 +1001,7 @@ stderr_content=$(cat "$stderr_file")
 assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge non-TTY: nudge still printed with stdout piped through cat"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 15. DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1 silences the nudge but keeps
+# 15. DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 silences the nudge but keeps
 # the rest of the behaviour intact (metrics row still written, model
 # output still on stdout). For users who genuinely don't want the noise.
 tmp=$(mktemp -d)
@@ -1012,7 +1012,7 @@ stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1 \
+  DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge opt-out: still exits 0"
 stderr_content=$(cat "$stderr_file")
@@ -1037,7 +1037,7 @@ stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_NO_METRICS=1 \
+  DELEGATE_LOCAL_NO_METRICS=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge NO_METRICS: still exits 0"
 stderr_content=$(cat "$stderr_file")
@@ -1072,12 +1072,12 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 17a. DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=N redirects the nudge to fd N
+# 17a. DELEGATE_LOCAL_VERDICT_NUDGE_FD=N redirects the nudge to fd N
 # instead of fd 2. Closes issue #139 (parallel-capture callers contaminating
 # stdout via 2>&1) without re-introducing the TTY-gate that the #149
 # reversal showed dropped lifetime verdict coverage from 82% interactive to
 # 47.8% lifetime. The recipe a parallel-capture caller wants is:
-#   DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 bash delegate.sh prose "X" \
+#   DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 bash delegate.sh prose "X" \
 #     > out.txt 2>&1 3>>nudge.log
 # stdout+stderr go to out.txt unaffected; the nudge lands on nudge.log via
 # fd 3 so coverage tracking stays intact.
@@ -1093,7 +1093,7 @@ nudge_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 \
+  DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge FD=3: happy path exits 0"
 stderr_content=$(cat "$stderr_file")
@@ -1125,7 +1125,7 @@ stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 \
+  DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge FD=3 no redirect: still exits 0"
 stderr_content=$(cat "$stderr_file")
@@ -1158,7 +1158,7 @@ stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=2 \
+  DELEGATE_LOCAL_VERDICT_NUDGE_FD=2 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge FD=2 (default-equivalent): exits 0"
 stderr_content=$(cat "$stderr_file")
@@ -1176,7 +1176,7 @@ stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=1 \
+  DELEGATE_LOCAL_VERDICT_NUDGE_FD=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge FD=1: exits 0"
 if echo "$out" | grep -q "record verdict"; then
@@ -1202,11 +1202,11 @@ stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=0 \
+  DELEGATE_LOCAL_VERDICT_NUDGE_FD=0 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 2 "$EC" "verdict-nudge FD=0: exits 2 (stdin rejected)"
 stderr_content=$(cat "$stderr_file")
-assert_contains "DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=0: error names the env var"
+assert_contains "DELEGATE_LOCAL_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=0: error names the env var"
 assert_contains "valid: 1-9" "$stderr_content" "verdict-nudge FD=0: error mentions the valid shape (1-9 single-digit range)"
 # No metrics row should have been written — validation fires before model
 # contact, so no delegation row exists to verdict against.
@@ -1226,11 +1226,11 @@ stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=foo \
+  DELEGATE_LOCAL_VERDICT_NUDGE_FD=foo \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 2 "$EC" "verdict-nudge FD=foo: exits 2 (non-numeric rejected)"
 stderr_content=$(cat "$stderr_file")
-assert_contains "DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=foo: error names the env var"
+assert_contains "DELEGATE_LOCAL_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=foo: error names the env var"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 17a-7. FD=-1 (negative) is rejected. The regex `^[1-9]$` matches single-
@@ -1246,7 +1246,7 @@ stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=-1 \
+  DELEGATE_LOCAL_VERDICT_NUDGE_FD=-1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 2 "$EC" "verdict-nudge FD=-1: exits 2 (negative rejected)"
 rm -rf "$tmp" "$metrics" "$stderr_file"
@@ -1264,11 +1264,11 @@ stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=10 \
+  DELEGATE_LOCAL_VERDICT_NUDGE_FD=10 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 2 "$EC" "verdict-nudge FD=10: exits 2 (multi-digit rejected)"
 stderr_content=$(cat "$stderr_file")
-assert_contains "DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=10: error names the env var"
+assert_contains "DELEGATE_LOCAL_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=10: error names the env var"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 17a-7c. FD=99 (larger multi-digit) is also rejected. Same reasoning as
@@ -1281,7 +1281,7 @@ stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=99 \
+  DELEGATE_LOCAL_VERDICT_NUDGE_FD=99 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 2 "$EC" "verdict-nudge FD=99: exits 2 (multi-digit rejected)"
 rm -rf "$tmp" "$metrics" "$stderr_file"
@@ -1297,8 +1297,8 @@ nudge_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 \
-  DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1 \
+  DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
+  DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge FD=3 + NO_VERDICT_NUDGE: exits 0"
 nudge_content=$(cat "$nudge_file")
@@ -1326,8 +1326,8 @@ nudge_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 \
-  DELEGATE_TO_OLLAMA_NO_METRICS=1 \
+  DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
+  DELEGATE_LOCAL_NO_METRICS=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge FD=3 + NO_METRICS: exits 0"
 nudge_content=$(cat "$nudge_file")
@@ -1354,7 +1354,7 @@ nudge_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 \
+  DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
 assert_eq 1 "$EC" "verdict-nudge FD=3 on failure: still exits 1"
 nudge_content=$(cat "$nudge_file")
@@ -1920,7 +1920,7 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 20. DELEGATE_TO_OLLAMA_NO_META=1 silences the meta line but the rest of
+# 20. DELEGATE_LOCAL_NO_META=1 silences the meta line but the rest of
 # the delegation still runs (metrics row written, model output on stdout,
 # verdict nudge still fires — meta and nudge are independent surfaces with
 # independent opt-outs).
@@ -1932,7 +1932,7 @@ stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_NO_META=1 \
+  DELEGATE_LOCAL_NO_META=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "delegate-meta opt-out: still exits 0"
 stderr_content=$(cat "$stderr_file")
@@ -2791,7 +2791,7 @@ assert_contains '"kind":3' "$otel_body" "OT2: span kind=3 (CLIENT)"
 assert_contains '"status":{"code":1}' "$otel_body" "OT2: span status OK on exit 0"
 # resource.service.name attribute.
 assert_contains '"service.name"' "$otel_body" "OT2: resource has service.name"
-assert_contains '"delegate-to-ollama"' "$otel_body" "OT2: resource service.name value"
+assert_contains '"delegate-local"' "$otel_body" "OT2: resource service.name value"
 # Metrics row carries the same trace/span IDs (cross-correlation enabler).
 metric_line=$(cat "$metrics")
 assert_contains '"otel_trace_id":"' "$metric_line" "OT2: metrics row has otel_trace_id"
