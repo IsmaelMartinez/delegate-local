@@ -7,18 +7,29 @@ On Apple Silicon, `mlx-lm` is an alternative inference runtime that uses Apple's
 ## Requirements
 
 - Apple Silicon Mac (M1 or later). MLX has no CUDA path.
-- `pipx` (`brew install pipx` if you don't have it) — installs `mlx-lm` as an isolated CLI tool rather than polluting your system Python.
+- `pipx` (`brew install pipx`) or a Python venv — either keeps `mlx-lm` isolated from your system Python.
 - Enough disk space for the model weights. Q8 35B models are ~35 GB; 4-bit equivalents are ~18 GB.
 
 The skill itself doesn't need a separate install — the existing `npx skills add` flow already lands the bash scripts. Only the MLX runtime is an additional dependency.
 
 ## Install `mlx-lm`
 
+Via `pipx` (single command, globally available):
+
 ```bash
 pipx install mlx-lm
 ```
 
-This gives you `mlx_lm.generate` (one-shot CLI), `mlx_lm.server` (OpenAI-compatible HTTP server), `mlx_lm.manage` (cache management), and others. The skill uses the server.
+Or via a Python venv (useful on systems where `pipx` is unavailable or when you want to pin the Python version):
+
+```bash
+python3 -m venv ~/venvs/mlx-lm
+~/venvs/mlx-lm/bin/pip install mlx-lm
+```
+
+With the venv approach, binaries land under `~/venvs/mlx-lm/bin/` (e.g. `~/venvs/mlx-lm/bin/mlx_lm.server`) rather than on PATH. The launchd plist in the auto-start section below uses the full path, so either install method works.
+
+Both give you `mlx_lm.generate` (one-shot CLI), `mlx_lm.server` (OpenAI-compatible HTTP server), `mlx_lm.manage` (cache management), and others. The skill uses the server.
 
 ## Pull a model
 
@@ -36,15 +47,78 @@ huggingface-cli download mlx-community/Qwen3.6-35B-A3B-Instruct-4bit
 
 ## Start the server
 
-Unlike `ollama serve`, `mlx_lm.server` doesn't run as a system daemon — you start it manually for your session:
+### Manual (per-session)
 
 ```bash
 mlx_lm.server --port 8080 &
 ```
 
-Leave it running in the background. The first request triggers model load (5–15 s for a 35B model); subsequent requests use the warm cache.
+Leave it running in the background. The first request triggers model load (5–15 s for a 35B model); subsequent requests use the warm cache. Pass `--model mlx-community/Qwen3.6-35B-A3B-8bit` to pin a specific model at startup; without it, the server loads whichever model name arrives in the first POST body.
 
-If you want a specific model pinned at startup pass `--model mlx-community/Qwen3.6-35B-A3B-Instruct-8bit`. Without `--model`, the server loads whichever model name arrives in the first POST body — useful when the tier you pick varies across calls.
+### Auto-start via launchd (recommended on macOS)
+
+Create a launchd agent so `mlx_lm.server` starts at login and restarts if it crashes. Adjust the `ProgramArguments` path to match your install method (`pipx` lands the binary on PATH, venv puts it under `~/venvs/mlx-lm/bin/`).
+
+Save to `~/Library/LaunchAgents/com.local.mlx-lm-server.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.local.mlx-lm-server</string>
+	<key>ProgramArguments</key>
+	<array>
+		<!-- pipx: use just "mlx_lm.server" if it's on PATH -->
+		<!-- venv: use the full path, e.g. /Users/YOU/venvs/mlx-lm/bin/mlx_lm.server -->
+		<string>/Users/YOU/venvs/mlx-lm/bin/mlx_lm.server</string>
+		<string>--model</string>
+		<string>mlx-community/Qwen3.6-35B-A3B-8bit</string>
+		<string>--port</string>
+		<string>8080</string>
+		<string>--host</string>
+		<string>127.0.0.1</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/Users/YOU/Library/Logs/mlx-lm-server.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/YOU/Library/Logs/mlx-lm-server.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/YOU</string>
+		<key>HF_HOME</key>
+		<string>/Users/YOU/.cache/huggingface</string>
+	</dict>
+</dict>
+</plist>
+```
+
+Replace `/Users/YOU` with your actual home directory. Then load the agent:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.local.mlx-lm-server.plist
+```
+
+Verify it came up:
+
+```bash
+curl -s http://localhost:8080/v1/models | jq -r '.data[0].id'
+```
+
+To stop it temporarily (e.g. to reclaim memory), unload and reload later:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.local.mlx-lm-server.plist   # stop
+launchctl load   ~/Library/LaunchAgents/com.local.mlx-lm-server.plist   # restart
+```
+
+Logs go to `~/Library/Logs/mlx-lm-server.log`. The `KeepAlive` key restarts the server if it crashes; `RunAtLoad` starts it at login. The auto-probe in `delegate.sh` picks it up transparently — no env-var changes needed.
 
 ## Route a delegation through MLX
 
@@ -91,7 +165,15 @@ The trace shows the backend, the prefs list, the scanned hub directory, and whic
 
 ## Stop the server (reclaim memory)
 
-`mlx_lm.server` keeps the model weights resident in unified memory between requests — that is what makes the second-request latency a fraction of the first. For a 35B 8-bit model that's ~36 GB held resident. For occasional users with other memory-hungry apps running, kill the server between sessions:
+`mlx_lm.server` keeps the model weights resident in unified memory between requests — that is what makes the second-request latency a fraction of the first. For a 35B 8-bit model that's ~36 GB held resident. For occasional users with other memory-hungry apps running, stop the server between sessions.
+
+If running via launchd:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.local.mlx-lm-server.plist
+```
+
+If running manually:
 
 ```bash
 pkill -f "mlx_lm.server"

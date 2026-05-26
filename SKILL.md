@@ -121,7 +121,7 @@ If the answer would be valuable specifically because the model is *reasoning bey
 
 ## Tier → model routing
 
-`pick-model.sh <tier>` resolves a tier to the best installed model at runtime. Do **not** hardcode model names in calls — the installed set changes.
+`pick-model.sh <tier>` resolves a tier to the best installed model at runtime. Do **not** hardcode model names in calls — the installed set changes. The default backend is `auto`: on Apple Silicon with `mlx_lm.server` running on port 8080, routing goes through MLX (Metal-native, lower memory, faster prefill); otherwise it falls back to Ollama. See [docs/install-mlx.md](docs/install-mlx.md) for install and auto-start via launchd.
 
 | Tier               | Use for                                                          |
 |--------------------|------------------------------------------------------------------|
