@@ -30,7 +30,7 @@ On Apple Silicon, MLX is the recommended backend. Install and auto-start via lau
 
 ```bash
 python3 -m venv ~/venvs/mlx-lm && ~/venvs/mlx-lm/bin/pip install mlx-lm
-huggingface-cli download mlx-community/Qwen3.6-35B-A3B-8bit
+~/venvs/mlx-lm/bin/huggingface-cli download mlx-community/Qwen3.6-35B-A3B-8bit
 ~/venvs/mlx-lm/bin/mlx_lm.server --model mlx-community/Qwen3.6-35B-A3B-8bit --port 8080 &
 ```
 
@@ -184,7 +184,7 @@ The skill intentionally avoids frameworks. Local models are good summarisers and
 
 This skill sits at the intersection of three personal projects, and is observed by a fourth.
 
-[`local-brain`](https://github.com/IsmaelMartinez/local-brain) is the source of the framing this skill operationalises. The core finding — local models are strong summarisers and weak agents, so delegation is a shell pipe rather than an orchestration layer — comes directly from that work, and is why this skill is bash scripts instead of a framework.
+[`local-brain`](https://github.com/IsmaelMartinez/local-brain) is the source of the framing this skill operationalises. The core finding — local models are strong summarisers and weak agents, so delegation is a shell pipe rather than an orchestration layer — comes directly from that work, and is why this skill is implemented as bash scripts rather than a framework.
 
 [`ai-model-advisor`](https://github.com/IsmaelMartinez/ai-model-advisor) supplies the tier classification (`code` / `prose` / `reasoning` / `long-context`) and the "smallest model sufficient" environmental philosophy that `pick-model.sh` encodes. When you change the preference order in that script, the rationale you are applying is the one ai-model-advisor argues for: bigger is not better when a 9GB model handles the prompt in half the time.
 
