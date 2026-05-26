@@ -41,7 +41,7 @@ Same as Claude Code's pattern — `init.sh` writes a starter override based on i
 bash ~/.codex/skills/delegate-local/scripts/init.sh > ~/.codex/skills/delegate-local/config.sh
 ```
 
-The default config path is the Claude Code one (`~/.claude/skills/...`). On a Codex-only host, set `DELEGATE_TO_OLLAMA_CONFIG=~/.codex/skills/delegate-local/config.sh` in your shell profile so `pick-model.sh` reads from the Codex location.
+The default config path is the Claude Code one (`~/.claude/skills/...`). On a Codex-only host, set `DELEGATE_LOCAL_CONFIG=~/.codex/skills/delegate-local/config.sh` in your shell profile so `pick-model.sh` reads from the Codex location.
 
 ## Uninstall
 

@@ -51,7 +51,7 @@ Same pattern as Claude Code — `init.sh` writes a starter override based on `ol
 bash ~/.config/opencode/skills/delegate-local/scripts/init.sh > ~/.config/opencode/skills/delegate-local/config.sh
 ```
 
-The default config path is the Claude Code one (`~/.claude/skills/...`). On an OpenCode-only host, set `DELEGATE_TO_OLLAMA_CONFIG=~/.config/opencode/skills/delegate-local/config.sh` in your shell profile so `pick-model.sh` reads from the OpenCode location.
+The default config path is the Claude Code one (`~/.claude/skills/...`). On an OpenCode-only host, set `DELEGATE_LOCAL_CONFIG=~/.config/opencode/skills/delegate-local/config.sh` in your shell profile so `pick-model.sh` reads from the OpenCode location.
 
 ## Uninstall
 

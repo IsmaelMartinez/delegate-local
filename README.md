@@ -1,39 +1,20 @@
 # delegate-local
 
-A Claude Code skill that routes summarisation, triage, and bulk-text tasks to locally-installed Ollama models instead of the Anthropic API. Saves tokens, keeps content on-device, and uses `llmfit` to keep the model set current.
+An agent skill that routes summarisation, triage, and bulk-text tasks to locally-installed models (Ollama or MLX) instead of the cloud API. Keeps content on-device, preserves the agent's context window, and uses `llmfit` to keep the model set current.
 
 ## What it does
 
-Claude reads the skill description and, when a user asks for something that fits the "gather context once, send one prompt, return text" pattern (log triage, commit-message drafting, batch classification, structured field extraction, prose rewriting, format conversion, regex generation, docstring stubbing), it shells out to `ollama run <model>` instead of handling it itself. Reasoning, tool-calling, and repo-wide tasks still go to Claude.
+When a task fits the "gather context once, send one prompt, return text" pattern — log triage, commit-message drafting, batch classification, structured extraction, prose rewriting, format conversion, regex generation, docstring stubbing — the agent delegates to a local model via `delegate.sh` instead of handling it itself. Reasoning, tool-calling, and repo-wide tasks still go to the cloud model.
 
-By default the skill auto-delegates without asking. Saying "delegate where it fits" or "auto-delegate" once in a conversation locks in that behaviour for every subsequent matching task.
+The skill auto-delegates by default. Saying "delegate where it fits" or "auto-delegate" once locks that behaviour for the rest of the conversation.
 
-Core pattern (from [local-brain](https://github.com/IsmaelMartinez/local-brain)) — a delegated call resolves a tier (`prose` here; the full list is documented under [Files](#files) below) to the best installed local model, then pipes context into it:
-
-```bash
-MODEL=$(bash ~/.claude/skills/delegate-local/scripts/pick-model.sh prose)
-git diff HEAD~5 | ollama run "$MODEL" "Summarise in 3 bullets."
-```
-
-The path shown is the default Claude Code skills location; `npx skills add` (recommended; see [Install](#install) below) symlinks the repo there for Claude Code, and at the equivalent default path for each other agent it detects. Other tools land at their own path — see the [Per-tool guides](#per-tool-guides).
-
-### Capturing output non-interactively
-
-When the response is being captured by another tool (a Bash wrapper, a CI step, an agent harness) rather than read in a terminal, `ollama run` interleaves spinner ANSI sequences (`\x1b[?25l` / `\x1b[?2026h` / `\x1b[K`) and partial-word stream-rewrites (`[9D[K`) into stdout. The actual response is fine; the noise just makes the captured bytes hard to parse.
-
-Two reliable workarounds:
+Core pattern (from [local-brain](https://github.com/IsmaelMartinez/local-brain)) — resolve a tier to the best installed model, pipe context in, get text back:
 
 ```bash
-# Option 1: write to file, strip control codes on read
-ollama run "$MODEL" "..." > /tmp/out.txt 2>/dev/null
-sed -E $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' /tmp/out.txt
-
-# Option 2: pipe-strip inline
-ollama run "$MODEL" "..." 2>/dev/null \
-  | sed -E $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g'
+git diff HEAD~5 | bash scripts/delegate.sh prose "Summarise in 3 bullets."
 ```
 
-Both keep the model output and drop the cursor-control bytes. `--hidethinking` does not currently affect the spinner — it only suppresses `<think>...</think>` blocks for reasoning models.
+`delegate.sh` handles backend selection (Ollama or MLX via auto-probe), model resolution, metrics logging, and returns clean text with no ANSI artifacts.
 
 ## Requirements
 
@@ -43,15 +24,17 @@ Both keep the model output and drop the cursor-control bytes. `--hidethinking` d
 
 ## Backends
 
-`delegate.sh` and `pick-model.sh` route through Ollama by default. Set `DELEGATE_BACKEND=mlx` to use [`mlx-lm`](https://github.com/ml-explore/mlx-lm) instead — Apple's native Metal-backed runtime on Apple Silicon, typically 10–30 % lighter on memory and faster on prefill for the same Q8 model. The trade-off is install effort (one `pipx install mlx-lm`, plus a separate `mlx_lm.server --port 8080` you keep running) and a smaller model registry (`mlx-community` on HuggingFace covers the major Qwen/DeepSeek/Phi lines but lags Ollama's catalog).
+The default is `DELEGATE_BACKEND=auto`: on each call, `delegate.sh` probes `localhost:8080` for an MLX server. If it responds, the call routes through MLX (Apple's Metal-native runtime — lower memory, faster prefill). Otherwise it falls back to Ollama. Non-Apple-Silicon hosts always fall through to Ollama transparently.
+
+On Apple Silicon, MLX is the recommended backend. Install and auto-start via launchd are documented in [docs/install-mlx.md](docs/install-mlx.md). The quick version:
 
 ```bash
-pipx install mlx-lm
-mlx_lm.server --port 8080 &        # keep this running
-DELEGATE_BACKEND=mlx bash scripts/delegate.sh prose "..."
+python3 -m venv ~/venvs/mlx-lm && ~/venvs/mlx-lm/bin/pip install mlx-lm
+huggingface-cli download mlx-community/Qwen3.6-35B-A3B-8bit
+~/venvs/mlx-lm/bin/mlx_lm.server --model mlx-community/Qwen3.6-35B-A3B-8bit --port 8080 &
 ```
 
-`pick-model.sh` scans `~/.cache/huggingface/hub` (or `$HF_HOME/hub`) for installed MLX models and matches the same tier preferences case-insensitively. The metrics JSONL tags each call with a `backend` field, and `scripts/metrics-summary.sh` adds a `Per-backend (delegate)` section when 2+ backends are present so latency and token totals can be compared side by side. Override the URL via `MLX_HOST` (default `http://localhost:8080`); raise the OpenAI-shape token cap via `DELEGATE_MAX_TOKENS` (default 4096). Per-tool install steps for `mlx-lm` are in [docs/install-mlx.md](docs/install-mlx.md).
+Force a specific backend with `DELEGATE_BACKEND=ollama` or `DELEGATE_BACKEND=mlx`. The metrics JSONL tags each call with a `backend` field so `scripts/metrics-summary.sh` can break down latency per backend.
 
 ## Install
 
@@ -108,18 +91,18 @@ esac
 bash <install-path>/scripts/init.sh > ~/.claude/skills/delegate-local/config.sh
 ```
 
-Set `DELEGATE_TO_OLLAMA_CONFIG=/some/other/path.sh` to redirect the override path (useful for testing or per-project overrides).
+Set `DELEGATE_LOCAL_CONFIG=/some/other/path.sh` to redirect the override path (useful for testing or per-project overrides).
 
 ## Files
 
-- `SKILL.md` — triggering description and usage patterns Claude reads.
-- `scripts/delegate.sh <tier> "<prompt>"` — wraps `pick-model.sh` + Ollama's `POST /api/generate` (with `think:false` and `temperature:0` defaults), and appends one JSON line per invocation to `~/.claude/skills/delegate-local/metrics.jsonl`. Use this in place of bare `ollama run` or hand-rolled `curl` calls. Honours `OLLAMA_HOST` (default `http://localhost:11434`).
-- `scripts/pick-model.sh <tier>` — resolves a tier to the best installed Ollama model via substring preference lists. Tiers are `code`, `prose`, `reasoning`, and `long-context` (active), plus `vision`, `embedding`, `premium-general`, and `reasoning-vision` (scaffolded — routing in place, resolution gated on the relevant model being installed). Edit this file (not the skill body) when your installed set changes.
+- `SKILL.md` — triggering description and usage patterns the agent reads.
+- `scripts/delegate.sh <tier> "<prompt>"` — wraps `pick-model.sh` + the backend's HTTP API (Ollama or MLX, auto-selected) with `think:false` and `temperature:0` defaults. Appends one JSON line per call to `~/.claude/skills/delegate-local/metrics.jsonl`. Use this instead of bare `ollama run` or hand-rolled `curl` calls.
+- `scripts/pick-model.sh <tier>` — resolves a tier to the best installed model via substring preference lists. Tiers are `code`, `prose`, `reasoning`, and `long-context` (active), plus `vision`, `embedding`, `premium-general`, and `reasoning-vision` (scaffolded). Edit this file (not the skill body) when your installed set changes.
 - `scripts/audit-models.sh` — prints installed models, tier routing, and llmfit-driven upgrade suggestions filtered to first-party providers. Read-only; never pulls.
 - `scripts/metrics-summary.sh` — reads the metrics JSONL and prints volume per tier, p50/p95 latency, total tokens-avoided, and top models by frequency. Read-only.
 - `tests/` — unit tests for every script. Run with `bash tests/run-tests.sh` (and the per-script `bash tests/test-*.sh`).
 - `mcp/` — optional Python MCP server that exposes `pick_model`, `audit_models`, and `list_tiers` to non-Claude tools (Codex, OpenCode, Cursor, custom MCP clients). Thin wrapper over the bash scripts, not a reimplementation. See [`mcp/README.md`](mcp/README.md) for install and config snippets.
-- `docs/observability/` — setup runbooks for the OTLP exporter (Phase 11 Track A, issue [#134](https://github.com/IsmaelMartinez/delegate-local/issues/134)). The exporter is opt-in: set `DELEGATE_OTEL_ENDPOINT=<url>` and every `delegate.sh` invocation POSTs an OTLP/HTTP span to that URL (off by default, zero overhead when unset, exporter failures never propagate to the caller). `delegate-feedback.sh` emits a feedback-as-linked-span pointing back at the parent delegation. Content fields (prompt, context, output, feedback reason) are redacted by default per Phase 11 Track F (issue [#158](https://github.com/IsmaelMartinez/delegate-local/issues/158)); only metadata (tier, model, recipe, char counts, durations, verdict, parent IDs) travels to the collector. Set `DELEGATE_OTEL_INCLUDE_CONTENT=1` to send content as-is, only against a trusted collector (a local Phoenix instance, a vetted self-hosted Langfuse, a private OTLP endpoint behind a firewall). Three backends documented: [Grafana Cloud free tier](docs/observability/grafana-cloud.md) (recommended default; pre-built GenAI dashboards), [Langfuse self-hosted](docs/observability/langfuse-self-host.md) (privacy-conscious fallback; `scores` API maps cleanly to hit/miss verdicts), and [Arize Phoenix](docs/observability/phoenix.md) (single-container ultra-light alternative). The wire payload is documented in [`docs/otel-schema.md`](docs/otel-schema.md) and the design rationale in [ADR 0007](docs/adr/0007-otel-schema.md). Auth + headers via `DELEGATE_OTEL_HEADERS`, timeout via `DELEGATE_OTEL_TIMEOUT` (default 5 s), verbose failure logging via `DELEGATE_OTEL_VERBOSE=1`. After wiring the endpoint for the first time, `bash scripts/backfill-otel.sh` walks the existing `metrics.jsonl` and emits one OTLP span per pre-exporter row so the dashboards have history on day 1 — row-level idempotent (re-runs and interrupted runs collide in the collector's OTel ID space via SHA-derived trace/span IDs, no duplicate spans), supports `--since`, `--dry-run`, and an opt-in `--update-jsonl` that writes the deterministic IDs back so subsequent runs skip via the live-exported path (Phase 11 Track E, issue [#157](https://github.com/IsmaelMartinez/delegate-local/issues/157)).
+- `docs/observability/` — opt-in OTLP exporter. Set `DELEGATE_OTEL_ENDPOINT=<url>` and every `delegate.sh` call POSTs an OTLP span (off by default, zero overhead when unset). Content is redacted by default; only metadata (tier, model, recipe, char counts, durations, verdict) travels to the collector. Three backends documented: [Grafana Cloud](docs/observability/grafana-cloud.md), [Langfuse](docs/observability/langfuse-self-host.md), and [Phoenix](docs/observability/phoenix.md). See [`docs/otel-schema.md`](docs/otel-schema.md) for the wire format.
 
 ## Validation
 
@@ -201,7 +184,7 @@ The skill intentionally avoids frameworks. Local models are good summarisers and
 
 This skill sits at the intersection of three personal projects, and is observed by a fourth.
 
-[`local-brain`](https://github.com/IsmaelMartinez/local-brain) is the source of the framing this skill operationalises. The core finding — local models are strong summarisers and weak agents, so delegation is `context | ollama run model` rather than an orchestration layer — comes directly from that work, and is why this skill is two bash scripts instead of a framework.
+[`local-brain`](https://github.com/IsmaelMartinez/local-brain) is the source of the framing this skill operationalises. The core finding — local models are strong summarisers and weak agents, so delegation is a shell pipe rather than an orchestration layer — comes directly from that work, and is why this skill is bash scripts instead of a framework.
 
 [`ai-model-advisor`](https://github.com/IsmaelMartinez/ai-model-advisor) supplies the tier classification (`code` / `prose` / `reasoning` / `long-context`) and the "smallest model sufficient" environmental philosophy that `pick-model.sh` encodes. When you change the preference order in that script, the rationale you are applying is the one ai-model-advisor argues for: bigger is not better when a 9GB model handles the prompt in half the time.
 
