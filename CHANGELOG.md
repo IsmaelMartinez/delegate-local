@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.10.0](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.9.0...v0.10.0) (2026-05-26)
+
+
+### Features
+
+* backfill-otel.sh reads and emits delegate.project attribute ([#224](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/224)) ([0d6da0b](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/0d6da0b2079fba32fa4e969770746fdb9c6b5ec8))
+
+
+### Bug Fixes
+
+* aggregate density threshold and hard recipe triggers ([#228](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/228)) ([2ba7a2e](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/2ba7a2e8466261af4fbe8cadb114576be07692cf))
+
+
+### Documentation
+
+* add MLX launchd auto-start and venv install ([#227](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/227)) ([afd0a32](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/afd0a32e6919f75bde593b9d8c4c523bbb44a309))
+* update CLAUDE.md test count and clear stale ROADMAP items ([#225](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/225)) ([fb02c52](https://github.com/IsmaelMartinez/delegate-to-ollama/commit/fb02c522cbbf0182959db7c6027ce02f1bdc21ea))
+
 ## [0.9.0](https://github.com/IsmaelMartinez/delegate-to-ollama/compare/v0.8.0...v0.9.0) (2026-05-25)
 
 
