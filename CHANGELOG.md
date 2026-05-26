@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.10.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.9.0...v0.10.0) (2026-05-26)
+
+
+### Features
+
+* backfill-otel.sh reads and emits delegate.project attribute ([#224](https://github.com/IsmaelMartinez/delegate-local/issues/224)) ([0d6da0b](https://github.com/IsmaelMartinez/delegate-local/commit/0d6da0b2079fba32fa4e969770746fdb9c6b5ec8))
+* rename skill to delegate-local ([#230](https://github.com/IsmaelMartinez/delegate-local/issues/230)) ([e9cbbc0](https://github.com/IsmaelMartinez/delegate-local/commit/e9cbbc0b94ad8781fa86471bd2e18842ec3f355c))
+
+
+### Bug Fixes
+
+* aggregate density threshold and hard recipe triggers ([#228](https://github.com/IsmaelMartinez/delegate-local/issues/228)) ([2ba7a2e](https://github.com/IsmaelMartinez/delegate-local/commit/2ba7a2e8466261af4fbe8cadb114576be07692cf))
+
+
+### Documentation
+
+* add MLX launchd auto-start and venv install ([#227](https://github.com/IsmaelMartinez/delegate-local/issues/227)) ([afd0a32](https://github.com/IsmaelMartinez/delegate-local/commit/afd0a32e6919f75bde593b9d8c4c523bbb44a309))
+* simplify README and fix stale env var references ([#231](https://github.com/IsmaelMartinez/delegate-local/issues/231)) ([a41d0eb](https://github.com/IsmaelMartinez/delegate-local/commit/a41d0ebf055ceab7dc7a7157d9904f383d387c2f))
+* update CLAUDE.md test count and clear stale ROADMAP items ([#225](https://github.com/IsmaelMartinez/delegate-local/issues/225)) ([fb02c52](https://github.com/IsmaelMartinez/delegate-local/commit/fb02c522cbbf0182959db7c6027ce02f1bdc21ea))
+
 ## [0.9.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.8.0...v0.9.0) (2026-05-25)
 
 
