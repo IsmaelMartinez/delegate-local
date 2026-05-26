@@ -57,7 +57,7 @@ Leave it running in the background. The first request triggers model load (5–1
 
 ### Auto-start via launchd (recommended on macOS)
 
-Create a launchd agent so `mlx_lm.server` starts at login and restarts if it crashes. Adjust the `ProgramArguments` path to match your install method (`pipx` lands the binary on PATH, venv puts it under `~/venvs/mlx-lm/bin/`).
+Create a launchd agent so `mlx_lm.server` starts at login and restarts if it crashes. Adjust the `ProgramArguments` path to match your install method. Launchd does not inherit your shell PATH, so always use the absolute path to the binary — `pipx` typically puts it in `~/.local/bin/`, venv in `~/venvs/mlx-lm/bin/`.
 
 Save to `~/Library/LaunchAgents/com.local.mlx-lm-server.plist`:
 
@@ -70,7 +70,7 @@ Save to `~/Library/LaunchAgents/com.local.mlx-lm-server.plist`:
 	<string>com.local.mlx-lm-server</string>
 	<key>ProgramArguments</key>
 	<array>
-		<!-- pipx: use just "mlx_lm.server" if it's on PATH -->
+		<!-- pipx: use the absolute path, e.g. /Users/YOU/.local/bin/mlx_lm.server -->
 		<!-- venv: use the full path, e.g. /Users/YOU/venvs/mlx-lm/bin/mlx_lm.server -->
 		<string>/Users/YOU/venvs/mlx-lm/bin/mlx_lm.server</string>
 		<string>--model</string>
