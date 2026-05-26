@@ -5,16 +5,16 @@ Codex (OpenAI's CLI) reads skills from `~/.codex/skills/` (user-scoped) and `<pr
 ## Recommended
 
 ```bash
-npx skills add IsmaelMartinez/delegate-to-ollama -a codex
+npx skills add IsmaelMartinez/delegate-local -a codex
 ```
 
-The `-a codex` flag scopes the install to Codex only. Add `-g` for a user-scoped install (`~/.codex/skills/delegate-to-ollama`) instead of project-scoped, and `--copy` if symlinks do not work on your filesystem.
+The `-a codex` flag scopes the install to Codex only. Add `-g` for a user-scoped install (`~/.codex/skills/delegate-local`) instead of project-scoped, and `--copy` if symlinks do not work on your filesystem.
 
 ## Manual
 
 ```bash
-git clone https://github.com/IsmaelMartinez/delegate-to-ollama
-ln -s "$PWD/delegate-to-ollama" ~/.codex/skills/delegate-to-ollama
+git clone https://github.com/IsmaelMartinez/delegate-local
+ln -s "$PWD/delegate-local" ~/.codex/skills/delegate-local
 ```
 
 For project-scoped install replace `~/.codex/skills/` with `<project>/.codex/skills/`. Use `cp -r` instead of `ln -s` on filesystems without symlink support.
@@ -28,25 +28,25 @@ If your Codex setup is configured to use MCP servers but not skill files directl
 Ask Codex something the skill should fire on (a log summary, a commit-message draft, a triage of N items) and confirm it announces "Delegated to <model> (<tier> tier)" before producing the output. The audit script confirms both that the skill is reachable and that `ollama list` shows installed models in the resolved tiers:
 
 ```bash
-bash ~/.codex/skills/delegate-to-ollama/scripts/audit-models.sh
+bash ~/.codex/skills/delegate-local/scripts/audit-models.sh
 ```
 
-If Codex answers without delegating, check that `~/.codex/skills/delegate-to-ollama/SKILL.md` exists and the AAIF discovery layout (`.agents/skills/`) is intact; some Codex versions only auto-discover via AAIF rather than the per-tool path.
+If Codex answers without delegating, check that `~/.codex/skills/delegate-local/SKILL.md` exists and the AAIF discovery layout (`.agents/skills/`) is intact; some Codex versions only auto-discover via AAIF rather than the per-tool path.
 
 ## Per-machine routing override
 
-Same as Claude Code's pattern — `init.sh` writes a starter override based on installed models. Path is `~/.codex/skills/delegate-to-ollama/config.sh`:
+Same as Claude Code's pattern — `init.sh` writes a starter override based on installed models. Path is `~/.codex/skills/delegate-local/config.sh`:
 
 ```bash
-bash ~/.codex/skills/delegate-to-ollama/scripts/init.sh > ~/.codex/skills/delegate-to-ollama/config.sh
+bash ~/.codex/skills/delegate-local/scripts/init.sh > ~/.codex/skills/delegate-local/config.sh
 ```
 
-The default config path is the Claude Code one (`~/.claude/skills/...`). On a Codex-only host, set `DELEGATE_TO_OLLAMA_CONFIG=~/.codex/skills/delegate-to-ollama/config.sh` in your shell profile so `pick-model.sh` reads from the Codex location.
+The default config path is the Claude Code one (`~/.claude/skills/...`). On a Codex-only host, set `DELEGATE_TO_OLLAMA_CONFIG=~/.codex/skills/delegate-local/config.sh` in your shell profile so `pick-model.sh` reads from the Codex location.
 
 ## Uninstall
 
 ```bash
-rm -rf ~/.codex/skills/delegate-to-ollama
+rm -rf ~/.codex/skills/delegate-local
 ```
 
-The metrics file written by `delegate.sh` defaults to `~/.claude/skills/delegate-to-ollama/metrics.jsonl` regardless of which agent invoked it. To redirect it, set `DELEGATE_METRICS_FILE=~/.codex/skills/delegate-to-ollama/metrics.jsonl` in the shell that runs Codex.
+The metrics file written by `delegate.sh` defaults to `~/.claude/skills/delegate-local/metrics.jsonl` regardless of which agent invoked it. To redirect it, set `DELEGATE_METRICS_FILE=~/.codex/skills/delegate-local/metrics.jsonl` in the shell that runs Codex.

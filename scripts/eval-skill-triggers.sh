@@ -106,7 +106,7 @@ if [[ -z "$description" ]]; then echo "could not parse description from $skill" 
 
 recall_threshold=$(jq -r '.thresholds.positive_recall // 0.9' "$eval_set")
 prec_threshold=$(jq -r '.thresholds.negative_precision // 0.9' "$eval_set")
-skill_name=$(jq -r '.skill // "delegate-to-ollama"' "$eval_set")
+skill_name=$(jq -r '.skill // "delegate-local"' "$eval_set")
 
 # Resolve the scoring model per backend.
 case "$backend" in

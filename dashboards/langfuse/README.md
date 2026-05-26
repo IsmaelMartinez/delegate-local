@@ -1,4 +1,4 @@
-# Langfuse — equivalent views for `delegate-to-ollama`
+# Langfuse — equivalent views for `delegate-local`
 
 Langfuse does not ship a portable dashboard JSON model the way Grafana does — its dashboards are session-views configured per-project through the web UI, and the rendered surface (the trace list, the per-trace timeline, the scores panel) is derived from query state rather than a versioned JSON file. The closest reproducible-from-scratch artefact for the Langfuse backend is this documentation, which names the three views the Grafana dashboards in `dashboards/grafana/` cover and explains how to recreate each one in Langfuse from scratch.
 
@@ -17,12 +17,12 @@ Surface: the Traces list filtered to this skill's service, plus a few saved filt
 Recreate in Langfuse:
 
 1. Open the project the exporter writes to. The left nav shows **Tracing → Traces**.
-2. Add a filter: **Trace metadata → `service.name` equals `delegate-to-ollama`**. This filter is the equivalent of the Grafana `resource.service.name="delegate-to-ollama"` clause and prevents spans from other GenAI workloads sharing the project from bleeding into the panels.
-3. Save the filter as `delegate-to-ollama — all`. Future visits to the Traces page restore the filter automatically.
+2. Add a filter: **Trace metadata → `service.name` equals `delegate-local`**. This filter is the equivalent of the Grafana `resource.service.name="delegate-local"` clause and prevents spans from other GenAI workloads sharing the project from bleeding into the panels.
+3. Save the filter as `delegate-local — all`. Future visits to the Traces page restore the filter automatically.
 4. Clone the saved filter three times and tighten each clone:
-   - `delegate-to-ollama — by tier` — group by `delegate.tier` in the column controls. The table renders a row per tier with the call count.
-   - `delegate-to-ollama — by recipe` — group by `delegate.recipe`. Bare-prose-tier calls (no recipe attribute) collapse into a single `null` row that the Grafana panel excludes; in Langfuse the null row is informative because it surfaces the count of non-recipe delegations.
-   - `delegate-to-ollama — by backend` — group by `gen_ai.provider.name`. The two-row split (`ollama` versus `mlx`) matches the auto-default backend's behaviour: MLX-when-available, Ollama-fallback.
+   - `delegate-local — by tier` — group by `delegate.tier` in the column controls. The table renders a row per tier with the call count.
+   - `delegate-local — by recipe` — group by `delegate.recipe`. Bare-prose-tier calls (no recipe attribute) collapse into a single `null` row that the Grafana panel excludes; in Langfuse the null row is informative because it surfaces the count of non-recipe delegations.
+   - `delegate-local — by backend` — group by `gen_ai.provider.name`. The two-row split (`ollama` versus `mlx`) matches the auto-default backend's behaviour: MLX-when-available, Ollama-fallback.
 
 Latency and tokens-avoided trends:
 
@@ -38,7 +38,7 @@ Recreate in Langfuse:
 1. Open **Tracing → Scores**. Each row is one feedback event joined to its parent delegation through the OTLP `links` field. Langfuse renders the join automatically.
 2. Filter on **Score name** = `delegate.feedback.verdict`. Two values are present: `hit` and `miss`.
 3. Switch the score chart to **Aggregation by score value** and the time range to last 7 days. The two stacked series (HIT count and MISS count) are the calibration view's headline.
-4. Save the filter as `delegate-to-ollama — calibration`.
+4. Save the filter as `delegate-local — calibration`.
 5. Add a second filter clone scoped to `score value = miss` and group by `delegate.recipe` (joined through the link to the parent span). The bar chart shows MISSes per recipe — the recurring-MISS detection signal that the runtime nudge in `delegate-feedback.sh` keys off when it prints the draft `gh issue create` command.
 
 Sample query against the Langfuse public API for the HIT rate (useful when the dashboard is being driven by an external tool rather than the UI):
@@ -54,7 +54,7 @@ SELECT
 FROM scores s
 JOIN traces t ON t.id = s.trace_id
 WHERE s.name = 'delegate.feedback.verdict'
-  AND t.metadata->>'service.name' = 'delegate-to-ollama'
+  AND t.metadata->>'service.name' = 'delegate-local'
 GROUP BY 1, 2
 ORDER BY 1 DESC, 2;
 ```
@@ -71,10 +71,10 @@ Surface: the Traces list filtered to error-status spans plus saved filters per e
 
 Recreate in Langfuse:
 
-1. Open **Tracing → Traces** and apply the saved `delegate-to-ollama — all` filter from View 1.
+1. Open **Tracing → Traces** and apply the saved `delegate-local — all` filter from View 1.
 2. Add a second filter: **Trace status** = `ERROR`. The exporter sets the OTel status to ERROR when `delegate.exit_status != 0`, so this filter is the Langfuse counterpart of the Grafana `Failed-export count` stat.
 3. Group by `delegate.exit_status`. Three rows are typical: `1` (generic failure), `2` (recipe-substitution refusal), `3` (pre-flight canary timeout).
-4. Save as `delegate-to-ollama — errors`.
+4. Save as `delegate-local — errors`.
 5. Clone the filter and tighten the exit-status filter to `= 3`. The resulting saved filter is the Langfuse counterpart of the Grafana `Canary timeout rate (exit 3)` stat — track the count rather than the rate, which Langfuse computes per-day rather than as a percentage.
 
 Sample query for the exit-status breakdown (handy for an external alerting tool rather than the UI):
@@ -85,7 +85,7 @@ SELECT
   t.metadata->>'delegate.exit_status' AS exit_status,
   COUNT(*) AS span_count
 FROM traces t
-WHERE t.metadata->>'service.name' = 'delegate-to-ollama'
+WHERE t.metadata->>'service.name' = 'delegate-local'
   AND t.metadata->>'gen_ai.operation.name' = 'chat'
 GROUP BY 1, 2
 ORDER BY 1 DESC, 2;

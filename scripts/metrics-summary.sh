@@ -12,7 +12,7 @@
 
 set -uo pipefail
 
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}"
+metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -55,7 +55,7 @@ IFS=$'\t' read -r ts_first ts_last total_avoided errors n_delegate n_experiment 
     (map(select(src == "feedback")) | length)
   ] | @tsv' "$metrics_file")
 
-echo "=== delegate-to-ollama metrics ==="
+echo "=== delegate-local metrics ==="
 echo "File:                $metrics_file"
 echo "Time range:          $ts_first  →  $ts_last"
 echo "Total invocations:   $total  (delegate=$n_delegate, experiment=$n_experiment)"

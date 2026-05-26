@@ -140,7 +140,7 @@ The "Context to gather first" section is updated to make the size framing explic
 
 ### 2026-05-13 — issue #110: discriminator is model parameter count, not body bytes
 
-The 2026-05-11 framing above ("if the body alone is > 1 KB, expect a stall") was empirically refined by issue [#110](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/110). Two follow-up reports sharpened the conclusion:
+The 2026-05-11 framing above ("if the body alone is > 1 KB, expect a stall") was empirically refined by issue [#110](https://github.com/IsmaelMartinez/delegate-local/issues/110). Two follow-up reports sharpened the conclusion:
 
 - 2026-05-12: full recipe with a **612-byte** PR body (well under the 1 KB heuristic) hung past 6 minutes on `qwen3.6:35b-a3b-q8_0` (Ollama prose tier). Body-size alone is not the discriminator.
 - 2026-05-13 (cooler load, MLX backend tested): full recipe (~3-4 KB total prompt) hung past 10 minutes on `mlx-community/Qwen3.6-35B-A3B-8bit` (MLX prose tier — same weights, different runtime). The same recipe-shaped prompt against `mlx-community/Qwen3-0.6B-4bit` (0.6B params) returned clean output in **1 second**. A 200-byte non-recipe canary against the MLX 35B returned in 5 seconds.

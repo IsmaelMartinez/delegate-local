@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-If you find a security issue in this skill, please report it privately rather than opening a public issue. Email `ismaelmartinez@gmail.com` with the details, or use GitHub's [private vulnerability reporting](https://github.com/IsmaelMartinez/delegate-to-ollama/security/advisories/new) for this repository.
+If you find a security issue in this skill, please report it privately rather than opening a public issue. Email `ismaelmartinez@gmail.com` with the details, or use GitHub's [private vulnerability reporting](https://github.com/IsmaelMartinez/delegate-local/security/advisories/new) for this repository.
 
 Expect an acknowledgement within a few days. There is no SLA — this is a personal project — but reports are taken seriously and patched as a priority over feature work.
 

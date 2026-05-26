@@ -17,7 +17,7 @@ fi
 # Determine the directory name to compare `name:` against. The naive choice
 # is the SKILL.md's parent directory, which works for the canonical layouts:
 #   ./SKILL.md                                 → repo root
-#   ~/.claude/skills/delegate-to-ollama/SKILL.md  → installed skill dir
+#   ~/.claude/skills/delegate-local/SKILL.md  → installed skill dir
 # But it breaks inside a git worktree (.claude/worktrees/<branch>/SKILL.md),
 # where the parent is the worktree name, not the skill name. Detect that
 # case via git's common-dir (shared across worktrees) and resolve to the
@@ -53,7 +53,21 @@ desc=$(awk '/^description:/{sub(/^description: */,""); print; while(getline && /
 [[ -n "$name" ]] || fail "missing name"
 [[ -n "$desc" ]] || fail "missing description"
 [[ "$name" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] || fail "name '$name' fails regex ^[a-z0-9][a-z0-9-]{0,63}\$"
-[[ "$name" == "$dir_name" ]] || fail "name '$name' does not match directory '$dir_name'"
+# During a repo rename transition, the checkout directory may still carry the
+# old name while SKILL.md already declares the new one. Accept known aliases.
+RENAME_ALIASES="delegate-to-ollama:delegate-local"
+name_matches_dir=false
+if [[ "$name" == "$dir_name" ]]; then
+  name_matches_dir=true
+else
+  for pair in $RENAME_ALIASES; do
+    old="${pair%%:*}"; new="${pair#*:}"
+    if [[ "$name" == "$new" && "$dir_name" == "$old" ]]; then
+      name_matches_dir=true; break
+    fi
+  done
+fi
+$name_matches_dir || fail "name '$name' does not match directory '$dir_name'"
 (( ${#desc} <= 4096 )) || fail "description exceeds 4096 chars (${#desc})"
 
 echo "OK $skill"

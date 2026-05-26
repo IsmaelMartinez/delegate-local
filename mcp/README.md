@@ -1,7 +1,7 @@
-# delegate-to-ollama-mcp
+# delegate-local-mcp
 
 An optional MCP server that exposes the routing logic of
-[delegate-to-ollama](https://github.com/IsmaelMartinez/delegate-to-ollama) to
+[delegate-local](https://github.com/IsmaelMartinez/delegate-local) to
 non-Claude tools (Codex, OpenCode, Cursor, custom MCP clients, etc.). It is
 a thin wrapper over the existing bash scripts — no new business logic
 lives here.
@@ -53,22 +53,22 @@ python3 -m venv .venv
 .venv/bin/pip install -e .
 ```
 
-This puts a `delegate-to-ollama-mcp` console script on PATH (inside the
-venv) and exposes the package as `delegate_to_ollama_mcp`.
+This puts a `delegate-local-mcp` console script on PATH (inside the
+venv) and exposes the package as `delegate_local_mcp`.
 
 The server expects the bash scripts to be reachable. By default it
 resolves `../scripts/` relative to the package install location (works
 when installed editable from the repo). Override with the env var
-`DELEGATE_TO_OLLAMA_SCRIPTS=/abs/path/to/scripts`.
+`DELEGATE_LOCAL_SCRIPTS=/abs/path/to/scripts`.
 
 ## Run
 
 Stdio (the standard MCP transport):
 
 ```bash
-.venv/bin/delegate-to-ollama-mcp
+.venv/bin/delegate-local-mcp
 # or equivalently:
-.venv/bin/python -m delegate_to_ollama_mcp
+.venv/bin/python -m delegate_local_mcp
 ```
 
 The server reads JSON-RPC requests from stdin and writes responses to
@@ -81,8 +81,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "delegate-to-ollama": {
-      "command": "/abs/path/to/mcp/.venv/bin/delegate-to-ollama-mcp"
+    "delegate-local": {
+      "command": "/abs/path/to/mcp/.venv/bin/delegate-local-mcp"
     }
   }
 }
@@ -91,7 +91,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ### Codex / OpenCode / Cursor
 
 Each of these reads MCP servers from its own config file. The command
-to invoke is the same — a path to the venv's `delegate-to-ollama-mcp`
+to invoke is the same — a path to the venv's `delegate-local-mcp`
 script. See each tool's MCP integration docs for the exact config
 location and key names.
 

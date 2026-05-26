@@ -1,4 +1,4 @@
-# delegate-to-ollama
+# delegate-local
 
 A Claude Code skill that routes summarisation, triage, and bulk-text tasks to locally-installed Ollama models instead of the Anthropic API. Saves tokens, keeps content on-device, and uses `llmfit` to keep the model set current.
 
@@ -11,7 +11,7 @@ By default the skill auto-delegates without asking. Saying "delegate where it fi
 Core pattern (from [local-brain](https://github.com/IsmaelMartinez/local-brain)) — a delegated call resolves a tier (`prose` here; the full list is documented under [Files](#files) below) to the best installed local model, then pipes context into it:
 
 ```bash
-MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh prose)
+MODEL=$(bash ~/.claude/skills/delegate-local/scripts/pick-model.sh prose)
 git diff HEAD~5 | ollama run "$MODEL" "Summarise in 3 bullets."
 ```
 
@@ -60,7 +60,7 @@ DELEGATE_BACKEND=mlx bash scripts/delegate.sh prose "..."
 Use [Vercel Labs' `skills` CLI](https://github.com/vercel-labs/skills), which symlinks the skill into every detected agent tool (Claude Code, Codex, OpenCode, Cursor, Copilot, and many others) so updates propagate everywhere at once:
 
 ```bash
-npx skills add IsmaelMartinez/delegate-to-ollama
+npx skills add IsmaelMartinez/delegate-local
 ```
 
 Pass `-g` to install globally (`~/<agent>/skills/`) instead of per-project, `--copy` to make independent copies on systems without symlink support, or `-a claude-code` to limit to a specific agent.
@@ -76,11 +76,11 @@ When the universal install is the wrong fit (per-machine routing, MCP-only consu
 
 ### Manual copy
 
-The skill is conformant with the [Agent Skills standard](https://agentskills.io/specification) — `SKILL.md` at the directory root with `name` and `description` frontmatter — so any tool that reads that format can use it. The repo is also AAIF-discoverable directly: a symlink at `.agents/skills/delegate-to-ollama` points at the repo root, so tools that scan the AAIF layout (Cursor, Copilot, OpenCode) find the skill without per-tool copying. For tools that do not support AAIF discovery, drop the directory into the tool's expected skills path:
+The skill is conformant with the [Agent Skills standard](https://agentskills.io/specification) — `SKILL.md` at the directory root with `name` and `description` frontmatter — so any tool that reads that format can use it. The repo is also AAIF-discoverable directly: a symlink at `.agents/skills/delegate-local` points at the repo root, so tools that scan the AAIF layout (Cursor, Copilot, OpenCode) find the skill without per-tool copying. For tools that do not support AAIF discovery, drop the directory into the tool's expected skills path:
 
 ```bash
-git clone https://github.com/IsmaelMartinez/delegate-to-ollama
-cp -r delegate-to-ollama ~/.claude/skills/   # or your tool's skills dir
+git clone https://github.com/IsmaelMartinez/delegate-local
+cp -r delegate-local ~/.claude/skills/   # or your tool's skills dir
 ```
 
 ### Confirm routing
@@ -93,10 +93,10 @@ bash <install-path>/scripts/audit-models.sh
 
 ### Personalising routing (optional)
 
-The shipped `pick-model.sh` is one preference list for everyone. To override the order on a specific machine without forking the repo, drop a bash file at `~/.claude/skills/delegate-to-ollama/config.sh`. `pick-model.sh` sources it after the shipped defaults are set, so any tier the file touches wins. Untouched tiers fall through to shipped defaults; an absent file changes nothing.
+The shipped `pick-model.sh` is one preference list for everyone. To override the order on a specific machine without forking the repo, drop a bash file at `~/.claude/skills/delegate-local/config.sh`. `pick-model.sh` sources it after the shipped defaults are set, so any tier the file touches wins. Untouched tiers fall through to shipped defaults; an absent file changes nothing.
 
 ```bash
-# ~/.claude/skills/delegate-to-ollama/config.sh
+# ~/.claude/skills/delegate-local/config.sh
 case "$tier" in
   prose) prefs=("gemma4" "qwen3.6" "qwen3-next") ;;
 esac
@@ -105,7 +105,7 @@ esac
 `scripts/init.sh` writes a starter override based on what's currently installed — read-only, prints to stdout, never auto-writes:
 
 ```bash
-bash <install-path>/scripts/init.sh > ~/.claude/skills/delegate-to-ollama/config.sh
+bash <install-path>/scripts/init.sh > ~/.claude/skills/delegate-local/config.sh
 ```
 
 Set `DELEGATE_TO_OLLAMA_CONFIG=/some/other/path.sh` to redirect the override path (useful for testing or per-project overrides).
@@ -113,13 +113,13 @@ Set `DELEGATE_TO_OLLAMA_CONFIG=/some/other/path.sh` to redirect the override pat
 ## Files
 
 - `SKILL.md` — triggering description and usage patterns Claude reads.
-- `scripts/delegate.sh <tier> "<prompt>"` — wraps `pick-model.sh` + Ollama's `POST /api/generate` (with `think:false` and `temperature:0` defaults), and appends one JSON line per invocation to `~/.claude/skills/delegate-to-ollama/metrics.jsonl`. Use this in place of bare `ollama run` or hand-rolled `curl` calls. Honours `OLLAMA_HOST` (default `http://localhost:11434`).
+- `scripts/delegate.sh <tier> "<prompt>"` — wraps `pick-model.sh` + Ollama's `POST /api/generate` (with `think:false` and `temperature:0` defaults), and appends one JSON line per invocation to `~/.claude/skills/delegate-local/metrics.jsonl`. Use this in place of bare `ollama run` or hand-rolled `curl` calls. Honours `OLLAMA_HOST` (default `http://localhost:11434`).
 - `scripts/pick-model.sh <tier>` — resolves a tier to the best installed Ollama model via substring preference lists. Tiers are `code`, `prose`, `reasoning`, and `long-context` (active), plus `vision`, `embedding`, `premium-general`, and `reasoning-vision` (scaffolded — routing in place, resolution gated on the relevant model being installed). Edit this file (not the skill body) when your installed set changes.
 - `scripts/audit-models.sh` — prints installed models, tier routing, and llmfit-driven upgrade suggestions filtered to first-party providers. Read-only; never pulls.
 - `scripts/metrics-summary.sh` — reads the metrics JSONL and prints volume per tier, p50/p95 latency, total tokens-avoided, and top models by frequency. Read-only.
 - `tests/` — unit tests for every script. Run with `bash tests/run-tests.sh` (and the per-script `bash tests/test-*.sh`).
 - `mcp/` — optional Python MCP server that exposes `pick_model`, `audit_models`, and `list_tiers` to non-Claude tools (Codex, OpenCode, Cursor, custom MCP clients). Thin wrapper over the bash scripts, not a reimplementation. See [`mcp/README.md`](mcp/README.md) for install and config snippets.
-- `docs/observability/` — setup runbooks for the OTLP exporter (Phase 11 Track A, issue [#134](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/134)). The exporter is opt-in: set `DELEGATE_OTEL_ENDPOINT=<url>` and every `delegate.sh` invocation POSTs an OTLP/HTTP span to that URL (off by default, zero overhead when unset, exporter failures never propagate to the caller). `delegate-feedback.sh` emits a feedback-as-linked-span pointing back at the parent delegation. Content fields (prompt, context, output, feedback reason) are redacted by default per Phase 11 Track F (issue [#158](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/158)); only metadata (tier, model, recipe, char counts, durations, verdict, parent IDs) travels to the collector. Set `DELEGATE_OTEL_INCLUDE_CONTENT=1` to send content as-is, only against a trusted collector (a local Phoenix instance, a vetted self-hosted Langfuse, a private OTLP endpoint behind a firewall). Three backends documented: [Grafana Cloud free tier](docs/observability/grafana-cloud.md) (recommended default; pre-built GenAI dashboards), [Langfuse self-hosted](docs/observability/langfuse-self-host.md) (privacy-conscious fallback; `scores` API maps cleanly to hit/miss verdicts), and [Arize Phoenix](docs/observability/phoenix.md) (single-container ultra-light alternative). The wire payload is documented in [`docs/otel-schema.md`](docs/otel-schema.md) and the design rationale in [ADR 0007](docs/adr/0007-otel-schema.md). Auth + headers via `DELEGATE_OTEL_HEADERS`, timeout via `DELEGATE_OTEL_TIMEOUT` (default 5 s), verbose failure logging via `DELEGATE_OTEL_VERBOSE=1`. After wiring the endpoint for the first time, `bash scripts/backfill-otel.sh` walks the existing `metrics.jsonl` and emits one OTLP span per pre-exporter row so the dashboards have history on day 1 — row-level idempotent (re-runs and interrupted runs collide in the collector's OTel ID space via SHA-derived trace/span IDs, no duplicate spans), supports `--since`, `--dry-run`, and an opt-in `--update-jsonl` that writes the deterministic IDs back so subsequent runs skip via the live-exported path (Phase 11 Track E, issue [#157](https://github.com/IsmaelMartinez/delegate-to-ollama/issues/157)).
+- `docs/observability/` — setup runbooks for the OTLP exporter (Phase 11 Track A, issue [#134](https://github.com/IsmaelMartinez/delegate-local/issues/134)). The exporter is opt-in: set `DELEGATE_OTEL_ENDPOINT=<url>` and every `delegate.sh` invocation POSTs an OTLP/HTTP span to that URL (off by default, zero overhead when unset, exporter failures never propagate to the caller). `delegate-feedback.sh` emits a feedback-as-linked-span pointing back at the parent delegation. Content fields (prompt, context, output, feedback reason) are redacted by default per Phase 11 Track F (issue [#158](https://github.com/IsmaelMartinez/delegate-local/issues/158)); only metadata (tier, model, recipe, char counts, durations, verdict, parent IDs) travels to the collector. Set `DELEGATE_OTEL_INCLUDE_CONTENT=1` to send content as-is, only against a trusted collector (a local Phoenix instance, a vetted self-hosted Langfuse, a private OTLP endpoint behind a firewall). Three backends documented: [Grafana Cloud free tier](docs/observability/grafana-cloud.md) (recommended default; pre-built GenAI dashboards), [Langfuse self-hosted](docs/observability/langfuse-self-host.md) (privacy-conscious fallback; `scores` API maps cleanly to hit/miss verdicts), and [Arize Phoenix](docs/observability/phoenix.md) (single-container ultra-light alternative). The wire payload is documented in [`docs/otel-schema.md`](docs/otel-schema.md) and the design rationale in [ADR 0007](docs/adr/0007-otel-schema.md). Auth + headers via `DELEGATE_OTEL_HEADERS`, timeout via `DELEGATE_OTEL_TIMEOUT` (default 5 s), verbose failure logging via `DELEGATE_OTEL_VERBOSE=1`. After wiring the endpoint for the first time, `bash scripts/backfill-otel.sh` walks the existing `metrics.jsonl` and emits one OTLP span per pre-exporter row so the dashboards have history on day 1 — row-level idempotent (re-runs and interrupted runs collide in the collector's OTel ID space via SHA-derived trace/span IDs, no duplicate spans), supports `--since`, `--dry-run`, and an opt-in `--update-jsonl` that writes the deterministic IDs back so subsequent runs skip via the live-exported path (Phase 11 Track E, issue [#157](https://github.com/IsmaelMartinez/delegate-local/issues/157)).
 
 ## Validation
 

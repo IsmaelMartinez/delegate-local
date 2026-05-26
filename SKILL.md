@@ -1,11 +1,11 @@
 ---
-name: delegate-to-ollama
-description: Use this skill to offload non-reasoning text work to locally-installed Ollama models via `ollama run`, keeping content on-device and freeing the main-agent context window. Saves API tokens too, though context protection and privacy are the headline values, not cost. MUST use whenever the user asks to summarise a log/diff/file/PR/issue, draft a commit message/changelog/release note, triage or classify many items, extract structured fields from free text, skim many files for a one-liner, rewrite or reformat prose, anonymise or redact text, convert between markup formats (YAML↔JSON, markdown→HTML), generate regex from description, or stub docstrings. MUST also use when the user mentions running locally, on-device, offline, saving tokens, privacy, Ollama, or a local model. MUST also use after the user sets durable auto-delegate intent ("delegate where it fits", "auto-delegate", "route to ollama as appropriate"), defaulting to delegating any subsequent matching task without re-confirming. Do NOT use for code correctness review, architectural decisions, debugging or tracing errors, implementing features, or any task whose output triggers a destructive or shared-state action without review. Do NOT use for open-ended "find anything interesting / suggest improvements" prompts that ask the model to surface things not in the input — those invite fabrication.
+name: delegate-local
+description: Use this skill to offload non-reasoning text work to locally-installed models (Ollama or MLX) via `delegate.sh`, keeping content on-device and freeing the main-agent context window. Saves API tokens too, though context protection and privacy are the headline values, not cost. MUST use whenever the user asks to summarise a log/diff/file/PR/issue, draft a commit message/changelog/release note, triage or classify many items, extract structured fields from free text, skim many files for a one-liner, rewrite or reformat prose, anonymise or redact text, convert between markup formats (YAML↔JSON, markdown→HTML), generate regex from description, or stub docstrings. MUST also use when the user mentions running locally, on-device, offline, saving tokens, privacy, Ollama, MLX, or a local model. MUST also use after the user sets durable auto-delegate intent ("delegate where it fits", "auto-delegate", "route to local where it makes sense"), defaulting to delegating any subsequent matching task without re-confirming. Do NOT use for code correctness review, architectural decisions, debugging or tracing errors, implementing features, or any task whose output triggers a destructive or shared-state action without review. Do NOT use for open-ended "find anything interesting / suggest improvements" prompts that ask the model to surface things not in the input — those invite fabrication.
 ---
 
-# Delegate to Ollama
+# Delegate Local
 
-Offload non-agentic text tasks to locally-installed Ollama models via `ollama run`. The headline value is privacy (content stays on-device) and context protection (the main-agent window is not consumed by paragraph-fills); token cost savings are real but typically pennies per session and a side effect, not the reason to reach. Local models are strong summarisers and weak reasoners — scope accordingly.
+Offload non-agentic text tasks to locally-installed models via the local inference backend. The headline value is privacy (content stays on-device) and context protection (the main-agent window is not consumed by paragraph-fills); token cost savings are real but typically pennies per session and a side effect, not the reason to reach. Local models are strong summarisers and weak reasoners — scope accordingly.
 
 **Core insight (from local-brain):** you do not need a framework. You need `context | ollama run model`.
 
@@ -49,7 +49,7 @@ Three steps, in order, every time: **gather → delegate → verify**.
 2. **Delegate** with a constrained prompt that asks for an exact output shape.
 3. **Verify** every specific claim the model returns against the actual files before acting on it. Treat the model's output as a hypothesis, not a finding.
 
-Use `scripts/delegate.sh <tier> "<prompt>"` — it resolves the tier to a model, calls Ollama's `POST /api/generate` with thinking suppressed (`think:false` by default; override with `DELEGATE_THINK=true` if reasoning chains genuinely help) and `temperature:0`, and appends one JSON line per invocation to `~/.claude/skills/delegate-to-ollama/metrics.jsonl` for `scripts/metrics-summary.sh` to roll up later. The HTTP API returns clean text, so no ANSI stripping is needed downstream.
+Use `scripts/delegate.sh <tier> "<prompt>"` — it resolves the tier to a model, calls Ollama's `POST /api/generate` with thinking suppressed (`think:false` by default; override with `DELEGATE_THINK=true` if reasoning chains genuinely help) and `temperature:0`, and appends one JSON line per invocation to `~/.claude/skills/delegate-local/metrics.jsonl` for `scripts/metrics-summary.sh` to roll up later. The HTTP API returns clean text, so no ANSI stripping is needed downstream.
 
 The `≤ 8k tokens` is a theoretical upper bound; the practical ceiling on a given host is often much lower. The 2026-05-05 IP-146 share-readiness session observed `qwen3.6:35b` via `delegate.sh` hanging for 3+ minutes on a single bundled `~1.3k-char` prompt and being killed by the harness with `exit 144`. Splitting the same content into atomic single-paragraph prompts (~350 chars each) returned in 10–20 s per call. If `delegate.sh` appears to hang for more than ~30 s with no output, the prompt-plus-stdin is probably too large for your host — kill the call and break it into smaller atomic sub-tasks rather than waiting. First call against a freshly-loaded model is also slower than subsequent calls against the same model, because the daemon warms up; this is fixed-cost per model, not per call.
 
@@ -76,9 +76,9 @@ For task shapes that come up often — drafting a commit message, drafting a PR 
 
 Recipe-covered tasks are hard triggers, not judgement calls. When you are about to write a commit message, use `--recipe commit-message`. When you are about to write a PR description, use `--recipe pr-description`. When you are about to summarise an issue, use `--recipe summarise-issue`. Do not skip the recipe because "this one is simple enough to write directly" — the recipes exist precisely because the setup cost is near-zero and the calibration guards prevent the small regressions (wrong conventional-commit type, padding tails, hallucinated file references) that hand-written prompts rediscover every time. The only valid reasons to skip a recipe are when the content requires multi-file reasoning context that exceeds the 8k token prompt limit, or when the recipe is flagged as flaky or refused on the resolved model (such as `pr-description` on 35B-class models).
 
-Gather the listed context and invoke `bash scripts/delegate.sh --recipe <name> --var key=value ... <tier> "<prompt>"`. The `--recipe` flag prepends the recipe's prompt template, substitutes each `{{key}}` placeholder from the matching `--var`, and refuses to send a partly-substituted template to the model so missed inputs surface as a clear error rather than a degraded answer. **Always record the verdict** after the call via `bash scripts/delegate-feedback.sh hit|miss [reason]` — without it the delegation stays as an "untracked" metrics row and the recipe library cannot self-correct from production data. `delegate.sh` prints a one-line stderr reminder after every successful call to make this step impossible to forget (silenceable via `DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1` for callers who genuinely don't want it). By default `delegate-feedback.sh` attaches the verdict to the most recent delegate row in the metrics JSONL and refuses if that row is older than 5 minutes — a safeguard for the cases where metrics were off (`DELEGATE_TO_OLLAMA_NO_METRICS=1`) or the delegation was killed before its row was written, since the implicit "most recent row" would otherwise be someone else's delegation. Pass `--ts <iso8601>` to pin the verdict to a specific delegate row when you need to bypass this. Recipes start small — `prompts/commit-message.md` and `prompts/pr-description.md` today — and grow append-style as new HIT patterns get distilled. If a task pattern recurs and no recipe covers it, the discipline is to file a `prompt-pattern` issue so the recipe library tracks coverage gaps rather than letting them evaporate. See `prompts/README.md` for the recipe shape and contribution flow.
+Gather the listed context and invoke `bash scripts/delegate.sh --recipe <name> --var key=value ... <tier> "<prompt>"`. The `--recipe` flag prepends the recipe's prompt template, substitutes each `{{key}}` placeholder from the matching `--var`, and refuses to send a partly-substituted template to the model so missed inputs surface as a clear error rather than a degraded answer. **Always record the verdict** after the call via `bash scripts/delegate-feedback.sh hit|miss [reason]` — without it the delegation stays as an "untracked" metrics row and the recipe library cannot self-correct from production data. `delegate.sh` prints a one-line stderr reminder after every successful call to make this step impossible to forget (silenceable via `DELEGATE_LOCAL_NO_VERDICT_NUDGE=1` for callers who genuinely don't want it). By default `delegate-feedback.sh` attaches the verdict to the most recent delegate row in the metrics JSONL and refuses if that row is older than 5 minutes — a safeguard for the cases where metrics were off (`DELEGATE_LOCAL_NO_METRICS=1`) or the delegation was killed before its row was written, since the implicit "most recent row" would otherwise be someone else's delegation. Pass `--ts <iso8601>` to pin the verdict to a specific delegate row when you need to bypass this. Recipes start small — `prompts/commit-message.md` and `prompts/pr-description.md` today — and grow append-style as new HIT patterns get distilled. If a task pattern recurs and no recipe covers it, the discipline is to file a `prompt-pattern` issue so the recipe library tracks coverage gaps rather than letting them evaporate. See `prompts/README.md` for the recipe shape and contribution flow.
 
-Parallel-capture callers that fan N delegations into N background shells and want clean per-call output files (`bash delegate.sh ... > out_$i.txt 2>&1 &`) historically had to choose between contaminated stdout (the nudge line mixed into `out_$i.txt` via `2>&1`) and lost coverage (silencing the nudge via `DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1` and never recording the verdict). `DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=N` resolves the trade-off by redirecting the nudge to caller-chosen file descriptor N instead of fd 2; the recipe is `DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=3 bash delegate.sh prose "X" > out.txt 2>&1 3>>nudge.log` — stdout+stderr land cleanly in `out.txt`, the nudge accumulates on `nudge.log` via fd 3, and coverage tracking stays intact because the caller can post-process `nudge.log` to drive a verdict-recording loop. The gotcha: the caller must redirect fd N to somewhere (file, pipe, or another fd); if fd N is closed when the nudge fires, the write fails silently and no nudge lands anywhere.
+Parallel-capture callers that fan N delegations into N background shells and want clean per-call output files (`bash delegate.sh ... > out_$i.txt 2>&1 &`) historically had to choose between contaminated stdout (the nudge line mixed into `out_$i.txt` via `2>&1`) and lost coverage (silencing the nudge via `DELEGATE_LOCAL_NO_VERDICT_NUDGE=1` and never recording the verdict). `DELEGATE_LOCAL_VERDICT_NUDGE_FD=N` resolves the trade-off by redirecting the nudge to caller-chosen file descriptor N instead of fd 2; the recipe is `DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 bash delegate.sh prose "X" > out.txt 2>&1 3>>nudge.log` — stdout+stderr land cleanly in `out.txt`, the nudge accumulates on `nudge.log` via fd 3, and coverage tracking stays intact because the caller can post-process `nudge.log` to drive a verdict-recording loop. The gotcha: the caller must redirect fd N to somewhere (file, pipe, or another fd); if fd N is closed when the nudge fires, the write fails silently and no nudge lands anywhere.
 
 ### Discipline for closed-format work
 
@@ -94,16 +94,16 @@ The 2026-05-03 retrospective (`experiments/sessions/2026-05-03-security-review-d
 - **Offer an explicit REFUSE hatch AND verify the output.** When the delegated task might be impossible to satisfy honestly — for example the failing test contains a wrong assertion, or some tests in a multi-test suite contradict each other — include a rule like *"if the task cannot be completed honestly, reply with a single line beginning with REFUSE: explaining why"*. The 2026-05-04 adversarial chain (four sessions, 42 of 42 cells with zero unauthorised test-file modifications) measured two things. First, the REFUSE hatch works: with it, both deepseek-r1:32b and qwen3-coder-next:latest correctly refuse rather than editing the test file or introducing a bug. Second, treat the REFUSE line and the returned patch as *independent signals*. qwen3-coder-next was observed producing a correct REFUSE message ("both tests cannot be satisfied") paired with a patch that silently satisfied the wrong test — prose refused, code complied. deepseek-r1:14b was observed ignoring the REFUSE rule entirely (correct diagnosis in prose, off-by-one patch in code). After delegating, verify by applying the patch and running the expected tests: patch-applies-and-test-passes → done; patch-applies-but-test-still-fails → treat as equivalent to REFUSE; the REFUSE line alone is advisory, not authoritative.
 
 ```bash
-git diff HEAD~5 | bash ~/.claude/skills/delegate-to-ollama/scripts/delegate.sh prose \
+git diff HEAD~5 | bash ~/.claude/skills/delegate-local/scripts/delegate.sh prose \
   "Summarise this diff in 3 bullets focused on user-visible changes."
 ```
 
 ```bash
-cat build.log | bash ~/.claude/skills/delegate-to-ollama/scripts/delegate.sh reasoning \
+cat build.log | bash ~/.claude/skills/delegate-local/scripts/delegate.sh reasoning \
   "List only the lines indicating test failures. One per line, no commentary."
 ```
 
-Always report the model used ("Delegated to qwen3.6:35b-a3b-q8_0 (prose tier)") so a bad answer is visible to the user. For long inputs, use the `long-context` tier. To opt out of metrics for a single invocation, set `DELEGATE_TO_OLLAMA_NO_METRICS=1`. To resolve the model without delegating (e.g., for inspection), call `pick-model.sh` directly.
+Always report the model used ("Delegated to qwen3.6:35b-a3b-q8_0 (prose tier)") so a bad answer is visible to the user. For long inputs, use the `long-context` tier. To opt out of metrics for a single invocation, set `DELEGATE_LOCAL_NO_METRICS=1`. To resolve the model without delegating (e.g., for inspection), call `pick-model.sh` directly.
 
 ## Prompt scope — closed vs open
 
@@ -159,7 +159,7 @@ Preference order per tier lives in `scripts/pick-model.sh`. Edit that file (not 
 `vision` and `reasoning-vision` resolve a model name but call `POST /api/generate` directly with a base64-encoded `images` array — `delegate.sh` sends only text, so vision call sites build their own payload until the wrapper grows an `images` parameter. The endpoint is the same daemon `delegate.sh` already uses, so no extra setup is needed:
 
 ```bash
-MODEL=$(bash ~/.claude/skills/delegate-to-ollama/scripts/pick-model.sh vision)
+MODEL=$(bash ~/.claude/skills/delegate-local/scripts/pick-model.sh vision)
 IMG_B64=$(base64 < /tmp/screen.png | tr -d '\n')
 curl -s -H "Content-Type: application/json" http://localhost:11434/api/generate \
   -d "$(jq -n --arg m "$MODEL" --arg p "Describe what is in this screenshot." --arg i "$IMG_B64" \
@@ -171,10 +171,10 @@ curl -s -H "Content-Type: application/json" http://localhost:11434/api/generate 
 
 ```bash
 # Primitive — embed a single string.
-echo "the text to embed" | bash ~/.claude/skills/delegate-to-ollama/scripts/embed.sh
+echo "the text to embed" | bash ~/.claude/skills/delegate-local/scripts/embed.sh
 
 # Recipe — rank N files by cosine similarity to a query.
-bash ~/.claude/skills/delegate-to-ollama/scripts/semantic-search.sh \
+bash ~/.claude/skills/delegate-local/scripts/semantic-search.sh \
   "how do I run the test suite" prompts/*.md README.md
 ```
 
@@ -198,7 +198,7 @@ These are real failure modes observed in production use, surfaced as warnings wh
 Local models drift; better ones ship every few weeks. The audit script uses `llmfit` to compare your installed models against the current HuggingFace catalogue scored for this hardware, and flags uninstalled models that beat the installed leader by 3+ points.
 
 ```bash
-bash ~/.claude/skills/delegate-to-ollama/scripts/audit-models.sh
+bash ~/.claude/skills/delegate-local/scripts/audit-models.sh
 ```
 
 It prints installed models, shows tier routing, runs `llmfit recommend --use-case <coding|general>` for each tier, and lists suggested pulls with their llmfit composite score (quality + speed + fit + context). It never pulls automatically — you confirm each upgrade. Ollama tags sometimes differ from the HuggingFace name, so verify on https://ollama.com/library before pulling.

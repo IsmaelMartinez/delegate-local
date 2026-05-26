@@ -69,13 +69,13 @@ run() {
   # run <PATH> <cmd...> -> writes stdout to $OUT, stderr to $ERR, sets $EC.
   # HOME is sandboxed to a tmp dir so a real per-user override config in
   # the developer's actual ~/.claude/skills/... can't leak into test runs.
-  # If $DELEGATE_TO_OLLAMA_CONFIG is set in the parent environment, it is
+  # If $DELEGATE_LOCAL_CONFIG is set in the parent environment, it is
   # forwarded so override tests can opt in to a specific config path.
   local custom_path="$1"; shift
   local sandbox_home; sandbox_home=$(mktemp -d)
-  local extra=()
-  if [[ -n "${DELEGATE_TO_OLLAMA_CONFIG:-}" ]]; then
-    extra=(DELEGATE_TO_OLLAMA_CONFIG="$DELEGATE_TO_OLLAMA_CONFIG")
+  local extra=(DELEGATE_BACKEND=ollama)
+  if [[ -n "${DELEGATE_LOCAL_CONFIG:-}" ]]; then
+    extra+=(DELEGATE_LOCAL_CONFIG="$DELEGATE_LOCAL_CONFIG")
   fi
   local err_file; err_file=$(mktemp)
   OUT=$(env -i PATH="$custom_path" HOME="$sandbox_home" ${extra[@]+"${extra[@]}"} "$@" 2>"$err_file") || EC=$?
@@ -275,9 +275,9 @@ case "$tier" in
 esac
 EOF
 EC=0
-DELEGATE_TO_OLLAMA_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+DELEGATE_LOCAL_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
 assert_eq "gemma4:latest" "$OUT" "override reorders prose to gemma4 first"
-unset DELEGATE_TO_OLLAMA_CONFIG
+unset DELEGATE_LOCAL_CONFIG
 rm -rf "$tmp"
 
 # 22. Override that only touches one tier leaves other tiers on shipped defaults.
@@ -291,9 +291,9 @@ case "$tier" in
 esac
 EOF
 EC=0
-DELEGATE_TO_OLLAMA_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" code || true
+DELEGATE_LOCAL_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" code || true
 assert_eq "qwen3-coder:30b" "$OUT" "override leaves untouched tiers using shipped defaults"
-unset DELEGATE_TO_OLLAMA_CONFIG
+unset DELEGATE_LOCAL_CONFIG
 rm -rf "$tmp"
 
 # 23. Override file absent: defaults resolve exactly as before.
@@ -301,9 +301,9 @@ tmp=$(mktemp -d)
 make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
 qwen3.6:35b-a3b   aa 30 GB  1 day ago"
 EC=0
-DELEGATE_TO_OLLAMA_CONFIG="$tmp/does-not-exist.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+DELEGATE_LOCAL_CONFIG="$tmp/does-not-exist.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
 assert_eq "qwen3.6:35b-a3b" "$OUT" "missing override file -> shipped defaults still resolve"
-unset DELEGATE_TO_OLLAMA_CONFIG
+unset DELEGATE_LOCAL_CONFIG
 rm -rf "$tmp"
 
 # 23b. World-writable override is rejected with a warning; shipped defaults win.
@@ -318,10 +318,10 @@ esac
 EOF
 chmod 666 "$tmp/config.sh"
 EC=0
-DELEGATE_TO_OLLAMA_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+DELEGATE_LOCAL_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
 assert_eq "qwen3.6:35b-a3b" "$OUT" "world-writable override is ignored, shipped defaults win"
 assert_contains "group/world-writable" "$ERR" "world-writable override produces warning on stderr"
-unset DELEGATE_TO_OLLAMA_CONFIG
+unset DELEGATE_LOCAL_CONFIG
 rm -rf "$tmp"
 
 # 24. --dry-run surfaces the override in the trace so users can debug it.
@@ -335,10 +335,10 @@ case "$tier" in
 esac
 EOF
 EC=0
-DELEGATE_TO_OLLAMA_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" --dry-run prose || true
+DELEGATE_LOCAL_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" --dry-run prose || true
 assert_contains "sourcing override:" "$ERR" "dry-run names the override file"
 assert_contains "post-override" "$ERR" "dry-run surfaces post-override prefs"
-unset DELEGATE_TO_OLLAMA_CONFIG
+unset DELEGATE_LOCAL_CONFIG
 rm -rf "$tmp"
 
 echo
@@ -373,9 +373,9 @@ assert_contains "prose) prefs=(" "$OUT" "init: includes prose tier"
 # qwen3.6 for prose (currently-installed-first ordering preserves the win).
 echo "$OUT" > "$tmp/config.sh"
 EC=0
-DELEGATE_TO_OLLAMA_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+DELEGATE_LOCAL_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
 assert_eq "qwen3.6:35b-a3b" "$OUT" "init: round-trip override picks the installed model"
-unset DELEGATE_TO_OLLAMA_CONFIG
+unset DELEGATE_LOCAL_CONFIG
 rm -rf "$tmp"
 
 echo
@@ -563,11 +563,11 @@ rm -rf "$tmp"
 echo
 echo "=== AAIF symlink ==="
 
-# AAIF compliance: .agents/skills/delegate-to-ollama must be a symlink to the
+# AAIF compliance: .agents/skills/delegate-local must be a symlink to the
 # repo root, not a regular file or directory copy. Catches the case where a
 # Windows-without-symlinks checkout (or an accidental `cp -L`) replaces the
 # entry with a regular file containing the literal string "../..".
-AAIF_LINK="$SKILL_DIR/.agents/skills/delegate-to-ollama"
+AAIF_LINK="$SKILL_DIR/.agents/skills/delegate-local"
 if [[ -L "$AAIF_LINK" ]]; then
   echo "  PASS  AAIF entry is a symlink"
   pass=$((pass+1))

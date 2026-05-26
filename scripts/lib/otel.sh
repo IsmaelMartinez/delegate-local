@@ -207,11 +207,11 @@ emit_otel_span() {
       resourceSpans: [{
         resource: {
           attributes: [
-            {key: "service.name", value: {stringValue: "delegate-to-ollama"}}
+            {key: "service.name", value: {stringValue: "delegate-local"}}
           ]
         },
         scopeSpans: [{
-          scope: {name: "delegate-to-ollama", version: "1.0"},
+          scope: {name: "delegate-local", version: "1.0"},
           spans: [(
             {
               traceId: $trace_id,
@@ -351,11 +351,11 @@ emit_otel_feedback_span_with_ids() {
       resourceSpans: [{
         resource: {
           attributes: [
-            {key: "service.name", value: {stringValue: "delegate-to-ollama"}}
+            {key: "service.name", value: {stringValue: "delegate-local"}}
           ]
         },
         scopeSpans: [{
-          scope: {name: "delegate-to-ollama", version: "1.0"},
+          scope: {name: "delegate-local", version: "1.0"},
           spans: [(
             {
               traceId: $trace_id,

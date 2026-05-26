@@ -1,3 +1,3 @@
 ---
-name: delegate-to-ollama
+name: delegate-local
 ---

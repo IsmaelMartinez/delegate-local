@@ -83,13 +83,13 @@ assert_contains '"eval_tokens":7' "$line" "metrics: real eval_tokens from respon
 assert_contains '"estimated_tokens_avoided":49' "$line" "metrics: tokens_avoided = prompt + eval"
 assert_contains '"exit_status":0' "$line" "metrics: exit_status 0 on success"
 
-# 2. Opt-out: DELEGATE_TO_OLLAMA_NO_METRICS=1 → no metrics line, cell still works.
+# 2. Opt-out: DELEGATE_LOCAL_NO_METRICS=1 → no metrics line, cell still works.
 metrics2="$tmp/metrics2.jsonl"
 out2="$tmp/cell2.txt"
 EC=0
 (
   cd "$tmp/2026-05-04-fake-session"
-  PATH="$tmp:$SAFE_PATH" DELEGATE_METRICS_FILE="$metrics2" DELEGATE_TO_OLLAMA_NO_METRICS=1 \
+  PATH="$tmp:$SAFE_PATH" DELEGATE_METRICS_FILE="$metrics2" DELEGATE_LOCAL_NO_METRICS=1 \
     bash -c "set -euo pipefail; source '$LIB'; run_api_cell 'm' 'p' '$out2'"
 ) >/dev/null 2>&1 || EC=$?
 assert_eq 0 "$EC" "opt-out: still exits 0"

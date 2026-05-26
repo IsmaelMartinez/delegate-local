@@ -1,5 +1,5 @@
 {
-  "skill": "delegate-to-ollama",
+  "skill": "delegate-local",
   "model": "claude-sonnet-4-6",
   "thresholds": {
     "positive_recall": 0.9,

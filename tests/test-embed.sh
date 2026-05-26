@@ -170,7 +170,7 @@ metrics=$(mktemp); rm -f "$metrics"
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_NO_METRICS=1 \
+  DELEGATE_LOCAL_NO_METRICS=1 \
   bash "$SCRIPT" --text "x" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "NO_METRICS: exit 0"
 if [[ -f "$metrics" ]]; then

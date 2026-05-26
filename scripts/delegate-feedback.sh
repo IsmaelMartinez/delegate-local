@@ -78,7 +78,7 @@
 
 set -uo pipefail
 
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}"
+metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
 stale_seconds="${DELEGATE_FEEDBACK_STALE_SECONDS:-300}"
 
 usage() {
@@ -345,7 +345,7 @@ NUDGE_HEADER
       echo "$matcher_out" | awk -F'\t' 'NF==2 {printf "  - %s: %s\n", $1, $2}' >&2
       cat >&2 <<NUDGE_FOOTER
 Consider filing a prompt-pattern issue so the recipe library tracks the gap:
-  gh issue create --repo IsmaelMartinez/delegate-to-ollama \\
+  gh issue create --repo IsmaelMartinez/delegate-local \\
     --label prompt-pattern \\
     --title "<recipe-name>: <one-line pattern summary>" \\
     --body "See .github/ISSUE_TEMPLATE/prompt-pattern.md — paste the matched MISS reasons above, the prompt, the model output, and a suggested fix if known."

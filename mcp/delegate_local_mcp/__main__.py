@@ -1,4 +1,4 @@
-from delegate_to_ollama_mcp.server import app
+from delegate_local_mcp.server import app
 
 
 def main() -> None:

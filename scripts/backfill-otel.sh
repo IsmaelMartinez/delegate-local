@@ -17,7 +17,7 @@
 #   --dry-run             print one line per row but make no HTTP calls.
 #   --metrics-file PATH   override the metrics JSONL location. Default is
 #                         ${DELEGATE_METRICS_FILE:-~/.claude/skills/
-#                         delegate-to-ollama/metrics.jsonl}.
+#                         delegate-local/metrics.jsonl}.
 #   --update-jsonl        after a successful POST, append the computed
 #                         otel_trace_id / otel_span_id to the row in the
 #                         JSONL so subsequent backfills skip via the live-
@@ -38,7 +38,7 @@
 #                                   regardless; this just adds the curl
 #                                   reason).
 #   DELEGATE_METRICS_FILE           overridden by --metrics-file. Default
-#                                   ~/.claude/skills/delegate-to-ollama/
+#                                   ~/.claude/skills/delegate-local/
 #                                   metrics.jsonl.
 #
 # Output:  per-row progress on stderr — `OK ts=... (delegate|feedback)`,
@@ -108,7 +108,7 @@ while (($# > 0)); do
   esac
 done
 
-metrics_file="${metrics_file_override:-${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}}"
+metrics_file="${metrics_file_override:-${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}}"
 
 [[ -f "$metrics_file" ]] || { echo "backfill-otel: metrics file not found: $metrics_file" >&2; exit 1; }
 command -v jq >/dev/null || { echo "backfill-otel: jq not on PATH" >&2; exit 2; }

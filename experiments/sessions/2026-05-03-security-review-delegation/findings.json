@@ -1,10 +1,10 @@
 {
-  "context": "Phase 9 v1 of delegate-to-ollama adds a per-user override mechanism. pick-model.sh sources ${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-to-ollama/config.sh} after the case statement populates `prefs`, allowing the override to reassign prefs per tier. init.sh emits a starter override to stdout based on `ollama list` output and the prefs parsed from pick-model.sh's case statement.",
+  "context": "Phase 9 v1 of delegate-local adds a per-user override mechanism. pick-model.sh sources ${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-local/config.sh} after the case statement populates `prefs`, allowing the override to reassign prefs per tier. init.sh emits a starter override to stdout based on `ollama list` output and the prefs parsed from pick-model.sh's case statement.",
   "findings": [
     {
       "id": "F1",
       "title": "Override path sources arbitrary bash via env var or $HOME",
-      "details": "pick-model.sh sources ${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-to-ollama/config.sh}. Whoever can write to that path or set DELEGATE_TO_OLLAMA_CONFIG executes arbitrary bash inheriting set -euo pipefail and the caller's environment. In a single-user dev context this is intentional, mirroring ~/.aiderrc and ~/.claude/settings.local.json. Risk increases sharply if pick-model.sh is ever invoked under sudo, in a CI runner with a shared HOME, or via a service account that doesn't fully control its HOME.",
+      "details": "pick-model.sh sources ${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-local/config.sh}. Whoever can write to that path or set DELEGATE_TO_OLLAMA_CONFIG executes arbitrary bash inheriting set -euo pipefail and the caller's environment. In a single-user dev context this is intentional, mirroring ~/.aiderrc and ~/.claude/settings.local.json. Risk increases sharply if pick-model.sh is ever invoked under sudo, in a CI runner with a shared HOME, or via a service account that doesn't fully control its HOME.",
       "file": "scripts/pick-model.sh:67-72"
     },
     {

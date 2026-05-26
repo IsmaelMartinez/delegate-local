@@ -21,7 +21,9 @@
 #                                         #   keeps the script independent
 #                                         #   of MLX_HOST being set).
 #   OLLAMA_HOST=<url>                     # default http://localhost:11434
-#   DELEGATE_TO_OLLAMA_NO_METRICS=1       # opt out of metrics logging
+#   DELEGATE_LOCAL_NO_METRICS=1            # opt out of metrics logging
+#                                         #   (back-compat: DELEGATE_TO_OLLAMA_NO_METRICS
+#                                         #   is accepted if the new name is unset)
 #   DELEGATE_METRICS_FILE=<path>          # override metrics destination
 #   DELEGATE_EMBED_MAX_CHARS=<int>        # default 6000. Inputs longer than
 #                                         #   this are head-truncated with a
@@ -50,6 +52,9 @@
 #         hit/miss surface doesn't apply.
 
 set -uo pipefail
+
+# Backwards compat: old env var name (rename delegate-to-ollama → delegate-local).
+DELEGATE_LOCAL_NO_METRICS="${DELEGATE_LOCAL_NO_METRICS:-${DELEGATE_TO_OLLAMA_NO_METRICS:-}}"
 
 usage() {
   echo 'usage: embed.sh [--text "<text>"]' >&2
@@ -125,7 +130,7 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-to-ollama/metrics.jsonl}"
+metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
 backend_requested="${DELEGATE_BACKEND:-ollama}"
 case "$backend_requested" in
   ollama|auto)
@@ -146,7 +151,7 @@ esac
 ollama_host="${OLLAMA_HOST:-http://localhost:11434}"
 
 log_metric() {
-  [[ "${DELEGATE_TO_OLLAMA_NO_METRICS:-}" == "1" ]] && return 0
+  [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
   local ts="$1" tier="$2" model="$3" input_chars="$4" embedding_dim="$5" dur_ms="$6" status="$7"
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
   # source:"embed" discriminates this row from delegate.sh (source:"delegate")
