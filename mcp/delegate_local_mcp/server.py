@@ -39,7 +39,7 @@ def _default_metrics_file() -> Path:
 
 
 def scripts_dir() -> Path:
-    override = os.environ.get("DELEGATE_LOCAL_SCRIPTS")
+    override = os.environ.get("DELEGATE_LOCAL_SCRIPTS") or os.environ.get("DELEGATE_TO_OLLAMA_SCRIPTS")
     return Path(override) if override else _default_scripts_dir()
 
 

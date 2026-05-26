@@ -24,6 +24,7 @@ def _completed(stdout: str = "", stderr: str = "", returncode: int = 0):
 
 def test_scripts_dir_defaults_to_repo_scripts(monkeypatch):
     monkeypatch.delenv("DELEGATE_LOCAL_SCRIPTS", raising=False)
+    monkeypatch.delenv("DELEGATE_TO_OLLAMA_SCRIPTS", raising=False)
     path = server.scripts_dir()
     assert path.name == "scripts"
     assert (path / "pick-model.sh").exists(), (
