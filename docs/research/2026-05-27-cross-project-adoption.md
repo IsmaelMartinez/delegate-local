@@ -2,7 +2,7 @@
 
 ### Current state
 
-Of 512 delegate calls with a `project` field set, 497 (97%) come from `delegate-to-ollama` (the skill's own repo, now renamed `delegate-local`). The remaining 15 calls come from 6 other project contexts, all within the last 48 hours (2026-05-25 to 2026-05-27): `github-issue-triage-bot` (3), `delegate-local` (3), `triage-bot-test-repo` (2), `enable-update-live` (2), `commit-message-contrastive-anti-padding` (1), `roadmap-rename-stream` (1). Three rows have `project` unset entirely.
+Of 515 delegate calls with a `project` field set (plus 3 rows with `project` unset), 497 (97% of attributed calls) come from `delegate-to-ollama` (the skill's own repo, now renamed `delegate-local`). The remaining 18 calls come from 7 project contexts, all within the last 48 hours (2026-05-25 to 2026-05-27): `github-issue-triage-bot` (3), `delegate-local` (3 — these are calls attributed to the new repo name after the rename, distinct from the 497 under the old name), `triage-bot-test-repo` (2), `enable-update-live` (2), `commit-message-contrastive-anti-padding` (1), `roadmap-rename-stream` (1), and 6 calls from worktree contexts with transient project names.
 
 The user has 15 repos with Claude Code project configs and 17 repos checked out under `~/projects/github/`. Eight of those repos have seen active Claude Code sessions in the past week (teams-for-linux, bonnie-wee-plot, votescot, github-issue-triage-bot, repo-butler, delegate-local, delegate-to-ollama, triage-bot-test-repo). Only 3 of those 8 have any delegation at all, and all cross-project usage started on 2026-05-25 — 13 days after the first delegation on 2026-05-12.
 

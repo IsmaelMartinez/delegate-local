@@ -4,7 +4,7 @@ Date: 2026-05-27. This is a research document, not an implementation plan. It sy
 
 ## Current state
 
-The skill has processed 992 invocations since 2026-05-03, routing 1,075K tokens locally with an 80% hit rate on tracked verdicts. Prose tier dominates (420 of 483 delegate calls), reasoning accounts for 57, and code has exactly 1 call. The average delegation is ~930 tokens (3K prompt chars in, 674 output chars out). At Opus 4.7 pricing that represents roughly $12 of avoided API cost against an estimated $398 of total session spend — a 3% offset.
+The skill has processed 992 invocations since 2026-05-03, routing 1,075K tokens locally with an 80% hit rate on tracked verdicts. Prose tier dominates (420 of 483 delegate calls), reasoning accounts for 57, code has exactly 1 call, and the remaining 5 are spread across long-context and embedding tiers. The average delegation is ~930 tokens (3K prompt chars in, 674 output chars out). At Opus 4.7 pricing that represents roughly $12 of avoided API cost against an estimated $398 of total session spend — a 3% offset.
 
 The system is heavily dogfooded within the delegate-local repo itself (635 of 647 recent calls). Only 12 calls came from other projects. Session analysis suggests 30-40% of all Claude Code sessions involve at least one delegatable sub-task, but the skill currently covers ~10% of sessions. The gap between 10% actual and 35% potential represents the main expansion opportunity.
 
@@ -14,7 +14,7 @@ MLX is the default backend since 2026-05-26 (launchd auto-start), running at p50
 
 llmfit scores the installed Qwen3.6-35B-A3B at 91.7 composite. The top suggestion is Qwen3-Next-80B-A3B-Thinking at 96.4, but the 2026-04-28 baseline showed larger models performing worse on structured tasks (the 80B was the worst T3 performer). No urgent model change is needed.
 
-The actionable model gap is MLX tier coverage. Downloading additional MLX-community models for the `code` and `reasoning` tiers would let those calls use the faster MLX backend instead of falling back to Ollama. Candidate downloads: `mlx-community/DeepSeek-R1-Distill-Qwen-32B-8bit` (reasoning) and `mlx-community/Qwen3-Coder-Next-8bit` (code, if available in the mlx-community catalogue).
+The actionable model gap is MLX tier coverage. Downloading additional MLX-community models for the `code` and `reasoning` tiers would let those calls use the faster MLX backend instead of falling back to Ollama. Candidate downloads: `mlx-community/DeepSeek-R1-Distill-Qwen-32B-MLX-8Bit` (reasoning) and `lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-8bit` (code).
 
 Any new model introduction should follow the existing due-diligence protocol from Phase 14: download, run the T3-T6 benchmark suite via `experiments/runner.sh`, compare against the current baseline, and only promote to `pick-model.sh` if scores match or exceed the incumbent. Prompt adjustments are model-specific — the anti-padding directives, subject-required guards, and contrastive anchors were calibrated against Qwen3.6; a different model family (DeepSeek, Gemma) may need its own calibration pass.
 
