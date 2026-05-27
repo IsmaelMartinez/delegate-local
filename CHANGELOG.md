@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.11.0...v0.12.0) (2026-05-27)
+
+
+### Features
+
+* add MLX-compatible reasoning preference for DeepSeek-R1-Distill ([#237](https://github.com/IsmaelMartinez/delegate-local/issues/237)) ([b62439e](https://github.com/IsmaelMartinez/delegate-local/commit/b62439eb9732263138e72839306a1b9d87bae7ed))
+
 ## [0.11.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.10.0...v0.11.0) (2026-05-27)
 
 
