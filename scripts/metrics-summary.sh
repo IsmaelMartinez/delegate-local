@@ -145,6 +145,71 @@ if (( n_feedback > 0 )); then
   echo
 fi
 
+# Per-project rollup (delegate entries only): volume, hit/miss/untracked, and
+# p50 latency grouped by .project. Rows missing the project field — pre-2026-05
+# delegate rows written before delegate.project landed — bucket as "(none)".
+# Only printed when 2+ distinct project values appear so single-project users
+# (the common case) don't see a noise section. The hit/miss derivation mirrors
+# the feedback block: a ref_ts -> kept map built in one reduce pass, then
+# direct $fb_map[.ts] access (NOT // false) so a recorded miss (false) isn't
+# coerced back to null and dropped.
+n_projects=$(jq -rs '
+  map(select((.source // "delegate") == "delegate"))
+  | map(.project // "(none)")
+  | unique
+  | length
+' "$metrics_file")
+if (( n_projects > 1 )); then
+  echo "Per-project (delegate):"
+  jq -rs '
+    def src: .source // "delegate";
+    (reduce (.[] | select(src == "feedback")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $fb_map
+    | map(select(src == "delegate") | {ts, project: (.project // "(none)"), duration_ms, kept: $fb_map[.ts]})
+    | group_by(.project)
+    | map({
+        project: .[0].project,
+        n: length,
+        hits: (map(select(.kept == true)) | length),
+        misses: (map(select(.kept == false)) | length),
+        untracked: (map(select(.kept == null)) | length),
+        p50: ((sort_by(.duration_ms) | .[(length / 2 | floor)] | .duration_ms // 0))
+      })
+    | sort_by(-.n)
+    | .[]
+    | "  \(.project | . + (" " * (20 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)  untracked=\(.untracked)  p50=\(.p50)ms"
+  ' "$metrics_file"
+  echo
+fi
+
+# Per-recipe rollup: hit-rate grouped by .recipe across the delegate rows that
+# carry a recipe field (i.e. --recipe NAME calls). Only printed when at least
+# one recipe row exists. Same feedback-join shape as the per-project block so a
+# recorded miss is counted, not dropped. This answers "which recipes underperform."
+n_recipe=$(jq -rs '
+  map(select((.source // "delegate") == "delegate" and .recipe != null))
+  | length
+' "$metrics_file")
+if (( n_recipe > 0 )); then
+  echo "Per-recipe (delegate):"
+  jq -rs '
+    def src: .source // "delegate";
+    (reduce (.[] | select(src == "feedback")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $fb_map
+    | map(select(src == "delegate" and .recipe != null) | {ts, recipe, kept: $fb_map[.ts]})
+    | group_by(.recipe)
+    | map({
+        recipe: .[0].recipe,
+        n: length,
+        hits: (map(select(.kept == true)) | length),
+        misses: (map(select(.kept == false)) | length),
+        untracked: (map(select(.kept == null)) | length)
+      })
+    | sort_by(-.n)
+    | .[]
+    | "  \(.recipe | . + (" " * (20 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)  untracked=\(.untracked)"
+  ' "$metrics_file"
+  echo
+fi
+
 # Per-tier (delegate entries only have tier; experiment entries have session).
 if (( n_tier > 0 )); then
   echo "Per-tier (delegate):"

@@ -206,8 +206,78 @@ case "$per_backend" in
 esac
 assert_contains "tokens≈0" "$per_backend" "sparse: missing tokens default to 0 in Per-backend"
 assert_contains "p50=0ms" "$per_backend" "sparse: missing duration_ms defaults to 0 in Per-backend p50"
-
 rm -f "$sparse"
+
+# 11. Per-project section: 2+ distinct projects -> section printed with
+# correct hits/misses/untracked (mirroring the feedback join) and p50 latency.
+# Project "alpha": 2 calls, 1 hit + 1 miss. Project "beta": 1 call, untracked.
+multiproj=$(mktemp)
+cat > "$multiproj" <<'EOF'
+{"ts":"2026-05-25T10:00:00Z","source":"delegate","project":"alpha","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-25T10:05:00Z","source":"delegate","project":"alpha","tier":"prose","model":"q","duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":110}
+{"ts":"2026-05-25T10:10:00Z","source":"delegate","project":"beta","tier":"reasoning","model":"d","duration_ms":6000,"exit_status":0,"estimated_tokens_avoided":150}
+{"ts":"2026-05-25T20:00:00Z","source":"feedback","ref_ts":"2026-05-25T10:00:00Z","kept":true}
+{"ts":"2026-05-25T20:01:00Z","source":"feedback","ref_ts":"2026-05-25T10:05:00Z","kept":false,"reason":"bullets"}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$multiproj" 2>&1) || EC=$?
+assert_eq 0 "$EC" "per-project: exits 0"
+assert_contains "Per-project (delegate):" "$out" "per-project: section header present"
+assert_contains "alpha                 n=2  hits=1  misses=1  untracked=0  p50=4200ms" "$out" "per-project: alpha hit/miss exact counts"
+assert_contains "beta                  n=1  hits=0  misses=0  untracked=1  p50=6000ms" "$out" "per-project: beta untracked when no feedback"
+rm -f "$multiproj"
+
+# 12. Per-project negative gate: single distinct project -> section hidden.
+# Also covers rows missing the project field bucketing to "(none)" (still one
+# distinct value, so still hidden).
+singleproj=$(mktemp)
+cat > "$singleproj" <<'EOF'
+{"ts":"2026-05-25T10:00:00Z","source":"delegate","project":"alpha","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-25T10:05:00Z","source":"delegate","project":"alpha","tier":"prose","model":"q","duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":110}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$singleproj" 2>&1) || EC=$?
+assert_eq 0 "$EC" "single-project: exits 0"
+case "$out" in
+  *"Per-project"*) echo "  FAIL  single-project: Per-project section should be hidden"; fail=$((fail+1));;
+  *) echo "  PASS  single-project: Per-project section hidden when only one project"; pass=$((pass+1));;
+esac
+rm -f "$singleproj"
+
+# 13. Per-recipe section: delegate rows carrying a recipe field -> section
+# printed grouped by recipe with hit/miss/untracked. commit-message: 2 calls,
+# 1 hit + 1 untracked. summarise-issue: 1 call, 1 miss.
+recipefix=$(mktemp)
+cat > "$recipefix" <<'EOF'
+{"ts":"2026-05-26T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-26T10:05:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":110}
+{"ts":"2026-05-26T10:10:00Z","source":"delegate","recipe":"summarise-issue","tier":"prose","model":"q","duration_ms":3800,"exit_status":0,"estimated_tokens_avoided":90}
+{"ts":"2026-05-26T10:15:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":3900,"exit_status":0,"estimated_tokens_avoided":80}
+{"ts":"2026-05-26T20:00:00Z","source":"feedback","ref_ts":"2026-05-26T10:00:00Z","kept":true}
+{"ts":"2026-05-26T20:01:00Z","source":"feedback","ref_ts":"2026-05-26T10:10:00Z","kept":false,"reason":"missed a comment"}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$recipefix" 2>&1) || EC=$?
+assert_eq 0 "$EC" "per-recipe: exits 0"
+assert_contains "Per-recipe (delegate):" "$out" "per-recipe: section header present"
+assert_contains "commit-message        n=2  hits=1  misses=0  untracked=1" "$out" "per-recipe: commit-message hit/untracked exact counts"
+assert_contains "summarise-issue       n=1  hits=0  misses=1  untracked=0" "$out" "per-recipe: summarise-issue miss not dropped"
+rm -f "$recipefix"
+
+# 14. Per-recipe negative gate: no recipe rows -> section hidden.
+norecipe=$(mktemp)
+cat > "$norecipe" <<'EOF'
+{"ts":"2026-05-26T10:00:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-26T10:05:00Z","source":"delegate","tier":"reasoning","model":"d","duration_ms":6000,"exit_status":0,"estimated_tokens_avoided":150}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$norecipe" 2>&1) || EC=$?
+assert_eq 0 "$EC" "no-recipe: exits 0"
+case "$out" in
+  *"Per-recipe"*) echo "  FAIL  no-recipe: Per-recipe section should be hidden"; fail=$((fail+1));;
+  *) echo "  PASS  no-recipe: Per-recipe section hidden when no recipe rows"; pass=$((pass+1));;
+esac
+rm -f "$norecipe"
 
 echo
 echo "$pass passed, $fail failed"
