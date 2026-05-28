@@ -2,6 +2,23 @@
 
 An agent skill that routes summarisation, triage, and bulk-text tasks to locally-installed models (Ollama or MLX) instead of the cloud API. Keeps content on-device, preserves the agent's context window, and uses `llmfit` to keep the model set current.
 
+## 30-second quickstart
+
+One linear path from nothing to a first delegated call:
+
+```bash
+# 1. Install (symlinks the skill into every detected agent tool)
+npx skills add IsmaelMartinez/delegate-local
+
+# 2. Confirm at least one local model is installed and see how tiers route
+bash ~/.claude/skills/delegate-local/scripts/audit-models.sh
+
+# 3. Make your first delegated call
+git diff | bash ~/.claude/skills/delegate-local/scripts/delegate.sh prose "Summarise this diff in 3 bullets."
+```
+
+Step 2 requires [Ollama](https://ollama.com) (or [`mlx-lm`](https://github.com/ml-explore/mlx-lm) on Apple Silicon) with a model pulled — see [Requirements](#requirements) and [Backends](#backends). The rest of this README covers install options, backend selection, and the routing internals.
+
 ## What it does
 
 When a task fits the "gather context once, send one prompt, return text" pattern — log triage, commit-message drafting, batch classification, structured extraction, prose rewriting, format conversion, regex generation, docstring stubbing — the agent delegates to a local model via `delegate.sh` instead of handling it itself. Reasoning, tool-calling, and repo-wide tasks still go to the cloud model.
@@ -77,6 +94,8 @@ bash <install-path>/scripts/audit-models.sh
 ### Personalising routing (optional)
 
 The shipped `pick-model.sh` is one preference list for everyone. To override the order on a specific machine without forking the repo, drop a bash file at `~/.claude/skills/delegate-local/config.sh`. `pick-model.sh` sources it after the shipped defaults are set, so any tier the file touches wins. Untouched tiers fall through to shipped defaults; an absent file changes nothing.
+
+> **Trust note:** `config.sh` is sourced as bash by `pick-model.sh`, meaning its contents execute with your environment and privileges. This is arbitrary code execution by design, similar to `~/.aiderrc` or `~/.claude/settings.local.json`. Only place a `config.sh` you wrote yourself or fully trust at that path; never paste one from an untrusted source. See [SECURITY.md](SECURITY.md) for the full trust model.
 
 ```bash
 # ~/.claude/skills/delegate-local/config.sh
