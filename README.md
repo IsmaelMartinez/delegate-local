@@ -11,10 +11,10 @@ One linear path from nothing to a first delegated call:
 npx skills add IsmaelMartinez/delegate-local
 
 # 2. Confirm at least one local model is installed and see how tiers route
-bash <install-path>/scripts/audit-models.sh
+bash ~/.claude/skills/delegate-local/scripts/audit-models.sh
 
 # 3. Make your first delegated call
-git diff | bash <install-path>/scripts/delegate.sh prose "Summarise this diff in 3 bullets."
+git diff | bash ~/.claude/skills/delegate-local/scripts/delegate.sh prose "Summarise this diff in 3 bullets."
 ```
 
 Step 2 requires [Ollama](https://ollama.com) (or [`mlx-lm`](https://github.com/ml-explore/mlx-lm) on Apple Silicon) with a model pulled — see [Requirements](#requirements) and [Backends](#backends). The rest of this README covers install options, backend selection, and the routing internals.
