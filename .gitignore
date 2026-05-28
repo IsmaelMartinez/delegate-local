@@ -7,11 +7,13 @@ __pycache__/
 .claude/scheduled_tasks.lock
 
 # Per-user telemetry written by scripts/delegate.sh. The default metrics path
-# is $HOME/.claude/skills/delegate-to-ollama/metrics.jsonl, which resolves
+# is $HOME/.claude/skills/delegate-local/metrics.jsonl, which resolves
 # through the `npx skills add`-installed symlink back to the repo root for
 # anyone developing the skill while it's installed. The file is private to
-# the user and never belongs in git.
+# the user and never belongs in git. The trailing-dot glob also covers the
+# timestamped backups (e.g. metrics.jsonl.bak-20260525) left behind by hand.
 metrics.jsonl
+metrics.jsonl.*
 
 # Per-cell patched source trees written by session scorers (e.g. scorer-v8.py).
 # Regenerated on every scorer run; the raw model outputs in v*-runs/ are the
