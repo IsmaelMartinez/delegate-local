@@ -61,6 +61,16 @@ metrics_generator:
       # Persist computed blocks so metrics queries span more than the live
       # in-memory window (needed for the multi-day trend panels).
       flush_to_storage: true
+      # Keep completed metrics blocks queryable for the full retention window.
+      # WITHOUT this the generator defaults to complete_block_timeout: 1h, so
+      # every TraceQL-metrics query_range beyond the last hour fails with
+      # "time range must be within last 1h0m0s" and the multi-day trend panels
+      # silently show only the last hour regardless of the time picker. The
+      # generator is a forward-streaming aggregator: this makes metrics
+      # ACCUMULATE up to 30 days going forward — it does not retroactively
+      # compute metrics for spans backfilled with old timestamps (those land
+      # in TraceQL search, not in historical metric buckets).
+      complete_block_timeout: 720h
 
 storage:
   trace:
