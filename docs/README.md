@@ -19,7 +19,7 @@ The universal `npx skills add` install in the top-level [`../README.md`](../READ
 
 ## Observability — `observability/`
 
-[`observability/`](observability/) documents the opt-in OTLP telemetry exporter and the three backends it targets: [Grafana Cloud](observability/grafana-cloud.md), [Langfuse](observability/langfuse-self-host.md), and [Phoenix](observability/phoenix.md). The wire format is specified in [`otel-schema.md`](otel-schema.md).
+[`observability/`](observability/) documents the opt-in OTLP telemetry exporter and the backends it targets: [Grafana Cloud](observability/grafana-cloud.md), [self-hosted Grafana + Tempo](observability/grafana-local.md), [Langfuse](observability/langfuse-self-host.md), and [Phoenix](observability/phoenix.md). The runnable local Grafana + Tempo compose stack lives in [`../observability/`](../observability/). The wire format is specified in [`otel-schema.md`](otel-schema.md).
 
 ## Research — `research/`
 

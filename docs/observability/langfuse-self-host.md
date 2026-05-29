@@ -99,4 +99,5 @@ Langfuse dashboards are session-views configured per-project through the web UI,
 ## See also
 
 - [docs/observability/grafana-cloud.md](grafana-cloud.md) — hosted alternative with pre-built GenAI dashboards when on-device storage is not a requirement.
+- [docs/observability/grafana-local.md](grafana-local.md) — lighter on-device alternative (Grafana + Tempo, two containers, no account) when the scores model is not needed.
 - [docs/observability/phoenix.md](phoenix.md) — ultra-light single-container alternative for one-off local inspection without the ClickHouse and PostgreSQL footprint.
