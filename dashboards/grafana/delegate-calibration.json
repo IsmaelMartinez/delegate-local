@@ -15,6 +15,15 @@
   "templating": {
     "list": [
       {
+        "name": "project",
+        "type": "textbox",
+        "label": "delegate.project",
+        "description": "Repo filter (span.delegate.project = git repo basename). Default .* matches all repos; type an exact name like delegate-local, or a regex like delegate-local|grafana-tempo-local to include worktrees.",
+        "query": ".*",
+        "current": {"selected": true, "text": ".*", "value": ".*"},
+        "options": [{"selected": true, "text": ".*", "value": ".*"}]
+      },
+      {
         "name": "recipe",
         "type": "custom",
         "label": "delegate.recipe",
@@ -39,14 +48,14 @@
           "refId": "A",
           "queryType": "traceql",
           "datasource": {"type": "tempo", "uid": "tempo"},
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"hit\"} | count_over_time()",
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict=\"hit\"} | count_over_time()",
           "hide": true
         },
         {
           "refId": "B",
           "queryType": "traceql",
           "datasource": {"type": "tempo", "uid": "tempo"},
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict != \"\"} | count_over_time()",
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict != \"\"} | count_over_time()",
           "hide": true
         },
         {
@@ -73,7 +82,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | count_over_time() - {resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict != \"\"} | count_over_time()"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.gen_ai.operation.name=\"chat\"} | count_over_time() - {resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict != \"\"} | count_over_time()"
         }
       ],
       "fieldConfig": {
@@ -93,7 +102,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"miss\"} | count_over_time()"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict=\"miss\"} | count_over_time()"
         }
       ],
       "fieldConfig": {
@@ -114,14 +123,14 @@
           "refId": "A",
           "queryType": "traceql",
           "datasource": {"type": "tempo", "uid": "tempo"},
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"hit\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)",
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict=\"hit\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)",
           "hide": true
         },
         {
           "refId": "B",
           "queryType": "traceql",
           "datasource": {"type": "tempo", "uid": "tempo"},
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict != \"\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)",
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict != \"\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)",
           "hide": true
         },
         {
@@ -149,7 +158,7 @@
           "refId": "A",
           "queryType": "traceql",
           "tableType": "spans",
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"miss\"} | select(span.delegate.recipe, span.delegate.feedback.reason)"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict=\"miss\"} | select(span.delegate.recipe, span.delegate.feedback.reason)"
         }
       ],
       "options": {"showHeader": true, "sortBy": [{"displayName": "Time", "desc": true}]},

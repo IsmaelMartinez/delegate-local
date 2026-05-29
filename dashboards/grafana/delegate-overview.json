@@ -15,6 +15,15 @@
   "templating": {
     "list": [
       {
+        "name": "project",
+        "type": "textbox",
+        "label": "delegate.project",
+        "description": "Repo filter (span.delegate.project = git repo basename). Default .* matches all repos; type an exact name like delegate-local, or a regex like delegate-local|grafana-tempo-local to include worktrees.",
+        "query": ".*",
+        "current": {"selected": true, "text": ".*", "value": ".*"},
+        "options": [{"selected": true, "text": ".*", "value": ".*"}]
+      },
+      {
         "name": "tier",
         "type": "custom",
         "label": "delegate.tier",
@@ -48,7 +57,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | rate() by (span.delegate.tier)"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.gen_ai.operation.name=\"chat\"} | rate() by (span.delegate.tier)"
         }
       ],
       "fieldConfig": {
@@ -68,7 +77,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)"
         }
       ],
       "fieldConfig": {
@@ -88,7 +97,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | rate() by (span.gen_ai.provider.name)"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.gen_ai.operation.name=\"chat\"} | rate() by (span.gen_ai.provider.name)"
         }
       ],
       "fieldConfig": {
@@ -108,7 +117,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(span.delegate.queue_wait_ms)"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(span.delegate.queue_wait_ms)"
         }
       ],
       "fieldConfig": {
@@ -128,7 +137,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(span.delegate.generation_ms)"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(span.delegate.generation_ms)"
         }
       ],
       "fieldConfig": {
@@ -148,7 +157,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(duration)"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(duration)"
         }
       ],
       "fieldConfig": {
@@ -168,7 +177,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | quantile_over_time(span.delegate.estimated_tokens_avoided, 0.5)"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.gen_ai.operation.name=\"chat\"} | quantile_over_time(span.delegate.estimated_tokens_avoided, 0.5)"
         }
       ],
       "fieldConfig": {
@@ -188,7 +197,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | count_over_time()"
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.gen_ai.operation.name=\"chat\"} | count_over_time()"
         }
       ],
       "fieldConfig": {
