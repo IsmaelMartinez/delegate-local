@@ -148,6 +148,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
+          "tableType": "spans",
           "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"miss\"} | select(span.delegate.recipe, span.delegate.feedback.reason)"
         }
       ],

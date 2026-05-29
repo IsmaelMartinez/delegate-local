@@ -133,6 +133,7 @@
         {
           "refId": "A",
           "queryType": "traceql",
+          "tableType": "spans",
           "query": "{resource.service.name=\"delegate-local\" && status=error} | select(span.gen_ai.request.model, span.gen_ai.provider.name, span.delegate.tier, span.delegate.recipe, span.delegate.exit_status, span.delegate.prompt_chars, span.delegate.context_chars, span.delegate.output_chars)"
         }
       ],
