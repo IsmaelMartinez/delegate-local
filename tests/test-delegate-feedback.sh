@@ -616,6 +616,19 @@ assert_contains '"delegate.feedback.parent_trace_id"' "$otel_body" "FB-OT2: pare
 assert_contains "\"$PARENT_TID\"" "$otel_body" "FB-OT2: parent_trace_id value matches delegate row"
 assert_contains '"delegate.feedback.parent_span_id"' "$otel_body" "FB-OT2: parent_span_id attribute"
 assert_contains "\"$PARENT_SID\"" "$otel_body" "FB-OT2: parent_span_id value matches delegate row"
+# delegate.project (#246 follow-up): the feedback span carries the repo
+# basename so per-project calibration dashboards can scope feedback spans the
+# same way they scope delegation spans. Computed from the cwd/git toplevel, so
+# assert presence rather than a fixed value.
+assert_contains '"delegate.project"' "$otel_body" "FB-OT2: delegate.project attribute present on feedback span"
+fb_project=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].attributes | map(select(.key == "delegate.project")) | .[0].value.stringValue // ""')
+if [[ -n "$fb_project" ]]; then
+  echo "  PASS  FB-OT2: delegate.project value is non-empty ($fb_project)"
+  pass=$((pass+1))
+else
+  echo "  FAIL  FB-OT2: delegate.project value is empty"
+  fail=$((fail+1))
+fi
 # Track F default-redaction: reason attribute is OMITTED when the flag is unset.
 case "$otel_body" in
   *'delegate.feedback.reason'*)

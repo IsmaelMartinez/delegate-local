@@ -241,6 +241,9 @@ verdict_word=$([[ "$kept" == "true" ]] && echo "HIT" || echo "MISS")
 # above. Empty fields are tolerated — emit_otel_feedback_span omits the
 # `links` array when the parent IDs are unknown (row pre-dates the exporter)
 # and omits delegate.recipe (#187) when the parent was a bare-tier call.
+# delegate.project is the basename of the repo the verdict was recorded in
+# (same derivation as delegate.sh), so per-project calibration dashboards can
+# scope feedback spans the same way they scope delegation spans.
 parent_trace_id=""
 parent_span_id=""
 parent_model=""
@@ -249,7 +252,7 @@ if [[ -n "${parent_meta:-}" ]]; then
   IFS=$'\t' read -r parent_trace_id parent_span_id parent_model parent_recipe <<< "$parent_meta"
 fi
 verdict_lower=$([[ "$kept" == "true" ]] && echo "hit" || echo "miss")
-emit_otel_feedback_span "$ts" "$verdict_lower" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model" "$parent_recipe"
+emit_otel_feedback_span "$ts" "$verdict_lower" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model" "$parent_recipe" "$feedback_project"
 
 echo "$verdict_word recorded against delegate ts=$ref_ts${reason:+ ($reason)}"
 
