@@ -53,12 +53,27 @@
       "title": "Canary timeout rate (exit 3)",
       "description": "Share of delegate.sh spans with exit_status=3 over the selected range. exit_status=3 means the pre-flight 1-token canary timed out before the full templated request was sent — typically a cold-load on a 35B-class prose-tier model, an unreachable backend, or a host where the resolved model is too large for the available memory. Track the trend rather than the absolute value: a slow drift up suggests the resolved-model preference list needs to step down a size class.",
       "gridPos": {"h": 6, "w": 8, "x": 0, "y": 8},
-      "datasource": {"type": "tempo", "uid": "tempo"},
+      "datasource": {"type": "datasource", "uid": "-- Mixed --"},
       "targets": [
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.exit_status=3} | count_over_time() / {resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | count_over_time()"
+          "datasource": {"type": "tempo", "uid": "tempo"},
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.exit_status=3} | count_over_time()",
+          "hide": true
+        },
+        {
+          "refId": "B",
+          "queryType": "traceql",
+          "datasource": {"type": "tempo", "uid": "tempo"},
+          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | count_over_time()",
+          "hide": true
+        },
+        {
+          "refId": "C",
+          "datasource": {"type": "__expr__", "uid": "__expr__"},
+          "type": "math",
+          "expression": "$A / $B"
         }
       ],
       "fieldConfig": {

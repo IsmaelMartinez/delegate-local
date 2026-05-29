@@ -33,12 +33,27 @@
       "title": "HIT rate (overall)",
       "description": "Share of feedback spans with delegate.feedback.verdict=\"hit\" over the selected range. Feedback spans live in their own trace per ADR 0007; they are joined to the parent delegation either by the `links` array or by delegate.feedback.parent_trace_id. Either join is sufficient for grouping in this panel because the rate is computed only over feedback spans.",
       "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
-      "datasource": {"type": "tempo", "uid": "tempo"},
+      "datasource": {"type": "datasource", "uid": "-- Mixed --"},
       "targets": [
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"hit\"} | count_over_time() / {resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict != \"\"} | count_over_time()"
+          "datasource": {"type": "tempo", "uid": "tempo"},
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"hit\"} | count_over_time()",
+          "hide": true
+        },
+        {
+          "refId": "B",
+          "queryType": "traceql",
+          "datasource": {"type": "tempo", "uid": "tempo"},
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict != \"\"} | count_over_time()",
+          "hide": true
+        },
+        {
+          "refId": "C",
+          "datasource": {"type": "__expr__", "uid": "__expr__"},
+          "type": "math",
+          "expression": "$A / $B"
         }
       ],
       "fieldConfig": {
@@ -93,12 +108,27 @@
       "title": "HIT rate trend by recipe",
       "description": "Per-recipe HIT-rate over time. Issue #187 added `delegate.recipe` as a feedback-span attribute at emit-time so this panel is a single-query group-by rather than the cross-trace join TraceQL doesn't support cleanly. Numerator: feedback spans with verdict=\"hit\" grouped by `delegate.recipe`. Denominator: feedback spans with any verdict set grouped by `delegate.recipe`. Bare-tier calls (no `--recipe`) do not carry the attribute and so do not appear here — see panel 1's overall HIT-rate stat for the all-up figure including bare calls.",
       "gridPos": {"h": 10, "w": 24, "x": 0, "y": 6},
-      "datasource": {"type": "tempo", "uid": "tempo"},
+      "datasource": {"type": "datasource", "uid": "-- Mixed --"},
       "targets": [
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"hit\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe) / {resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict != \"\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)"
+          "datasource": {"type": "tempo", "uid": "tempo"},
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"hit\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)",
+          "hide": true
+        },
+        {
+          "refId": "B",
+          "queryType": "traceql",
+          "datasource": {"type": "tempo", "uid": "tempo"},
+          "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict != \"\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)",
+          "hide": true
+        },
+        {
+          "refId": "C",
+          "datasource": {"type": "__expr__", "uid": "__expr__"},
+          "type": "math",
+          "expression": "$A / $B"
         }
       ],
       "fieldConfig": {

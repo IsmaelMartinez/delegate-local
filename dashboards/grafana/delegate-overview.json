@@ -160,22 +160,22 @@
     {
       "id": 7,
       "type": "stat",
-      "title": "Tokens kept local (estimated)",
-      "description": "Sum of delegate.estimated_tokens_avoided across the selected time range. The skill's README headlines this as one of the two core values alongside on-device privacy; this stat is the rollup version of `scripts/metrics-summary.sh`'s `estimated_tokens_avoided` line, surfaced in the observability backend.",
+      "title": "Tokens kept local (median/call)",
+      "description": "Median of delegate.estimated_tokens_avoided per call over the selected range. Local Tempo 2.6.1 has no sum_over_time aggregator, so this shows the per-call median rather than a running total; for the true sum over all history use `scripts/metrics-summary.sh`'s `estimated_tokens_avoided` line.",
       "gridPos": {"h": 6, "w": 12, "x": 0, "y": 24},
       "datasource": {"type": "tempo", "uid": "tempo"},
       "targets": [
         {
           "refId": "A",
           "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | sum(span.delegate.estimated_tokens_avoided)"
+          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | quantile_over_time(span.delegate.estimated_tokens_avoided, 0.5)"
         }
       ],
       "fieldConfig": {
         "defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}},
         "overrides": []
       },
-      "options": {"reduceOptions": {"calcs": ["sum"]}, "textMode": "auto"}
+      "options": {"reduceOptions": {"calcs": ["mean"]}, "textMode": "auto"}
     },
     {
       "id": 8,
