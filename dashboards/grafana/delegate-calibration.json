@@ -1,12 +1,7 @@
 {
   "title": "delegate-local — Calibration (HIT/MISS)",
   "uid": "delegate-calibration",
-  "tags": [
-    "delegate-local",
-    "genai",
-    "otel",
-    "feedback"
-  ],
+  "tags": ["delegate-local", "genai", "otel", "feedback"],
   "schemaVersion": 38,
   "version": 1,
   "editable": true,
@@ -24,11 +19,7 @@
         "type": "custom",
         "label": "delegate.recipe",
         "query": "*,commit-message,pr-description,summarise-diff,pr-review-reply,release-note,summarise-issue,file-summary,em-dash-removal,ci-log-triage,plan-section-intro",
-        "current": {
-          "selected": false,
-          "text": "*",
-          "value": "*"
-        },
+        "current": {"selected": false, "text": "*", "value": "*"},
         "options": [],
         "includeAll": false,
         "multi": false
@@ -41,98 +32,43 @@
       "type": "stat",
       "title": "HIT rate (overall)",
       "description": "Share of feedback spans with delegate.feedback.verdict=\"hit\" over the selected range. Feedback spans live in their own trace per ADR 0007; they are joined to the parent delegation either by the `links` array or by delegate.feedback.parent_trace_id. Either join is sufficient for grouping in this panel because the rate is computed only over feedback spans.",
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 0,
-        "y": 0
-      },
-      "datasource": {
-        "type": "datasource",
-        "uid": "-- Mixed --"
-      },
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
+      "datasource": {"type": "datasource", "uid": "-- Mixed --"},
       "targets": [
         {
           "refId": "A",
           "queryType": "traceql",
+          "datasource": {"type": "tempo", "uid": "tempo"},
           "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"hit\"} | count_over_time()",
-          "datasource": {
-            "type": "tempo",
-            "uid": "tempo"
-          },
           "hide": true
         },
         {
           "refId": "B",
           "queryType": "traceql",
+          "datasource": {"type": "tempo", "uid": "tempo"},
           "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict != \"\"} | count_over_time()",
-          "datasource": {
-            "type": "tempo",
-            "uid": "tempo"
-          },
           "hide": true
         },
         {
           "refId": "C",
-          "datasource": {
-            "type": "__expr__",
-            "uid": "__expr__"
-          },
+          "datasource": {"type": "__expr__", "uid": "__expr__"},
           "type": "math",
           "expression": "$A / $B"
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1,
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 0.6
-              },
-              {
-                "color": "green",
-                "value": 0.8
-              }
-            ]
-          }
-        },
+        "defaults": {"unit": "percentunit", "min": 0, "max": 1, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.6}, {"color": "green", "value": 0.8}]}},
         "overrides": []
       },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      }
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
     },
     {
       "id": 2,
       "type": "stat",
       "title": "Untracked delegations",
       "description": "Count of delegate.sh spans without a matching feedback span. Untracked rows are calibration debt — the recipe library cannot self-correct from production data without verdicts. The verdict nudge in delegate.sh prints a stderr reminder after every successful call to keep this number trending down.",
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 8,
-        "y": 0
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "tempo"
-      },
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 0},
+      "datasource": {"type": "tempo", "uid": "tempo"},
       "targets": [
         {
           "refId": "A",
@@ -141,54 +77,18 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 10
-              },
-              {
-                "color": "red",
-                "value": 50
-              }
-            ]
-          }
-        },
+        "defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 10}, {"color": "red", "value": 50}]}},
         "overrides": []
       },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      }
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
     },
     {
       "id": 3,
       "type": "stat",
       "title": "MISS count",
       "description": "Raw count of feedback spans with verdict=\"miss\". The top-N MISS table below this row breaks the misses down by reason and recipe so a recurring shape can be promoted into a `prompt-pattern` issue.",
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 16,
-        "y": 0
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "tempo"
-      },
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 0},
+      "datasource": {"type": "tempo", "uid": "tempo"},
       "targets": [
         {
           "refId": "A",
@@ -197,115 +97,53 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 3
-              },
-              {
-                "color": "red",
-                "value": 10
-              }
-            ]
-          }
-        },
+        "defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 3}, {"color": "red", "value": 10}]}},
         "overrides": []
       },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      }
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
     },
     {
       "id": 4,
       "type": "timeseries",
       "title": "HIT rate trend by recipe",
       "description": "Per-recipe HIT-rate over time. Issue #187 added `delegate.recipe` as a feedback-span attribute at emit-time so this panel is a single-query group-by rather than the cross-trace join TraceQL doesn't support cleanly. Numerator: feedback spans with verdict=\"hit\" grouped by `delegate.recipe`. Denominator: feedback spans with any verdict set grouped by `delegate.recipe`. Bare-tier calls (no `--recipe`) do not carry the attribute and so do not appear here — see panel 1's overall HIT-rate stat for the all-up figure including bare calls.",
-      "gridPos": {
-        "h": 10,
-        "w": 24,
-        "x": 0,
-        "y": 6
-      },
-      "datasource": {
-        "type": "datasource",
-        "uid": "-- Mixed --"
-      },
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 6},
+      "datasource": {"type": "datasource", "uid": "-- Mixed --"},
       "targets": [
         {
           "refId": "A",
           "queryType": "traceql",
+          "datasource": {"type": "tempo", "uid": "tempo"},
           "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"hit\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)",
-          "datasource": {
-            "type": "tempo",
-            "uid": "tempo"
-          },
           "hide": true
         },
         {
           "refId": "B",
           "queryType": "traceql",
+          "datasource": {"type": "tempo", "uid": "tempo"},
           "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict != \"\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)",
-          "datasource": {
-            "type": "tempo",
-            "uid": "tempo"
-          },
           "hide": true
         },
         {
           "refId": "C",
-          "datasource": {
-            "type": "__expr__",
-            "uid": "__expr__"
-          },
+          "datasource": {"type": "__expr__", "uid": "__expr__"},
           "type": "math",
           "expression": "$A / $B"
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1
-        },
+        "defaults": {"unit": "percentunit", "min": 0, "max": 1},
         "overrides": []
       },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "right"
-        }
-      }
+      "options": {"legend": {"displayMode": "list", "placement": "right"}}
     },
     {
       "id": 5,
       "type": "table",
       "title": "Recent MISSes (by recipe + reason)",
       "description": "Each row is one feedback span with verdict=\"miss\". Grouped by `delegate.recipe` (#187 added this attribute to the feedback span so the column is a direct projection rather than a cross-trace join). The reason column is the free-text reason the user typed via `delegate-feedback.sh miss \"<reason>\"` and is only present when `DELEGATE_OTEL_INCLUDE_CONTENT=1` is set against a trusted collector (Track F #158 gated content fields by default). When the same reason recurs three times in a 30-day window, the delegate-feedback.sh runtime nudge prints a draft `gh issue create` command pre-targeted at the `prompt-pattern` label — this table is the dashboard counterpart of that nudge.",
-      "gridPos": {
-        "h": 12,
-        "w": 24,
-        "x": 0,
-        "y": 16
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "tempo"
-      },
+      "gridPos": {"h": 12, "w": 24, "x": 0, "y": 16},
+      "datasource": {"type": "tempo", "uid": "tempo"},
       "targets": [
         {
           "refId": "A",
@@ -313,22 +151,9 @@
           "query": "{resource.service.name=\"delegate-local\" && span.delegate.feedback.verdict=\"miss\"} | select(span.delegate.recipe, span.delegate.feedback.reason)"
         }
       ],
-      "options": {
-        "showHeader": true,
-        "sortBy": [
-          {
-            "displayName": "Time",
-            "desc": true
-          }
-        ]
-      },
+      "options": {"showHeader": true, "sortBy": [{"displayName": "Time", "desc": true}]},
       "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "displayMode": "auto"
-          }
-        },
+        "defaults": {"custom": {"align": "auto", "displayMode": "auto"}},
         "overrides": []
       }
     }

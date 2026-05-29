@@ -1,12 +1,7 @@
 {
   "title": "delegate-local — Errors",
   "uid": "delegate-errors",
-  "tags": [
-    "delegate-local",
-    "genai",
-    "otel",
-    "errors"
-  ],
+  "tags": ["delegate-local", "genai", "otel", "errors"],
   "schemaVersion": 38,
   "version": 1,
   "editable": true,
@@ -24,11 +19,7 @@
         "type": "custom",
         "label": "delegate.tier",
         "query": "*,code,prose,reasoning,long-context,vision,embedding,premium-general,reasoning-vision",
-        "current": {
-          "selected": false,
-          "text": "*",
-          "value": "*"
-        },
+        "current": {"selected": false, "text": "*", "value": "*"},
         "options": [],
         "includeAll": false,
         "multi": false
@@ -41,16 +32,8 @@
       "type": "timeseries",
       "title": "Exit-status breakdown",
       "description": "Count of delegate.sh spans over time grouped by delegate.exit_status. Status 0 is success; status 1 is a generic failure (model error, transport error); status 2 is an unsubstituted-placeholder error from the --recipe loader; status 3 is the pre-flight canary timeout (the resolved model did not respond to a 1-token probe within DELEGATE_PREFLIGHT_TIMEOUT). The series legend keys off the literal integer attribute so a new exit code surfaces automatically.",
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "tempo"
-      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0},
+      "datasource": {"type": "tempo", "uid": "tempo"},
       "targets": [
         {
           "refId": "A",
@@ -59,115 +42,53 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "unit": "reqps"
-        },
+        "defaults": {"unit": "reqps"},
         "overrides": []
       },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      }
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
     },
     {
       "id": 2,
       "type": "stat",
       "title": "Canary timeout rate (exit 3)",
       "description": "Share of delegate.sh spans with exit_status=3 over the selected range. exit_status=3 means the pre-flight 1-token canary timed out before the full templated request was sent — typically a cold-load on a 35B-class prose-tier model, an unreachable backend, or a host where the resolved model is too large for the available memory. Track the trend rather than the absolute value: a slow drift up suggests the resolved-model preference list needs to step down a size class.",
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 0,
-        "y": 8
-      },
-      "datasource": {
-        "type": "datasource",
-        "uid": "-- Mixed --"
-      },
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 8},
+      "datasource": {"type": "datasource", "uid": "-- Mixed --"},
       "targets": [
         {
           "refId": "A",
           "queryType": "traceql",
+          "datasource": {"type": "tempo", "uid": "tempo"},
           "query": "{resource.service.name=\"delegate-local\" && span.delegate.exit_status=3} | count_over_time()",
-          "datasource": {
-            "type": "tempo",
-            "uid": "tempo"
-          },
           "hide": true
         },
         {
           "refId": "B",
           "queryType": "traceql",
+          "datasource": {"type": "tempo", "uid": "tempo"},
           "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | count_over_time()",
-          "datasource": {
-            "type": "tempo",
-            "uid": "tempo"
-          },
           "hide": true
         },
         {
           "refId": "C",
-          "datasource": {
-            "type": "__expr__",
-            "uid": "__expr__"
-          },
+          "datasource": {"type": "__expr__", "uid": "__expr__"},
           "type": "math",
           "expression": "$A / $B"
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1,
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 0.05
-              },
-              {
-                "color": "red",
-                "value": 0.15
-              }
-            ]
-          }
-        },
+        "defaults": {"unit": "percentunit", "min": 0, "max": 1, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.05}, {"color": "red", "value": 0.15}]}},
         "overrides": []
       },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      }
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
     },
     {
       "id": 3,
       "type": "stat",
       "title": "Failed-export count",
       "description": "Count of delegate.sh spans where the span status is ERROR. The exporter sets status ERROR when delegate.exit_status != 0, so this stat is the OTel-status-coded view of the exit-status timeseries above. Backends that filter on span status (rather than attribute equality) use this stat as the primary failure surface.",
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 8,
-        "y": 8
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "tempo"
-      },
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 8},
+      "datasource": {"type": "tempo", "uid": "tempo"},
       "targets": [
         {
           "refId": "A",
@@ -176,54 +97,18 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 5
-              }
-            ]
-          }
-        },
+        "defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}, {"color": "red", "value": 5}]}},
         "overrides": []
       },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      }
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
     },
     {
       "id": 4,
       "type": "stat",
       "title": "Recipe-substitution failures (exit 2)",
       "description": "Count of delegate.sh spans with exit_status=2. This is the --recipe loader refusing to send a partly-substituted template to the model: a missing --var key, an unknown placeholder, or a typoed recipe name. A non-zero count here means a caller is invoking a recipe wrong and getting an error rather than a degraded answer — which is the recipe loader behaving as designed.",
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 16,
-        "y": 8
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "tempo"
-      },
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 8},
+      "datasource": {"type": "tempo", "uid": "tempo"},
       "targets": [
         {
           "refId": "A",
@@ -232,50 +117,18 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              }
-            ]
-          }
-        },
+        "defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}]}},
         "overrides": []
       },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      }
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
     },
     {
       "id": 5,
       "type": "table",
       "title": "Recent failed spans (status=ERROR)",
       "description": "Per-span breakdown of the failures in the time range — model, tier, recipe (when present), exit_status, and char counts. The char counts let an investigator correlate a stall or canary timeout to input size without leaving the dashboard. No content fields are present per ADR 0007's no-content rule.",
-      "gridPos": {
-        "h": 12,
-        "w": 24,
-        "x": 0,
-        "y": 14
-      },
-      "datasource": {
-        "type": "tempo",
-        "uid": "tempo"
-      },
+      "gridPos": {"h": 12, "w": 24, "x": 0, "y": 14},
+      "datasource": {"type": "tempo", "uid": "tempo"},
       "targets": [
         {
           "refId": "A",
@@ -283,22 +136,9 @@
           "query": "{resource.service.name=\"delegate-local\" && status=error} | select(span.gen_ai.request.model, span.gen_ai.provider.name, span.delegate.tier, span.delegate.recipe, span.delegate.exit_status, span.delegate.prompt_chars, span.delegate.context_chars, span.delegate.output_chars)"
         }
       ],
-      "options": {
-        "showHeader": true,
-        "sortBy": [
-          {
-            "displayName": "Time",
-            "desc": true
-          }
-        ]
-      },
+      "options": {"showHeader": true, "sortBy": [{"displayName": "Time", "desc": true}]},
       "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "displayMode": "auto"
-          }
-        },
+        "defaults": {"custom": {"align": "auto", "displayMode": "auto"}},
         "overrides": []
       }
     }
