@@ -19,9 +19,10 @@ services:
       - ./tempo.yaml:/etc/tempo.yaml:ro
       - tempo-data:/var/tempo
     ports:
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP  (delegate.sh default target)
-      - "3200:3200"   # Tempo query API
+      # Loopback-only: telemetry stays on the workstation, not exposed to the LAN.
+      - "127.0.0.1:4317:4317"   # OTLP gRPC
+      - "127.0.0.1:4318:4318"   # OTLP HTTP  (delegate.sh default target)
+      - "127.0.0.1:3200:3200"   # Tempo query API
     restart: unless-stopped
 
   grafana:
@@ -41,7 +42,8 @@ services:
       - ../dashboards/grafana:/etc/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
-      - "3001:3000"   # host 3001 → Grafana (3000 is commonly already in use)
+      # Loopback-only: anonymous-admin Grafana must not be reachable from the LAN.
+      - "127.0.0.1:3001:3000"   # host 3001 → Grafana (3000 is commonly already in use)
     restart: unless-stopped
 
 volumes:
