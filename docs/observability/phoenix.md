@@ -60,4 +60,5 @@ Phoenix does not have an import-a-JSON-dashboard surface — the UI is the OpenI
 ## See also
 
 - [docs/observability/grafana-cloud.md](grafana-cloud.md) — hosted alternative with pre-built GenAI dashboards keyed on the native `gen_ai.*` attributes.
+- [docs/observability/grafana-local.md](grafana-local.md) — the committed dashboards self-hosted on-device (Grafana + Tempo) when you want trend panels, not just per-trace inspection.
 - [docs/observability/langfuse-self-host.md](langfuse-self-host.md) — privacy-conscious self-hosted alternative with first-class scores for the hit/miss verdict, at the cost of a full ClickHouse plus PostgreSQL stack.

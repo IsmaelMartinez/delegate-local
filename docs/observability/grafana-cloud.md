@@ -95,5 +95,6 @@ Row-level idempotent: any row that was already exported live (carries `otel_trac
 
 ## See also
 
+- [docs/observability/grafana-local.md](grafana-local.md) — the same dashboards self-hosted on-device (Grafana + Tempo, two containers, no account).
 - [docs/observability/langfuse-self-host.md](langfuse-self-host.md) — privacy-conscious self-hosted alternative when telemetry must stay on-device.
 - [docs/observability/phoenix.md](phoenix.md) — ultra-light single-container alternative for local-only inspection without infrastructure.

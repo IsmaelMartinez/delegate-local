@@ -1,0 +1,15 @@
+apiVersion: 1
+
+# Tempo datasource. The uid MUST stay "tempo" — every panel in
+# dashboards/grafana/*.json references datasource.uid="tempo", and
+# tests/test-dashboards.sh pins that contract.
+datasources:
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+    isDefault: true
+    jsonData:
+      streamingEnabled:
+        search: true
