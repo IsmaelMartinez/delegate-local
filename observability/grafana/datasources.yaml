@@ -11,5 +11,9 @@ datasources:
     url: http://tempo:3200
     isDefault: true
     jsonData:
+      # Search streaming returns Tempo's incremental job-progress frames, which
+      # Grafana's Tempo panel renders as the table body (State / Elapsed / Jobs
+      # columns) instead of the matched spans. Disable it so search/table panels
+      # render the result set. Metric panels are unaffected (separate endpoint).
       streamingEnabled:
-        search: true
+        search: false
