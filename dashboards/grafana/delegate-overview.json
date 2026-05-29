@@ -175,7 +175,7 @@
         "defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}},
         "overrides": []
       },
-      "options": {"reduceOptions": {"calcs": ["sum"]}, "textMode": "auto"}
+      "options": {"reduceOptions": {"calcs": ["mean"]}, "textMode": "auto"}
     },
     {
       "id": 8,
