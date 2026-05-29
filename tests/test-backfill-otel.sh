@@ -170,7 +170,7 @@ invocations="$tmp/invocations"; : > "$invocations"
 make_mock_curl "$tmp" "$bodies" "$invocations" "ok"
 cat > "$tmp/m.jsonl" <<'EOF'
 {"ts":"2026-05-22T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b","prompt_chars":80,"context_chars":100,"output_chars":50,"duration_ms":5000,"queue_wait_ms":100,"generation_ms":4900,"exit_status":0,"estimated_tokens_avoided":40}
-{"ts":"2026-05-22T10:01:00Z","source":"feedback","ref_ts":"2026-05-22T10:00:00Z","kept":false,"reason":"had to rewrite"}
+{"ts":"2026-05-22T10:01:00Z","source":"feedback","ref_ts":"2026-05-22T10:00:00Z","kept":false,"reason":"had to rewrite","project":"acme-repo"}
 EOF
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -190,6 +190,13 @@ fb_verdict=$(echo "$fb_body" | jq -r '
   | map(select(.key == "delegate.feedback.verdict"))
   | .[0].value.stringValue')
 assert_eq "miss" "$fb_verdict" "T5: feedback verdict is 'miss' (from kept:false)"
+# delegate.project (#246 follow-up): backfill emits the feedback row's own
+# project field onto the span so per-project calibration covers historical rows.
+fb_project=$(echo "$fb_body" | jq -r '
+  .resourceSpans[0].scopeSpans[0].spans[0].attributes
+  | map(select(.key == "delegate.project"))
+  | .[0].value.stringValue // ""')
+assert_eq "acme-repo" "$fb_project" "T5: delegate.project emitted on backfilled feedback span"
 # Track F (#158) default: feedback reason is content and redacted unless
 # DELEGATE_OTEL_INCLUDE_CONTENT=1. Assert the redaction holds end-to-end
 # through the backfill path.
