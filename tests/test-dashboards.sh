@@ -98,12 +98,14 @@ for dash in "$DASHBOARDS/grafana"/*.json; do
     echo "  FAIL  $base: $bad_svc query(ies) do not select service=\"delegate-local\""; fail=$((fail+1))
   fi
 
-  # 4. Field allowlist: pull every `unwrap X` and `| json | ... X(=|!=|=~)` and
-  #    `by (X)` token from the panel exprs and confirm each is a known field.
+  # 4. Field allowlist: pull every `unwrap X`, `by (X)`, `| X(=|!=|=~)` filter,
+  #    and `line_format` `{{.X}}` reference from the panel exprs and confirm each
+  #    is a known JSONL field. Scanning line_format too means a typo'd field in a
+  #    logs panel (e.g. `{{.resaon}}`) is caught, not just the metric filters.
   exprs=$(jq -r '[.panels[].targets[]?.expr // ""] | join("\n")' "$dash")
   fields=$(printf '%s\n' "$exprs" \
-    | grep -oE 'unwrap [a-z_]+|by \([a-z_]+\)|\| [a-z_]+(=|!=|=~)' \
-    | sed -E 's/^unwrap //; s/^by \(([a-z_]+)\)$/\1/; s/^\| ([a-z_]+).*$/\1/' \
+    | grep -oE 'unwrap [a-z_]+|by \([a-z_]+\)|\| [a-z_]+(=|!=|=~)|\{\{ *\.[a-z_]+ *\}\}' \
+    | sed -E 's/^unwrap //; s/^by \(([a-z_]+)\)$/\1/; s/^\| ([a-z_]+).*$/\1/; s/^\{\{ *\.([a-z_]+) *\}\}$/\1/' \
     | sort -u)
   dash_field_fail=0
   while IFS= read -r fld; do

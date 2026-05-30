@@ -59,8 +59,10 @@ assert_contains '"source":"feedback","count":1' "$out" "T1: 1 feedback row group
 
 # --- T2: real push captures a well-formed payload --------------------------
 rm -f "$state" "$body"
+EC=0
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  bash "$SCRIPT" --full --metrics-file "$met" --state-file "$state" --loki-url http://x >/dev/null 2>&1
+  bash "$SCRIPT" --full --metrics-file "$met" --state-file "$state" --loki-url http://x >/dev/null 2>&1 || EC=$?
+assert_eq "0" "$EC" "T2: push run exits 0"
 if [[ -f "$body" ]] && jq empty "$body" >/dev/null 2>&1; then
   echo "  PASS  T2: push body is valid JSON"; pass=$((pass+1))
 else
@@ -91,6 +93,31 @@ assert_eq "4" "$(cat "$state")" "T5: watermark set to row count"
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --metrics-file "$met" --state-file "$state" --loki-url http://x 2>&1)
 assert_contains "nothing new to push" "$out" "T5: second run is a no-op"
+
+# --- T6: a malformed/partial row aborts WITHOUT advancing the watermark -----
+# (a torn final line from the sync racing an in-progress delegate.sh append
+# must be retried, not silently skipped past).
+met2="$tmp/m2.jsonl"; state2="$tmp/state2"; body2="$tmp/body2.json"
+make_mock_curl "$tmp" "$body2"
+printf '%s\n' '{"ts":"2026-05-10T10:00:00Z","source":"delegate","tier":"prose","project":"r"}' >  "$met2"
+printf '%s\n' '{"ts":"2026-05-10T10:00:01Z","source":"delegate"'                                 >> "$met2"
+EC=0
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  bash "$SCRIPT" --full --metrics-file "$met2" --state-file "$state2" --loki-url http://x >/dev/null 2>&1 || EC=$?
+assert_eq "1" "$EC" "T6: malformed row -> exit 1"
+if [[ -f "$state2" ]]; then echo "  FAIL  T6: watermark must NOT advance on a malformed batch"; fail=$((fail+1)); else echo "  PASS  T6: watermark not advanced on a malformed batch"; pass=$((pass+1)); fi
+
+# --- T7: valid rows with no usable ts are skipped (advance, no push) --------
+met3="$tmp/m3.jsonl"; state3="$tmp/state3"; body3="$tmp/body3.json"
+make_mock_curl "$tmp" "$body3"
+printf '%s\n' '{"source":"delegate","tier":"prose","project":"r"}' > "$met3"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  bash "$SCRIPT" --full --metrics-file "$met3" --state-file "$state3" --loki-url http://x 2>&1) || EC=$?
+assert_eq "0" "$EC" "T7: no-ts rows -> exit 0"
+assert_contains "no pushable entries" "$out" "T7: warns about skipped rows"
+assert_eq "1" "$(cat "$state3" 2>/dev/null)" "T7: watermark advanced past unsyncable rows"
+if [[ -f "$body3" ]]; then echo "  FAIL  T7: nothing should have been pushed"; fail=$((fail+1)); else echo "  PASS  T7: no push body written"; pass=$((pass+1)); fi
 
 rm -rf "$tmp"
 echo

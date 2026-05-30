@@ -92,8 +92,10 @@ new_count=$((total_lines - watermark))
 #     "...000000000" sub-second part silently loses all-but-one row per second
 #     (observed: 49 of 713 delegate rows survived). We disambiguate by using
 #     the row's global line number as the 9-digit sub-second part: unique per
-#     row, monotonic with file order (≈ chronological), and < 1e9 so it never
-#     overflows into the next second.
+#     row and monotonic with file order (≈ chronological). The 9-digit slice
+#     assumes fewer than 1e9 rows in the file (any real metrics JSONL); beyond
+#     that the slice would truncate and could re-collide, but a billion-line
+#     workstation metrics file is not reachable.
 # Feedback rows record only the verdict + parent ref_ts, not the parent's
 # recipe/tier — but per-recipe and per-tier HIT-rate are the load-bearing
 # calibration signals. Build a (delegate ts -> {recipe, tier}) map from the
@@ -107,6 +109,11 @@ parent_map=$(jq -sc '
     ({}; .[$r.ts] = {recipe: ($r.recipe // ""), tier: ($r.tier // "")} )
 ' "$metrics_file")
 
+# pipefail is on, so a malformed/partial row that makes the jq slurp fail
+# propagates a non-zero status here. Abort WITHOUT advancing the watermark so
+# the batch is retried next run — critical, since a torn final line (the sync
+# racing an in-progress delegate.sh append) would otherwise blank the payload,
+# get pushed as empty, and silently skip every row in the batch.
 payload=$(tail -n "+$start_line" "$metrics_file" \
   | jq -sc --argjson base "$start_line" --argjson parents "$parent_map" '
       [ to_entries[]
@@ -129,12 +136,26 @@ payload=$(tail -n "+$start_line" "$metrics_file" \
         })
       | {streams: .}
     ')
+jq_status=$?
+if (( jq_status != 0 )); then
+  echo "sync-metrics-to-loki: failed to build push payload (a malformed or partial row in lines $start_line..$total_lines?) — watermark left at $watermark, re-run to retry" >&2
+  exit 1
+fi
 
-pushed_rows=$(echo "$payload" | jq '[.streams[].values | length] | add // 0')
+pushed_rows=$(printf '%s' "$payload" | jq '[.streams[].values[]?] | length')
 
 if (( dry_run == 1 )); then
   echo "sync-metrics-to-loki: DRY RUN — would push $pushed_rows of $new_count new rows (lines $start_line..$total_lines) to $loki_url" >&2
-  echo "$payload" | jq -c '{streams: [.streams[] | {source: .stream.source, count: (.values | length)}]}' >&2
+  printf '%s' "$payload" | jq -c '{streams: [.streams[] | {source: .stream.source, count: (.values | length)}]}' >&2
+  exit 0
+fi
+
+# Parsed cleanly but no pushable entries — every new row lacked a valid ts and
+# cannot be timestamped in Loki. Advance the watermark (else the script re-scans
+# them forever) but say so loudly rather than silently.
+if [[ "$pushed_rows" == "0" ]]; then
+  echo "$total_lines" > "$state_file"
+  echo "sync-metrics-to-loki: $new_count new row(s) (lines $start_line..$total_lines) had no pushable entries (missing/invalid ts); skipped, watermark -> $total_lines" >&2
   exit 0
 fi
 
