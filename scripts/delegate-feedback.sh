@@ -220,7 +220,10 @@ MSG
 fi
 
 ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-feedback_project=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+# Main repo basename, even inside a git worktree (delegate_project_name from
+# lib/otel.sh, sourced above) — so a verdict recorded in a worktree attributes
+# to the same repo as the delegation it scores.
+feedback_project=$(delegate_project_name)
 
 # Build the feedback row. `reason` is omitted when the caller didn't supply
 # one so empty-string entries don't pollute future filters.
