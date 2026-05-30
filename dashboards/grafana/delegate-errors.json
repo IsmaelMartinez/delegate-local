@@ -746,7 +746,7 @@
           },
           "editorMode": "code",
           "expr": "sum by (project) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status!=\"0\" [$__range]))",
-          "queryType": "range",
+          "queryType": "instant",
           "legendFormat": "{{project}}"
         }
       ]
@@ -807,7 +807,7 @@
           },
           "editorMode": "code",
           "expr": "quantile_over_time(0.95, {service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | unwrap generation_ms [$__range]) by (backend)",
-          "queryType": "range",
+          "queryType": "instant",
           "legendFormat": "{{backend}}"
         }
       ]

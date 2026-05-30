@@ -118,6 +118,18 @@ for dash in "$DASHBOARDS/grafana"/*.json; do
   if [[ "$dash_field_fail" == "0" ]]; then
     echo "  PASS  $base: all LogQL field references are known JSONL fields"; pass=$((pass+1))
   fi
+
+  # 5. Single-value-per-category panels (bargauge, piechart) MUST use instant
+  #    queries. As RANGE queries with a `[$__range]` selector they would return
+  #    ~the full-range total at every step, and the panel's "sum" reduce would
+  #    then add all those steps together — inflating every value by the step
+  #    count (e.g. a 61 K total shown as 8.8 M per bar). Instant evaluates once.
+  range_reduced=$(jq -r '[.panels[] | select(.type=="bargauge" or .type=="piechart") | select((.targets // []) | any((.queryType // "range") != "instant")) | .title] | join(", ")' "$dash")
+  if [[ -z "$range_reduced" ]]; then
+    echo "  PASS  $base: bargauge/piechart panels use instant queries"; pass=$((pass+1))
+  else
+    echo "  FAIL  $base: bargauge/piechart panel(s) not instant (step-sum inflation risk): $range_reduced"; fail=$((fail+1))
+  fi
 done
 shopt -u nullglob
 
