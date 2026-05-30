@@ -36,16 +36,20 @@ _DELEGATE_OTEL_LIB_LOADED=1
 #   --show-toplevel` returns the worktree directory (e.g.
 #   `.claude/worktrees/<branch>`), which would make every worktree session show
 #   up as its own "project" and scatter a single repo across many names.
-#   `--git-common-dir` points at the main repo's `.git` regardless of which
-#   worktree is checked out, so its parent directory is the real repo root.
+#   `--git-common-dir` (git 2.5+) points at the main repo's `.git` regardless of
+#   which worktree is checked out, so its parent directory is the real repo root.
+#   The path it prints may be relative, so `cd` + `pwd` makes it absolute — this
+#   avoids `--path-format=absolute`, which needs git 2.31+ and would otherwise
+#   fail silently on older git and fall back to the (wrong) worktree name.
 #   Falls back to the worktree toplevel, then the cwd, when not in (or unable to
 #   resolve) a git repo — preserving the previous behaviour outside worktrees.
 #   bash 3.2-safe.
 delegate_project_name() {
-  local common
-  common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  local common common_dir
+  common=$(git rev-parse --git-common-dir 2>/dev/null)
   if [[ -n "$common" ]]; then
-    basename "$(dirname "$common")"
+    common_dir=$(cd "$common" 2>/dev/null && pwd)
+    basename "$(dirname "$common_dir")"
   else
     basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   fi
