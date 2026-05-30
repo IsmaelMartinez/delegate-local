@@ -1,171 +1,593 @@
 {
-  "title": "delegate-local — Calibration (HIT/MISS)",
   "uid": "delegate-calibration",
-  "tags": ["delegate-local", "genai", "otel", "feedback"],
-  "schemaVersion": 38,
+  "title": "delegate-local \u2014 Calibration (HIT/MISS)",
+  "tags": [
+    "delegate-local",
+    "genai",
+    "loki",
+    "feedback"
+  ],
+  "schemaVersion": 39,
   "version": 1,
   "editable": true,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "time": {
-    "from": "now-7d",
+    "from": "now-30d",
     "to": "now"
   },
   "timepicker": {},
-  "refresh": "1m",
+  "refresh": "",
   "templating": {
     "list": [
       {
         "name": "project",
         "type": "textbox",
         "label": "delegate.project",
-        "description": "Repo filter (span.delegate.project = git repo basename). Default .* matches all repos; type an exact name like delegate-local, or a regex like delegate-local|grafana-tempo-local to include worktrees.",
+        "description": "Repo filter on the delegate.project field. Default .* matches all repos; type an exact name like delegate-local or a regex like repoA|repoB.",
         "query": ".*",
-        "current": {"selected": true, "text": ".*", "value": ".*"},
-        "options": [{"selected": true, "text": ".*", "value": ".*"}]
-      },
-      {
-        "name": "recipe",
-        "type": "custom",
-        "label": "delegate.recipe",
-        "query": "*,commit-message,pr-description,summarise-diff,pr-review-reply,release-note,summarise-issue,file-summary,em-dash-removal,ci-log-triage,plan-section-intro",
-        "current": {"selected": false, "text": "*", "value": "*"},
-        "options": [],
-        "includeAll": false,
-        "multi": false
+        "current": {
+          "selected": true,
+          "text": ".*",
+          "value": ".*"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": ".*",
+            "value": ".*"
+          }
+        ]
       }
     ]
   },
   "panels": [
     {
-      "id": 1,
-      "type": "stat",
+      "id": 27,
+      "type": "gauge",
       "title": "HIT rate (overall)",
-      "description": "Share of feedback spans with delegate.feedback.verdict=\"hit\" over the selected range. Feedback spans live in their own trace per ADR 0007; they are joined to the parent delegation either by the `links` array or by delegate.feedback.parent_trace_id. Either join is sufficient for grouping in this panel because the rate is computed only over feedback spans.",
-      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
-      "datasource": {"type": "datasource", "uid": "-- Mixed --"},
+      "description": "Share of verdicts that were HIT.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.6
+              },
+              {
+                "color": "green",
+                "value": 0.8
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "datasource": {"type": "tempo", "uid": "tempo"},
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict=\"hit\"} | count_over_time()",
-          "hide": true
-        },
-        {
-          "refId": "B",
-          "queryType": "traceql",
-          "datasource": {"type": "tempo", "uid": "tempo"},
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict != \"\"} | count_over_time()",
-          "hide": true
-        },
-        {
-          "refId": "C",
-          "datasource": {"type": "__expr__", "uid": "__expr__"},
-          "type": "math",
-          "expression": "$A / $B"
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
+          "queryType": "instant"
         }
-      ],
-      "fieldConfig": {
-        "defaults": {"unit": "percentunit", "min": 0, "max": 1, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.6}, {"color": "green", "value": 0.8}]}},
-        "overrides": []
-      },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+      ]
     },
     {
-      "id": 2,
+      "id": 28,
       "type": "stat",
-      "title": "Untracked delegations",
-      "description": "Count of delegate.sh spans without a matching feedback span. Untracked rows are calibration debt — the recipe library cannot self-correct from production data without verdicts. The verdict nudge in delegate.sh prints a stderr reminder after every successful call to keep this number trending down.",
-      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 0},
-      "datasource": {"type": "tempo", "uid": "tempo"},
+      "title": "Verdicts recorded",
+      "description": "Total HIT+MISS verdicts in range.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.gen_ai.operation.name=\"chat\"} | count_over_time() - {resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict != \"\"} | count_over_time()"
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
+          "queryType": "instant"
         }
-      ],
-      "fieldConfig": {
-        "defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 10}, {"color": "red", "value": 50}]}},
-        "overrides": []
-      },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+      ]
     },
     {
-      "id": 3,
+      "id": 29,
       "type": "stat",
       "title": "MISS count",
-      "description": "Raw count of feedback spans with verdict=\"miss\". The top-N MISS table below this row breaks the misses down by reason and recipe so a recurring shape can be promoted into a `prompt-pattern` issue.",
-      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 0},
-      "datasource": {"type": "tempo", "uid": "tempo"},
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict=\"miss\"} | count_over_time()"
-        }
-      ],
+      "description": "Verdicts marked MISS.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
       "fieldConfig": {
-        "defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 3}, {"color": "red", "value": 10}]}},
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "color": {
+            "mode": "thresholds",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 20
+              }
+            ]
+          }
+        },
         "overrides": []
       },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "id": 4,
-      "type": "timeseries",
-      "title": "HIT rate trend by recipe",
-      "description": "Per-recipe HIT-rate over time. Issue #187 added `delegate.recipe` as a feedback-span attribute at emit-time so this panel is a single-query group-by rather than the cross-trace join TraceQL doesn't support cleanly. Numerator: feedback spans with verdict=\"hit\" grouped by `delegate.recipe`. Denominator: feedback spans with any verdict set grouped by `delegate.recipe`. Bare-tier calls (no `--recipe`) do not carry the attribute and so do not appear here — see panel 1's overall HIT-rate stat for the all-up figure including bare calls.",
-      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 6},
-      "datasource": {"type": "datasource", "uid": "-- Mixed --"},
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "datasource": {"type": "tempo", "uid": "tempo"},
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict=\"hit\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)",
-          "hide": true
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" [$__range]))",
+          "queryType": "instant"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "stat",
+      "title": "Untracked delegations",
+      "description": "Delegations minus verdicts \u2014 calibration debt (record a verdict with delegate-feedback.sh).",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" [$__range])) - sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
+          "queryType": "instant"
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "HIT rate trend",
+      "description": "HIT rate over time across all recipes.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__auto])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "HIT rate"
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Verdict volume",
+      "description": "HIT and MISS counts per step.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "HIT"
         },
         {
           "refId": "B",
-          "queryType": "traceql",
-          "datasource": {"type": "tempo", "uid": "tempo"},
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict != \"\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)",
-          "hide": true
-        },
-        {
-          "refId": "C",
-          "datasource": {"type": "__expr__", "uid": "__expr__"},
-          "type": "math",
-          "expression": "$A / $B"
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "MISS"
         }
-      ],
-      "fieldConfig": {
-        "defaults": {"unit": "percentunit", "min": 0, "max": 1},
-        "overrides": []
-      },
-      "options": {"legend": {"displayMode": "list", "placement": "right"}}
+      ]
     },
     {
-      "id": 5,
-      "type": "table",
-      "title": "Recent MISSes (by recipe + reason)",
-      "description": "Each row is one feedback span with verdict=\"miss\". Grouped by `delegate.recipe` (#187 added this attribute to the feedback span so the column is a direct projection rather than a cross-trace join). The reason column is the free-text reason the user typed via `delegate-feedback.sh miss \"<reason>\"` and is only present when `DELEGATE_OTEL_INCLUDE_CONTENT=1` is set against a trusted collector (Track F #158 gated content fields by default). When the same reason recurs three times in a 30-day window, the delegate-feedback.sh runtime nudge prints a draft `gh issue create` command pre-targeted at the `prompt-pattern` label — this table is the dashboard counterpart of that nudge.",
-      "gridPos": {"h": 12, "w": 24, "x": 0, "y": 16},
-      "datasource": {"type": "tempo", "uid": "tempo"},
+      "id": 33,
+      "type": "timeseries",
+      "title": "HIT rate by recipe",
+      "description": "Per-recipe HIT rate \u2014 the load-bearing calibration signal.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "tableType": "spans",
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.project=~\"${project}\" && span.delegate.feedback.verdict=\"miss\"} | select(span.delegate.recipe, span.delegate.feedback.reason)"
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | recipe!=\"\" [$__auto])) / sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | recipe!=\"\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{recipe}}"
         }
-      ],
-      "options": {"showHeader": true, "sortBy": [{"displayName": "Time", "desc": true}]},
+      ]
+    },
+    {
+      "id": 34,
+      "type": "bargauge",
+      "title": "HIT rate by project",
+      "description": "Per-repo HIT rate.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
       "fieldConfig": {
-        "defaults": {"custom": {"align": "auto", "displayMode": "auto"}},
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
         "overrides": []
-      }
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__range])) / sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
+          "queryType": "range",
+          "legendFormat": "{{project}}"
+        }
+      ]
+    },
+    {
+      "id": 35,
+      "type": "logs",
+      "title": "Recent MISSes (reason + recipe)",
+      "description": "Most recent MISS verdicts. The reason field is the input to recipe calibration.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" | line_format \"{{.project}} recipe={{.recipe}} \u2014 {{.reason}}\"",
+          "queryType": "range"
+        }
+      ]
     }
   ]
 }
