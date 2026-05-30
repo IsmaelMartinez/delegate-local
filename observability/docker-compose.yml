@@ -25,10 +25,23 @@ services:
       - "127.0.0.1:3200:3200"   # Tempo query API
     restart: unless-stopped
 
+  loki:
+    image: grafana/loki:3.3.0
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./loki.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    ports:
+      # Loopback-only: the sync script (scripts/sync-metrics-to-loki.sh) pushes
+      # the metrics JSONL here so the dashboards can chart the full history.
+      - "127.0.0.1:3100:3100"   # Loki HTTP (push + query)
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:11.4.0
     depends_on:
       - tempo
+      - loki
     environment:
       # Frictionless local access: anonymous admin, no login form, no account.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
@@ -48,4 +61,5 @@ services:
 
 volumes:
   tempo-data:
+  loki-data:
   grafana-data:

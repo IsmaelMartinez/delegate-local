@@ -298,7 +298,7 @@ emit_delegate_row() {
 #   collector deduplicates on re-emit via OTel ID space.
 emit_feedback_row() {
   local row="$1"
-  local fb_ts ref_ts kept reason verdict
+  local fb_ts ref_ts kept reason verdict project
   ROW_KIND="feedback"
 
   # One jq call extracts every field into a 0x1F-separated record — same
@@ -314,9 +314,10 @@ emit_feedback_row() {
     .ts // "",
     .ref_ts // "",
     (.kept // false | tostring),
-    .reason // ""
+    .reason // "",
+    .project // ""
   ] | join("\u001f")' <<< "$row")
-  IFS=$'\x1f' read -r fb_ts ref_ts kept reason <<< "$fields"
+  IFS=$'\x1f' read -r fb_ts ref_ts kept reason project <<< "$fields"
 
   if [[ -z "$fb_ts" ]]; then
     ROW_RESULT="ERROR malformed feedback row (no ts)"
@@ -381,8 +382,12 @@ emit_feedback_row() {
     return 0
   fi
 
+  # Position 9 (parent_recipe) is left empty — the parent_lookup TSV does not
+  # carry recipe, so backfilled feedback spans omit delegate.recipe (unchanged
+  # behaviour). Position 10 (project) comes from the feedback row's own field,
+  # which delegate-feedback.sh records at verdict time.
   emit_otel_feedback_span_with_ids "$fb_trace" "$fb_span" \
-    "$fb_ts" "$verdict" "$reason" "$parent_trace" "$parent_span" "$parent_model"
+    "$fb_ts" "$verdict" "$reason" "$parent_trace" "$parent_span" "$parent_model" "" "$project"
   ROW_RESULT="OK"
   return 0
 }

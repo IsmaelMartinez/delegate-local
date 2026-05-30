@@ -65,6 +65,9 @@ jobs:
       - name: Backfill-otel tests
         run: bash tests/test-backfill-otel.sh
 
+      - name: Sync-metrics-to-loki tests
+        run: bash tests/test-sync-metrics-to-loki.sh
+
       - name: Run-api-cell tests
         run: bash tests/test-run-api-cell.sh
 

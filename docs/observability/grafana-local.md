@@ -4,13 +4,13 @@ This is the on-device alternative to Grafana Cloud: a self-hosted Grafana + Temp
 
 ## When to pick this
 
-Choose the local Grafana and Tempo backend when you require persistent per-recipe, per-tier, and HIT/MISS calibration dashboards that the Phoenix flat single-project trace view cannot display. This solution runs fully on-device as two Docker containers — Tempo for trace storage with TraceQL metrics and Grafana for the dashboards — eliminating the need for a SaaS account and sending no data off the workstation. It offers a lighter footprint than the six-container Langfuse self-host stack, though metric trend panels build up from live delegations going forward rather than instantly from backfilled history.
+Choose the local Grafana, Tempo, and Loki backend when you require persistent per-recipe, per-tier, per-project, and HIT/MISS calibration dashboards that the Phoenix flat single-project trace view cannot display. This solution runs fully on-device as three Docker containers — Tempo for live trace storage and drill-down, Loki for the historical metrics the dashboards chart, and Grafana for the dashboards themselves — eliminating the need for a SaaS account and sending no data off the workstation. It offers a lighter footprint than the six-container Langfuse self-host stack while still charting the full history. The reason for the Loki container is a hard Tempo limitation: Tempo indexes blocks by ingestion time, so spans backfilled with old timestamps are unreachable at their real time and its TraceQL-metrics generator is forward-only. Loki accepts historical timestamps, so the dashboards read Loki — fed the complete `metrics.jsonl` by [`scripts/sync-metrics-to-loki.sh`](../../scripts/sync-metrics-to-loki.sh) — and a freshly started stack shows all of your past delegations immediately rather than building up only from new traffic. Tempo stays in the stack for opening an individual trace in Grafana Explore.
 
 ## Prerequisites
 
 - Docker plus Docker Compose v2 (`docker compose ...`).
-- Ports `4317`, `4318`, and `3200` free for Tempo (OTLP gRPC, OTLP HTTP, query API), and `3001` free for the Grafana UI. If you already run a Phoenix / otel-collector stack it is holding `4317`/`4318` — see the swap step below.
-- ~1 GB of disk for the Tempo and Grafana volumes at workstation scale.
+- Ports `4317`, `4318`, and `3200` free for Tempo (OTLP gRPC, OTLP HTTP, query API), `3100` free for Loki (push + query), and `3001` free for the Grafana UI. If you already run a Phoenix / otel-collector stack it is holding `4317`/`4318` — see the swap step below.
+- ~1 GB of disk for the Tempo, Loki, and Grafana volumes at workstation scale.
 
 ## Bring it up
 
@@ -18,7 +18,27 @@ Choose the local Grafana and Tempo backend when you require persistent per-recip
 docker compose -f observability/docker-compose.yml up -d
 ```
 
-Grafana comes up at [http://localhost:3001](http://localhost:3001) with anonymous admin access and no login form — the Tempo datasource and the three dashboards are provisioned automatically, so the `delegate-local` dashboard folder is populated on first start. Tempo's query API is at `http://localhost:3200`.
+Grafana comes up at [http://localhost:3001](http://localhost:3001) with anonymous admin access and no login form — the Tempo and Loki datasources and the three dashboards are provisioned automatically, so the `delegate-local` dashboard folder is populated on first start. Tempo's query API is at `http://localhost:3200` and Loki's is at `http://localhost:3100`.
+
+The dashboard panels are empty until you load history into Loki — see the next section.
+
+## Loading history into Loki
+
+The dashboards chart LogQL over the delegate metrics JSONL, not Tempo traces, so they need that JSONL pushed into Loki. Run the sync once after bringing the stack up:
+
+```bash
+bash scripts/sync-metrics-to-loki.sh
+```
+
+It reads `~/.claude/skills/delegate-local/metrics.jsonl` (override with `--metrics-file` or `DELEGATE_METRICS_FILE`), pushes one log line per row stamped at the row's own `ts`, and records a line-offset watermark next to the file so re-runs only push rows appended since last time. That makes it safe to schedule for ongoing freshness — for example a `launchd` agent or a cron entry every few minutes:
+
+```bash
+*/5 * * * * /bin/bash /path/to/repo/scripts/sync-metrics-to-loki.sh >/dev/null 2>&1
+```
+
+The sync also enriches each feedback row with its parent delegation's `recipe` and `tier` (joined by `ref_ts`), so the calibration dashboard can break HIT-rate down by recipe and tier across the whole history even though the feedback JSONL row itself stores only the verdict. Pass `--full` to ignore the watermark and re-push everything (Loki de-duplicates identical entries, so a full re-sync is harmless). Point it at a non-default Loki with `--loki-url`.
+
+Why not just backfill Tempo? Tempo indexes blocks by ingestion time, so a span sent now with a three-week-old timestamp lands in a "now" block and is unreachable when you query that historical window — and its metrics generator only aggregates live traffic forward. Loki accepts the historical timestamps directly, which is why the analytics live there. The `delegate.sh` exporter still sends live spans to Tempo, so individual traces remain available for drill-down in Grafana Explore via the Tempo datasource.
 
 ## Swapping in from a Phoenix / otel-collector stack
 

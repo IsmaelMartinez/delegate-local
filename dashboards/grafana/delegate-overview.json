@@ -1,201 +1,843 @@
 {
-  "title": "delegate-local — Overview",
   "uid": "delegate-overview",
-  "tags": ["delegate-local", "genai", "otel"],
-  "schemaVersion": 38,
+  "title": "delegate-local \u2014 Overview",
+  "tags": [
+    "delegate-local",
+    "genai",
+    "loki",
+    "usage"
+  ],
+  "schemaVersion": 39,
   "version": 1,
   "editable": true,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "time": {
-    "from": "now-24h",
+    "from": "now-30d",
     "to": "now"
   },
   "timepicker": {},
-  "refresh": "30s",
+  "refresh": "",
   "templating": {
     "list": [
       {
-        "name": "tier",
-        "type": "custom",
-        "label": "delegate.tier",
-        "query": "*,code,prose,reasoning,long-context,vision,embedding,premium-general,reasoning-vision",
-        "current": {"selected": false, "text": "*", "value": "*"},
-        "options": [],
-        "includeAll": false,
-        "multi": false
-      },
-      {
-        "name": "backend",
-        "type": "custom",
-        "label": "gen_ai.provider.name",
-        "query": "*,ollama,mlx",
-        "current": {"selected": false, "text": "*", "value": "*"},
-        "options": [],
-        "includeAll": false,
-        "multi": false
+        "name": "project",
+        "type": "textbox",
+        "label": "delegate.project",
+        "description": "Repo filter on the delegate.project field. Default .* matches all repos; type an exact name like delegate-local or a regex like repoA|repoB.",
+        "query": ".*",
+        "current": {
+          "selected": true,
+          "text": ".*",
+          "value": ".*"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": ".*",
+            "value": ".*"
+          }
+        ]
       }
     ]
   },
   "panels": [
     {
       "id": 1,
-      "type": "timeseries",
-      "title": "Call volume by tier",
-      "description": "Count of delegate.sh spans over time, grouped by delegate.tier. Filter to a single tier via the dashboard variable; the query keys off the resource attribute service.name=\"delegate-local\" so spans from other GenAI workloads on the same collector do not bleed in.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
-      "datasource": {"type": "tempo", "uid": "tempo"},
+      "type": "stat",
+      "title": "Delegations",
+      "description": "Total delegate.sh calls in range, after the project filter.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | rate() by (span.delegate.tier)"
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" [$__range]))",
+          "queryType": "instant"
         }
-      ],
-      "fieldConfig": {
-        "defaults": {"unit": "reqps"},
-        "overrides": []
-      },
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+      ]
     },
     {
       "id": 2,
-      "type": "timeseries",
-      "title": "Call volume by recipe",
-      "description": "Count of delegate.sh spans grouped by delegate.recipe. Bare (no-recipe) calls do not carry the attribute and are excluded — the no-recipe count is visible in the by-tier panel above.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
-      "datasource": {"type": "tempo", "uid": "tempo"},
+      "type": "stat",
+      "title": "Tokens avoided",
+      "description": "Sum of delegate.estimated_tokens_avoided \u2014 the headline value metric (work kept on-device).",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.delegate.recipe != \"\"} | rate() by (span.delegate.recipe)"
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | unwrap estimated_tokens_avoided [$__range]))",
+          "queryType": "instant"
         }
-      ],
-      "fieldConfig": {
-        "defaults": {"unit": "reqps"},
-        "overrides": []
-      },
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+      ]
     },
     {
       "id": 3,
-      "type": "timeseries",
-      "title": "Call volume by backend (Ollama vs MLX)",
-      "description": "Count of delegate.sh spans grouped by gen_ai.provider.name. On a single-backend host one series is flat at zero; on the auto-default host the split shows MLX-when-available versus Ollama-fallback ratios.",
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
-      "datasource": {"type": "tempo", "uid": "tempo"},
+      "type": "gauge",
+      "title": "HIT rate",
+      "description": "Share of recorded verdicts that were HIT over the range.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.6
+              },
+              {
+                "color": "green",
+                "value": 0.8
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | rate() by (span.gen_ai.provider.name)"
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
+          "queryType": "instant"
         }
-      ],
-      "fieldConfig": {
-        "defaults": {"unit": "reqps"},
-        "overrides": []
-      },
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+      ]
     },
     {
       "id": 4,
-      "type": "histogram",
-      "title": "delegate.queue_wait_ms",
-      "description": "Wall-clock from delegate.sh invoking the backend HTTP endpoint to the first byte returned. Parallel-caller contention surfaces here rather than being hidden in the duration_ms total. A heavy right tail on this histogram with a stable generation_ms histogram means queue pressure.",
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
-      "datasource": {"type": "tempo", "uid": "tempo"},
+      "type": "stat",
+      "title": "p95 generation",
+      "description": "95th-percentile model decode time (delegate.generation_ms).",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "mappings": [],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(span.delegate.queue_wait_ms)"
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "quantile_over_time(0.95, {service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | unwrap generation_ms [$__range]) by ()",
+          "queryType": "instant"
         }
-      ],
-      "fieldConfig": {
-        "defaults": {"unit": "ms"},
-        "overrides": []
-      },
-      "options": {"bucketOffset": 0, "combine": false}
+      ]
     },
     {
       "id": 5,
-      "type": "histogram",
-      "title": "delegate.generation_ms",
-      "description": "First byte to response-complete — the model's own decode time. Slowness here is model-side rather than queue-side. The companion queue_wait_ms histogram on the left isolates the two.",
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
-      "datasource": {"type": "tempo", "uid": "tempo"},
+      "type": "stat",
+      "title": "Error rate",
+      "description": "Share of delegations with a non-zero exit_status.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "mappings": [],
+          "color": {
+            "mode": "thresholds",
+            "fixedColor": "text"
+          },
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.02
+              },
+              {
+                "color": "red",
+                "value": 0.1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(span.delegate.generation_ms)"
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status!=\"0\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" [$__range]))",
+          "queryType": "instant"
         }
-      ],
-      "fieldConfig": {
-        "defaults": {"unit": "ms"},
-        "overrides": []
-      },
-      "options": {"bucketOffset": 0, "combine": false}
+      ]
     },
     {
       "id": 6,
-      "type": "histogram",
-      "title": "gen_ai.client.operation.duration",
-      "description": "End-to-end delegate.sh wall-clock per Phase 11 Track G's planned histogram metric. Until Track G ships the dedicated metric, this panel keys off the span duration intrinsic — equivalent to `queue_wait_ms + generation_ms` since both attributes derive from the same start/end timestamps.",
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
-      "datasource": {"type": "tempo", "uid": "tempo"},
+      "type": "stat",
+      "title": "Projects",
+      "description": "Distinct repos that delegated in range.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | histogram_over_time(duration)"
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "count(sum by (project) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" [$__range])))",
+          "queryType": "instant"
         }
-      ],
-      "fieldConfig": {
-        "defaults": {"unit": "ms"},
-        "overrides": []
-      },
-      "options": {"bucketOffset": 0, "combine": false}
+      ]
     },
     {
       "id": 7,
-      "type": "stat",
-      "title": "Tokens kept local (median/call)",
-      "description": "Median of delegate.estimated_tokens_avoided per call over the selected range. Local Tempo 2.6.1 has no sum_over_time aggregator, so this shows the per-call median rather than a running total; for the true sum over all history use `scripts/metrics-summary.sh`'s `estimated_tokens_avoided` line.",
-      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 24},
-      "datasource": {"type": "tempo", "uid": "tempo"},
+      "type": "timeseries",
+      "title": "Delegations over time by tier",
+      "description": "Call volume grouped by delegate.tier.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | quantile_over_time(span.delegate.estimated_tokens_avoided, 0.5)"
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (tier) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{tier}}"
         }
-      ],
-      "fieldConfig": {
-        "defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}},
-        "overrides": []
-      },
-      "options": {"reduceOptions": {"calcs": ["mean"]}, "textMode": "auto"}
+      ]
     },
     {
       "id": 8,
-      "type": "stat",
-      "title": "Delegations in range",
-      "description": "Total count of chat spans from the delegate.sh service in the selected time range. Sanity check that the exporter is wired and emitting.",
-      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 24},
-      "datasource": {"type": "tempo", "uid": "tempo"},
+      "type": "timeseries",
+      "title": "Delegations over time by project",
+      "description": "Call volume grouped by repo.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
       "targets": [
         {
           "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.service.name=\"delegate-local\" && span.gen_ai.operation.name=\"chat\"} | count_over_time()"
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (project) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{project}}"
         }
-      ],
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Tokens avoided over time",
+      "description": "delegate.estimated_tokens_avoided summed per step.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 12
+      },
       "fieldConfig": {
-        "defaults": {"unit": "short"},
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          },
+          "mappings": []
+        },
         "overrides": []
       },
-      "options": {"reduceOptions": {"calcs": ["sum"]}, "textMode": "auto"}
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | unwrap estimated_tokens_avoided [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "tokens avoided"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "bargauge",
+      "title": "Tokens avoided by project",
+      "description": "Which repos got the most value from local delegation.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (project) (sum_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | unwrap estimated_tokens_avoided [$__range]))",
+          "queryType": "range",
+          "legendFormat": "{{project}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "piechart",
+      "title": "Calls by recipe",
+      "description": "Distribution of --recipe calls (bare-tier calls excluded).",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "pieType": "donut",
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value",
+            "percent"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | recipe!=\"\" [$__range]))",
+          "queryType": "range",
+          "legendFormat": "{{recipe}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Delegations over time by backend",
+      "description": "ollama vs mlx call volume.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (backend) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | backend!=\"\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{backend}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "piechart",
+      "title": "Tier distribution",
+      "description": "Share of calls by routing tier.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "pieType": "donut",
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value",
+            "percent"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (tier) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | tier!=\"\" [$__range]))",
+          "queryType": "range",
+          "legendFormat": "{{tier}}"
+        }
+      ]
     }
   ]
 }

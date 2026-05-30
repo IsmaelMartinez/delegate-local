@@ -253,7 +253,7 @@ emit_otel_span() {
 }
 
 # emit_otel_feedback_span <fb_ts> <verdict> <reason> <parent_trace_id>
-#   <parent_span_id> <parent_model>
+#   <parent_span_id> <parent_model> [<parent_recipe>] [<project>]
 #
 # Emit a feedback-as-linked-span per ADR 0007: NEW trace, NEW span, with
 # `links: [{traceId, spanId}]` pointing at the parent delegation when the
@@ -271,6 +271,7 @@ emit_otel_feedback_span() {
   [[ -z "${DELEGATE_OTEL_ENDPOINT:-}" ]] && return 0
   local fb_ts="$1" verdict="$2" reason="$3" parent_trace_id="$4"
   local parent_span_id="$5" parent_model="$6" parent_recipe="${7:-}"
+  local project="${8:-}"
 
   # Generate this span's own identifiers. Per ADR 0007, the feedback is in a
   # new trace because the parent trace has already been flushed by the time
@@ -280,12 +281,13 @@ emit_otel_feedback_span() {
   span_id=$(otel_gen_id 16) || return 0
 
   emit_otel_feedback_span_with_ids "$trace_id" "$span_id" \
-    "$fb_ts" "$verdict" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model" "$parent_recipe"
+    "$fb_ts" "$verdict" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model" "$parent_recipe" "$project"
   return 0
 }
 
 # emit_otel_feedback_span_with_ids <trace_id> <span_id> <fb_ts> <verdict>
 #   <reason> <parent_trace_id> <parent_span_id> <parent_model>
+#   [<parent_recipe>] [<project>]
 #
 # The same as emit_otel_feedback_span but with this span's trace_id /
 # span_id supplied by the caller rather than generated fresh. Used by
@@ -302,6 +304,7 @@ emit_otel_feedback_span_with_ids() {
   local trace_id="$1" span_id="$2" fb_ts="$3" verdict="$4" reason="$5"
   local parent_trace_id="$6" parent_span_id="$7" parent_model="$8"
   local parent_recipe="${9:-}"
+  local project="${10:-}"
   local include_content="${DELEGATE_OTEL_INCLUDE_CONTENT:-0}"
 
   # Convert the feedback row's ISO ts to nanoseconds and derive end_ns
@@ -343,6 +346,7 @@ emit_otel_feedback_span_with_ids() {
     --arg trace_id "$trace_id" --arg span_id "$span_id" \
     --arg parent_trace_id "$parent_trace_id" --arg parent_span_id "$parent_span_id" \
     --arg model "$parent_model" --arg recipe "$parent_recipe" \
+    --arg project "$project" \
     --arg verdict "$verdict" --arg reason "$reason" \
     --arg start_ns "$start_ns" --arg end_ns "$end_ns" \
     --arg include_content "$include_content" \
@@ -370,6 +374,7 @@ emit_otel_feedback_span_with_ids() {
                 {key: "delegate.feedback.parent_span_id", value: {stringValue: $parent_span_id}}
               ]
               + (if $recipe != "" then [{key: "delegate.recipe", value: {stringValue: $recipe}}] else [] end)
+              + (if $project != "" then [{key: "delegate.project", value: {stringValue: $project}}] else [] end)
               + (if $include_content == "1" and $reason != "" then [{key: "delegate.feedback.reason", value: {stringValue: $reason}}] else [] end)),
               status: {code: $status_code}
             }

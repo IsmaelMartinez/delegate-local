@@ -1,0 +1,68 @@
+# Single-binary Loki for delegate-local historical analytics. Stores the
+# delegate metrics JSONL (one log line per row, timestamped at the row's own
+# `ts`) so the Grafana dashboards can chart the full retention window — unlike
+# Tempo, whose blocks are ingestion-time-indexed and so cannot surface
+# backfilled history. Filesystem storage, no auth, loopback only.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2020-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+ingester:
+  # Queries for data older than query_ingesters_within (3h) are served from the
+  # STORE, not the ingester — so synced rows must flush to a chunk before they
+  # are queryable. Flush idle streams quickly (the workstation volume is tiny)
+  # so a sync becomes visible within ~1 minute rather than the 30m default.
+  chunk_idle_period: 1m
+  max_chunk_age: 1h
+
+limits_config:
+  # Accept rows whose timestamp is weeks in the past — the whole point is to
+  # load historical JSONL. Out-of-order writes are allowed by default.
+  reject_old_samples: false
+  reject_old_samples_max_age: 0s
+  max_query_lookback: 0s
+  # 0 = no cap. The default max_query_length is ~30d, which rejects a "Last 30
+  # days" panel whose range selector (e.g. [30d]) nudges just over the limit.
+  # Single-user local analytics — let panels span whatever they need.
+  max_query_length: 0s
+  # The bulk historical load is one big push; keep limits well above it.
+  ingestion_rate_mb: 64
+  ingestion_burst_size_mb: 128
+  per_stream_rate_limit: 64MB
+  per_stream_rate_limit_burst: 128MB
+  max_streams_per_user: 0
+  max_line_size: 0
+  allow_structured_metadata: true
+  volume_enabled: true
+  retention_period: 0s
+
+compactor:
+  working_directory: /loki/compactor
+
+querier:
+  max_concurrent: 4

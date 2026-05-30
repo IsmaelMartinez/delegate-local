@@ -83,6 +83,7 @@ These always travel — they are structured routing signal, not arbitrary user t
 |-----------|------|--------|-----------|---------|
 | `delegate.tier` | string | JSONL `tier` | private | `prose` |
 | `delegate.recipe` | string | JSONL `recipe` (optional — only when `--recipe` was used) | private | `doc-section` |
+| `delegate.project` | string | JSONL `project` (basename of the git toplevel, or cwd outside a repo) | private | `delegate-local` |
 | `delegate.prompt_chars` | int | JSONL `prompt_chars` | private | `80` |
 | `delegate.context_chars` | int | JSONL `context_chars` | private | `3739` |
 | `delegate.output_chars` | int | JSONL `output_chars` | private | `2807` |
@@ -95,6 +96,7 @@ Notes on each:
 
 - `delegate.tier` is the routing tier `pick-model.sh` resolved (`code`, `prose`, `reasoning`, `long-context`, or one of the scaffolded tiers once they go live). Dashboards group by tier to track per-tier hit rate and per-tier tokens-avoided.
 - `delegate.recipe` is present only when the caller used `delegate.sh --recipe NAME`. Bare-prose-tier calls omit it; the exporter SHOULD NOT emit the attribute with an empty string. The `delegate.recipe` attribute is what dashboards group by to track per-recipe hit/miss rates, which is the load-bearing signal for the prompt-library calibration work.
+- `delegate.project` is the basename of the git toplevel (or the cwd when not in a repo) at the time `delegate.sh` ran. It attributes each delegation to the repo it came from, so a single shared Tempo/Grafana backend can be scoped per-repo via the dashboards' `$project` filter variable. Note that git worktrees resolve to their own basename, so worktrees of one repo appear as distinct project values.
 - `delegate.prompt_chars` / `delegate.context_chars` / `delegate.output_chars` are character counts only. They travel unconditionally as the metadata replacement for the content fields — dashboards correlate latency and verdict against input/output size without needing the text itself. The matching `delegate.prompt` / `delegate.context` / `delegate.output` content attributes are gated separately (see below).
 - `delegate.queue_wait_ms` and `delegate.generation_ms` split the JSONL `duration_ms` total per the gotcha #170 telemetry fix: `queue_wait_ms` is the wall-clock from `delegate.sh` invoking the backend HTTP endpoint to the first byte returned (parallel-caller contention surfaces here), and `generation_ms` is first-byte to response-complete (the model's own decode time). The two sum to `duration_ms` within rounding. Dashboards keep both histograms so a slow tail can be attributed to queue pressure versus generation pressure rather than being hidden in a single `duration_ms` blob.
 - `delegate.estimated_tokens_avoided` is the tokens-avoided counter the skill's README headlines as one of the two core values (the other being on-device privacy). It is the central rollup metric for the per-tier and per-recipe panels in Track D's dashboards.
@@ -147,12 +149,14 @@ The feedback span is short by design — it is a marker event, not a unit of wor
 | `delegate.feedback.parent_trace_id` | string | parent delegation's JSONL `otel_trace_id` | private (fallback for backends that don't render `links` well) | 32 hex chars |
 | `delegate.feedback.parent_span_id` | string | parent delegation's JSONL `otel_span_id` | private (fallback for backends that don't render `links` well) | 16 hex chars |
 | `delegate.recipe` | string | parent delegation's JSONL `recipe` (optional — only when `--recipe` was used) | private | `commit-message` |
+| `delegate.project` | string | feedback JSONL `project` (basename of the git toplevel where the verdict was recorded, or cwd outside a repo) | private | `delegate-local` |
 
 Notes on each:
 
 - `delegate.feedback.verdict` collapses the JSONL `kept` boolean to a string. The string form makes dashboard group-by clauses readable (`group by delegate.feedback.verdict` reads as `hit` / `miss` rather than `true` / `false`).
 - `delegate.feedback.parent_trace_id` and `delegate.feedback.parent_span_id` duplicate the `links` array as plain string attributes for backends that do not render `links` well in their default trace view. Backends that handle `links` correctly use the standard mechanism; backends that don't can still filter and join on the attribute. The fallback is intentionally redundant.
 - `delegate.recipe` (#187) is duplicated from the parent delegate span onto the feedback span so per-recipe HIT-rate dashboards become single-query panels. TraceQL does not support cross-trace projection cleanly — a query of the form "verdict distribution grouped by the parent's recipe" needs the recipe attribute physically present on the feedback span, not just reachable through a `links` traversal. Recipe names are short predefined identifiers from `prompts/<NAME>.md` (not arbitrary user content), so the attribute travels unconditionally — the `DELEGATE_OTEL_INCLUDE_CONTENT` content gate does not apply. Omitted when the parent delegation was a bare-tier call without `--recipe`, consistent with the parent delegate span's recipe handling.
+- `delegate.project` is duplicated onto the feedback span for the same reason as `delegate.recipe`: feedback spans live in their own trace (see Feedback span identity), so the calibration dashboard cannot reach the parent delegation's `delegate.project` through a `links` traversal in a TraceQL group-by. Carrying it physically on the feedback span lets per-project calibration use the same `span.delegate.project=~"$project"` filter the overview and errors dashboards use. It is computed at verdict-recording time as the basename of the git toplevel (or cwd outside a repo) — the same derivation as the delegation span — which matches the delegation's project in the normal flow where the verdict is recorded in the same repo shortly after the call. The repo basename is not user-authored free text, so the attribute travels unconditionally; the `DELEGATE_OTEL_INCLUDE_CONTENT` content gate does not apply. Omitted only when the basename cannot be determined (empty).
 
 #### Content attributes (gated on `DELEGATE_OTEL_INCLUDE_CONTENT=1`)
 
