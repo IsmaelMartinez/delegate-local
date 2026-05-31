@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.13.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.12.0...v0.13.0) (2026-05-31)
+
+
+### Features
+
+* add per-project and per-recipe hit-rate rollup to metrics summary ([#241](https://github.com/IsmaelMartinez/delegate-local/issues/241)) ([bd6bb28](https://github.com/IsmaelMartinez/delegate-local/commit/bd6bb2869484c507dd52c3d35d6296dce8e9218d))
+* per-project + full-history observability via Loki dashboards ([#247](https://github.com/IsmaelMartinez/delegate-local/issues/247)) ([49dfabf](https://github.com/IsmaelMartinez/delegate-local/commit/49dfabfbb9d25b74a50ccf7d5448975136f0aaab))
+* self-hosted Grafana + Tempo local observability stack ([#243](https://github.com/IsmaelMartinez/delegate-local/issues/243)) ([1ad69c2](https://github.com/IsmaelMartinez/delegate-local/commit/1ad69c2997fc171a6305c66006de9b63c33bae5a))
+
+
+### Bug Fixes
+
+* make bargauge/pie dashboard panels instant (stop step-sum inflation) ([#249](https://github.com/IsmaelMartinez/delegate-local/issues/249)) ([d3d85fd](https://github.com/IsmaelMartinez/delegate-local/commit/d3d85fdd44c4045c5ad684150b15b23f6f619c1d))
+* make Grafana dashboards render on local Tempo 2.6.1 ([#245](https://github.com/IsmaelMartinez/delegate-local/issues/245)) ([87ab03c](https://github.com/IsmaelMartinez/delegate-local/commit/87ab03c51dd4d3bd5c992469e5876e0d7fb62007))
+* render Tempo table panels via spans, not search-job frames ([#246](https://github.com/IsmaelMartinez/delegate-local/issues/246)) ([fea8bb1](https://github.com/IsmaelMartinez/delegate-local/commit/fea8bb1a6402c925d8570f62752e8b6a47d0ed3d))
+
+
+### Documentation
+
+* add 2026-05-27 MLX baseline for DeepSeek-R1 and Qwen3-Coder ([#239](https://github.com/IsmaelMartinez/delegate-local/issues/239)) ([b9f80f9](https://github.com/IsmaelMartinez/delegate-local/commit/b9f80f912de581c014f379b8688c0d7c55b023fe))
+* add expansion use cases to ROADMAP ([#240](https://github.com/IsmaelMartinez/delegate-local/issues/240)) ([e48241e](https://github.com/IsmaelMartinez/delegate-local/commit/e48241eb042157329d81b36852ebe6a327e1c9c1))
+* contributor-readiness pass after delegate-local rename ([#242](https://github.com/IsmaelMartinez/delegate-local/issues/242)) ([f8e5c71](https://github.com/IsmaelMartinez/delegate-local/commit/f8e5c71be862cbbef3fb7ff1f691e548a4329be5))
+
 ## [0.12.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.11.0...v0.12.0) (2026-05-27)
 
 
