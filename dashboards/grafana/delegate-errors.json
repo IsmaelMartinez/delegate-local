@@ -732,7 +732,7 @@
             "sum"
           ],
           "fields": "",
-          "values": false
+          "values": true
         },
         "showUnfilled": true,
         "valueMode": "color"
@@ -793,7 +793,7 @@
             "lastNotNull"
           ],
           "fields": "",
-          "values": false
+          "values": true
         },
         "showUnfilled": true,
         "valueMode": "color"

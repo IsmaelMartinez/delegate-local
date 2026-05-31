@@ -132,6 +132,19 @@ for dash in "$DASHBOARDS/grafana"/*.json; do
   else
     echo "  FAIL  $base: bargauge/piechart panel(s) not instant (step-sum inflation risk): $range_reduced"; fail=$((fail+1))
   fi
+
+  # 5b. Those same panels MUST also set reduceOptions.values=true. An instant
+  #    `sum by (label) (...)` comes back as a `numeric-multi` frame; with
+  #    values:false the bargauge/piechart applies its reduce calc ACROSS the
+  #    series and collapses them into a single bar/slice (e.g. all projects
+  #    summed into one 50 K bar). values:true renders every series value as its
+  #    own bar/slice — the one-bar-per-label breakdown these panels exist for.
+  collapse=$(jq -r '[.. | objects | select(.type=="bargauge" or .type=="piechart") | select((.options.reduceOptions.values // false) != true) | .title] | join(", ")' "$dash")
+  if [[ -z "$collapse" ]]; then
+    echo "  PASS  $base: bargauge/piechart panels show all values (no series collapse)"; pass=$((pass+1))
+  else
+    echo "  FAIL  $base: bargauge/piechart panel(s) reduceOptions.values!=true (series-collapse risk): $collapse"; fail=$((fail+1))
+  fi
 done
 shopt -u nullglob
 
