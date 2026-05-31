@@ -642,7 +642,7 @@
             "sum"
           ],
           "fields": "",
-          "values": false
+          "values": true
         },
         "showUnfilled": true,
         "valueMode": "color"
@@ -656,7 +656,7 @@
           },
           "editorMode": "code",
           "expr": "sum by (project) (sum_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | unwrap estimated_tokens_avoided [$__range]))",
-          "queryType": "range",
+          "queryType": "instant",
           "legendFormat": "{{project}}"
         }
       ]
@@ -691,7 +691,7 @@
             "sum"
           ],
           "fields": "",
-          "values": false
+          "values": true
         },
         "pieType": "donut",
         "tooltip": {
@@ -715,7 +715,7 @@
           },
           "editorMode": "code",
           "expr": "sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | recipe!=\"\" [$__range]))",
-          "queryType": "range",
+          "queryType": "instant",
           "legendFormat": "{{recipe}}"
         }
       ]
@@ -810,7 +810,7 @@
             "sum"
           ],
           "fields": "",
-          "values": false
+          "values": true
         },
         "pieType": "donut",
         "tooltip": {
@@ -834,7 +834,7 @@
           },
           "editorMode": "code",
           "expr": "sum by (tier) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | tier!=\"\" [$__range]))",
-          "queryType": "range",
+          "queryType": "instant",
           "legendFormat": "{{tier}}"
         }
       ]

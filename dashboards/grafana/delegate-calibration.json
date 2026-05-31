@@ -532,7 +532,7 @@
             "lastNotNull"
           ],
           "fields": "",
-          "values": false
+          "values": true
         },
         "showUnfilled": true,
         "valueMode": "color"
@@ -546,7 +546,7 @@
           },
           "editorMode": "code",
           "expr": "sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__range])) / sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
-          "queryType": "range",
+          "queryType": "instant",
           "legendFormat": "{{project}}"
         }
       ]
