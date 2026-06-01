@@ -74,6 +74,12 @@ jobs:
       - name: Score-t3 tests
         run: bash tests/test-score-t3.sh
 
+      - name: Score-t9 tests (ground-check scorer)
+        run: bash tests/test-score-t9.sh
+
+      - name: Ground-check wrapper tests
+        run: bash tests/test-ground-check.sh
+
       - name: Runner argument-parsing tests
         run: bash tests/test-runner.sh
 
