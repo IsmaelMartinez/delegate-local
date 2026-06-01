@@ -81,7 +81,8 @@ while IFS= read -r eline; do
   local_id="${local_id//[[:space:]]/}"
   spec="${eline#*:}"
   spec="${spec%%#*}"                                   # drop trailing annotation
-  spec="$(printf '%s' "$spec" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  spec="${spec#"${spec%%[![:space:]]*}"}"              # strip leading whitespace (pure bash)
+  spec="${spec%"${spec##*[![:space:]]}"}"              # strip trailing whitespace (pure bash)
   exp_ids+=("$local_id")
   exp_specs+=("$spec")
 done < <(awk '/^===== EXPECTED =====$/{f=1;next} /^===== / && f{f=0} f' "$fixture")
