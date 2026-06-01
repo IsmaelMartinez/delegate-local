@@ -61,6 +61,30 @@ Wrong (the claim is plausible but the evidence does not state it):
 Correct (no such span exists in the evidence; the only honest verdict is silence):
   3: NOT-STATED
 
+A real, exact quote only SUPPORTS a claim if it STATES THE SAME FACT AT THE SAME
+SCOPE. A span that is narrower (it carries a qualifier the claim drops, e.g. "in
+staging", "early", "partial") or that just reuses the claim's number or noun to
+state a DIFFERENT fact is NOT support — the verdict is NOT-STATED, even though the
+span is a real substring.
+
+Wrong (the span adds a qualifier the claim drops, so it states something narrower):
+  41: SUPPORTED — "the rate limiter rejects bursts in the staging config"
+Correct (the claim was the unqualified "the rate limiter rejects bursts"; the span
+only states it for the staging config, so the claim goes beyond the evidence):
+  41: NOT-STATED
+
+Wrong (the span shares a number with the claim but states a different fact):
+  42: SUPPORTED — "the audit recorded 90 endpoints as reachable"
+Correct (the claim was "the two rollouts covered 90 endpoints in total"; this 90 is
+the reachable count, a different fact that happens to share the number 90 — and
+deriving the rollout total would be arithmetic, which is out of scope):
+  42: NOT-STATED
+
+Correct (a faithful restatement WITHIN the span's exact scope IS support — narrower
+or different is the only disqualifier; do not reject an exact match that fully
+states the claim):
+  43: SUPPORTED — "moves the orders endpoint from sync mode to async mode"
+
 === EVIDENCE ===
 {{stdin}}
 ```
@@ -121,3 +145,16 @@ Gate result (plan §6): NEITHER tier clears the bar. Prose fails (c) — the ove
 A/B verdict on the right model class (prose Qwen3.6-35B vs reasoning deepseek-r1:32b): prose LEADS, 0.9444 vs 0.9166. This nuances the SKILL.md line-141 reasoning-default for this specific recipe shape — the reasoning model's verbatim-quote fidelity was worse, not better. The recipe keeps `reasoning` as its documented default tier (the routing rule still stands until graduation), but the measured lead is the signal to revisit: if prose clears the bar after the C6/C8 fixes below, switch the wrapper's tier to prose.
 
 Blockers / next levers (not papered over): (1) C6 qualifier-drop is the hardest case and was flagged as borderline-legitimate in the plan; both tiers read "render correctly in staging" as supporting the unqualified "render correctly". The lever is a contrastive Wrong/Correct anchor on qualifier-dropping (Convention 3), not more enumeration. (2) C8 lets the model match a real "90 panels" span for "ninety in total"; sharpen the claim or add a scope anchor so the arithmetic-refusal is unambiguous. (3) the reasoning tier's C12 quote paraphrase is the quote-fidelity blocker on the 32b; if reasoning is retained, the lever is a stronger verbatim-copy directive in rule 5. One contrastive anchor at a time, re-measure (calibration-loop discipline).
+
+### 2026-06-01 — Phase 7 graduation iteration 2: relevance/scope anchor (SCAFFOLD retained, but A/B flips to reasoning)
+
+Added a single contrastive relevance anchor to the prompt template (designed via a 5-agent workflow): a positive "a quote only SUPPORTS a claim if it states the SAME FACT AT THE SAME SCOPE" lead, two domain-neutral Wrong→NOT-STATED pairs (qualifier-drop and number-shared-but-different-fact), and one Correct→SUPPORTED faithful-restatement guard to protect recall. Re-ran the A/B (3 reps/tier).
+
+- reasoning (`deepseek-r1:32b`): **0.9166 → 0.9722**, stdev 0, `quote_fab_fails=0`, `supported_recall=1.0`, `contradicted_recall=1.0`. The anchor BOUND: C8 (number-match) now resolves NOT-STATED on every rep, C2 (contradiction) and the v1 C12 quote-fidelity slip both held. The ONLY residual is C6 (qualifier-drop), failing VERDICT_MATCH on every rep.
+- prose (`Qwen3.6-35B`): **0.9444 → 0.9166** — a REGRESSION. The same anchor broke C2: the prose tier over-applied "states a different fact → NOT-STATED" to the contradiction case (`contradicted_recall` 1.0 → 0.667), and still did not bind C6/C8.
+
+Key finding: the relevance anchor is TIER-DEPENDENT — it helps the reasoning tier and hurts the prose tier, because correctly applying a same-fact-same-scope test requires the chain-of-thought the prose tier lacks (it collapses "states the opposite" into "states something different" and drifts to NOT-STATED). This decisively flips the A/B to **reasoning** (0.9722 vs prose 0.9166), vindicating SKILL.md line 141 for this recipe shape and superseding iteration 1's tentative prose lead. The wrapper's `reasoning` default is therefore correct and unchanged.
+
+Gate result: STILL SCAFFOLD. Reasoning now passes (a) zero-fab, (b) recall ≥0.90 on both classes, (d) C9 buried-late CONTRADICTED, (e) C10 right-quote-wrong-claim, (f) no-injection, (g) parity — and the C8 arithmetic case of (c). It fails (c) ONLY on C6.
+
+C6 is a genuine graduation DECISION, not a wording bug to grind on. "Early dashboards render correctly in staging" → the unqualified "render correctly": a strict grounding checker says NOT-STATED (scope dropped), but a reasonable grader can accept SUPPORTED, which is what `deepseek-r1:32b` does consistently even with the explicit "in staging" qualifier example in the anchor. This is the binding ceiling on a judgment-implied discrimination (cf. the directive-binding-ceiling and reasoning-task-scope-boundary findings). Forcing C6 to NOT-STATED via a harder scope directive would risk OVER-flagging real-world claims that legitimately drop an incidental qualifier ("X works in staging" ⇒ a NOT-STATED alarm on "X works"), degrading the recipe's practical utility to pass one fixture cell. Per the "tell me if a test is wrong rather than work around it" rule, the open decision for the maintainer is whether C6 should stay a hard gate condition or become a measured-but-not-gated case (the recipe is otherwise graduation-ready on reasoning at 0.9722). Not changed unilaterally; the anchor improvement (a sound general relevance principle) is banked and the recipe stays scaffold pending that call.
