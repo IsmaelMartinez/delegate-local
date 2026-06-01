@@ -65,7 +65,10 @@ A real, exact quote only SUPPORTS a claim if it STATES THE SAME FACT AT THE SAME
 SCOPE. A span that is narrower (it carries a qualifier the claim drops, e.g. "in
 staging", "early", "partial") or that just reuses the claim's number or noun to
 state a DIFFERENT fact is NOT support — the verdict is NOT-STATED, even though the
-span is a real substring.
+span is a real substring. In particular, when the evidence states a fact only for a
+specific environment, phase, time, or subset (only "in staging", only "early", only
+"for beta users"), a claim that states that fact in GENERAL — dropping that scope —
+goes beyond the evidence: the verdict is NOT-STATED.
 
 Wrong (the span adds a qualifier the claim drops, so it states something narrower):
   41: SUPPORTED — "the rate limiter rejects bursts in the staging config"
@@ -158,3 +161,5 @@ Key finding: the relevance anchor is TIER-DEPENDENT — it helps the reasoning t
 Gate result: STILL SCAFFOLD. Reasoning now passes (a) zero-fab, (b) recall ≥0.90 on both classes, (d) C9 buried-late CONTRADICTED, (e) C10 right-quote-wrong-claim, (f) no-injection, (g) parity — and the C8 arithmetic case of (c). It fails (c) ONLY on C6.
 
 C6 is a genuine graduation DECISION, not a wording bug to grind on. "Early dashboards render correctly in staging" → the unqualified "render correctly": a strict grounding checker says NOT-STATED (scope dropped), but a reasonable grader can accept SUPPORTED, which is what `deepseek-r1:32b` does consistently even with the explicit "in staging" qualifier example in the anchor. This is the binding ceiling on a judgment-implied discrimination (cf. the directive-binding-ceiling and reasoning-task-scope-boundary findings). Forcing C6 to NOT-STATED via a harder scope directive would risk OVER-flagging real-world claims that legitimately drop an incidental qualifier ("X works in staging" ⇒ a NOT-STATED alarm on "X works"), degrading the recipe's practical utility to pass one fixture cell. Per the "tell me if a test is wrong rather than work around it" rule, the open decision for the maintainer is whether C6 should stay a hard gate condition or become a measured-but-not-gated case (the recipe is otherwise graduation-ready on reasoning at 0.9722). Not changed unilaterally; the anchor improvement (a sound general relevance principle) is banked and the recipe stays scaffold pending that call.
+
+Iteration 3 (same session) added a generalised environment/phase/time/subset scope directive to the anchor lead, as a second lever aimed specifically at C6. Result: C6 STILL does not bind on EITHER tier — a second independent lever failing confirms C6 is at the prompt-binding ceiling, not a wording gap. The directive was a net win elsewhere, though: it REPAIRED the iteration-2 prose regression, so both tiers now converge at **0.9722** (only C6 residual, `supported_recall`/`contradicted_recall` 1.0, `quote_fab_fails=0`, C2 contradiction preserved on both). With two levers exhausted on a defensibly-borderline case, no third attempt is warranted; measured-but-not-gated is the recommended disposition for C6, and the recipe is graduation-ready on either tier the moment that call is made.
