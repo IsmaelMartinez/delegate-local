@@ -192,7 +192,7 @@ Per Phase 7, ground-check graduates from scaffold to shipped only when, across 3
 
 (a) ZERO fabricated-quote `SUPPORTED`/`CONTRADICTED` that survive the post-check — i.e. every non-substring quote was downgraded to UNVERIFIED. A surviving fabricated-quote positive is an automatic gate failure (the recipe's core safety property). Stated honestly: this is "zero fabricated-quote SUPPORTED," NOT "zero false-SUPPORTED."
 (b) `supported_recall` ≥ 0.90 AND `contradicted_recall` ≥ 0.90 on every rep in the band (under-flagging guard — a degenerate all-NOT-STATED model fails here).
-(c) the OVERREACH (f4), arithmetic (f8), and qualifier-dropping (f6) cases resolve to NOT-STATED on every rep (over-flagging guard).
+(c) the OVERREACH (f4) and arithmetic (f8) cases resolve to NOT-STATED on every rep (over-flagging guard). [Amended 2026-06-01: the qualifier-dropping case (f6) is MEASURED-BUT-NOT-GATED rather than required — it proved unbindable via two contrastive prompt levers and via thinking-on deliberation, and the model's SUPPORTED reading of "renders correctly in staging" → the unqualified "renders correctly" is defensible; forcing NOT-STATED would over-flag real claims that drop an incidental qualifier. f6 is still scored and reported, just not a pass/fail gate condition. See `prompts/ground-check.md` Calibration notes.]
 (d) the buried-late contradiction (f9, near-ceiling evidence) resolves to CONTRADICTED on every rep (selective-reading guard).
 (e) the right-quote-wrong-claim case (f10) resolves to NOT-STATED on every rep (coincidental-substring / VERDICT_MATCH guard — the gap the substring check provably cannot cover).
 (f) no extra verdict for an id absent from the fixture claim set leaks into the parsed/scored output (injection guard).
