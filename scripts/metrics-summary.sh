@@ -114,33 +114,30 @@ if (( n_backends > 1 )); then
   echo
 fi
 
-# Feedback rollup: hit-rate per delegate-tier across delegate events that
-# have a feedback row referring to them. Untracked = delegate events with
-# no feedback recorded yet.
+# Feedback rollup. Verdict coverage is the recipe-calibration signal, so it is
+# scoped to RECIPE delegations (--recipe NAME calls — the unit the recipe library
+# self-corrects on). Raw / no-recipe delegations (ad-hoc prose calls plus
+# experiment / audit / benchmark sessions run from scratch dirs like `audit`) are
+# reported on their own line: their hit/miss verdict is optional and would
+# otherwise inflate "untracked" even though they belong to no recipe's calibration
+# history. (Benchmark/audit sessions should set DELEGATE_LOCAL_NO_METRICS=1 to stay
+# out of the metrics stream entirely; this split is the backstop for ones that
+# didn't.) The ref_ts -> kept map is built in one reduce pass; direct $fb_map[.ts]
+# access (NOT // false) so a recorded miss (false) isn't coerced back to null and
+# dropped, and latest feedback for a delegate wins (verdict revision).
 if (( n_feedback > 0 )); then
   echo "Delegation feedback (hit/miss):"
   jq -rs '
     def src: .source // "delegate";
-    # Build a ref_ts -> kept lookup map in a single reduce pass over the
-    # feedback rows. O(D + F) total; later feedback for the same delegate
-    # overwrites earlier feedback (latest-wins) which matches caller intent
-    # when a hit/miss verdict is revised. Direct map access via $fb_map[.ts]
-    # returns null for missing keys without triggering the // false-as-null
-    # pitfall (// would coerce a recorded false back to null and silently
-    # drop every miss).
     (reduce (.[] | select(src == "feedback")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $fb_map
-    | map(select(src == "delegate") | {ts, tier, model, kept: $fb_map[.ts]})
-    | group_by(.tier)
-    | map({
-        tier: .[0].tier,
-        n: length,
-        hits: (map(select(.kept == true)) | length),
-        misses: (map(select(.kept == false)) | length),
-        untracked: (map(select(.kept == null)) | length)
-      })
-    | sort_by(-.n)
-    | .[]
-    | "  \(.tier | . + (" " * (14 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)  untracked=\(.untracked)"
+    | (map(select(src == "delegate") | {recipe, tier, kept: $fb_map[.ts]})) as $d
+    | ($d | map(select(.recipe != null))) as $rx
+    | ($d | map(select(.recipe == null))) as $raw
+    | ($rx | length) as $rn
+    | ($raw | length) as $wn
+    | "  Recipe delegations (calibration signal): n=\($rn)  hits=\($rx|map(select(.kept==true))|length)  misses=\($rx|map(select(.kept==false))|length)  untracked=\($rx|map(select(.kept==null))|length)" + (if $rn > 0 then "  coverage=\((($rx|map(select(.kept!=null))|length) * 100 / $rn) | floor)%" else "" end),
+      ($rx | group_by(.tier) | map({tier:.[0].tier, n:length, hits:(map(select(.kept==true))|length), misses:(map(select(.kept==false))|length), untracked:(map(select(.kept==null))|length)}) | sort_by(-.n) | .[] | "    \(.tier | . + (" " * (14 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)  untracked=\(.untracked)"),
+      (if $wn > 0 then "  Raw / no-recipe (verdicts optional — experiments, audits, ad-hoc): n=\($wn)  tracked=\($raw|map(select(.kept!=null))|length)  untracked=\($raw|map(select(.kept==null))|length)" else empty end)
   ' "$metrics_file"
   echo
 fi
