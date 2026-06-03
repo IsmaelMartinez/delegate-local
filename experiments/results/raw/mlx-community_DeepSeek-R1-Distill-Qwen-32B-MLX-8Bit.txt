@@ -1,7 +1,7 @@
 MODEL: mlx-community/DeepSeek-R1-Distill-Qwen-32B-MLX-8Bit
 BACKEND: mlx
 OLLAMA_API: 1
-DATE: 2026-05-27T14:02:22Z
+DATE: 2026-06-03T06:25:27Z
 REPS: 3
 T3_SNAPSHOT: 2026-04-28
 T4_SNAPSHOT: 2026-05-24
@@ -20,7 +20,7 @@ CLAIM_C: already-done — yaml.stringify with lineWidth:0 is used in both script
 CLAIM_D: already-done — Shallow freeze is consistent across all six loaders.
 
 ===== T2-party-config rep 1 =====
-DURATION_SEC: 45
+DURATION_SEC: 53
 RUN_STATUS: 0
 OUTPUT:
 
@@ -28,7 +28,7 @@ OUTPUT:
 CLEAN
 
 ===== T3-merge-patterns rep 1 =====
-DURATION_SEC: 72
+DURATION_SEC: 85
 RUN_STATUS: 0
 OUTPUT:
 
@@ -57,7 +57,7 @@ OUTPUT:
 | Quiz tie handling and podium implementation | `src/components/QuizPodium.tsx` |
 
 ===== T4-commit-message rep 1 =====
-DURATION_SEC: 39
+DURATION_SEC: 54
 RUN_STATUS: 0
 OUTPUT:
 
@@ -67,7 +67,7 @@ feat: add commit-message fixture and score-t4.sh tool
 Adds the commit-message fixture and associated scoring tool to measure model adherence to the recipe's structural guidelines. The fixture sends the substituted prompt to installed Ollama models, and score-t4.sh applies six deterministic checks for subject length, conventional-commit type, body formatting, and padding tails. Each check addresses a real past issue, enabling direct comparison of model pass rates to the recipe's calibration history.
 
 ===== T5-json-shape rep 1 =====
-DURATION_SEC: 42
+DURATION_SEC: 64
 RUN_STATUS: 0
 OUTPUT:
 
@@ -82,7 +82,7 @@ OUTPUT:
 }
 
 ===== T6-regex-generation rep 1 =====
-DURATION_SEC: 53
+DURATION_SEC: 87
 RUN_STATUS: 0
 OUTPUT:
 
@@ -90,7 +90,7 @@ OUTPUT:
 ^\d{5}(-\d{4})?$
 
 ===== T1-doc-drift rep 2 =====
-DURATION_SEC: 33
+DURATION_SEC: 57
 RUN_STATUS: 0
 OUTPUT:
 
@@ -101,7 +101,7 @@ CLAIM_C: already-done — yaml.stringify with lineWidth:0 is used in both script
 CLAIM_D: already-done — Shallow freeze is consistent across all six loaders.
 
 ===== T2-party-config rep 2 =====
-DURATION_SEC: 40
+DURATION_SEC: 60
 RUN_STATUS: 0
 OUTPUT:
 
@@ -109,7 +109,7 @@ OUTPUT:
 CLEAN
 
 ===== T3-merge-patterns rep 2 =====
-DURATION_SEC: 72
+DURATION_SEC: 102
 RUN_STATUS: 0
 OUTPUT:
 
@@ -138,7 +138,7 @@ OUTPUT:
 | Quiz tie handling and podium implementation | `src/components/QuizPodium.tsx` |
 
 ===== T4-commit-message rep 2 =====
-DURATION_SEC: 37
+DURATION_SEC: 53
 RUN_STATUS: 0
 OUTPUT:
 
@@ -148,7 +148,7 @@ feat: add commit-message fixture and score-t4.sh tool
 Adds the commit-message fixture and associated scoring tool to measure model adherence to the recipe's structural guidelines. The fixture sends the substituted prompt to installed Ollama models, and score-t4.sh applies six deterministic checks for subject length, conventional-commit type, body formatting, and padding tails. Each check addresses a real past issue, enabling direct comparison of model pass rates to the recipe's calibration history.
 
 ===== T5-json-shape rep 2 =====
-DURATION_SEC: 45
+DURATION_SEC: 63
 RUN_STATUS: 0
 OUTPUT:
 
@@ -163,7 +163,7 @@ OUTPUT:
 }
 
 ===== T6-regex-generation rep 2 =====
-DURATION_SEC: 58
+DURATION_SEC: 77
 RUN_STATUS: 0
 OUTPUT:
 
@@ -171,7 +171,7 @@ OUTPUT:
 ^\d{5}(-\d{4})?$
 
 ===== T1-doc-drift rep 3 =====
-DURATION_SEC: 37
+DURATION_SEC: 49
 RUN_STATUS: 0
 OUTPUT:
 
@@ -182,7 +182,7 @@ CLAIM_C: already-done — yaml.stringify with lineWidth:0 is used in both script
 CLAIM_D: already-done — Shallow freeze is consistent across all six loaders.
 
 ===== T2-party-config rep 3 =====
-DURATION_SEC: 44
+DURATION_SEC: 66
 RUN_STATUS: 0
 OUTPUT:
 
@@ -190,7 +190,7 @@ OUTPUT:
 CLEAN
 
 ===== T3-merge-patterns rep 3 =====
-DURATION_SEC: 78
+DURATION_SEC: 104
 RUN_STATUS: 0
 OUTPUT:
 
@@ -219,7 +219,7 @@ OUTPUT:
 | Quiz tie handling and podium implementation | `src/components/QuizPodium.tsx` |
 
 ===== T4-commit-message rep 3 =====
-DURATION_SEC: 38
+DURATION_SEC: 50
 RUN_STATUS: 0
 OUTPUT:
 
@@ -229,7 +229,7 @@ feat: add commit-message fixture and score-t4.sh tool
 Adds the commit-message fixture and associated scoring tool to measure model adherence to the recipe's structural guidelines. The fixture sends the substituted prompt to installed Ollama models, and score-t4.sh applies six deterministic checks for subject length, conventional-commit type, body formatting, and padding tails. Each check addresses a real past issue, enabling direct comparison of model pass rates to the recipe's calibration history.
 
 ===== T5-json-shape rep 3 =====
-DURATION_SEC: 46
+DURATION_SEC: 57
 RUN_STATUS: 0
 OUTPUT:
 
@@ -244,7 +244,7 @@ OUTPUT:
 }
 
 ===== T6-regex-generation rep 3 =====
-DURATION_SEC: 58
+DURATION_SEC: 62
 RUN_STATUS: 0
 OUTPUT:
 

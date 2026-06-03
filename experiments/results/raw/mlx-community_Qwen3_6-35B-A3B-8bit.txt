@@ -1,14 +1,15 @@
 MODEL: mlx-community/Qwen3.6-35B-A3B-8bit
 BACKEND: mlx
-DATE: 2026-05-12T21:25:32Z
+OLLAMA_API: 1
+DATE: 2026-06-03T06:24:42Z
 REPS: 3
 T3_SNAPSHOT: 2026-04-28
-T4_SNAPSHOT: 2026-05-11
+T4_SNAPSHOT: 2026-05-24
 T5_SNAPSHOT: 2026-05-11
 T6_SNAPSHOT: 2026-05-11
 
 ===== T1-doc-drift rep 1 =====
-DURATION_SEC: 1
+DURATION_SEC: 14
 RUN_STATUS: 0
 OUTPUT:
 CLAIM_A: still-open — no "How we did" retrospective page or related code exists in the repo
@@ -17,13 +18,13 @@ CLAIM_C: already-done — scripts/apply-party-positions.ts:60 uses yaml.stringif
 CLAIM_D: already-done — src/lib/data.ts shows six cached loaders all use shallow Object.freeze with no deep-freeze
 
 ===== T2-party-config rep 1 =====
-DURATION_SEC: 2
+DURATION_SEC: 1
 RUN_STATUS: 0
 OUTPUT:
 CLEAN
 
 ===== T3-merge-patterns rep 1 =====
-DURATION_SEC: 2
+DURATION_SEC: 3
 RUN_STATUS: 0
 OUTPUT:
 1. Potential regression in regional candidate count display logic | `src/pages/index.astro` (grep for region card rendering logic)
@@ -32,14 +33,14 @@ OUTPUT:
 4. Removal of data enrichment scripts may break downstream data integrity if not replaced by lib functions | `src/lib/data.ts`, `src/lib/party-match.ts` (verify no references to deleted scripts remain)
 
 ===== T4-commit-message rep 1 =====
-DURATION_SEC: 3
+DURATION_SEC: 2
 RUN_STATUS: 0
 OUTPUT:
-feat: add commit-message fixture and scoring for empirical calibration
+feat: add T4 commit-message fixture and scoring harness
 
-The commit-message recipe was hardened with an anti-padding directive in PR #85, but lacked a per-model measurement to verify its effectiveness. This commit introduces the T4 fixture to send the literal substituted recipe prompt to installed Ollama models and applies six deterministic structural checks to each output. These checks target real past misses, including subject length, conventional-commit prefixes, and the absence of fake issue suffixes or participial tails.
+The experiments directory gains a T4 fixture, runner flag, and scoring script to empirically measure the commit-message recipe's structural compliance. The fixture sends the hardened recipe prompt to local models and the scoring script applies six deterministic checks against the output to verify subject length, type prefix, and prose style.
 
-The experiments/runner.sh gains a --t4-snapshot DATE flag to version the fixture per the existing T3 convention. The new score-t4.sh script automates the evaluation, allowing the recipe's empirical calibration history to be directly compared against model pass rates. This closes the gap between asserted hardening and measured accuracy.
+This setup closes the gap between the recipe's anti-padding directives and actual model performance. The runner now supports --t4-snapshot DATE to version the fixture, allowing the team to track calibration history and compare model pass rates against the recipe's empirical accuracy.
 
 ===== T5-json-shape rep 1 =====
 DURATION_SEC: 2
@@ -55,13 +56,13 @@ OUTPUT:
 }
 
 ===== T6-regex-generation rep 1 =====
-DURATION_SEC: 1
+DURATION_SEC: 0
 RUN_STATUS: 0
 OUTPUT:
 ^\d{5}(-\d{4})?$
 
 ===== T1-doc-drift rep 2 =====
-DURATION_SEC: 1
+DURATION_SEC: 2
 RUN_STATUS: 0
 OUTPUT:
 CLAIM_A: still-open — no "How we did" retrospective page or related code exists in the repo
@@ -70,13 +71,13 @@ CLAIM_C: already-done — scripts/apply-party-positions.ts:60 uses yaml.stringif
 CLAIM_D: already-done — src/lib/data.ts shows six cached loaders all use shallow Object.freeze with no deep-freeze
 
 ===== T2-party-config rep 2 =====
-DURATION_SEC: 2
+DURATION_SEC: 1
 RUN_STATUS: 0
 OUTPUT:
 CLEAN
 
 ===== T3-merge-patterns rep 2 =====
-DURATION_SEC: 2
+DURATION_SEC: 3
 RUN_STATUS: 0
 OUTPUT:
 1. Potential regression in regional candidate count display logic | `src/pages/index.astro` (grep for region card rendering logic)
@@ -85,14 +86,14 @@ OUTPUT:
 4. Removal of data enrichment scripts may break downstream data integrity if not replaced by lib functions | `src/lib/data.ts`, `src/lib/party-match.ts` (verify no references to deleted scripts remain)
 
 ===== T4-commit-message rep 2 =====
-DURATION_SEC: 3
+DURATION_SEC: 2
 RUN_STATUS: 0
 OUTPUT:
-feat: add commit-message fixture and scoring for empirical calibration
+feat: add T4 commit-message fixture and scoring harness
 
-The commit-message recipe was hardened with an anti-padding directive in PR #85, but lacked a per-model measurement to verify its effectiveness. This commit introduces the T4 fixture to send the literal substituted recipe prompt to installed Ollama models and applies six deterministic structural checks to each output. These checks target real past misses, including subject length, conventional-commit prefixes, and the absence of fake issue suffixes or participial tails.
+The experiments directory gains a T4 fixture, runner flag, and scoring script to empirically measure the commit-message recipe's structural compliance. The fixture sends the hardened recipe prompt to local models and the scoring script applies six deterministic checks against the output to verify subject length, type prefix, and prose style.
 
-The experiments/runner.sh gains a --t4-snapshot DATE flag to version the fixture per the existing T3 convention. The new score-t4.sh script automates the evaluation, allowing the recipe's empirical calibration history to be directly compared against model pass rates. This closes the gap between asserted hardening and measured accuracy.
+This setup closes the gap between the recipe's anti-padding directives and actual model performance. The runner now supports --t4-snapshot DATE to version the fixture, allowing the team to track calibration history and compare model pass rates against the recipe's empirical accuracy.
 
 ===== T5-json-shape rep 2 =====
 DURATION_SEC: 2
@@ -108,13 +109,13 @@ OUTPUT:
 }
 
 ===== T6-regex-generation rep 2 =====
-DURATION_SEC: 1
+DURATION_SEC: 0
 RUN_STATUS: 0
 OUTPUT:
 ^\d{5}(-\d{4})?$
 
 ===== T1-doc-drift rep 3 =====
-DURATION_SEC: 1
+DURATION_SEC: 2
 RUN_STATUS: 0
 OUTPUT:
 CLAIM_A: still-open — no "How we did" retrospective page or related code exists in the repo
@@ -123,13 +124,13 @@ CLAIM_C: already-done — scripts/apply-party-positions.ts:60 uses yaml.stringif
 CLAIM_D: already-done — src/lib/data.ts shows six cached loaders all use shallow Object.freeze with no deep-freeze
 
 ===== T2-party-config rep 3 =====
-DURATION_SEC: 2
+DURATION_SEC: 1
 RUN_STATUS: 0
 OUTPUT:
 CLEAN
 
 ===== T3-merge-patterns rep 3 =====
-DURATION_SEC: 2
+DURATION_SEC: 3
 RUN_STATUS: 0
 OUTPUT:
 1. Potential regression in regional candidate count display logic | `src/pages/index.astro` (grep for region card rendering logic)
@@ -141,11 +142,11 @@ OUTPUT:
 DURATION_SEC: 3
 RUN_STATUS: 0
 OUTPUT:
-feat: add commit-message fixture and scoring for empirical calibration
+feat: add T4 commit-message fixture and scoring harness
 
-The commit-message recipe was hardened with an anti-padding directive in PR #85, but lacked a per-model measurement to verify its effectiveness. This commit introduces the T4 fixture to send the literal substituted recipe prompt to installed Ollama models and applies six deterministic structural checks to each output. These checks target real past misses, including subject length, conventional-commit prefixes, and the absence of fake issue suffixes or participial tails.
+The experiments directory gains a T4 fixture, runner flag, and scoring script to empirically measure the commit-message recipe's structural compliance. The fixture sends the hardened recipe prompt to local models and the scoring script applies six deterministic checks against the output to verify subject length, type prefix, and prose style.
 
-The experiments/runner.sh gains a --t4-snapshot DATE flag to version the fixture per the existing T3 convention. The new score-t4.sh script automates the evaluation, allowing the recipe's empirical calibration history to be directly compared against model pass rates. This closes the gap between asserted hardening and measured accuracy.
+This setup closes the gap between the recipe's anti-padding directives and actual model performance. The runner now supports --t4-snapshot DATE to version the fixture, allowing the team to track calibration history and compare model pass rates against the recipe's empirical accuracy.
 
 ===== T5-json-shape rep 3 =====
 DURATION_SEC: 2
@@ -161,7 +162,7 @@ OUTPUT:
 }
 
 ===== T6-regex-generation rep 3 =====
-DURATION_SEC: 0
+DURATION_SEC: 1
 RUN_STATUS: 0
 OUTPUT:
 ^\d{5}(-\d{4})?$

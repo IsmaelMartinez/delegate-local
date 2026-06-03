@@ -1,7 +1,7 @@
 MODEL: lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-8bit
 BACKEND: mlx
 OLLAMA_API: 1
-DATE: 2026-05-27T14:17:29Z
+DATE: 2026-06-03T06:23:53Z
 REPS: 3
 T3_SNAPSHOT: 2026-04-28
 T4_SNAPSHOT: 2026-05-24
@@ -18,7 +18,7 @@ CLAIM_C: already-done — yaml.stringify with { lineWidth: 0 } already used in a
 CLAIM_D: already-done — Shallow Object.freeze pattern consistently used across all six cached loaders in src/lib/data.ts
 
 ===== T2-party-config rep 1 =====
-DURATION_SEC: 6
+DURATION_SEC: 4
 RUN_STATUS: 0
 OUTPUT:
 INCONSISTENT
@@ -78,13 +78,13 @@ OUTPUT:
 }
 
 ===== T6-regex-generation rep 1 =====
-DURATION_SEC: 1
+DURATION_SEC: 0
 RUN_STATUS: 0
 OUTPUT:
 ^[0-9]{5}(?:-[0-9]{4})?$
 
 ===== T1-doc-drift rep 2 =====
-DURATION_SEC: 1
+DURATION_SEC: 2
 RUN_STATUS: 0
 OUTPUT:
 CLAIM_A: still-open — No "How we did" retrospective page or related code found in the repository
@@ -93,7 +93,7 @@ CLAIM_C: already-done — yaml.stringify with { lineWidth: 0 } already used in a
 CLAIM_D: already-done — Shallow Object.freeze pattern consistently used across all six cached loaders in src/lib/data.ts
 
 ===== T2-party-config rep 2 =====
-DURATION_SEC: 4
+DURATION_SEC: 3
 RUN_STATUS: 0
 OUTPUT:
 INCONSISTENT
@@ -153,13 +153,13 @@ OUTPUT:
 }
 
 ===== T6-regex-generation rep 2 =====
-DURATION_SEC: 1
+DURATION_SEC: 0
 RUN_STATUS: 0
 OUTPUT:
 ^[0-9]{5}(?:-[0-9]{4})?$
 
 ===== T1-doc-drift rep 3 =====
-DURATION_SEC: 1
+DURATION_SEC: 2
 RUN_STATUS: 0
 OUTPUT:
 CLAIM_A: still-open — No "How we did" retrospective page or related code found in the repository
@@ -168,7 +168,7 @@ CLAIM_C: already-done — yaml.stringify with { lineWidth: 0 } already used in a
 CLAIM_D: already-done — Shallow Object.freeze pattern consistently used across all six cached loaders in src/lib/data.ts
 
 ===== T2-party-config rep 3 =====
-DURATION_SEC: 4
+DURATION_SEC: 3
 RUN_STATUS: 0
 OUTPUT:
 INCONSISTENT
@@ -180,7 +180,7 @@ INCONSISTENT
 • Scottish National Party stance on equality contradicts their position score: position is 2 but stance says "Uphold and protect the human rights of trans people" which implies support, not opposition.
 
 ===== T3-merge-patterns rep 3 =====
-DURATION_SEC: 1
+DURATION_SEC: 2
 RUN_STATUS: 0
 OUTPUT:
 1. **Quiz tie handling implementation may need further testing**  
@@ -196,7 +196,7 @@ OUTPUT:
    CONCERN | `scripts/` directory (grep for any remaining script references in config or docs)
 
 ===== T4-commit-message rep 3 =====
-DURATION_SEC: 3
+DURATION_SEC: 2
 RUN_STATUS: 0
 OUTPUT:
 feat: add T4 commit-message fixture with scoring and runner support
@@ -206,7 +206,7 @@ Introduces the T4 commit-message fixture to measure empirical accuracy of commit
 The experiments/runner.sh gains a --t4-snapshot DATE flag to version the fixture per existing T3 conventions. New test cases in tests/test-score-t4.sh validate the scoring logic, while the fixture itself is added to experiments/fixtures/task-4-commit-message-2026-05-11.txt for reproducible evaluation. This completes the infrastructure for measuring commit-message drafting accuracy in the empirical-accuracy framework.
 
 ===== T5-json-shape rep 3 =====
-DURATION_SEC: 2
+DURATION_SEC: 1
 RUN_STATUS: 0
 OUTPUT:
 {
@@ -228,7 +228,7 @@ OUTPUT:
 }
 
 ===== T6-regex-generation rep 3 =====
-DURATION_SEC: 0
+DURATION_SEC: 1
 RUN_STATUS: 0
 OUTPUT:
 ^[0-9]{5}(?:-[0-9]{4})?$
