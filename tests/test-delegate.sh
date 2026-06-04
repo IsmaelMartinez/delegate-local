@@ -2334,6 +2334,97 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "inputs: optional --var missing → exits 0"
 rm -rf "$tmp" "$metrics"
 
+# 27d2. Optional input WITH a {{placeholder}} in the body, --var provided →
+# the value is substituted into the template. This is the override case the
+# explicit commit-message `type` lever relies on. The marker line collapses
+# to `override:spicy:end` so a single assert_contains proves substitution.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/typed-recipe.md" <<'RECIPE'
+---
+inputs:
+  pr_number: integer
+  flavour: string?
+---
+# typed-recipe
+
+## When to use
+test
+
+## Prompt template
+
+```
+pr_number={{pr_number}}
+override:{{flavour}}:end
+```
+
+## Variables
+
+- `{{pr_number}}` — PR number
+- `{{flavour}}` — optional flavour override
+
+## Calibration notes
+n/a
+RECIPE
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe typed-recipe --var pr_number=7 --var flavour=spicy prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "inputs: optional placeholder provided → exits 0"
+assert_contains 'override:spicy:end' "$(cat "$sniff")" "inputs: optional --var substituted into template"
+rm -rf "$tmp" "$metrics"
+
+# 27d3. Same recipe with the optional --var OMITTED → the {{flavour}}
+# placeholder is blanked rather than tripping the unsubstituted-placeholder
+# guard. The marker collapses to `override::end`, which the literal-placeholder
+# bug would have rendered as `override:{{flavour}}:end` — so a positive
+# assert_contains on `override::end` proves the blanking happened.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/typed-recipe.md" <<'RECIPE'
+---
+inputs:
+  pr_number: integer
+  flavour: string?
+---
+# typed-recipe
+
+## When to use
+test
+
+## Prompt template
+
+```
+pr_number={{pr_number}}
+override:{{flavour}}:end
+```
+
+## Variables
+
+- `{{pr_number}}` — PR number
+- `{{flavour}}` — optional flavour override
+
+## Calibration notes
+n/a
+RECIPE
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe typed-recipe --var pr_number=7 prose "tail" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "inputs: optional placeholder omitted → exits 0 (blanked, not exit 2)"
+assert_contains 'override::end' "$(cat "$sniff")" "inputs: omitted optional placeholder collapsed to empty"
+rm -rf "$tmp" "$metrics"
+
 # 27e. Recipe without a frontmatter inputs: block → back-compat path, no
 # type-check runs. This is the lazy-migration safety net so existing recipes
 # work unchanged until they're touched for other reasons.
