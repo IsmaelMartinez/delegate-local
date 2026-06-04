@@ -30,6 +30,31 @@ if [[ -n "${_DELEGATE_OTEL_LIB_LOADED:-}" ]]; then
 fi
 _DELEGATE_OTEL_LIB_LOADED=1
 
+# delegate_project_name
+#   Resolve the value for delegate.project: the basename of the MAIN repository,
+#   even when delegate.sh runs inside a linked git worktree. `git rev-parse
+#   --show-toplevel` returns the worktree directory (e.g.
+#   `.claude/worktrees/<branch>`), which would make every worktree session show
+#   up as its own "project" and scatter a single repo across many names.
+#   `--git-common-dir` (git 2.5+) points at the main repo's `.git` regardless of
+#   which worktree is checked out, so its parent directory is the real repo root.
+#   The path it prints may be relative, so `cd` + `pwd` makes it absolute — this
+#   avoids `--path-format=absolute`, which needs git 2.31+ and would otherwise
+#   fail silently on older git and fall back to the (wrong) worktree name.
+#   Falls back to the worktree toplevel, then the cwd, when not in (or unable to
+#   resolve) a git repo — preserving the previous behaviour outside worktrees.
+#   bash 3.2-safe.
+delegate_project_name() {
+  local common common_dir
+  common=$(git rev-parse --git-common-dir 2>/dev/null)
+  if [[ -n "$common" ]]; then
+    common_dir=$(cd "$common" 2>/dev/null && pwd)
+    basename "$(dirname "$common_dir")"
+  else
+    basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  fi
+}
+
 # otel_gen_id <nhex>
 #   Generate a random hex string of $1 hex chars (so $1*4 bits of entropy).
 #   Used for OTel trace IDs (32 hex = 128 bits) and span IDs (16 hex = 64

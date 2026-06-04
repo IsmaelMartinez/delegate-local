@@ -335,7 +335,8 @@ pick="$script_dir/pick-model.sh"
 prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 
 metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
-delegate_project=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+# delegate_project is derived after lib/otel.sh is sourced (it provides
+# delegate_project_name); first used in the metric/span emission near the end.
 # Resolve auto backend by probing the MLX server. Cheap (sub-second
 # timeout, single GET) and runs once per invocation. Explicit ollama|mlx
 # skip the probe. The metrics line records the resolved backend, never
@@ -462,6 +463,9 @@ log_metric() {
 # omits prompt/context/output entirely). Sourcing has no side effects.
 # shellcheck source=lib/otel.sh
 . "$script_dir/lib/otel.sh"
+
+# Resolve the project name (main repo basename, even inside a git worktree).
+delegate_project=$(delegate_project_name)
 
 ts_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 start_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')

@@ -50,6 +50,9 @@ jobs:
       - name: Delegate.sh tests
         run: bash tests/test-delegate.sh
 
+      - name: Project-name resolution tests
+        run: bash tests/test-project-name.sh
+
       - name: Embed.sh tests
         run: bash tests/test-embed.sh
 
