@@ -499,6 +499,7 @@ fi
 # Resolve recipe template (if any) and substitute {{key}} placeholders.
 recipe_template=""
 recipe_had_stdin_marker=0
+declared_inputs_present=0
 if [[ -n "$recipe" ]]; then
   recipe_file="$prompts_dir/${recipe}.md"
   if [[ ! -f "$recipe_file" ]]; then
@@ -561,6 +562,7 @@ if [[ -n "$recipe" ]]; then
       declared_types+=("$itype")
       declared_optional+=("$iopt")
     done <<< "$inputs_block"
+    declared_inputs_present=1
 
     # Build a map of provided --var keys (and {{stdin}} when stdin is piped)
     # so we can both type-check each value and detect missing required inputs.
@@ -700,6 +702,28 @@ if [[ -n "$recipe" ]]; then
     recipe_template="${recipe_template//\{\{$key\}\}/$value}"
     satisfied_keys="${satisfied_keys}{{${key}}}"$'\n'
   done
+
+  # Declared-optional inputs (the `?` suffix) the caller did NOT supply have
+  # their {{key}} placeholder collapsed to empty here, BEFORE the unsubstituted-
+  # placeholder guard below. Without this, an optional input whose placeholder
+  # appears in the template body would trip that guard (exit 2) the moment a
+  # caller omitted it — forcing every optional placeholder to be all-or-nothing.
+  # Blanking lets a recipe expose a genuine override (e.g. commit-message
+  # `type`) that most callers leave off, with the template's surrounding prose
+  # handling the empty case. Guarded on declared_inputs_present so recipes with
+  # no inputs: block (today's majority) are untouched, and so "${declared_keys[@]}"
+  # is only expanded when the array was actually built (bash 3.2 + set -u safe).
+  if (( declared_inputs_present == 1 )); then
+    oidx=0
+    for dk in "${declared_keys[@]}"; do
+      if (( declared_optional[oidx] == 1 )) \
+         && ! printf '%s' "$satisfied_keys" | grep -Fxq "{{${dk}}}"; then
+        recipe_template="${recipe_template//\{\{$dk\}\}/}"
+        satisfied_keys="${satisfied_keys}{{${dk}}}"$'\n'
+      fi
+      oidx=$((oidx + 1))
+    done
+  fi
 
   # {{stdin}} is the implicit placeholder for the piped context.
   if printf '%s' "$required_placeholders" | grep -qx '{{stdin}}'; then

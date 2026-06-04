@@ -3,6 +3,7 @@ inputs:
   recent_commits: string
   diff_stat: string
   why: string
+  type: string?
 ---
 # commit-message
 
@@ -38,6 +39,12 @@ collapse "X and Y" pairs to whichever is primary, prefer the shorter
 synonym. The 72-char limit is a hard ceiling, not a guideline.
 Wrong: feat: prompts/summarise-issue — OMIT-EMPTY positive directive + Comment-N citation guard (79 chars)
 Correct: feat: prompts/summarise-issue — OMIT-EMPTY + Comment-N guard (60 chars)
+
+TYPE override (highest priority): {{type}}
+If a non-empty value appears immediately above, use it verbatim as the subject
+prefix — a value of `chore` means the subject MUST start with `chore:` — and
+SKIP the priority list below entirely. If the line above is blank, ignore it and
+select the type from the priority list.
 
 TYPE selection — first match wins, non-negotiable:
 1. If the diff body or WHY paragraph mentions "fix", "bug", "regression", "broken", "hang", "crash", or "leak" → `fix:`
@@ -82,6 +89,7 @@ Output ONLY the commit message itself, nothing else.
 - `{{recent_commits}}` — output of `git log <main-branch> --pretty=fuller -3`. Load-bearing shape anchor.
 - `{{diff_stat}}` — output of `git diff --cached --stat` (and optionally the full `git diff --cached` if small).
 - `{{why}}` — one or two sentences explaining the motivation: what bug, what user-visible change, what reviewer feedback. Authored by the agent, not gathered from a command.
+- `{{type}}` — OPTIONAL. The conventional-commit type (`feat`, `fix`, `docs`, `chore`, `refactor`, `test`) when the caller already knows it. When set, it overrides the TYPE-selection priority list and forces the subject prefix verbatim, sidestepping the model's type inference entirely. Omit it to let the priority rules choose; an omitted value is blanked by `delegate.sh` so the override line collapses to empty.
 
 ## Invocation
 
@@ -90,10 +98,11 @@ bash scripts/delegate.sh --recipe commit-message \
   --var recent_commits="$(git log main --pretty=fuller -3)" \
   --var diff_stat="$(git diff --cached --stat)" \
   --var why="<one or two sentences>" \
+  --var type=feat \
   prose "Match the example commit messages exactly in shape and tone. Keep subject ≤ 72 chars. Use the feat: prefix."
 ```
 
-The trailing prompt arg is the reinforcement instruction; the recipe template carries the structural directives. The `Use the <type>: prefix.` suffix is the call-site reinforcement for TYPE selection — pick the type from the priority list in the template body (rule #1 → `fix:`, #2 → `feat:`, #3 → `docs:`, #4 → `test:`, #5 → `chore:`, default → `feat:`) and substitute it literally into the trailing prompt. The 2026-05-23 calibration entry below documents why this hint is part of the recipe rather than a workaround.
+The trailing prompt arg is the reinforcement instruction; the recipe template carries the structural directives. When you already know the type, pass it as `--var type=<type>` — the template substitutes it as a highest-priority override that short-circuits the priority-list reasoning entirely, which is the most reliable lever because the model copies a literal token rather than inferring a rule (see the 2026-06-04 calibration entry). Leave `--var type` off to let the priority list choose. The `Use the <type>: prefix.` suffix is the call-site reinforcement for the no-explicit-type case — pick the type from the priority list in the template body (rule #1 → `fix:`, #2 → `feat:`, #3 → `docs:`, #4 → `test:`, #5 → `chore:`, default → `feat:`) and substitute it literally into the trailing prompt. The 2026-05-23 calibration entry below documents why this hint is part of the recipe rather than a workaround.
 
 ## Anti-hallucination guards (each line addresses a real past MISS)
 
@@ -261,3 +270,9 @@ Phase 16 Track B's treadmill-confirmation caveat named the generalised structura
 Empirical measurement confirms the intervention's effect across three reps of `qwen3.6:35b-a3b-q8_0` on Ollama against the unchanged 2026-05-24 fixture and anchors. Before the matcher (Phase 16 baseline): cumulative 18/18, mean 1.00, with the Phase 16-documented `, moving` and `, including` shapes slipping through. After the matcher (Phase 17 Track B): cumulative 15/18, mean 0.83, all three reps fail BODY_NO_PADDING. The model output is bit-identical across the two runs — the score difference is pure scorer-fidelity improvement, not a behaviour change in the model. False-positive risk in the commit-message domain is acceptable: coordination lists of gerunds (`supports caching, batching, retries`), continuative participial phrases (`the loop runs, blocking on I/O`), and 6+-char `-ing` nouns in type lists (`, string,`) are the realistic false-positive shapes — the first two are themselves prose smells the recipe rejects, the third is the documented PR #213 trade-off. The `{3,}` constraint clears the bare-noun false positives on 5-or-shorter words while preserving the five MUST-catch positives, and the false-negative gap for `-ed` and `-ied` past-participle forms is addressed by retaining the per-verb regex for `, exemplified`. A new test 14l block in `tests/test-score-t4.sh` covers the five positive cases, a short-word coordination-list negative case to guard the `{3,}` floor, and an explicit `, string` positive case that documents the acknowledged false positive; test 14k's existing three sentence-initial-use negative cases are reinforced as the false-positive corpus for the generalised matcher.
 
 Caveat for the next iteration: if the model now shifts to a yet-newer unenumerated structural shape — `, supported by X` past-participle, `, X-ed Y` past-tense participle, or sentence-level constructions like `, but Y` adversative tails — the treadmill is still running, just at a higher-order structural level. The recipe's directive enumeration is NOT extended in this PR because the structural matcher does the empirical work; promoting the matcher pattern into the directive text would re-introduce the directive-binding ceiling Phase 13 documented. Future Phase 17 caveats land in this calibration entry as new MISS shapes surface.
+
+### 2026-06-04 — explicit `--var type=` override (separating the solvable case from the ceiling)
+
+A 2026-06-04 MISS-signal analysis over the rolling feedback log surfaced a commit-message miss against the explicit-type case: the caller passed `--var type=chore` and the recipe still emitted `feat:`. The cause was NOT the directive-binding ceiling the 2026-05-23 entry documents (where the model infers the wrong tag from the diff and WHY) — it was that the recipe declared no `type` input and carried no `{{type}}` placeholder, so the undeclared `--var` was silently dropped by the validator (`prompts/README.md` Convention 2 passes undeclared keys through untouched). That makes "honour an explicit caller-supplied type" a genuinely separable lever: when the caller already knows the type there is no inference to get wrong, and copying a literal token is something small models do reliably.
+
+The fix declares `type: string?` (optional) and adds a highest-priority `TYPE override` line at the top of the TYPE handling. When `--var type=chore` is passed it substitutes verbatim and the directive tells the model to use it and skip the priority list; when omitted, `delegate.sh` blanks the optional placeholder (the optional-placeholder-blanking behaviour added to the wrapper in the same change) so the line collapses to empty and the existing priority-list-plus-trailing-hint path is unchanged. The lever is prompt-side, consistent with the rest of the recipe library; if a future dogfood shows the model ignoring an explicit override, the escalation path is wrapper-side prefix enforcement (force `<type>:` on the returned subject), deferred until measured to be necessary. The TYPE-selection priority list and the call-site `Use the <type>: prefix.` hint stay load-bearing for the no-explicit-type case — promotion adds, doesn't replace, the same additive principle the 2026-05-22 and 2026-05-23 entries established.
