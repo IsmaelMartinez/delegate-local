@@ -14,7 +14,7 @@ jobs:
       contents: read
       models: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # Need history vs the base ref so the trigger-eval step can decide
           # whether SKILL.md or evals/eval-set.json actually changed and skip
@@ -159,7 +159,7 @@ jobs:
     name: mcp server (python)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v5
