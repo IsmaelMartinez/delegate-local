@@ -86,10 +86,10 @@ rm -f "$mixed"
 # jq // alternative-operator quirk.
 fb=$(mktemp)
 cat > "$fb" <<'EOF'
-{"ts":"2026-05-09T10:00:00Z","source":"delegate","tier":"prose","model":"q","prompt_chars":40,"context_chars":160,"output_chars":200,"duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":100}
-{"ts":"2026-05-09T10:30:00Z","source":"delegate","tier":"prose","model":"q","prompt_chars":40,"context_chars":160,"output_chars":200,"duration_ms":4500,"exit_status":0,"estimated_tokens_avoided":120}
-{"ts":"2026-05-09T11:00:00Z","source":"delegate","tier":"reasoning","model":"d","prompt_chars":50,"context_chars":200,"output_chars":250,"duration_ms":7000,"exit_status":0,"estimated_tokens_avoided":150}
-{"ts":"2026-05-09T11:30:00Z","source":"delegate","tier":"reasoning","model":"d","prompt_chars":50,"context_chars":200,"output_chars":250,"duration_ms":7200,"exit_status":0,"estimated_tokens_avoided":160}
+{"ts":"2026-05-09T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","prompt_chars":40,"context_chars":160,"output_chars":200,"duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-09T10:30:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","prompt_chars":40,"context_chars":160,"output_chars":200,"duration_ms":4500,"exit_status":0,"estimated_tokens_avoided":120}
+{"ts":"2026-05-09T11:00:00Z","source":"delegate","recipe":"summarise-issue","tier":"reasoning","model":"d","prompt_chars":50,"context_chars":200,"output_chars":250,"duration_ms":7000,"exit_status":0,"estimated_tokens_avoided":150}
+{"ts":"2026-05-09T11:30:00Z","source":"delegate","recipe":"summarise-issue","tier":"reasoning","model":"d","prompt_chars":50,"context_chars":200,"output_chars":250,"duration_ms":7200,"exit_status":0,"estimated_tokens_avoided":160}
 {"ts":"2026-05-09T20:00:00Z","source":"feedback","ref_ts":"2026-05-09T10:00:00Z","kept":true}
 {"ts":"2026-05-09T20:01:00Z","source":"feedback","ref_ts":"2026-05-09T10:30:00Z","kept":false,"reason":"bullets"}
 {"ts":"2026-05-09T20:02:00Z","source":"feedback","ref_ts":"2026-05-09T11:00:00Z","kept":false}
@@ -107,6 +107,8 @@ assert_contains "reasoning" "$out" "feedback: reasoning row appears"
 assert_contains "prose           n=2  hits=1  misses=1  untracked=0" "$out" "feedback: prose hit/miss exact counts"
 # Reasoning has 1 miss + 1 untracked (no feedback for the second reasoning call).
 assert_contains "reasoning       n=2  hits=0  misses=1  untracked=1" "$out" "feedback: reasoning miss not silently dropped"
+# Recipe-scoped coverage headline: 4 recipe delegations, 3 with feedback = 75%.
+assert_contains "coverage=75%" "$out" "feedback: recipe verdict coverage headline (recipe-scoped)"
 # Feedback rows must NOT inflate Tokens avoided (they have no token field).
 # Sum of delegate-only tokens: 100+120+150+160 = 530.
 assert_contains "Tokens avoided (≈):  530" "$out" "feedback: tokens not inflated by feedback rows"
@@ -117,7 +119,7 @@ rm -f "$fb"
 # user revised their verdict — and be counted as the miss.
 revised=$(mktemp)
 cat > "$revised" <<'EOF'
-{"ts":"2026-05-09T10:00:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":50}
+{"ts":"2026-05-09T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":50}
 {"ts":"2026-05-09T20:00:00Z","source":"feedback","ref_ts":"2026-05-09T10:00:00Z","kept":true}
 {"ts":"2026-05-09T20:05:00Z","source":"feedback","ref_ts":"2026-05-09T10:00:00Z","kept":false,"reason":"second look — not actually used"}
 EOF
@@ -278,6 +280,27 @@ case "$out" in
   *) echo "  PASS  no-recipe: Per-recipe section hidden when no recipe rows"; pass=$((pass+1));;
 esac
 rm -f "$norecipe"
+
+# 15. Verdict coverage is scoped to recipe delegations; raw / no-recipe calls
+# (ad-hoc + benchmark/audit traffic) are reported separately and do NOT inflate
+# the recipe untracked count. 2 recipe calls (1 tracked) + 2 raw calls (1 tracked).
+denoise=$(mktemp)
+cat > "$denoise" <<'EOF'
+{"ts":"2026-05-27T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-27T10:05:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":110}
+{"ts":"2026-05-27T10:10:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":900,"exit_status":0,"estimated_tokens_avoided":40}
+{"ts":"2026-05-27T10:15:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":950,"exit_status":0,"estimated_tokens_avoided":45}
+{"ts":"2026-05-27T20:00:00Z","source":"feedback","ref_ts":"2026-05-27T10:00:00Z","kept":true}
+{"ts":"2026-05-27T20:01:00Z","source":"feedback","ref_ts":"2026-05-27T10:10:00Z","kept":true}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$denoise" 2>&1) || EC=$?
+assert_eq 0 "$EC" "denoise: exits 0"
+assert_contains "Recipe delegations (calibration signal): n=2  hits=1  misses=0  untracked=1" "$out" "denoise: recipe untracked NOT inflated by raw calls"
+assert_contains "coverage=50%" "$out" "denoise: coverage scoped to recipe delegations"
+assert_contains "Raw / no-recipe" "$out" "denoise: raw/no-recipe line present"
+assert_contains "n=2  tracked=1  untracked=1" "$out" "denoise: raw calls bucketed separately, not in recipe untracked"
+rm -f "$denoise"
 
 echo
 echo "$pass passed, $fail failed"
