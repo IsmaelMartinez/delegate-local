@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.14.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.13.0...v0.14.0) (2026-06-04)
+
+
+### Features
+
+* honour explicit --var type in commit-message recipe ([#262](https://github.com/IsmaelMartinez/delegate-local/issues/262)) ([dc03649](https://github.com/IsmaelMartinez/delegate-local/commit/dc03649f1b875d4fdcd0446d2c58fcdaa9bdf728))
+
+
+### Documentation
+
+* batch 2026-06-04 strategic review topics into ROADMAP.md ([#261](https://github.com/IsmaelMartinez/delegate-local/issues/261)) ([836cd5a](https://github.com/IsmaelMartinez/delegate-local/commit/836cd5af5a921e9105e8d51cd9809880c572a5a2))
+
+
+### Maintenance
+
+* **deps:** bump actions/checkout from 4 to 6 ([#257](https://github.com/IsmaelMartinez/delegate-local/issues/257)) ([4ff7ca6](https://github.com/IsmaelMartinez/delegate-local/commit/4ff7ca666a1cc46d5b1c289ab6f3ab1118251381))
+* **deps:** bump actions/setup-python from 5 to 6 ([#259](https://github.com/IsmaelMartinez/delegate-local/issues/259)) ([d4768d3](https://github.com/IsmaelMartinez/delegate-local/commit/d4768d3d3149a86ba0d9f3d47d6c03ffacf69205))
+* **deps:** bump github/codeql-action from 3 to 4 ([#258](https://github.com/IsmaelMartinez/delegate-local/issues/258)) ([907803b](https://github.com/IsmaelMartinez/delegate-local/commit/907803b40f03ea8c1af437565fcae999b33b28c7))
+
 ## [0.13.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.12.0...v0.13.0) (2026-06-04)
 
 
