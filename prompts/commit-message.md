@@ -41,10 +41,10 @@ Wrong: feat: prompts/summarise-issue — OMIT-EMPTY positive directive + Comment
 Correct: feat: prompts/summarise-issue — OMIT-EMPTY + Comment-N guard (60 chars)
 
 TYPE override (highest priority): {{type}}
-If a non-empty value appears immediately above, use it verbatim as the subject
-prefix — a value of `chore` means the subject MUST start with `chore:` — and
-SKIP the priority list below entirely. If the line above is blank, ignore it and
-select the type from the priority list.
+If a value appears after the colon immediately above, use it verbatim as the
+subject prefix — a value of `chore` means the subject MUST start with `chore:` —
+and SKIP the priority list below entirely. If no value appears after the colon,
+ignore it and select the type from the priority list.
 
 TYPE selection — first match wins, non-negotiable:
 1. If the diff body or WHY paragraph mentions "fix", "bug", "regression", "broken", "hang", "crash", or "leak" → `fix:`
@@ -89,7 +89,7 @@ Output ONLY the commit message itself, nothing else.
 - `{{recent_commits}}` — output of `git log <main-branch> --pretty=fuller -3`. Load-bearing shape anchor.
 - `{{diff_stat}}` — output of `git diff --cached --stat` (and optionally the full `git diff --cached` if small).
 - `{{why}}` — one or two sentences explaining the motivation: what bug, what user-visible change, what reviewer feedback. Authored by the agent, not gathered from a command.
-- `{{type}}` — OPTIONAL. The conventional-commit type (`feat`, `fix`, `docs`, `chore`, `refactor`, `test`) when the caller already knows it. When set, it overrides the TYPE-selection priority list and forces the subject prefix verbatim, sidestepping the model's type inference entirely. Omit it to let the priority rules choose; an omitted value is blanked by `delegate.sh` so the override line collapses to empty.
+- `{{type}}` — OPTIONAL. The conventional-commit type (`feat`, `fix`, `docs`, `chore`, `refactor`, `test`) when the caller already knows it. When set, it overrides the TYPE-selection priority list and forces the subject prefix verbatim, sidestepping the model's type inference entirely. Omit it to let the priority rules choose; an omitted value is blanked by `delegate.sh` so the placeholder collapses to empty.
 
 ## Invocation
 
@@ -275,4 +275,4 @@ Caveat for the next iteration: if the model now shifts to a yet-newer unenumerat
 
 A 2026-06-04 MISS-signal analysis over the rolling feedback log surfaced a commit-message miss against the explicit-type case: the caller passed `--var type=chore` and the recipe still emitted `feat:`. The cause was NOT the directive-binding ceiling the 2026-05-23 entry documents (where the model infers the wrong tag from the diff and WHY) — it was that the recipe declared no `type` input and carried no `{{type}}` placeholder, so the undeclared `--var` was silently dropped by the validator (`prompts/README.md` Convention 2 passes undeclared keys through untouched). That makes "honour an explicit caller-supplied type" a genuinely separable lever: when the caller already knows the type there is no inference to get wrong, and copying a literal token is something small models do reliably.
 
-The fix declares `type: string?` (optional) and adds a highest-priority `TYPE override` line at the top of the TYPE handling. When `--var type=chore` is passed it substitutes verbatim and the directive tells the model to use it and skip the priority list; when omitted, `delegate.sh` blanks the optional placeholder (the optional-placeholder-blanking behaviour added to the wrapper in the same change) so the line collapses to empty and the existing priority-list-plus-trailing-hint path is unchanged. The lever is prompt-side, consistent with the rest of the recipe library; if a future dogfood shows the model ignoring an explicit override, the escalation path is wrapper-side prefix enforcement (force `<type>:` on the returned subject), deferred until measured to be necessary. The TYPE-selection priority list and the call-site `Use the <type>: prefix.` hint stay load-bearing for the no-explicit-type case — promotion adds, doesn't replace, the same additive principle the 2026-05-22 and 2026-05-23 entries established.
+The fix declares `type: string?` (optional) and adds a highest-priority `TYPE override` line at the top of the TYPE handling. When `--var type=chore` is passed it substitutes verbatim and the directive tells the model to use it and skip the priority list; when omitted, `delegate.sh` blanks the optional placeholder (the optional-placeholder-blanking behaviour added to the wrapper in the same change) so the placeholder collapses to empty and the existing priority-list-plus-trailing-hint path is unchanged. The lever is prompt-side, consistent with the rest of the recipe library; if a future dogfood shows the model ignoring an explicit override, the escalation path is wrapper-side prefix enforcement (force `<type>:` on the returned subject), deferred until measured to be necessary. The TYPE-selection priority list and the call-site `Use the <type>: prefix.` hint stay load-bearing for the no-explicit-type case — promotion adds, doesn't replace, the same additive principle the 2026-05-22 and 2026-05-23 entries established.
