@@ -100,20 +100,21 @@ superficial edits — this is a SHAPE, not one forbidden string). The model
 has previously passed SCOPE, ANCHORS, and SUB-TRACK lines through unchanged;
 real observed echoes include the SCOPE sentence
 `The aggregator is opt-in, single-user, and writes to a local rollup file.`,
-the SCOPE clause `scan the rolling 30-day MISS window for task-shape clusters
-that no existing recipe covers`, the ANCHORS sentence `The Phase 8
-recurring-MISS nudge (#91)
-established the directive-rule shape the new gap-detector follows`, and
-SUB-TRACK descriptions such as `extends scripts/audit-metrics.sh with a
-clustering pass over MISS reasons` only superficially rewritten into
-third-person enumeration. These are EXAMPLES OF THE SHAPE, not the specific
-strings to avoid — treat ANY FACTS line reproduced with only cosmetic edits
-as the prohibited shape, regardless of which line it came from.
+the SCOPE clause
+`scan the rolling 30-day MISS window for task-shape clusters that no existing recipe covers`,
+the ANCHORS sentence
+`The Phase 8 recurring-MISS nudge (#91) established the directive-rule shape the new gap-detector follows`,
+and SUB-TRACK descriptions such as
+`extends scripts/audit-metrics.sh with a clustering pass over MISS reasons`
+only superficially rewritten into third-person enumeration. These are EXAMPLES
+OF THE SHAPE, not the specific strings to avoid — treat ANY FACTS line
+reproduced with only cosmetic edits as the prohibited shape, regardless of
+which line it came from.
 Correct (every FACTS line rewritten in the anchor's voice): e.g. the
-opt-in-aggregator fact becomes `An opt-in single-user aggregator collects
-each host's rollup into a local file, keeping the cross-machine path under
-one workstation's control.` — same content, the anchor's prose rhythm, with
-no FACTS line recognisable verbatim.
+opt-in-aggregator fact becomes
+`An opt-in single-user aggregator collects each host's rollup into a local file, keeping the cross-machine path under one workstation's control.`
+— same content, the anchor's prose rhythm, with no FACTS line recognisable
+verbatim.
 
 Match the STYLE ANCHOR exactly in: spelling variant (American vs British),
 prose-vs-bullets balance, paragraph length, technical density, and tone.
