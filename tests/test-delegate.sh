@@ -103,6 +103,40 @@ EOF
   chmod +x "$dir/curl"
 }
 
+make_mock_curl_think() {
+  # Mock curl whose Ollama .response carries a <think>...</think> reasoning
+  # trace before the answer, to exercise DELEGATE_STRIP_THINK. $2 is the
+  # JSON-escaped .response value (use \n for newlines). Mirrors
+  # make_mock_curl_ok's -o / -w / probe handling.
+  local dir="$1" resp="$2"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+out_file=""
+write_out=""
+saw_probe=0
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *"/v1/models"*) saw_probe=1; shift ;;
+    *) shift ;;
+  esac
+done
+if (( saw_probe == 1 )); then exit 7; fi
+cat > /dev/null
+body='{"response":"${resp}"}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
+EOF
+  chmod +x "$dir/curl"
+}
+
 # 1. Missing args -> exit 2.
 EC=0
 out=$(bash "$SCRIPT" 2>&1) || EC=$?
@@ -4180,6 +4214,55 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --recipe case-test-recipe prose "tail" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 4 "$EC" "flaky-gate case-insensitive: uppercase pattern matches lowercase resolved model"
 assert_contains "QWEN3.6:35B" "$(cat "$stderr_file")" "flaky-gate case-insensitive: stderr preserves the original-case pattern"
+rm -rf "$tmp" "$metrics"
+
+# 30. DELEGATE_STRIP_THINK strips a leading <think>...</think> reasoning trace
+# so trace-emitting reasoning models produce clean, parseable output.
+
+# 30a. Strip ON: <think>reason</think>\n\nANSWER -> only the answer reaches stdout.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_think "$tmp" '<think>\nLet me work through this carefully.\n</think>\n\nCLEAN_ANSWER_123'
+metrics=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_STRIP_THINK=1 \
+  bash "$SCRIPT" prose "summarise" </dev/null 2>/dev/null)
+assert_eq "CLEAN_ANSWER_123" "$out" "strip-think on: only the answer remains, trace removed"
+rm -rf "$tmp" "$metrics"
+
+# 30b. Strip OFF (default): the full trace is preserved on stdout.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_think "$tmp" '<think>\nLet me work through this carefully.\n</think>\n\nCLEAN_ANSWER_123'
+metrics=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "summarise" </dev/null 2>/dev/null)
+assert_contains "<think>" "$out" "strip-think off (default): opening trace tag preserved"
+assert_contains "CLEAN_ANSWER_123" "$out" "strip-think off: answer still present"
+rm -rf "$tmp" "$metrics"
+
+# 30c. Strip ON but response has no </think>: no-op, output unchanged.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_STRIP_THINK=1 \
+  bash "$SCRIPT" prose "summarise" </dev/null 2>/dev/null)
+assert_contains "mock-model-output: ok" "$out" "strip-think on, no </think>: no-op passthrough"
+rm -rf "$tmp" "$metrics"
+
+# 30d. Strip ON, template-prefilled trace (closing </think> only, no opening
+# tag — the real qwen3-next-thinking shape): answer after </think> survives.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_think "$tmp" 'Reasoning emitted with no opening tag.\n</think>\n\nPREFILLED_ANSWER_456'
+metrics=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_STRIP_THINK=1 \
+  bash "$SCRIPT" prose "summarise" </dev/null 2>/dev/null)
+assert_eq "PREFILLED_ANSWER_456" "$out" "strip-think on: prefilled-open-tag trace stripped to answer"
 rm -rf "$tmp" "$metrics"
 
 echo
