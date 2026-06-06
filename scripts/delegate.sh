@@ -723,15 +723,19 @@ if [[ -n "$recipe" ]]; then
   # override, resolved by load-flavor.sh and injected as {{flavor_*}} placeholders.
   # Runs AFTER the --var loop and only fills placeholders --var didn't already
   # satisfy, so an explicit --var flavor_x=… still wins. With no profile installed
-  # the defaults reproduce the pre-split prompt verbatim (back-compat). Process
-  # substitution (not a pipe) so the substitutions land in this shell.
-  while IFS='=' read -r fkey fval; do
-    [[ -z "$fkey" ]] && continue
-    if ! printf '%s' "$satisfied_keys" | grep -Fxq "{{${fkey}}}"; then
-      recipe_template="${recipe_template//\{\{$fkey\}\}/$fval}"
-      satisfied_keys="${satisfied_keys}{{${fkey}}}"$'\n'
-    fi
-  done < <(bash "$script_dir/load-flavor.sh" 2>/dev/null)
+  # the defaults reproduce the pre-split prompt verbatim (back-compat). Gated on
+  # the template actually using a {{flavor_*}} placeholder, so recipes that don't
+  # opt in skip the loader subprocess entirely (no cost, zero behaviour change).
+  # Process substitution (not a pipe) so the substitutions land in this shell.
+  if [[ "$recipe_template" == *'{{flavor_'* ]]; then
+    while IFS='=' read -r fkey fval; do
+      [[ -z "$fkey" ]] && continue
+      if ! printf '%s' "$satisfied_keys" | grep -Fxq "{{${fkey}}}"; then
+        recipe_template="${recipe_template//\{\{$fkey\}\}/$fval}"
+        satisfied_keys="${satisfied_keys}{{${fkey}}}"$'\n'
+      fi
+    done < <(bash "$script_dir/load-flavor.sh" 2>/dev/null)
+  fi
 
   # Declared-optional inputs (the `?` suffix) the caller did NOT supply have
   # their {{key}} placeholder collapsed to empty here, BEFORE the unsubstituted-
