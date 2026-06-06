@@ -719,6 +719,20 @@ if [[ -n "$recipe" ]]; then
     satisfied_keys="${satisfied_keys}{{${key}}}"$'\n'
   done
 
+  # Per-user flavor profile (ADR 0013): shipped defaults plus an optional user
+  # override, resolved by load-flavor.sh and injected as {{flavor_*}} placeholders.
+  # Runs AFTER the --var loop and only fills placeholders --var didn't already
+  # satisfy, so an explicit --var flavor_x=… still wins. With no profile installed
+  # the defaults reproduce the pre-split prompt verbatim (back-compat). Process
+  # substitution (not a pipe) so the substitutions land in this shell.
+  while IFS='=' read -r fkey fval; do
+    [[ -z "$fkey" ]] && continue
+    if ! printf '%s' "$satisfied_keys" | grep -Fxq "{{${fkey}}}"; then
+      recipe_template="${recipe_template//\{\{$fkey\}\}/$fval}"
+      satisfied_keys="${satisfied_keys}{{${fkey}}}"$'\n'
+    fi
+  done < <(bash "$script_dir/load-flavor.sh" 2>/dev/null)
+
   # Declared-optional inputs (the `?` suffix) the caller did NOT supply have
   # their {{key}} placeholder collapsed to empty here, BEFORE the unsubstituted-
   # placeholder guard below. Without this, an optional input whose placeholder

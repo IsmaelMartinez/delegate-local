@@ -4302,6 +4302,56 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_contains "<think>" "$out" "strip-think: reasoning tier + STRIP_THINK=0 preserves trace"
 rm -rf "$tmp" "$metrics"
 
+# 31. Flavor profile (ADR 0013): a recipe's {{flavor_*}} placeholders are
+# filled from scripts/flavor-defaults.sh when no profile.sh is installed
+# (back-compat), and overridden by a per-user profile.sh.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/flav.md" <<'EOF'
+# flav
+
+## When to use
+Flavor test recipe.
+
+## Prompt template
+
+```
+SUBJECT MAX: {{flavor_commit_subject_max}}
+TYPES: {{flavor_commit_types}}
+```
+
+## Calibration notes
+n/a
+EOF
+# 31a. No profile installed -> shipped defaults fill the placeholders.
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  DELEGATE_LOCAL_PROFILE="$tmp/nonexistent.sh" \
+  bash "$SCRIPT" --recipe flav prose "go" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "flavor: exits 0 with shipped defaults"
+payload=$(cat "$sniff")
+assert_contains 'SUBJECT MAX: 72' "$payload" "flavor: default subject max injected"
+assert_contains 'TYPES: feat, fix, ci, docs, chore, refactor, test' "$payload" "flavor: default type vocabulary injected"
+# 31b. A per-user profile overrides the defaults.
+prof="$tmp/profile.sh"
+printf 'FLAVOR_COMMIT_SUBJECT_MAX=50\nFLAVOR_COMMIT_TYPES="feat, fix, docs"\n' > "$prof"
+chmod 600 "$prof"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  DELEGATE_LOCAL_PROFILE="$prof" \
+  bash "$SCRIPT" --recipe flav prose "go" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "flavor: exits 0 with profile override"
+payload=$(cat "$sniff")
+assert_contains 'SUBJECT MAX: 50' "$payload" "flavor: profile override subject max injected"
+assert_contains 'TYPES: feat, fix, docs' "$payload" "flavor: profile override type vocabulary injected"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
