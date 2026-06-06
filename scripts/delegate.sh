@@ -170,19 +170,22 @@
 #                                           #   Maps to Ollama's `think` field
 #                                           #   and to MLX's
 #                                           #   `chat_template_kwargs.enable_thinking`.
-#   DELEGATE_STRIP_THINK=1                  # default off. Strip a leading
-#                                           #   <think>...</think> reasoning
-#                                           #   trace from the response (drop
-#                                           #   everything up to and including
-#                                           #   the first </think>, trim
-#                                           #   leading whitespace). For trace-
-#                                           #   emitting reasoning models whose
-#                                           #   chat template leaks the trace
-#                                           #   into the answer field even under
-#                                           #   think:false, so structured-
-#                                           #   output recipes still parse. Do
-#                                           #   NOT set for recipes whose own
-#                                           #   output may contain </think>.
+#   DELEGATE_STRIP_THINK=1|0                # Strip a leading <think>...</think>
+#                                           #   reasoning trace from the response
+#                                           #   (drop everything up to and
+#                                           #   including the first </think>,
+#                                           #   trim leading whitespace) so
+#                                           #   structured-output recipes still
+#                                           #   parse when a trace-emitting model
+#                                           #   leaks the trace into the answer
+#                                           #   under think:false. ON by default
+#                                           #   for the reasoning tier (which
+#                                           #   routes trace-emitting models);
+#                                           #   =1 forces it on for any tier; =0
+#                                           #   force-disables it even on the
+#                                           #   reasoning tier, for a reasoning
+#                                           #   recipe whose own output may
+#                                           #   contain </think>.
 #   OLLAMA_HOST=<url>                       # default http://localhost:11434
 #   MLX_HOST=<url>                          # default http://localhost:8080
 #   DELEGATE_MAX_TOKENS=<int>               # default 4096. MLX-only — the
@@ -1084,19 +1087,27 @@ else
   fi
 fi
 
-# Optional reasoning-trace strip (DELEGATE_STRIP_THINK=1). Some trace-emitting
-# reasoning models (qwen3-next-thinking, phi4-reasoning) prepend a
-# <think>...</think> chain-of-thought to the answer even under think:false —
-# their Ollama chat template can prefill the opening <think> server-side, so
-# only the closing </think> appears in .response, with the real answer after
-# it. When this env var is set, drop everything up to and including the FIRST
-# </think> and trim the leading whitespace, leaving the clean answer so the
-# structured-output recipes (JSON, regex) parse. Off by default — legitimate
-# output that itself contains </think> (e.g. a recipe about reasoning models)
-# must not opt in. No-op when the response has no </think>, when the call
-# failed (empty output), or when the var is unset. Applied before output_chars
+# Reasoning-trace strip. Some trace-emitting reasoning models (qwen3-next-
+# thinking, qwq, phi4-reasoning) prepend a <think>...</think> chain-of-thought
+# to the answer even under think:false — their Ollama chat template can prefill
+# the opening <think> server-side, so only the closing </think> appears in
+# .response, with the real answer after it. The strip drops everything up to and
+# including the FIRST </think> and trims leading whitespace, leaving the clean
+# answer so the structured-output recipes (JSON, regex) parse. It applies when
+# DELEGATE_STRIP_THINK=1 OR for the reasoning tier by default (that tier exists
+# to route trace-emitting models, and on the Ollama fallback path even the R1
+# distill leaks its trace). DELEGATE_STRIP_THINK=0 force-disables even on the
+# reasoning tier, for a reasoning recipe whose own output may legitimately
+# contain </think>. No-op when the response has no </think>, when the call
+# failed (empty output), or when stripping is off. Applied before output_chars
 # and the metric/span emission below so every surface sees the clean answer.
-if [[ "${DELEGATE_STRIP_THINK:-}" == "1" && "$output" == *"</think>"* ]]; then
+strip_think=0
+if [[ "${DELEGATE_STRIP_THINK:-}" == "1" ]]; then
+  strip_think=1
+elif [[ "$tier" == "reasoning" && "${DELEGATE_STRIP_THINK:-}" != "0" ]]; then
+  strip_think=1
+fi
+if (( strip_think == 1 )) && [[ "$output" == *"</think>"* ]]; then
   output="${output#*</think>}"
   output="${output#"${output%%[![:space:]]*}"}"
 fi
