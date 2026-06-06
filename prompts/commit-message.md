@@ -29,14 +29,14 @@ The `--pretty=fuller` flag is load-bearing — the model learns the project's bo
 Draft a git commit message from the staged diff and recent-commit anchors below. Do not invent file paths, PR numbers, or features that are not present in the diff.
 
 Draft a git commit message in EXACTLY the same shape as these recent examples.
-Subject ≤ 72 chars starting with '<TYPE>:' (feat, fix, ci, docs, chore, refactor, test).
+Subject ≤ {{flavor_commit_subject_max}} chars starting with '<TYPE>:' ({{flavor_commit_types}}).
 Then a blank line, then 1-2 short flowing-prose paragraphs (NO bullet lists, NO indentation).
 
 Subject length — first match wins, non-negotiable:
 Count the characters in your subject line including the '<TYPE>:' prefix.
-If the count exceeds 72, REWRITE the subject before emitting. Drop adjectives,
+If the count exceeds {{flavor_commit_subject_max}}, REWRITE the subject before emitting. Drop adjectives,
 collapse "X and Y" pairs to whichever is primary, prefer the shorter
-synonym. The 72-char limit is a hard ceiling, not a guideline.
+synonym. The {{flavor_commit_subject_max}}-char limit is a hard ceiling, not a guideline.
 Wrong: feat: prompts/summarise-issue — OMIT-EMPTY positive directive + Comment-N citation guard (79 chars)
 Correct: feat: prompts/summarise-issue — OMIT-EMPTY + Comment-N guard (60 chars)
 
@@ -90,6 +90,8 @@ Output ONLY the commit message itself, nothing else.
 - `{{diff_stat}}` — output of `git diff --cached --stat` (and optionally the full `git diff --cached` if small).
 - `{{why}}` — one or two sentences explaining the motivation: what bug, what user-visible change, what reviewer feedback. Authored by the agent, not gathered from a command.
 - `{{type}}` — OPTIONAL. The conventional-commit type (`feat`, `fix`, `docs`, `chore`, `refactor`, `test`) when the caller already knows it. When set, it overrides the TYPE-selection priority list and forces the subject prefix verbatim, sidestepping the model's type inference entirely. Omit it to let the priority rules choose; an omitted value is blanked by `delegate.sh` so the placeholder collapses to empty.
+- `{{flavor_commit_subject_max}}` — subject-length ceiling in characters. Injected from the flavor profile (ADR 0013), not passed via `--var`: shipped default `72`, overridable per-user through `~/.claude/skills/delegate-local/profile.sh` (generate one with `scripts/derive-flavor.sh`).
+- `{{flavor_commit_types}}` — allowed conventional-commit type vocabulary for the subject prefix. Injected from the flavor profile, not passed via `--var`: shipped default `feat, fix, ci, docs, chore, refactor, test`, overridable per-user.
 
 ## Invocation
 
