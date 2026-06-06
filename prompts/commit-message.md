@@ -4,6 +4,9 @@ inputs:
   diff_stat: string
   why: string
   type: string?
+checks:
+  subject_max: {{flavor_commit_subject_max}}
+  no_padding_tail: true
 ---
 # commit-message
 

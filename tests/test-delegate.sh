@@ -4352,6 +4352,53 @@ assert_contains 'SUBJECT MAX: 50' "$payload" "flavor: profile override subject m
 assert_contains 'TYPES: feat, fix, docs' "$payload" "flavor: profile override type vocabulary injected"
 rm -rf "$tmp" "$metrics"
 
+# 32. Deterministic output checks (ADR 0014): a recipe's frontmatter `checks:`
+# block runs on the finalised output (warn-only) and reports failures on stderr
+# plus a checks_failed=N field on the delegate-meta line.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/chk.md" <<'EOF'
+---
+checks:
+  subject_max: 10
+  no_padding_tail: true
+---
+# chk
+
+## When to use
+Checks test recipe.
+
+## Prompt template
+
+```
+GO
+```
+
+## Calibration notes
+n/a
+EOF
+# 32a. Output that violates both checks -> two FAILED warnings + checks_failed=2.
+make_mock_curl_think "$tmp" 'This first line is far longer than ten chars\n\nthe body works, ensuring everything is fine'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe chk prose "go" </dev/null 2>&1)
+assert_contains "check 'subject_max' FAILED" "$out" "checks: subject_max failure reported on stderr"
+assert_contains "check 'no_padding_tail' FAILED" "$out" "checks: no_padding_tail failure reported on stderr"
+assert_contains "checks_failed=2" "$out" "checks: failure count rides the delegate-meta line"
+# 32b. Clean output -> no FAILED warnings, no checks_failed field.
+make_mock_curl_think "$tmp" 'short\n\nthe body returns a structured response and stops'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe chk prose "go" </dev/null 2>&1)
+if [[ "$out" == *"FAILED"* || "$out" == *"checks_failed="* ]]; then
+  echo "  FAIL  checks: clean output triggers no check warnings"; fail=$((fail+1))
+else
+  echo "  PASS  checks: clean output triggers no check warnings"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
