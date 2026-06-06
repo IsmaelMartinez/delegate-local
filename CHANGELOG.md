@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.15.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.14.0...v0.15.0) (2026-06-06)
+
+
+### Features
+
+* add DELEGATE_STRIP_THINK to drop reasoning traces from output ([#267](https://github.com/IsmaelMartinez/delegate-local/issues/267)) ([e409d68](https://github.com/IsmaelMartinez/delegate-local/commit/e409d686d5e7b38f4aeacebcb1b7fe3876c33414))
+* strip &lt;think&gt; traces on the reasoning tier and in audits ([#268](https://github.com/IsmaelMartinez/delegate-local/issues/268)) ([7d3d4ea](https://github.com/IsmaelMartinez/delegate-local/commit/7d3d4ea58f8fc7412a195cb9bc3f87d4a5913d0b))
+
+
+### Documentation
+
+* family-of-paraphrases FACTS anchor in plan-section-intro ([#264](https://github.com/IsmaelMartinez/delegate-local/issues/264)) ([1310b26](https://github.com/IsmaelMartinez/delegate-local/commit/1310b26e863fbd368f447aa2462447045a355975))
+* gate model-currency moves through audit-models.sh in ROADMAP ([#265](https://github.com/IsmaelMartinez/delegate-local/issues/265)) ([97d614c](https://github.com/IsmaelMartinez/delegate-local/commit/97d614c01850170dcc5a23fce6172c7d87fd444d))
+* Qwen3-Next-80B-A3B-Thinking reasoning audit and roadmap update ([#266](https://github.com/IsmaelMartinez/delegate-local/issues/266)) ([f5aefa2](https://github.com/IsmaelMartinez/delegate-local/commit/f5aefa2b3be629aff1fa5ac38cd8272075bc3d51))
+
 ## [0.14.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.13.0...v0.14.0) (2026-06-04)
 
 
