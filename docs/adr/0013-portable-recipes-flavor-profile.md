@@ -1,0 +1,43 @@
+# 13. Portable recipes via a flavor profile and onboarding
+
+Date: 2026-06-06
+
+## Status
+
+Proposed.
+
+This ADR captures a design direction reached through analysis, not a decision to build. It is recorded so the reasoning is durable before any implementation, and so the work that precedes it — the v0.15.0 release and a review of recent session usage — happens with the target written down.
+
+## Context
+
+The skill is now used across several projects, not just its own repository — the recent metrics show delegations tagged to `teams-for-linux`, `repo-butler`, `github-issue-triage-bot` and others alongside the `delegate-local` dogfooding. But while the engine travels, the recipes do not: they are tuned to one person's taste. Making the skill genuinely reusable means letting a new user configure it to their own flavor rather than inheriting the maintainer's.
+
+The delegate-local recipes bake in the maintainer's style preferences and discovery history alongside the generic engine logic. A new user who installs the skill inherits this specific commit history as their style guide, which acts as noise and is incorrect for their context. The portability problem resides in this flavor layer rather than the underlying engine, so factoring that layer out is the whole of the work.
+
+It helps to separate three different kinds of "specific to me" that are tangled together today. The first is the engine — `delegate.sh`, the tier-routing logic, `pick-model.sh`'s machinery, the metrics plumbing, the recipe templating. That layer is already generic and holds no opinion about any user. The second is the environment — which models are installed, how much memory the host has, which ports MLX and Ollama listen on. Those are facts about a machine, and the right response is to detect them rather than ask; the pattern already exists, since `scripts/init.sh` probes `ollama list` and prints a `config.sh` that `pick-model.sh` sources after its shipped defaults. The third is flavor — the maintainer's judgment about what good output looks like — and that is the layer this ADR is about.
+
+Grounding the flavor problem in a single recipe makes its depth clear. In `prompts/commit-message.md`, the frontmatter and the one-line task ("draft a conventional commit from this diff and these recent-commit anchors") are genuinely generic, perhaps five lines. Everything else is the maintainer's: the 72-character subject ceiling with a Wrong/Correct pair drawn from this repo's own PR, the conventional-commit type-priority list tuned against this project's empirical type-frequency, the `(#NN)`-rejection rule that exists because of how this repo's GitHub squash-merges format subjects, the long anti-padding blocklist of forbidden participles and "This-X" tails distilled from dozens of the maintainer's MISS observations, and below all of it 27 dated calibration entries citing PRs #73 through #213. None of that is a style knob. It is a lab notebook embedded in the prompt. The same coupling shows up elsewhere in the inventory: the maintainer's email and a `RELATED_PROJECTS` list in the MCP server, test fixtures hardcoded to `"owner": "ismael"`, a 128 GB hardware envelope baked into the model-currency audit, and model preference lists that assume a particular set of pulled models.
+
+The deeper observation is that a recipe is really three things fused into one prompt: a generic structure that should ship with the skill, a small set of flavor parameters (subject length, voice, whether conventional-commits, anti-padding on or off), and derived examples (the Wrong/Correct pairs, the type-frequency baseline, the shape anchors). Today all three live in the prompt text. Portability requires pulling the second and third out — and, crucially, the third should be generated from the new user's own corpus rather than configured by hand.
+
+## Decision
+
+The proposed direction is a three-layer separation. The engine ships unchanged. The environment is detected. The flavor lives in a per-user profile — a file sibling to the existing `config.sh` — that `delegate.sh` loads so its keys are available as substitution variables, reusing the `{{var}}` and `inputs:` machinery the recipes already have. A recipe that references `{{voice}}` or `{{subject_max}}` is a small change to an existing mechanism, not a new system.
+
+The recipes split along the three-part structure above. The generic template and a set of safe default examples stay in the repo. The flavor parameters and the derived examples move into the profile. The maintainer's calibration history and the `ismael` fixtures move out of the shipped recipes entirely — into the experiments and dev tree, or into the maintainer's own profile — so a new user receives a clean recipe rather than someone else's notebook.
+
+The piece that makes this usable is onboarding, which is where the user's idea of "analyze my sessions and build it to my liking" lands. The flow probes the environment first (extending `init.sh` from models to also detect the memory envelope (via `sysctl hw.memsize` on macOS, `/proc/meminfo` or `free` on Linux) and the active endpoints — facts, no questions); then analyzes the user's own corpus (their `git log`, recent commit bodies and PR descriptions, their `CLAUDE.md` if present) to infer subject-length norms, conventional-commit type distribution, and a prose-versus-bullets voice, and to derive the per-recipe Wrong/Correct examples from the user's own best work; then asks a short wizard of questions only where inference is genuinely ambiguous, each one pre-filled with the detected value so it is confirm-or-edit rather than a blank form; then writes the profile; then previews two or three recipes against the user's own recent inputs and lets them keep-or-fix, iterating once. The existing HIT/MISS feedback loop is exactly the calibration mechanism for that preview step, and it keeps refining the profile afterwards.
+
+Two areas are deliberately scoped differently. The tier-routing policy in `SKILL.md` — which task types are allowed on which tier, and the scope boundary that forbids delegating code-correctness judgments — is configurable in principle but deferred: those boundaries exist for verifiability reasons and should not be loosened casually. The metrics and observability stack stays opt-in, as it already is via the `NO_METRICS` switch, since it is the maintainer's improvement process rather than a feature every user wants; the local JSONL-plus-feedback core, however, is worth reframing as a genuine user feature because it is what powers onboarding's calibration step.
+
+The recommended first step, to validate the whole direction cheaply, is to split a single recipe — `commit-message` — end to end into generic template plus profile variables plus corpus-derived examples, proving that flavor can be lifted out and regenerated before generalizing to the rest of the library.
+
+## Consequences
+
+This makes the skill adoptable by people other than the maintainer, which is the point. The encouraging part is that it is mostly a factoring exercise rather than a rebuild: the engine is already generic, the `{{var}}` substitution and `inputs:` frontmatter already parameterize recipes, the `init.sh`/`config.sh` pattern already personalizes the environment layer, and the feedback loop already exists as the calibration mechanism. The new surface is a profile schema and a loader in `delegate.sh`, the per-recipe refactor, and an onboarding command with a corpus-analysis step.
+
+The maintainer becomes just another profile. Dogfooding continues unchanged — the maintainer's flavor simply lives in their profile rather than in the shipped prompts — and the recipes the project ships get cleaner as a side effect, since the calibration history that currently bloats them moves out.
+
+The main risk is a thin corpus: a new user with little commit history yields weak derived examples. The mitigation is to fall back to the shipped generic examples when the corpus is too sparse to derive from, and let the feedback loop strengthen the profile over the first sessions. A second cost is that splitting every recipe is real work; the commit-message proof comes first precisely so the pattern is validated before that cost is paid across the library.
+
+Deferred, not retired: making the tier-routing policy configurable, and the full per-recipe rollout beyond the commit-message proof. This ADR is also distinct from the separate idea of a generic output-constraint layer (deterministic post-generation checks for length, padding, and source-overlap); that concerns output validation, a different axis, and is out of scope here.
