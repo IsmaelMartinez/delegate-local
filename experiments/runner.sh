@@ -184,6 +184,20 @@ sampling_presence_penalty=""
 [[ -n "${DELEGATE_TOP_K:-}" ]] && sampling_top_k="$DELEGATE_TOP_K"
 [[ -n "${DELEGATE_PRESENCE_PENALTY:-}" ]] && sampling_presence_penalty="$DELEGATE_PRESENCE_PENALTY"
 
+# Strip a leading <think>...</think> reasoning trace from a model response,
+# mirroring delegate.sh's DELEGATE_STRIP_THINK so the baseline measures the same
+# clean output production produces for trace-emitting reasoning models. Active
+# only when DELEGATE_STRIP_THINK=1 (model-change-audit.sh sets it for reasoning-
+# tier audits); a no-op otherwise or when the response has no </think>.
+strip_think_trace() {
+  local s="$1"
+  if [[ "${DELEGATE_STRIP_THINK:-}" == "1" && "$s" == *"</think>"* ]]; then
+    s="${s#*</think>}"
+    s="${s#"${s%%[![:space:]]*}"}"
+  fi
+  printf '%s' "$s"
+}
+
 run_task_api() {
   # Posts the (fixture || directive) input to the backend's instruction
   # endpoint with reasoning disabled — mirrors how scripts/delegate.sh routes
@@ -219,6 +233,7 @@ run_task_api() {
     response=$(curl -sS --fail -X POST "$host/api/generate" -d @- <<<"$payload") || status=$?
     if (( status == 0 )); then
       body=$(jq -r '.response // ""' <<<"$response")
+      body=$(strip_think_trace "$body")
     else
       body="API_CALL_FAILED status=$status"
     fi
@@ -240,6 +255,7 @@ run_task_api() {
     response=$(curl -sS --fail -X POST "$host/v1/chat/completions" -d @- <<<"$payload") || status=$?
     if (( status == 0 )); then
       body=$(jq -r '.choices[0].message.content // ""' <<<"$response")
+      body=$(strip_think_trace "$body")
     else
       body="API_CALL_FAILED status=$status"
     fi

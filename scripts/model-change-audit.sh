@@ -121,6 +121,16 @@ else
   fi
 fi
 
+# Reasoning-tier audits mirror production dispatch: reasoning models emit
+# <think> traces that the gate-2 baseline runner must strip to score the real
+# (production) output. delegate.sh strips for the reasoning tier by default, so
+# signal the runner to do the same via DELEGATE_STRIP_THINK. A caller-set
+# DELEGATE_STRIP_THINK=0 opts out. Gate 1 (eval) uses format:json which already
+# suppresses the trace, so this only affects gate 2.
+if [[ "$tier" == "reasoning" && "${DELEGATE_STRIP_THINK:-}" != "0" ]]; then
+  export DELEGATE_STRIP_THINK=1
+fi
+
 # Slug mirrors experiments/runner.sh: tr '/:.' '___'.
 slug_of() { printf '%s' "$1" | tr '/:.' '___'; }
 new_slug=$(slug_of "$new_model")

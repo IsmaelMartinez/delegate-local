@@ -4265,6 +4265,43 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq "PREFILLED_ANSWER_456" "$out" "strip-think on: prefilled-open-tag trace stripped to answer"
 rm -rf "$tmp" "$metrics"
 
+# 30e. Reasoning tier strips the trace BY DEFAULT (no DELEGATE_STRIP_THINK set)
+# — reasoning models emit traces and the tier exists to route them. Needs an
+# ollama mock listing a reasoning model so pick-model resolves the tier.
+tmp=$(mktemp -d)
+cat > "$tmp/ollama" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  list) printf 'NAME             ID SIZE   MODIFIED\ndeepseek-r1:32b  rr 19 GB  1 day ago\n' ;;
+esac
+EOF
+chmod +x "$tmp/ollama"
+make_mock_curl_think "$tmp" '<think>\nreasoning here\n</think>\n\nREASONING_ANSWER_789'
+metrics=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" reasoning "infer something" </dev/null 2>/dev/null)
+assert_eq "REASONING_ANSWER_789" "$out" "strip-think: reasoning tier strips by default (no env set)"
+rm -rf "$tmp" "$metrics"
+
+# 30f. Reasoning tier with DELEGATE_STRIP_THINK=0 force-disables the strip
+# (escape hatch for a reasoning recipe whose own output may contain </think>).
+tmp=$(mktemp -d)
+cat > "$tmp/ollama" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  list) printf 'NAME             ID SIZE   MODIFIED\ndeepseek-r1:32b  rr 19 GB  1 day ago\n' ;;
+esac
+EOF
+chmod +x "$tmp/ollama"
+make_mock_curl_think "$tmp" '<think>\nreasoning here\n</think>\n\nREASONING_ANSWER_789'
+metrics=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_STRIP_THINK=0 \
+  bash "$SCRIPT" reasoning "infer something" </dev/null 2>/dev/null)
+assert_contains "<think>" "$out" "strip-think: reasoning tier + STRIP_THINK=0 preserves trace"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

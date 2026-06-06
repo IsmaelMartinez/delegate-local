@@ -1,0 +1,175 @@
+MODEL: qwq:32b-q8_0
+BACKEND: ollama
+OLLAMA_API: 1
+DATE: 2026-06-05T23:52:26Z
+REPS: 3
+T3_SNAPSHOT: 2026-04-28
+T4_SNAPSHOT: 2026-05-24
+T5_SNAPSHOT: 2026-05-11
+T6_SNAPSHOT: 2026-05-11
+
+===== T1-doc-drift rep 1 =====
+DURATION_SEC: 31
+RUN_STATUS: 0
+OUTPUT:
+CLAIM_A: still-open — There is no "How we did" retrospective page or related code in the repo.  
+CLAIM_B: already-done — No matches for defaultProjection/DEFAULT_PROJECTION in scripts/src, implying it's retired.  
+CLAIM_C: already-done — apply-party-positions.ts uses yaml.stringify({ lineWidth: 0 }) as required.  
+CLAIM_D: already-done — All six cached loaders in src/lib/data.ts use consistent shallow freeze, no deep-freeze needed.
+
+===== T2-party-config rep 1 =====
+DURATION_SEC: 92
+RUN_STATUS: 0
+OUTPUT:
+CLEAN
+
+===== T3-merge-patterns rep 1 =====
+DURATION_SEC: 89
+RUN_STATUS: 0
+OUTPUT:
+CONCERN | FILE_OR_PATTERN_TO_VERIFY  
+---|---  
+Roadmap updates may not reflect April 28 audit findings | `docs/ROADMAP.md` (grep for audit dates or candidate references)  
+Region card counts may still mismatch destination pages | `src/pages/index.astro` (grep for region card count logic)  
+Branding/listPosition normalizations may have inconsistencies | `data/regional-candidates/*.yaml` (grep for `IGV` or `listPosition` fields)  
+Hardcoded chart colors may remain after centralization | `src/components/ConstituencyMap.tsx` and `PollsChart.tsx` (grep for hex color codes like `#RRGGBB`)
+
+===== T4-commit-message rep 1 =====
+DURATION_SEC: 75
+RUN_STATUS: 0
+OUTPUT:
+feat: add T4 commit-message fixture to empirical-accuracy framework
+
+Introduces the T4 commit-message fixture to the empirical-accuracy framework, measuring models' adherence to structural checks derived from past misses. The experiments/runner.sh gains --t4-snapshot DATE to version the fixture alongside existing T3 conventions.
+
+The score-t4.sh script evaluates outputs against six deterministic checks: subject length limits, conventional-commit type prefixes, absence of fake (#NN) suffixes, flush-left body text, no bullet lists, and no participial-padding tails. These checks codify real past failures observed in this project's sessions, enabling direct comparison of model performance against recipe calibration metrics.
+
+===== T5-json-shape rep 1 =====
+DURATION_SEC: 52
+RUN_STATUS: 0
+OUTPUT:
+{
+"owner": "ismael",
+"items": [
+    {"task": "update the data-retention policy doc to reflect the new 90-day window", "due": "2026-04-22"},
+    {"task": "draft the SOC2 type-II evidence pack for the auth service", "due": "2026-05-08"},
+    {"task": "review the privacy impact assessment for the new search index", "due": "2026-04-30"}
+]
+}
+
+===== T6-regex-generation rep 1 =====
+DURATION_SEC: 165
+RUN_STATUS: 0
+OUTPUT:
+^\d{5}(-\d{4})?$
+
+===== T1-doc-drift rep 2 =====
+DURATION_SEC: 33
+RUN_STATUS: 0
+OUTPUT:
+CLAIM_A: still-open — There is no "How we did" retrospective page or related code in the repo.  
+CLAIM_B: already-done — No matches for defaultProjection/DEFAULT_PROJECTION in scripts/src, implying it's retired.  
+CLAIM_C: already-done — apply-party-positions.ts uses yaml.stringify({ lineWidth: 0 }) as required.  
+CLAIM_D: already-done — All six cached loaders in src/lib/data.ts use consistent shallow freeze, no deep-freeze needed.
+
+===== T2-party-config rep 2 =====
+DURATION_SEC: 101
+RUN_STATUS: 0
+OUTPUT:
+CLEAN
+
+===== T3-merge-patterns rep 2 =====
+DURATION_SEC: 96
+RUN_STATUS: 0
+OUTPUT:
+CONCERN | FILE_OR_PATTERN_TO_VERIFY  
+---|---  
+Roadmap updates may not reflect April 28 audit findings | `docs/ROADMAP.md` (grep for audit dates or candidate references)  
+Region card counts may still mismatch destination pages | `src/pages/index.astro` (grep for region card count logic)  
+Branding/listPosition normalizations may have inconsistencies | `data/regional-candidates/*.yaml` (grep for `IGV` or `listPosition` fields)  
+Hardcoded chart colors may remain after centralization | `src/components/ConstituencyMap.tsx` and `PollsChart.tsx` (grep for hex color codes like `#RRGGBB`)
+
+===== T4-commit-message rep 2 =====
+DURATION_SEC: 79
+RUN_STATUS: 0
+OUTPUT:
+feat: add T4 commit-message fixture to empirical-accuracy framework
+
+Introduces the T4 commit-message fixture to the empirical-accuracy framework, measuring models' adherence to structural checks derived from past misses. The experiments/runner.sh gains --t4-snapshot DATE to version the fixture alongside existing T3 conventions.
+
+The score-t4.sh script evaluates outputs against six deterministic checks: subject length limits, conventional-commit type prefixes, absence of fake (#NN) suffixes, flush-left body text, no bullet lists, and no participial-padding tails. These checks codify real past failures observed in this project's sessions, enabling direct comparison of model performance against recipe calibration metrics.
+
+===== T5-json-shape rep 2 =====
+DURATION_SEC: 54
+RUN_STATUS: 0
+OUTPUT:
+{
+"owner": "ismael",
+"items": [
+    {"task": "update the data-retention policy doc to reflect the new 90-day window", "due": "2026-04-22"},
+    {"task": "draft the SOC2 type-II evidence pack for the auth service", "due": "2026-05-08"},
+    {"task": "review the privacy impact assessment for the new search index", "due": "2026-04-30"}
+]
+}
+
+===== T6-regex-generation rep 2 =====
+DURATION_SEC: 167
+RUN_STATUS: 0
+OUTPUT:
+^\d{5}(-\d{4})?$
+
+===== T1-doc-drift rep 3 =====
+DURATION_SEC: 34
+RUN_STATUS: 0
+OUTPUT:
+CLAIM_A: still-open — There is no "How we did" retrospective page or related code in the repo.  
+CLAIM_B: already-done — No matches for defaultProjection/DEFAULT_PROJECTION in scripts/src, implying it's retired.  
+CLAIM_C: already-done — apply-party-positions.ts uses yaml.stringify({ lineWidth: 0 }) as required.  
+CLAIM_D: already-done — All six cached loaders in src/lib/data.ts use consistent shallow freeze, no deep-freeze needed.
+
+===== T2-party-config rep 3 =====
+DURATION_SEC: 102
+RUN_STATUS: 0
+OUTPUT:
+CLEAN
+
+===== T3-merge-patterns rep 3 =====
+DURATION_SEC: 99
+RUN_STATUS: 0
+OUTPUT:
+CONCERN | FILE_OR_PATTERN_TO_VERIFY  
+---|---  
+Roadmap updates may not reflect April 28 audit findings | `docs/ROADMAP.md` (grep for audit dates or candidate references)  
+Region card counts may still mismatch destination pages | `src/pages/index.astro` (grep for region card count logic)  
+Branding/listPosition normalizations may have inconsistencies | `data/regional-candidates/*.yaml` (grep for `IGV` or `listPosition` fields)  
+Hardcoded chart colors may remain after centralization | `src/components/ConstituencyMap.tsx` and `PollsChart.tsx` (grep for hex color codes like `#RRGGBB`)
+
+===== T4-commit-message rep 3 =====
+DURATION_SEC: 979
+RUN_STATUS: 0
+OUTPUT:
+feat: add T4 commit-message fixture to empirical-accuracy framework
+
+Introduces the T4 commit-message fixture to the empirical-accuracy framework, measuring models' adherence to structural checks derived from past misses. The experiments/runner.sh gains --t4-snapshot DATE to version the fixture alongside existing T3 conventions.
+
+The score-t4.sh script evaluates outputs against six deterministic checks: subject length limits, conventional-commit type prefixes, absence of fake (#NN) suffixes, flush-left body text, no bullet lists, and no participial-padding tails. These checks codify real past failures observed in this project's sessions, enabling direct comparison of model performance against recipe calibration metrics.
+
+===== T5-json-shape rep 3 =====
+DURATION_SEC: 968
+RUN_STATUS: 0
+OUTPUT:
+{
+"owner": "ismael",
+"items": [
+    {"task": "update the data-retention policy doc to reflect the new 90-day window", "due": "2026-04-22"},
+    {"task": "draft the SOC2 type-II evidence pack for the auth service", "due": "2026-05-08"},
+    {"task": "review the privacy impact assessment for the new search index", "due": "2026-04-30"}
+]
+}
+
+===== T6-regex-generation rep 3 =====
+DURATION_SEC: 2866
+RUN_STATUS: 0
+OUTPUT:
+^\d{5}(-\d{4})?$
+
