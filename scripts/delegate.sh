@@ -1168,9 +1168,16 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
   check_first_line=$(printf '%s' "$output" | awk 'NF { print; exit }')
   check_last_line=$(printf '%s' "$output" | awk 'NF { l=$0 } END { print l }')
   while IFS= read -r cline; do
-    [[ "$cline" =~ ^[[:space:]]*$ ]] && continue
-    ckey=$(printf '%s' "$cline" | sed -E 's/^[[:space:]]*([a-zA-Z_]+):.*/\1/')
-    cval=$(printf '%s' "$cline" | sed -E 's/^[[:space:]]*[a-zA-Z_]+:[[:space:]]*//; s/[[:space:]]*$//')
+    # Parse `  key: value` in-process (no sed subshells in this per-line loop);
+    # non-matching/blank lines are skipped. The nested-expansion trim drops any
+    # trailing whitespace on the value (bash 3.2 safe).
+    if [[ "$cline" =~ ^[[:space:]]*([a-zA-Z_]+):[[:space:]]*(.*)$ ]]; then
+      ckey="${BASH_REMATCH[1]}"
+      cval="${BASH_REMATCH[2]}"
+      cval="${cval%"${cval##*[![:space:]]}"}"
+    else
+      continue
+    fi
     case "$ckey" in
       subject_max)
         if [[ "$cval" =~ ^[0-9]+$ ]] && (( ${#check_first_line} > cval )); then
