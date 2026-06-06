@@ -729,7 +729,9 @@ if [[ -n "$recipe" ]]; then
   # Process substitution (not a pipe) so the substitutions land in this shell.
   if [[ "$recipe_template" == *'{{flavor_'* ]]; then
     while IFS='=' read -r fkey fval; do
-      [[ -z "$fkey" ]] && continue
+      # Defence-in-depth: only act on flavor_* keys, so a stray line (e.g. a
+      # value with an embedded newline) can't substitute a non-flavor placeholder.
+      [[ "$fkey" != flavor_* ]] && continue
       if ! printf '%s' "$satisfied_keys" | grep -Fxq "{{${fkey}}}"; then
         recipe_template="${recipe_template//\{\{$fkey\}\}/$fval}"
         satisfied_keys="${satisfied_keys}{{${fkey}}}"$'\n'
