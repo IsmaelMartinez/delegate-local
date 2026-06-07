@@ -1175,7 +1175,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
   # documented there). The This-X arm stays enumerated to bound false positives
   # but is extended with the gap verbs the same analysis surfaced (prevents,
   # avoids, serves). Warn-only framing keeps any false positive cheap.
-  padding_re=',[[:space:]]+[a-z]{3,}ing([[:space:]]|[.!?,]|$)|(^|[.!?][[:space:]])(this[[:space:]]+(means|approach|ensures|enables|guarantees|delivers|provides|prevents|avoids|serves)|in summary|overall|consequently|ultimately|in effect|as a result)\b|(going|moving)[[:space:]]+forward|clos(es|ing)[[:space:]]+the[[:space:]]+(gap|loop)'
+  padding_re=',[[:space:]]+[a-z]{3,}ing([[:space:]]|[.!?,]|$)|(^|[.!?][[:space:]]+)(this[[:space:]]+(means|approach|ensures|enables|guarantees|delivers|provides|prevents|avoids|serves)|in summary|overall|consequently|ultimately|in effect|as a result)\b|(going|moving)[[:space:]]+forward|clos(es|ing)[[:space:]]+the[[:space:]]+(gap|loop)'
   check_first_line=$(printf '%s' "$output" | awk 'NF { print; exit }')
   check_last_line=$(printf '%s' "$output" | awk 'NF { l=$0 } END { print l }')
   while IFS= read -r cline; do
@@ -1208,12 +1208,16 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         # caller's --var type=X echoed here; an omitted (optional) type collapses
         # to empty and the check is skipped — it only fires when the caller
         # asserted a type and the model ignored it (a recurring MISS the recipe
-        # itself named as the wrapper-enforcement escalation). Accepts the full
-        # conventional-commit subject shape: type, type(scope), type!, all with
-        # the trailing colon.
+        # itself named as the wrapper-enforcement escalation). Compared with pure
+        # string ops, not a regex built from cval, so a regex metacharacter in
+        # the caller's --var type can't break the match. Strips the optional
+        # `!` and `(scope)` from the subject's pre-colon segment so the full
+        # conventional shape (type, type(scope), type!, type(scope)!) is honoured.
         if [[ -n "$cval" ]]; then
-          type_re="^${cval}(\([^)]*\))?!?:"
-          if [[ ! "$check_first_line" =~ $type_re ]]; then
+          subj_type="${check_first_line%%:*}"   # segment before the first colon
+          subj_type="${subj_type%!}"            # drop a trailing ! (type!: form)
+          subj_type="${subj_type%%(*}"          # drop a (scope) suffix
+          if [[ "$check_first_line" != *:* || "$subj_type" != "$cval" ]]; then
             echo "delegate: check 'subject_type' FAILED — subject does not start with '$cval:' (got '${check_first_line%%:*}:')" >&2
             checks_failed=$((checks_failed + 1))
           fi
