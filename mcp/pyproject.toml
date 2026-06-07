@@ -1,6 +1,6 @@
 [project]
 name = "delegate-local-mcp"
-version = "0.15.0"
+version = "0.16.0"
 description = "MCP server wrapping delegate-local's pick-model.sh, audit-models.sh, and prompt recipe library so non-Claude tools can query routing and recipe recommendations programmatically."
 readme = "README.md"
 requires-python = ">=3.11"
