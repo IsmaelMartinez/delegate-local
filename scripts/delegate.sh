@@ -693,6 +693,21 @@ if [[ -n "$recipe" ]]; then
     exit 2
   fi
 
+  # Optional frontmatter `checks:` block (ADR 0014, deterministic output
+  # constraints). Each indented `name: value` line declares a check that runs
+  # on the finalised output (warn-only). Extracted here so it rides the same
+  # {{key}} substitution as the template below — a check value may reference a
+  # flavor placeholder (e.g. `subject_max: {{flavor_commit_subject_max}}`) and
+  # stay consistent with the prompt. Recipes with no checks: block are untouched.
+  recipe_checks=$(awk '
+    BEGIN { in_fm=0; in_checks=0 }
+    NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
+    in_fm && /^---[[:space:]]*$/ { exit }
+    in_fm && /^checks:[[:space:]]*$/ { in_checks=1; next }
+    in_fm && in_checks && /^[[:space:]]+[a-zA-Z_]/ { print; next }
+    in_fm && in_checks && /^[a-zA-Z_]/ { in_checks=0 }
+  ' "$recipe_file")
+
   # Identify the placeholders the *original* template requires. Validating
   # against this list — not the post-substitution string — means substituted
   # values that legitimately contain `{{...}}` (Vue/Angular bindings, Go
@@ -716,6 +731,7 @@ if [[ -n "$recipe" ]]; then
       exit 2
     fi
     recipe_template="${recipe_template//\{\{$key\}\}/$value}"
+    recipe_checks="${recipe_checks//\{\{$key\}\}/$value}"
     satisfied_keys="${satisfied_keys}{{${key}}}"$'\n'
   done
 
@@ -727,11 +743,15 @@ if [[ -n "$recipe" ]]; then
   # the template actually using a {{flavor_*}} placeholder, so recipes that don't
   # opt in skip the loader subprocess entirely (no cost, zero behaviour change).
   # Process substitution (not a pipe) so the substitutions land in this shell.
-  if [[ "$recipe_template" == *'{{flavor_'* ]]; then
+  if [[ "$recipe_template$recipe_checks" == *'{{flavor_'* ]]; then
     while IFS='=' read -r fkey fval; do
       # Defence-in-depth: only act on flavor_* keys, so a stray line (e.g. a
       # value with an embedded newline) can't substitute a non-flavor placeholder.
       [[ "$fkey" != flavor_* ]] && continue
+      # The checks block always resolves flavor refs (independent of the
+      # template's --var satisfaction state) so e.g. subject_max stays in sync
+      # with the prompt's flavor cap.
+      recipe_checks="${recipe_checks//\{\{$fkey\}\}/$fval}"
       if ! printf '%s' "$satisfied_keys" | grep -Fxq "{{${fkey}}}"; then
         recipe_template="${recipe_template//\{\{$fkey\}\}/$fval}"
         satisfied_keys="${satisfied_keys}{{${fkey}}}"$'\n'
@@ -1132,6 +1152,52 @@ if (( strip_think == 1 )) && [[ "$output" == *"</think>"* ]]; then
   output="${output#"${output%%[![:space:]]*}"}"
 fi
 
+# Deterministic output checks (ADR 0014): a recipe's frontmatter `checks:` block
+# declares constraints that run on the finalised output. Warn-only — they never
+# change the output or the exit status. The value is converting a failure the
+# prompt cannot reliably prevent under greedy decoding (an over-long subject, a
+# trailing padding clause) from "the caller might notice" into "the wrapper
+# always flags it". Gated on the same clean-stderr conditions as the meta line
+# so batch runs (NO_META) and failed calls stay quiet. The surfaced count rides
+# the delegate-meta line below as checks_failed=N.
+checks_failed=0
+if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${recipe_checks:-}" ]]; then
+  # Signatures of the recurring BODY_NO_PADDING failure: a trailing participial
+  # clause, a "This-X" declarative rephrase, or a known restating phrase.
+  padding_re=',[[:space:]]+(ensuring|allowing|making|enabling|providing|keeping|reflecting|supporting|highlighting|underscoring|replacing|leading to)\b|(^|[.][[:space:]])(this (means|approach|ensures|enables|guarantees|delivers|provides)|in summary|overall|consequently|ultimately|in effect|as a result)\b|(going|moving) forward|clos(es|ing) the (gap|loop)'
+  check_first_line=$(printf '%s' "$output" | awk 'NF { print; exit }')
+  check_last_line=$(printf '%s' "$output" | awk 'NF { l=$0 } END { print l }')
+  while IFS= read -r cline; do
+    # Parse `  key: value` in-process (no sed subshells in this per-line loop);
+    # non-matching/blank lines are skipped. The nested-expansion trim drops any
+    # trailing whitespace on the value (bash 3.2 safe).
+    if [[ "$cline" =~ ^[[:space:]]*([a-zA-Z_]+):[[:space:]]*(.*)$ ]]; then
+      ckey="${BASH_REMATCH[1]}"
+      cval="${BASH_REMATCH[2]}"
+      cval="${cval%"${cval##*[![:space:]]}"}"
+    else
+      continue
+    fi
+    case "$ckey" in
+      subject_max)
+        if [[ "$cval" =~ ^[0-9]+$ ]] && (( ${#check_first_line} > cval )); then
+          echo "delegate: check 'subject_max' FAILED — first line is ${#check_first_line} chars (> $cval)" >&2
+          checks_failed=$((checks_failed + 1))
+        fi
+        ;;
+      no_padding_tail)
+        if [[ "$cval" == "true" ]] && printf '%s' "$check_last_line" | grep -Eiq "$padding_re"; then
+          echo "delegate: check 'no_padding_tail' FAILED — output ends on a padding/restating clause" >&2
+          checks_failed=$((checks_failed + 1))
+        fi
+        ;;
+      *)
+        echo "delegate: unknown check '$ckey' in recipe '$recipe' — ignored" >&2
+        ;;
+    esac
+  done <<< "$recipe_checks"
+fi
+
 end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 duration_ms=$((end_epoch_ms - start_epoch_ms))
 
@@ -1192,6 +1258,9 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] \
   meta="model=\"$model\" tier=\"$tier\" backend=\"$backend\" tokens_local=$tokens_local duration_ms=$duration_ms"
   if [[ -n "$recipe" ]]; then
     meta="$meta recipe=\"$recipe\""
+  fi
+  if (( checks_failed > 0 )); then
+    meta="$meta checks_failed=$checks_failed"
   fi
   echo "delegate-meta: $meta" >&2
 fi
