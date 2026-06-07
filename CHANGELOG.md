@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.16.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.15.0...v0.16.0) (2026-06-07)
+
+
+### Features
+
+* deterministic output-constraint checks (ADR 0014) ([#273](https://github.com/IsmaelMartinez/delegate-local/issues/273)) ([53d3f25](https://github.com/IsmaelMartinez/delegate-local/commit/53d3f253502305bff73603f22db0fcff796aa0c1))
+* portable recipes — flavor profile for commit-message (ADR 0013) ([#272](https://github.com/IsmaelMartinez/delegate-local/issues/272)) ([eab320f](https://github.com/IsmaelMartinez/delegate-local/commit/eab320f546787cf83c42d15206dd082d93919b00))
+
+
+### Documentation
+
+* ADR 0013 — portable recipes via a flavor profile and onboarding ([#271](https://github.com/IsmaelMartinez/delegate-local/issues/271)) ([92c93c9](https://github.com/IsmaelMartinez/delegate-local/commit/92c93c9c14eb0a12d0e4dee39fbb13a6a50a9374))
+* mark ROADMAP Topic A resolved after reasoning-audit results ([#269](https://github.com/IsmaelMartinez/delegate-local/issues/269)) ([dfabbbc](https://github.com/IsmaelMartinez/delegate-local/commit/dfabbbcd60708875b5970de15ffff53d83cd9fdb))
+
 ## [0.15.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.14.0...v0.15.0) (2026-06-06)
 
 
