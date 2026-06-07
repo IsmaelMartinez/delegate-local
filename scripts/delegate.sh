@@ -775,6 +775,7 @@ if [[ -n "$recipe" ]]; then
       if (( declared_optional[oidx] == 1 )) \
          && ! printf '%s' "$satisfied_keys" | grep -Fxq "{{${dk}}}"; then
         recipe_template="${recipe_template//\{\{$dk\}\}/}"
+        recipe_checks="${recipe_checks//\{\{$dk\}\}/}"
         satisfied_keys="${satisfied_keys}{{${dk}}}"$'\n'
       fi
       oidx=$((oidx + 1))
@@ -1163,8 +1164,18 @@ fi
 checks_failed=0
 if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${recipe_checks:-}" ]]; then
   # Signatures of the recurring BODY_NO_PADDING failure: a trailing participial
-  # clause, a "This-X" declarative rephrase, or a known restating phrase.
-  padding_re=',[[:space:]]+(ensuring|allowing|making|enabling|providing|keeping|reflecting|supporting|highlighting|underscoring|replacing|leading to)\b|(^|[.][[:space:]])(this (means|approach|ensures|enables|guarantees|delivers|provides)|in summary|overall|consequently|ultimately|in effect|as a result)\b|(going|moving) forward|clos(es|ing) the (gap|loop)'
+  # clause, a "This-X" declarative rephrase, or a known restating phrase. The
+  # participial arm is STRUCTURAL — `, <word>ing` matches any gerund tail rather
+  # than an enumerated verb list, because the 2026-06-07 MISS-cluster analysis
+  # showed ~3/4 of cited padding verbs (confirming, lifting, undermining,
+  # preserving, documenting…) were unenumerated: per-verb enumeration is a
+  # treadmill the model walks off by reaching for the next unlisted verb. This
+  # mirrors the proven matcher in experiments/score-t4.sh (`[a-z]{3,}ing`, whose
+  # {3,} floor and accepted `, string,` false positive carry the same trade-off,
+  # documented there). The This-X arm stays enumerated to bound false positives
+  # but is extended with the gap verbs the same analysis surfaced (prevents,
+  # avoids, serves). Warn-only framing keeps any false positive cheap.
+  padding_re=',[[:space:]]+[a-z]{3,}ing([[:space:]]|[.!?,]|$)|(^|[.!?][[:space:]]+)(this[[:space:]]+(means|approach|ensures|enables|guarantees|delivers|provides|prevents|avoids|serves)|in summary|overall|consequently|ultimately|in effect|as a result)\b|(going|moving)[[:space:]]+forward|clos(es|ing)[[:space:]]+the[[:space:]]+(gap|loop)'
   check_first_line=$(printf '%s' "$output" | awk 'NF { print; exit }')
   check_last_line=$(printf '%s' "$output" | awk 'NF { l=$0 } END { print l }')
   while IFS= read -r cline; do
@@ -1189,6 +1200,27 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         if [[ "$cval" == "true" ]] && printf '%s' "$check_last_line" | grep -Eiq "$padding_re"; then
           echo "delegate: check 'no_padding_tail' FAILED — output ends on a padding/restating clause" >&2
           checks_failed=$((checks_failed + 1))
+        fi
+        ;;
+      subject_type)
+        # Caller-supplied conventional-commit type the subject MUST carry. The
+        # value rides {{key}} substitution, so `subject_type: {{type}}` is the
+        # caller's --var type=X echoed here; an omitted (optional) type collapses
+        # to empty and the check is skipped — it only fires when the caller
+        # asserted a type and the model ignored it (a recurring MISS the recipe
+        # itself named as the wrapper-enforcement escalation). Compared with pure
+        # string ops, not a regex built from cval, so a regex metacharacter in
+        # the caller's --var type can't break the match. Strips the optional
+        # `!` and `(scope)` from the subject's pre-colon segment so the full
+        # conventional shape (type, type(scope), type!, type(scope)!) is honoured.
+        if [[ -n "$cval" ]]; then
+          subj_type="${check_first_line%%:*}"   # segment before the first colon
+          subj_type="${subj_type%!}"            # drop a trailing ! (type!: form)
+          subj_type="${subj_type%%(*}"          # drop a (scope) suffix
+          if [[ "$check_first_line" != *:* || "$subj_type" != "$cval" ]]; then
+            echo "delegate: check 'subject_type' FAILED — subject does not start with '$cval:' (got '${check_first_line%%:*}:')" >&2
+            checks_failed=$((checks_failed + 1))
+          fi
         fi
         ;;
       *)
