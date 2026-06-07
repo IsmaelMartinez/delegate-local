@@ -4399,6 +4399,102 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
+# 33. Structural no_padding_tail + subject_type checks (2026-06-07 accuracy work):
+# the participial arm matches any gerund tail rather than an enumerated verb
+# list, and subject_type catches an ignored caller-supplied conventional type.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/pad.md" <<'EOF'
+---
+checks:
+  no_padding_tail: true
+---
+# pad
+
+## When to use
+Padding-check test recipe.
+
+## Prompt template
+
+```
+GO
+```
+
+## Calibration notes
+n/a
+EOF
+# 33a. Structural matcher catches an UNENUMERATED gerund tail ('confirming')
+# the old per-verb list did not name.
+make_mock_curl_think "$tmp" 'short subject\n\nthe body drops the per-call cost, confirming the need for a matcher'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe pad prose "go" </dev/null 2>&1)
+assert_contains "check 'no_padding_tail' FAILED" "$out" "checks: structural matcher catches unenumerated gerund tail"
+# 33b. A clean finite-verb tail is not flagged.
+make_mock_curl_think "$tmp" 'short subject\n\nthe body drops the per-call cost and stops here'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe pad prose "go" </dev/null 2>&1)
+if [[ "$out" == *"no_padding_tail' FAILED"* ]]; then
+  echo "  FAIL  checks: clean finite-verb tail not flagged"; fail=$((fail+1))
+else
+  echo "  PASS  checks: clean finite-verb tail not flagged"; pass=$((pass+1))
+fi
+# subject_type recipe: optional type input echoed into the check value.
+cat > "$prompts/typ.md" <<'EOF'
+---
+inputs:
+  type: string?
+checks:
+  subject_type: {{type}}
+---
+# typ
+
+## When to use
+Subject-type check test recipe.
+
+## Prompt template
+
+```
+GO {{type}}
+```
+
+## Variables
+- `{{type}}` — optional conventional-commit type.
+
+## Calibration notes
+n/a
+EOF
+# 33c. Provided type the subject ignores -> FAILED.
+make_mock_curl_think "$tmp" 'feat: did a thing\n\nbody'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe typ --var type=fix prose "go" </dev/null 2>&1)
+assert_contains "check 'subject_type' FAILED" "$out" "checks: subject_type flags an ignored --var type override"
+# 33d. Provided type the subject honours (with a scope) -> no failure.
+make_mock_curl_think "$tmp" 'fix(core): did a thing\n\nbody'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe typ --var type=fix prose "go" </dev/null 2>&1)
+if [[ "$out" == *"subject_type' FAILED"* ]]; then
+  echo "  FAIL  checks: subject_type passes when subject carries the type"; fail=$((fail+1))
+else
+  echo "  PASS  checks: subject_type passes when subject carries the type"; pass=$((pass+1))
+fi
+# 33e. Omitted optional type -> placeholder blanked in the checks block, skipped.
+make_mock_curl_think "$tmp" 'anything goes here\n\nbody'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe typ prose "go" </dev/null 2>&1)
+if [[ "$out" == *"subject_type' FAILED"* || "$out" == *"{{type}}"* ]]; then
+  echo "  FAIL  checks: subject_type skipped when optional type omitted"; fail=$((fail+1))
+else
+  echo "  PASS  checks: subject_type skipped when optional type omitted"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
