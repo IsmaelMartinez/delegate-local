@@ -42,7 +42,7 @@ fi
 # annotations on prior delegate events, surfaced separately below.
 IFS=$'\t' read -r ts_first ts_last total_avoided errors n_delegate n_experiment n_tier n_session n_feedback < <(jq -rs '
   def src: .source // "delegate";
-  def call: select(src != "feedback");
+  def call: select(src != "feedback" and src != "opportunity");
   [
     (map(call) | min_by(.ts) | .ts),
     (map(call) | max_by(.ts) | .ts),
@@ -63,13 +63,13 @@ echo "Errors (non-zero):   $errors"
 echo "Tokens avoided (≈):  $total_avoided"
 echo
 
-# Per-source breakdown: count, tokens avoided, p50/p95 latency. Feedback
-# events are excluded — they have no duration / token cost and are reported
-# in their own section below.
+# Per-source breakdown: count, tokens avoided, p50/p95 latency. Feedback and
+# opportunity events are excluded — they have no duration / token cost and are
+# reported in their own sections below.
 echo "Per-source:"
 jq -rs '
   def src: .source // "delegate";
-  map(select(src != "feedback"))
+  map(select(src != "feedback" and src != "opportunity"))
   | group_by(src)
   | map({
       source: (.[0] | src),
@@ -203,6 +203,31 @@ if (( n_recipe > 0 )); then
     | sort_by(-.n)
     | .[]
     | "  \(.recipe | . + (" " * (20 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)  untracked=\(.untracked)"
+  ' "$metrics_file"
+  echo
+fi
+
+# Trigger rate (#277): boundary events (commit / PR / release) recorded by the
+# delegate-boundary hook. Each source:"opportunity" row is one delegatable
+# opportunity; .delegated marks whether a local delegation preceded it inside the
+# look-back window. Rate = delegated / opportunities, per project — the
+# under-triggering number this signal exists to make visible. Only printed when
+# opportunity rows exist (i.e. the boundary hook is installed).
+n_opp=$(jq -rs 'map(select((.source // "") == "opportunity")) | length' "$metrics_file")
+if (( n_opp > 0 )); then
+  echo "Trigger rate (commit/PR/release boundaries):"
+  jq -rs '
+    map(select((.source // "") == "opportunity"))
+    | group_by(.project // "(none)")
+    | map({
+        project: (.[0].project // "(none)"),
+        n: length,
+        delegated: (map(select(.delegated == true)) | length),
+        missed: (map(select(.delegated == false)) | length)
+      })
+    | sort_by(-.n)
+    | .[]
+    | "  \(.project | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)  rate=\(if .n > 0 then (.delegated * 100 / .n | floor) else 0 end)%"
   ' "$metrics_file"
   echo
 fi

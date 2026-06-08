@@ -62,6 +62,9 @@ jobs:
       - name: Metrics-summary tests
         run: bash tests/test-metrics-summary.sh
 
+      - name: Delegate-boundary-hook tests
+        run: bash tests/test-delegate-boundary-hook.sh
+
       - name: Delegate-feedback tests
         run: bash tests/test-delegate-feedback.sh
 
