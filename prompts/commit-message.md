@@ -60,6 +60,10 @@ TYPE selection — first match wins, non-negotiable:
 Wrong: feat: handle stale lock file when daemon crashes (this is a bug fix — should be fix:)
 Correct: fix: handle stale lock file when daemon crashes
 
+SCOPE: if the recent examples use `<type>(<scope>):`, your subject must too, naming the diff's main area; else bare `<type>:`.
+Wrong: fix: refresh token before handshake
+Correct: fix(auth): refresh token before handshake
+
 Subjects ending in (#NN) are REJECTED. The (#NN) suffix in every recent
 example below was appended by GitHub's squash merge AFTER the commit was
 written. Your subject MUST NOT include (#NN). This rule is non-negotiable.
@@ -121,6 +125,13 @@ The trailing prompt arg is the reinforcement instruction; the recipe template ca
   the next number. Strengthened on 2026-05-10 (issue #74) after a 3/3 MISS reproduction;
   the contrastive Wrong/Correct one-shot plus the "non-negotiable" directive flipped it
   to 5/5 HIT on the same input.
+- "SCOPE — match the recent examples" with a Wrong/Correct one-shot — addresses a
+  2026-06-08 teams-for-linux MISS where the model dropped the repo's `fix(auth):`
+  scope convention and emitted a grammatically awkward bare-`fix:` subject. The
+  recipe modelled the conventional-commit type thoroughly but had no notion of
+  scope, so the model copied shape and tone yet flattened `type(scope):` to bare
+  `type:`. The wrapper's `subject_type` check already strips an optional `(scope)`
+  (ADR 0014), so the gap was purely the prompt never asking for one.
 - "Output ONLY the commit message" — without this, the model wraps in prose like "Here's the commit message:" which has to be stripped.
 - "Stop each paragraph after the substantive sentences. Do NOT add a trailing
   sentence that restates the point …" — addresses the prose-tier padding
@@ -141,7 +152,7 @@ The trailing prompt arg is the reinforcement instruction; the recipe template ca
 ## Expected output shape
 
 ```
-<type>: <subject in flowing prose, ≤ 72 chars, no PR ref>
+<type>[(<scope>)]: <subject in flowing prose, ≤ 72 chars, no PR ref>
 
 <paragraph 1: what the change does and why, 2-4 sentences>
 
@@ -290,3 +301,9 @@ A MISS-cluster analysis over the rolling feedback log (485 verdicts, hit-rate pl
 The padding lever: the analysis found roughly three-quarters of the cited padding verbs were unenumerated (confirming, lifting, undermining, preserving, documenting, considering, …) — the per-verb treadmill Phase 16/17 already documented, now reproduced inside the `no_padding_tail` check's regex. The check's participial arm is replaced with the generalised structural matcher this recipe's own `experiments/score-t4.sh` has shipped and tested since Phase 17 Track B (`,[[:space:]]+[a-z]{3,}ing(...)`), and the "This-X" arm gains the gap verbs the analysis surfaced (prevents, avoids, serves). This is detection only — the prompt's directive enumeration is deliberately NOT extended, because promoting structural patterns into the directive text re-introduces the directive-binding ceiling Phase 13 documented; the check does the structural work the prompt cannot.
 
 The type lever: the recipe opts into a new `subject_type: {{type}}` check. The value rides the same `{{key}}` substitution the prompt uses, so it echoes the caller's `--var type=X`; an omitted optional type collapses to empty and the check is skipped. When the caller asserted a type the model then ignored, the wrapper now warns on stderr (`check 'subject_type' FAILED`) and contributes to `checks_failed=N` — the deterministic backstop the 2026-06-04 entry named, implemented as warn-only detection consistent with ADR 0014 rather than the output-mutating "force the prefix" form. The prompt-side `TYPE override` directive stays load-bearing; the check is the belt-and-braces detector for when it drifts.
+
+### 2026-06-08 — SCOPE directive added after teams-for-linux MISS
+
+A 2026-06-08 commit-message MISS on `teams-for-linux` (prose tier, `mlx-community/Qwen3.6-35B-A3B-8bit`) recorded `subject grammatically awkward ('to auth failure') and dropped repo's fix(auth): scope convention; body usable`. The recipe modelled the conventional-commit type exhaustively — the TYPE-selection priority list, the `{{type}}` override, and the 2026-06-07 `subject_type` backstop — but had no notion of scope, so against a repo that commits as `fix(auth):` the model copied shape and tone yet flattened `type(scope):` to a bare `type:` and then wedged "auth" awkwardly into the subject prose. The wrapper's `subject_type` check already strips an optional `!` and `(scope)` before comparing (the same 2026-06-07 ADR 0014 work, shipped in v0.17.0), so the gap was purely that the prompt never asked for a scope.
+
+The fix adds a one-line SCOPE directive with a v5/v7 Wrong/Correct one-shot after the TYPE-selection block, and regenerates the T4 fixture as `task-4-commit-message-2026-06-08.txt` in lock-step (runner default bumped). The first iteration paired a two-sentence directive with the verbatim MISS subjects as the example (`fix(auth): gate worker UPR recovery behind reauthRecovery opt-in`, 64 chars); T4 re-measurement dropped MLX from the 2026-05-24 baseline of 15/18 to 12/18, all three reps newly failing SUBJECT_LEN at a 77-char subject — the exact "added preamble nudges the subject longer" trade-off the 2026-05-11 and 2026-05-21 entries document, here amplified because the long in-prompt example subjects anchored the model toward longer output. Collapsing the directive to one line and swapping in a short scoped example pair (`fix: refresh token before handshake` / `fix(auth): refresh token before handshake`, 35/41 chars) restored MLX T4 to 15/18 — SUBJECT_LEN passing, matching the 2026-05-24 baseline exactly; the residual BODY_NO_PADDING failure is pre-existing on this fixture/model, not introduced here. Scope binding was verified by a live dogfood through the edited recipe with scoped anchors: deterministic `fix(auth): …` subjects at 50–64 chars across 3+2 reps, no `subject_type` or `subject_max` warnings, and the second batch emitted `fix(auth): gate reauth recovery behind opt-in flag` rather than echoing the example — confirming the model applies the scope to the actual change instead of parroting.
