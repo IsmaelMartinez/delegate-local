@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.16.0...v0.17.0) (2026-06-07)
+
+
+### Features
+
+* structural padding matcher + subject_type check (ADR 0014) ([#275](https://github.com/IsmaelMartinez/delegate-local/issues/275)) ([f1b0d78](https://github.com/IsmaelMartinez/delegate-local/commit/f1b0d785c7a6d8921928b08397d13fbcf8e103a8))
+
 ## [0.16.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.15.0...v0.16.0) (2026-06-07)
 
 
