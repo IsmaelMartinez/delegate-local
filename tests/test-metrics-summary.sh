@@ -302,6 +302,35 @@ assert_contains "Raw / no-recipe" "$out" "denoise: raw/no-recipe line present"
 assert_contains "n=2  tracked=1  untracked=1" "$out" "denoise: raw calls bucketed separately, not in recipe untracked"
 rm -f "$denoise"
 
+# 12. Trigger rate (#277): source:"opportunity" rows (from the delegate-boundary
+# hook) drive a per-project trigger-rate section and must NOT be counted as
+# invocations or errors — they carry no exit_status, so before the call-filter
+# guard they would have inflated the error count. Fixture: project "alpha" has 2
+# boundaries (1 delegated), "beta" has 1 boundary (missed).
+opp=$(mktemp)
+cat > "$opp" <<'EOF'
+{"ts":"2026-06-08T10:00:00Z","source":"delegate","project":"alpha","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-06-08T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true}
+{"ts":"2026-06-08T10:30:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false}
+{"ts":"2026-06-08T11:00:00Z","source":"opportunity","project":"beta","boundary":"pr-create","suggested_recipe":"pr-description","delegated":false}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$opp" 2>&1) || EC=$?
+assert_eq 0 "$EC" "trigger-rate: exits 0"
+assert_contains "delegate=1" "$out" "trigger-rate: only the delegate row counts as an invocation"
+assert_contains "Errors (non-zero):   0" "$out" "trigger-rate: opportunity rows not miscounted as errors"
+assert_contains "Trigger rate (commit/PR/release boundaries):" "$out" "trigger-rate: section header present"
+assert_contains "alpha" "$out" "trigger-rate: alpha project listed"
+assert_contains "beta" "$out" "trigger-rate: beta project listed"
+assert_contains "opportunities=2  delegated=1  missed=1  rate=50%" "$out" "trigger-rate: alpha 50% (2 opps, 1 delegated)"
+assert_contains "opportunities=1  delegated=0  missed=1  rate=0%" "$out" "trigger-rate: beta 0% (1 opp, missed)"
+# Opportunity rows must not leak into the Per-source model/latency rollup.
+case "$out" in
+  *"opportunity     n="*) echo "  FAIL  trigger-rate: opportunity must not appear as a Per-source call row"; fail=$((fail+1));;
+  *) echo "  PASS  trigger-rate: opportunity excluded from Per-source rollup"; pass=$((pass+1));;
+esac
+rm -f "$opp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Unit tests for scripts/delegate-boundary-hook.sh (the #277 trigger-rate hook).
+# Feeds PreToolUse payloads on stdin, asserts on the emitted JSON and the
+# source:"opportunity" rows written to a throwaway metrics file. No real models
+# or metrics files are touched.
+
+set -u
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HOOK="$REPO/scripts/delegate-boundary-hook.sh"
+
+pass=0
+fail=0
+assert_eq() {
+  local e="$1" a="$2" n="$3"
+  if [[ "$e" == "$a" ]]; then echo "  PASS  $n"; pass=$((pass+1))
+  else echo "  FAIL  $n (expected '$e', got '$a')"; fail=$((fail+1)); fi
+}
+assert_contains() {
+  local needle="$1" haystack="$2" name="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then echo "  PASS  $name"; pass=$((pass+1))
+  else echo "  FAIL  $name (missing '$needle' in '$haystack')"; fail=$((fail+1)); fi
+}
+
+# A throwaway cwd that is NOT inside any git repo, so the hook's project
+# derivation falls back to its basename — a stable, known project name.
+tmpcwd=$(mktemp -d)
+proj=$(basename "$tmpcwd")
+METRICS=$(mktemp)
+nowts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+payload() { # cmd  cwd
+  jq -nc --arg cmd "$1" --arg cwd "$2" \
+    '{hook_event_name:"PreToolUse", tool_name:"Bash", cwd:$cwd, tool_input:{command:$cmd}}'
+}
+last_row() { tail -1 "$METRICS"; }
+nrows() { local n; n=$(grep -c . "$METRICS" 2>/dev/null) || true; echo "${n:-0}"; }
+
+# 1. Non-boundary command: silent, no row.
+: > "$METRICS"
+ec=0
+out=$(payload "ls -la" "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK") || ec=$?
+assert_eq 0 "$ec" "non-boundary: exit 0"
+assert_eq "" "$out" "non-boundary: no stdout"
+assert_eq 0 "$(nrows)" "non-boundary: no metrics row"
+
+# 2. git commit, no prior delegation: warn nudge + delegated:false opportunity row.
+: > "$METRICS"
+out=$(payload 'git commit -m "fix: thing"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_contains '"additionalContext"' "$out" "commit/no-delegation: non-blocking additionalContext"
+assert_contains '"permissionDecision":"allow"' "$out" "commit/no-delegation: allow (non-blocking)"
+assert_contains 'commit-message' "$out" "commit/no-delegation: names the recipe"
+row=$(last_row)
+assert_eq opportunity "$(jq -r .source <<<"$row")" "commit row: source=opportunity"
+assert_eq git-commit "$(jq -r .boundary <<<"$row")" "commit row: boundary=git-commit"
+assert_eq commit-message "$(jq -r .suggested_recipe <<<"$row")" "commit row: suggested_recipe"
+assert_eq false "$(jq -r .delegated <<<"$row")" "commit row: delegated=false"
+assert_eq "$proj" "$(jq -r .project <<<"$row")" "commit row: project derived from cwd"
+
+# 3. git commit WITH a recent delegation for this project: silent, delegated:true.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+out=$(payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq "" "$out" "commit/recent-delegation: no nudge"
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "commit/recent-delegation: delegated=true"
+
+# 4. Delegation older than the window: counts as missed.
+: > "$METRICS"
+jq -nc --arg p "$proj" \
+  '{ts:"2020-01-01T00:00:00Z", source:"delegate", project:$p, tier:"prose"}' >> "$METRICS"
+payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "commit/stale-delegation: delegated=false"
+
+# 5. A delegation for a DIFFERENT project does not count.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" \
+  '{ts:$ts, source:"delegate", project:"some-other-repo", tier:"prose"}' >> "$METRICS"
+payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "commit/other-project delegation: delegated=false"
+
+# 6. gh pr create -> pr-description recipe.
+: > "$METRICS"
+out=$(payload 'gh pr create --title t --body b' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq pr-create "$(jq -r .boundary <<<"$(last_row)")" "pr-create: boundary"
+assert_eq pr-description "$(jq -r .suggested_recipe <<<"$(last_row)")" "pr-create: recipe"
+assert_contains 'pr-description' "$out" "pr-create: nudge names recipe"
+
+# 7. glab mr create -> also pr-create.
+: > "$METRICS"
+payload 'glab mr create --fill' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq pr-create "$(jq -r .boundary <<<"$(last_row)")" "glab mr create: boundary"
+
+# 8. gh release create -> release-note recipe.
+: > "$METRICS"
+payload 'gh release create v1.0.0 --notes x' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq release-create "$(jq -r .boundary <<<"$(last_row)")" "release-create: boundary"
+assert_eq release-note "$(jq -r .suggested_recipe <<<"$(last_row)")" "release-create: recipe"
+
+# 9. git commit --amend --no-edit: reuses a message, not a boundary.
+: > "$METRICS"
+ec=0
+out=$(payload 'git commit --amend --no-edit' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK") || ec=$?
+assert_eq 0 "$ec" "amend: exit 0"
+assert_eq "" "$out" "amend: no nudge"
+assert_eq 0 "$(nrows)" "amend: no row"
+
+# 10. enforce mode: blocks with a deny decision.
+: > "$METRICS"
+out=$(payload 'git commit -m x' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_BOUNDARY_MODE=enforce bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "enforce: deny decision"
+assert_contains 'commit-message' "$out" "enforce: names recipe in reason"
+
+# 11. off mode: no nudge, but the opportunity row is still recorded (measure-only).
+: > "$METRICS"
+out=$(payload 'git commit -m x' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_BOUNDARY_MODE=off bash "$HOOK")
+assert_eq "" "$out" "off: no nudge"
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "off: row still written"
+
+# 12. DELEGATE_LOCAL_NO_METRICS=1: nudge still fires, no row written.
+: > "$METRICS"
+out=$(payload 'git commit -m x' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_LOCAL_NO_METRICS=1 bash "$HOOK")
+assert_contains 'additionalContext' "$out" "no-metrics: still nudges"
+assert_eq 0 "$(nrows)" "no-metrics: no row written"
+
+# 13. Custom window honoured (1-minute window, 5-minute-old delegation -> missed).
+: > "$METRICS"
+oldish=$(jq -rn --argjson now "$(date -u +%s)" '($now - 300) | todateiso8601')
+jq -nc --arg ts "$oldish" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose"}' >> "$METRICS"
+payload 'git commit -m x' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_BOUNDARY_WINDOW_MIN=1 bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "custom window: 5m-old delegation outside 1m window"
+
+# 14. Fail-open on malformed stdin.
+ec=0
+out=$(echo 'not json' | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK") || ec=$?
+assert_eq 0 "$ec" "malformed stdin: exit 0 (fail-open)"
+
+rm -rf "$tmpcwd" "$METRICS"
+echo
+echo "delegate-boundary-hook: $pass passed, $fail failed"
+[[ $fail -eq 0 ]]
