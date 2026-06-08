@@ -227,7 +227,7 @@ if (( n_opp > 0 )); then
       })
     | sort_by(-.n)
     | .[]
-    | "  \(.project | . + (" " * (20 - length)))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)  rate=\(if .n > 0 then (.delegated * 100 / .n | floor) else 0 end)%"
+    | "  \(.project | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)  rate=\(if .n > 0 then (.delegated * 100 / .n | floor) else 0 end)%"
   ' "$metrics_file"
   echo
 fi

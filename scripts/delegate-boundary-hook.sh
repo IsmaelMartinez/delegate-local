@@ -51,7 +51,7 @@ hook_cwd=$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null) || hook_cwd=""
 # reuses an existing message — no fresh drafting moment).
 boundary="" recipe=""
 if grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+commit([[:space:]]|$)' <<<"$cmd" \
-   && grep -Eq -- '(^|[[:space:]])(-m|-F|--message|--file)' <<<"$cmd" \
+   && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[mF]|--message|--file)' <<<"$cmd" \
    && ! grep -Eq -- '--amend' <<<"$cmd"; then
   boundary="git-commit"; recipe="commit-message"
 elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+pr[[:space:]]+create' <<<"$cmd" \

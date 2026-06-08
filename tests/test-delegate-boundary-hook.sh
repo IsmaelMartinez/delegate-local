@@ -97,6 +97,11 @@ payload 'gh release create v1.0.0 --notes x' "$tmpcwd" | DELEGATE_METRICS_FILE="
 assert_eq release-create "$(jq -r .boundary <<<"$(last_row)")" "release-create: boundary"
 assert_eq release-note "$(jq -r .suggested_recipe <<<"$(last_row)")" "release-create: recipe"
 
+# 8b. Combined short flags (-am, -aF) author a message inline -> still a boundary.
+: > "$METRICS"
+payload 'git commit -am "fix: thing"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq git-commit "$(jq -r .boundary <<<"$(last_row)")" "combined -am flag: detected as git-commit boundary"
+
 # 9. git commit --amend --no-edit: reuses a message, not a boundary.
 : > "$METRICS"
 ec=0
