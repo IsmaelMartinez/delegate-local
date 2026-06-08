@@ -2,6 +2,8 @@
 inputs:
   style_anchor: string
   facts: string
+checks:
+  no_padding_tail: true
 ---
 # roadmap-status
 
@@ -21,7 +23,7 @@ Run both of these before invoking the recipe:
 #    so the model copies the spelling variant, prose-vs-bullets density, and
 #    paragraph length rather than an abstract description. Adjust the heading
 #    regex to your plan file's convention before running.
-awk '/^### / { if (flag) exit; if ($0 ~ /Next Up|Up Next/) flag=1 } flag' ROADMAP.md
+awk '/^### / { if (flag) exit; if ($0 ~ /Next Up|Up Next/) { flag=1; next } } flag' ROADMAP.md
 
 # 2. Structured fact list — the unshipped / blocked / deferred items with their
 #    gating, ordered by the agent who did the prioritising. Author this in a
@@ -74,7 +76,7 @@ Output ONLY the status itself, no preamble, no "Here's the status:".
 
 ```bash
 PLAN_FILE=ROADMAP.md
-ANCHOR=$(awk '/^### / { if (flag) exit; if ($0 ~ /Next Up|Up Next/) flag=1 } flag' "$PLAN_FILE")
+ANCHOR=$(awk '/^### / { if (flag) exit; if ($0 ~ /Next Up|Up Next/) { flag=1; next } } flag' "$PLAN_FILE")
 bash scripts/delegate.sh --recipe roadmap-status \
   --var style_anchor="$ANCHOR" \
   --var facts="$(cat /tmp/facts.md)" \
