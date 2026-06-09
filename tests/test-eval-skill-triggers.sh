@@ -584,6 +584,29 @@ assert_contains "8 verdicts missing" "$out" "--ollama partial: warning surfaces 
 assert_contains "recall=1.000 negative-precision=0.000" "$out" "--ollama partial: missing counted as misses"
 rm -rf "$tmp"
 
+# N. gate:false diagnostic queries (#277 dir 3) are scored and reported but
+# excluded from the pass/fail recall gate. The fixture adds two diagnostic
+# positives: one the perfect classifier marks TRIGGER (id starts with p) and
+# one it marks NOTRIGGER (a miss). If diagnostics counted toward the gate the
+# miss would drop gating recall below 0.9 and the run would exit 1; instead
+# gating stays 1.000/exit 0 and the diagnostic line reports embedded-recall.
+tmp=$(mktemp -d)
+make_skill "$tmp"
+make_eval_set "$tmp"
+# Append two diagnostic entries to the fixture's queries array.
+jq '.queries += [
+  {"id":"p90","tag":"embedded","expect":"trigger","gate":false,"query":"implement X then commit and open a PR"},
+  {"id":"e01","tag":"embedded","expect":"trigger","gate":false,"query":"fix the bug then commit and push"}
+]' "$tmp/eval-set.json" > "$tmp/eval-set.json.new" && mv "$tmp/eval-set.json.new" "$tmp/eval-set.json"
+sniff="$tmp/body.txt"
+make_mock_curl_batched "$tmp" "$sniff" ollama perfect
+EC=0
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model:latest --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 0 "$EC" "gate:false: gating still passes (exit 0)"
+assert_contains "recall=1.000 negative-precision=1.000" "$out" "gate:false: diagnostics excluded from gating recall"
+assert_contains "diagnostic (non-gating, embedded sub-step): dtp=1 dfn=1 embedded-recall=0.500" "$out" "gate:false: diagnostic line reports embedded-recall"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

@@ -39,6 +39,12 @@
     {"id": "n10", "tag": "adjacent",   "expect": "no-trigger", "query": "i need to design a database schema for a multi-tenant saas where tenants can have nested orgs. should i use row-level security or separate schemas per tenant? walk me through the tradeoffs"},
     {"id": "n11", "tag": "unrelated",  "expect": "no-trigger", "query": "what's the difference between a spirit and a liqueur? trying to follow a cocktail recipe and it just says 'spirit of choice'"},
     {"id": "n12", "tag": "unrelated",  "expect": "no-trigger", "query": "if i invest 5k at 4.5% annual compounded monthly for 7 years, what's the final balance?"},
-    {"id": "n13", "tag": "unrelated",  "expect": "no-trigger", "query": "my dog keeps chewing the corner of the rug whenever i leave for work. she's 2yrs old, well-fed. is this anxiety or just boredom?"}
+    {"id": "n13", "tag": "unrelated",  "expect": "no-trigger", "query": "my dog keeps chewing the corner of the rug whenever i leave for work. she's 2yrs old, well-fed. is this anxiety or just boredom?"},
+    {"id": "n14", "tag": "adjacent",   "expect": "no-trigger", "query": "can you run the app locally so i can see the new dashboard? start the dev server and the worker, then open it in my browser"},
+    {"id": "n15", "tag": "adjacent",   "expect": "no-trigger", "query": "the integration tests pass in CI but i want to run them locally on my machine before i push — can you kick them off and tell me if anything breaks?"},
+    {"id": "e01", "tag": "embedded",   "expect": "trigger",    "gate": false, "query": "implement the per-tenant rate limiter in src/middleware/, add a unit test, then commit and open a PR with a summary and test plan"},
+    {"id": "e02", "tag": "embedded",   "expect": "trigger",    "gate": false, "query": "fix the off-by-one in the pagination cursor, then commit it and push"},
+    {"id": "e03", "tag": "embedded",   "expect": "trigger",    "gate": false, "query": "add the dark-mode toggle to settings, wire it through the theme context, and when you're done draft the commit message and the PR description"},
+    {"id": "e04", "tag": "embedded",   "expect": "trigger",    "gate": false, "query": "bump the dependency, regenerate the lockfile, make sure the build passes, then cut a release and write the changelog entry"}
   ]
 }
