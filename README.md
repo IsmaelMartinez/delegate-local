@@ -7,8 +7,8 @@ An agent skill that routes summarisation, triage, and bulk-text tasks to locally
 One linear path from nothing to a first delegated call:
 
 ```bash
-# 1. Install the whole skill (SKILL.md + scripts/) into every detected agent tool
-npx skills add IsmaelMartinez/delegate-local
+# 1. Install the whole skill (SKILL.md + scripts/) into Claude Code, user-scoped
+npx skills add IsmaelMartinez/delegate-local -a claude-code -g
 
 # 2. Confirm at least one local model is installed and see how tiers route
 bash ~/.claude/skills/delegate-local/scripts/audit-models.sh

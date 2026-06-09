@@ -570,7 +570,7 @@ echo "=== no installer-breaking AAIF self-symlink ==="
 # discovered from the root SKILL.md instead, so no repo-root self-symlink may exist.
 SELF_LINK="$SKILL_DIR/.agents/skills/delegate-local"
 if [[ -L "$SELF_LINK" ]] && \
-   [[ "$(cd "$(dirname "$SELF_LINK")" && cd "$(readlink "$SELF_LINK")" 2>/dev/null && pwd -P)" == "$SKILL_DIR" ]]; then
+   [[ "$(cd "$(dirname "$SELF_LINK")" && cd "$(readlink "$SELF_LINK")" 2>/dev/null && pwd -P)" == "$(cd "$SKILL_DIR" && pwd -P)" ]]; then
   echo "  FAIL  .agents/skills/delegate-local symlinks the repo root (re-creates the npx install recursion)"
   fail=$((fail+1))
 else
