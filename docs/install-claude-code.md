@@ -8,7 +8,7 @@ Claude Code reads skills from `~/.claude/skills/` (user-scoped) and `<project>/.
 npx skills add IsmaelMartinez/delegate-local -a claude-code
 ```
 
-The `-a claude-code` flag scopes the install to Claude Code only, so the AAIF symlink does not propagate to other tools you have installed. Add `-g` if you want the install to be user-scoped (`~/.claude/skills/delegate-local`) rather than project-scoped, and `--copy` on systems where symlinks do not work (most network filesystems, some Windows configurations).
+The `-a claude-code` flag scopes the install to Claude Code only, so the skill is not also installed into other agent tools the CLI detects. Add `-g` if you want the install to be user-scoped (`~/.claude/skills/delegate-local`) rather than project-scoped, and `--copy` on systems where symlinks do not work (most network filesystems, some Windows configurations).
 
 ## Manual
 

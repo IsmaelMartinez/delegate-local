@@ -31,7 +31,7 @@ Ask Codex something the skill should fire on (a log summary, a commit-message dr
 bash ~/.codex/skills/delegate-local/scripts/audit-models.sh
 ```
 
-If Codex answers without delegating, check that `~/.codex/skills/delegate-local/SKILL.md` exists and the AAIF discovery layout (`.agents/skills/`) is intact; some Codex versions only auto-discover via AAIF rather than the per-tool path.
+If Codex answers without delegating, check that `~/.codex/skills/delegate-local/SKILL.md` exists (the path `npx skills add -a codex` installs to) and that the Ollama daemon is running.
 
 ## Per-machine routing override
 
