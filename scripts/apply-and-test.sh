@@ -204,8 +204,10 @@ while IFS= read -r -d '' search <&3 && IFS= read -r -d '' replace <&3; do
   # regex metacharacters in the SEARCH content are not interpreted. Write
   # to a sibling temp file and rotate to preserve byte-exactness across
   # iterations (no command substitution, no here-string).
+  # No `set -e` here, so guard the substitution and the rotation explicitly:
+  # a failed perl leaves a truncated $next_file that mv would silently promote.
   next_file=$(mktemp)
-  SEARCH="$search" REPLACE="$replace" perl -CSD -0777 -e '
+  if ! SEARCH="$search" REPLACE="$replace" perl -CSD -0777 -e '
     my $text = do { local $/; <STDIN> };
     my $s = $ENV{SEARCH};
     my $r = $ENV{REPLACE};
@@ -214,8 +216,11 @@ while IFS= read -r -d '' search <&3 && IFS= read -r -d '' replace <&3; do
       $text = substr($text, 0, $idx) . $r . substr($text, $idx + length($s));
     }
     print $text;
-  ' < "$patched_file" > "$next_file"
-  mv "$next_file" "$patched_file"
+  ' < "$patched_file" > "$next_file"; then
+    emit APPLY "block $block_idx: substitution failed writing patched copy"
+    exit 3
+  fi
+  mv "$next_file" "$patched_file" || { emit APPLY "block $block_idx: failed to update patched file"; exit 3; }
   next_file=""
 done
 exec 3<&-
