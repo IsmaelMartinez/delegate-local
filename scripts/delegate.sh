@@ -16,6 +16,11 @@
 # Recipe flag (layer 2 of the training-loop initiative):
 #   --recipe NAME            load prompts/<NAME>.md, extract its '## Prompt
 #                            template' fenced block, prepend it to the input.
+#   --recipe auto            infer the recipe from the piped context (#277):
+#                            a unified diff on stdin -> commit-message, with
+#                            recent_commits/diff_stat backfilled from git when
+#                            not passed. Errors (exit 2) if the context is not
+#                            a recognised diff — never a silent guess.
 #   --var key=value          substitute {{key}} placeholders inside the
 #                            recipe template. Repeat for multiple variables.
 #                            Values may contain newlines and special chars.
@@ -510,6 +515,40 @@ otel_span_id=$(otel_gen_id 16)
 context=""
 if [[ -p /dev/stdin || -s /dev/stdin ]]; then
   context=$(cat)
+fi
+
+# --recipe auto (#277 dir 5): infer the recipe from the piped context so the
+# agent reaches for one call instead of choosing the recipe and assembling
+# every --var by hand. One high-confidence mapping today: a unified diff on
+# stdin → commit-message, whose two git-derived inputs (recent_commits,
+# diff_stat) are backfilled here when the caller did not pass them. delegate.sh
+# already shells out to git for project attribution, so this adds no new
+# dependency; intent (`why`) is never inferable from a diff, so it stays a
+# required --var and a missing one surfaces via the normal unsubstituted-
+# placeholder guard. Anything that is not a recognised diff is an explicit
+# error, never a silent guess.
+if [[ "$recipe" == "auto" ]]; then
+  if [[ -z "$context" ]]; then
+    echo "delegate: --recipe auto needs context on stdin to infer a recipe (none piped). Pass --recipe NAME explicitly; see prompts/README.md." >&2
+    exit 2
+  fi
+  if printf '%s' "$context" | grep -Eq '^diff --git |^@@ '; then
+    recipe="commit-message"
+    _auto_have_var() { local k="$1" v; for v in "${recipe_vars[@]:-}"; do [[ "$v" == "$k="* ]] && return 0; done; return 1; }
+    if ! _auto_have_var recent_commits; then
+      _auto_rc=$(git log -3 --pretty=fuller 2>/dev/null || true)
+      [[ -n "$_auto_rc" ]] && recipe_vars+=("recent_commits=$_auto_rc")
+    fi
+    if ! _auto_have_var diff_stat; then
+      _auto_ds=$(git diff --cached --stat 2>/dev/null || true)
+      [[ -z "$_auto_ds" ]] && _auto_ds=$(git diff --stat 2>/dev/null || true)
+      [[ -n "$_auto_ds" ]] && recipe_vars+=("diff_stat=$_auto_ds")
+    fi
+    echo "delegate: --recipe auto inferred commit-message from the piped diff" >&2
+  else
+    echo "delegate: --recipe auto could not infer a recipe from the piped context (expected a unified diff for commit-message). Pass --recipe NAME explicitly; see prompts/README.md." >&2
+    exit 2
+  fi
 fi
 
 # Resolve recipe template (if any) and substitute {{key}} placeholders.
