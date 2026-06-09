@@ -538,7 +538,7 @@ if [[ "$recipe" == "auto" ]]; then
   fi
   if printf '%s' "$context" | grep -Eq '^diff --git |^@@ '; then
     recipe="commit-message"
-    _auto_have_var() { local k="$1" v; for v in "${recipe_vars[@]:-}"; do [[ "$v" == "$k="* ]] && return 0; done; return 1; }
+    _auto_have_var() { local k="$1" v; for v in ${recipe_vars[@]+"${recipe_vars[@]}"}; do [[ "$v" == "$k="* ]] && return 0; done; return 1; }
     if ! _auto_have_var diff_stat; then
       # Derive a per-file +added/-deleted summary from the piped unified diff.
       # awk, not `git diff --stat`, so the summary reflects exactly what was
