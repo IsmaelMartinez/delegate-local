@@ -219,6 +219,16 @@ assert_eq 0 "$EC" "HITs only: exit 0"
 assert_contains "No MISS feedback rows" "$out" "HITs only: no buckets (kept:true filtered out)"
 rm -rf "$tmp"
 
+# 16. Draft command targets the default repo when DELEGATE_GITHUB_REPO is
+# unset, and the override repo when it is set (fork support).
+tmp=$(mktemp -d); seed_misses "$tmp/m.jsonl" 3
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" 2>&1)
+assert_contains "--repo IsmaelMartinez/delegate-local" "$out" "repo default: draft targets IsmaelMartinez/delegate-local"
+out=$(DELEGATE_GITHUB_REPO="someorg/forked-skill" DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" 2>&1)
+assert_contains "--repo someorg/forked-skill" "$out" "repo override: draft targets DELEGATE_GITHUB_REPO"
+assert_not_contains "IsmaelMartinez/delegate-local" "$out" "repo override: default repo absent from draft"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

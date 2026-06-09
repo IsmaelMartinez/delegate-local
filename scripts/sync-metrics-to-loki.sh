@@ -159,10 +159,15 @@ if [[ "$pushed_rows" == "0" ]]; then
   exit 0
 fi
 
-http_code=$(curl -s -o /tmp/loki_push_resp.$$ -w '%{http_code}' \
+# Unpredictable response-body tempfile (mktemp, not a $$-suffixed /tmp path —
+# PIDs are guessable, so a fixed name invites symlink/pre-creation games on a
+# shared /tmp). The EXIT trap covers both the success and the failed-push path.
+resp_file=$(mktemp)
+trap 'rm -f "$resp_file"' EXIT
+http_code=$(curl -s -o "$resp_file" -w '%{http_code}' \
   -X POST "${loki_url%/}/loki/api/v1/push" \
   -H 'Content-Type: application/json' --data-binary "$payload")
-resp=$(cat /tmp/loki_push_resp.$$ 2>/dev/null); rm -f /tmp/loki_push_resp.$$
+resp=$(cat "$resp_file" 2>/dev/null)
 
 if [[ "$http_code" == "204" || "$http_code" == "200" ]]; then
   echo "$total_lines" > "$state_file"

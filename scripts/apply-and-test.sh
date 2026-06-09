@@ -121,7 +121,20 @@ has_refuse=$(printf '%s' "$patch_text" | awk '
 # identifiers or comments and must round-trip verbatim.
 blocks_file=$(mktemp)
 patched_file=$(mktemp)
-trap 'rm -f "$blocks_file" "$patched_file"' EXIT
+# Single EXIT trap for every tempfile this script creates. Later phases used
+# to overwrite this trap (dropping $patched_file from the cleanup list and
+# leaking it); a cleanup function with all paths — including the not-yet-
+# created $log_file and the in-flight $next_file rotation — fixes that.
+# Variables not yet assigned are empty and skipped.
+log_file=""
+next_file=""
+cleanup() {
+  rm -f "$blocks_file" "$patched_file"
+  [[ -n "$log_file" ]] && rm -f "$log_file"
+  [[ -n "$next_file" ]] && rm -f "$next_file"
+  return 0
+}
+trap cleanup EXIT
 printf '%s' "$patch_text" | perl -CSD -0777 -ne '
   while (/<{5,}\s*SEARCH\s*\n(.*?)\n={5,}\s*\n(.*?)\n>{5,}\s*REPLACE/sg) {
     print $1, "\0", $2, "\0";
@@ -191,8 +204,10 @@ while IFS= read -r -d '' search <&3 && IFS= read -r -d '' replace <&3; do
   # regex metacharacters in the SEARCH content are not interpreted. Write
   # to a sibling temp file and rotate to preserve byte-exactness across
   # iterations (no command substitution, no here-string).
+  # No `set -e` here, so guard the substitution and the rotation explicitly:
+  # a failed perl leaves a truncated $next_file that mv would silently promote.
   next_file=$(mktemp)
-  SEARCH="$search" REPLACE="$replace" perl -CSD -0777 -e '
+  if ! SEARCH="$search" REPLACE="$replace" perl -CSD -0777 -e '
     my $text = do { local $/; <STDIN> };
     my $s = $ENV{SEARCH};
     my $r = $ENV{REPLACE};
@@ -201,8 +216,12 @@ while IFS= read -r -d '' search <&3 && IFS= read -r -d '' replace <&3; do
       $text = substr($text, 0, $idx) . $r . substr($text, $idx + length($s));
     }
     print $text;
-  ' < "$patched_file" > "$next_file"
-  mv "$next_file" "$patched_file"
+  ' < "$patched_file" > "$next_file"; then
+    emit APPLY "block $block_idx: substitution failed writing patched copy"
+    exit 3
+  fi
+  mv "$next_file" "$patched_file" || { emit APPLY "block $block_idx: failed to update patched file"; exit 3; }
+  next_file=""
 done
 exec 3<&-
 
@@ -225,7 +244,6 @@ cp "$patched_file" "$out_dir/$source_name"
 # a python module so the shebang of pytest doesn't matter — only the chosen
 # interpreter does.
 log_file=$(mktemp)
-trap 'rm -f "$blocks_file" "$log_file"' EXIT
 
 run_pytest() {
   if command -v timeout >/dev/null 2>&1; then
