@@ -76,17 +76,24 @@ done
 [[ -f "$skill" ]]    || { echo "missing skill: $skill" >&2; exit 2; }
 command -v jq >/dev/null || { echo "jq not on PATH" >&2; exit 2; }
 
-# Shape checks (always run).
+# Shape checks (always run). positive/negative count only GATED rows (gate !=
+# false): the >=8 thresholds exist to guarantee enough cases in the population
+# the recall/precision gate actually scores, and diagnostic (gate:false) rows
+# are excluded from that gate, so counting them here would let a set pass shape
+# while having too few gated cases to score meaningfully. jq's `!= false` is
+# safe (unlike `// false`) — absent gate is null, null != false is true, so an
+# entry is gated unless it explicitly sets gate:false.
 total=$(jq '.queries | length' "$eval_set")
-pos=$(jq '[.queries[] | select(.expect == "trigger")] | length' "$eval_set")
-neg=$(jq '[.queries[] | select(.expect == "no-trigger")] | length' "$eval_set")
+pos=$(jq '[.queries[] | select(.expect == "trigger" and (.gate != false))] | length' "$eval_set")
+neg=$(jq '[.queries[] | select(.expect == "no-trigger" and (.gate != false))] | length' "$eval_set")
+diagnostic=$(jq '[.queries[] | select(.gate == false)] | length' "$eval_set")
 missing_fields=$(jq '[.queries[] | select((.id // "") == "" or (.tag // "") == "" or (.expect // "") == "" or (.query // "") == "")] | length' "$eval_set")
 
-echo "shape: total=$total positive=$pos negative=$neg missing-fields=$missing_fields"
+echo "shape: total=$total positive=$pos negative=$neg diagnostic=$diagnostic missing-fields=$missing_fields"
 
 (( total >= 16 ))         || { echo "FAIL: need >=16 total queries" >&2; exit 1; }
-(( pos >= 8 ))            || { echo "FAIL: need >=8 positives (got $pos)" >&2; exit 1; }
-(( neg >= 8 ))            || { echo "FAIL: need >=8 negatives (got $neg)" >&2; exit 1; }
+(( pos >= 8 ))            || { echo "FAIL: need >=8 gated positives (got $pos)" >&2; exit 1; }
+(( neg >= 8 ))            || { echo "FAIL: need >=8 gated negatives (got $neg)" >&2; exit 1; }
 (( missing_fields == 0 )) || { echo "FAIL: $missing_fields queries missing fields" >&2; exit 1; }
 
 if [[ "$mode" == "shape" ]]; then

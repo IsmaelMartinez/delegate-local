@@ -4581,17 +4581,10 @@ assert_eq 2 "$EC" "--recipe auto (no stdin): exit 2"
 assert_contains "needs context" "$out" "--recipe auto (no stdin): clear error"
 rm -rf "$tmp" "$metrics"
 
-# A4. --recipe auto backfills recent_commits + diff_stat from git: in a real
-# git repo with a staged change, passing only --var why must succeed (exit 0),
-# which is only possible if both git-derived inputs were auto-filled.
-if command -v git >/dev/null 2>&1; then
-  tmp=$(mktemp -d)
-  make_mock_ollama "$tmp"
-  sniff="$tmp/payload.json"
-  make_mock_curl_ok "$tmp" "$sniff"
-  metrics=$(mktemp); : > "$metrics"
-  prompts="$tmp/prompts"; mkdir -p "$prompts"
-  cp "$REPO/prompts/commit-message.md" "$prompts/commit-message.md" 2>/dev/null || cat > "$prompts/commit-message.md" <<'EOF'
+# A stub commit-message recipe with the three placeholders the auto path fills.
+make_auto_cm_recipe() {
+  local dir="$1"; mkdir -p "$dir"
+  cat > "$dir/commit-message.md" <<'EOF'
 # commit-message
 
 ## When to use
@@ -4611,12 +4604,26 @@ WHY
 ## Calibration notes
 n/a
 EOF
+}
+
+# A4. --recipe auto: diff_stat is derived from the PIPED diff (not git state),
+# recent_commits is backfilled from git log. The repo stages a DIFFERENT file
+# (a.txt) than the piped diff (foo.txt); the payload must mention foo.txt (from
+# the piped diff) and NOT a.txt — proving diff_stat tracks what was piped and
+# cannot diverge to the index. Passing only --var why must exit 0.
+if command -v git >/dev/null 2>&1; then
+  tmp=$(mktemp -d)
+  make_mock_ollama "$tmp"
+  sniff="$tmp/payload.json"
+  make_mock_curl_ok "$tmp" "$sniff"
+  metrics=$(mktemp); : > "$metrics"
+  prompts="$tmp/prompts"; make_auto_cm_recipe "$prompts"
   repo="$tmp/gitrepo"; mkdir -p "$repo"
   (
     cd "$repo"
     git init -q
     git config user.email t@t.t; git config user.name t
-    printf 'one\n' > a.txt; git add a.txt; git commit -qm "initial"
+    printf 'one\n' > a.txt; git add a.txt; git commit -qm "initial commit"
     printf 'two\n' >> a.txt; git add a.txt
   )
   EC=0
@@ -4624,13 +4631,42 @@ EOF
     DELEGATE_METRICS_FILE="$metrics" \
     DELEGATE_PROMPTS_DIR="$prompts" \
     bash "$SCRIPT" --recipe auto --var why=because prose "go") || EC=$?
-  assert_eq 0 "$EC" "--recipe auto (git backfill): exit 0 with only --var why"
+  assert_eq 0 "$EC" "--recipe auto (backfill): exit 0 with only --var why"
   payload=$(cat "$sniff")
-  assert_contains 'initial' "$payload" "--recipe auto (git backfill): recent_commits filled from git log"
-  assert_contains 'a.txt' "$payload" "--recipe auto (git backfill): diff_stat filled from git diff"
+  assert_contains 'initial commit' "$payload" "--recipe auto (backfill): recent_commits from git log"
+  assert_contains 'foo.txt' "$payload" "--recipe auto (backfill): diff_stat derived from the piped diff"
+  if [[ "$payload" == *"a.txt"* ]]; then
+    echo "  FAIL  --recipe auto (backfill): diff_stat leaked git index (a.txt) instead of piped diff"; fail=$((fail+1))
+  else
+    echo "  PASS  --recipe auto (backfill): diff_stat does NOT leak the staged index file"; pass=$((pass+1))
+  fi
+  rm -rf "$tmp" "$metrics"
+
+  # A5. Clean working tree (nothing staged, diff piped from elsewhere e.g.
+  # `git show`): diff_stat still fills from the piped diff, so the call must NOT
+  # hard-fail on a missing diff_stat. This is the Bug-1 regression guard.
+  tmp=$(mktemp -d)
+  make_mock_ollama "$tmp"
+  sniff="$tmp/payload.json"
+  make_mock_curl_ok "$tmp" "$sniff"
+  metrics=$(mktemp); : > "$metrics"
+  prompts="$tmp/prompts"; make_auto_cm_recipe "$prompts"
+  repo="$tmp/gitrepo2"; mkdir -p "$repo"
+  (
+    cd "$repo"
+    git init -q
+    git config user.email t@t.t; git config user.name t
+    printf 'one\n' > a.txt; git add a.txt; git commit -qm "initial commit"
+  )  # nothing staged after the commit — clean tree
+  EC=0
+  out=$(cd "$repo" && printf '%s' "$DIFF_SAMPLE" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_METRICS_FILE="$metrics" \
+    DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe auto --var why=because prose "go" 2>&1) || EC=$?
+  assert_eq 0 "$EC" "--recipe auto (clean tree): exit 0 — diff_stat from piped diff, no hard-fail"
   rm -rf "$tmp" "$metrics"
 else
-  echo "  SKIP  --recipe auto (git backfill): git not on PATH"
+  echo "  SKIP  --recipe auto (backfill): git not on PATH"
 fi
 
 echo
