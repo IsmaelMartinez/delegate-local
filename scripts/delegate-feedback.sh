@@ -27,6 +27,10 @@
 #                                         tokens, stopwords removed) at which
 #                                         two MISS reasons are considered
 #                                         similar (default 0.4).
+#   DELEGATE_GITHUB_REPO                  owner/repo the draft `gh issue
+#                                         create` nudge command targets
+#                                         (default IsmaelMartinez/delegate-local;
+#                                         forks set their own).
 #   DELEGATE_OTEL_ENDPOINT                Phase 11 Track A (#134). When set,
 #                                         POST a feedback-as-linked-span to
 #                                         this OTLP/HTTP traces URL after the
@@ -80,6 +84,7 @@ set -uo pipefail
 
 metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
 stale_seconds="${DELEGATE_FEEDBACK_STALE_SECONDS:-300}"
+github_repo="${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}"
 
 usage() {
   cat >&2 <<'EOF'
@@ -351,7 +356,7 @@ NUDGE_HEADER
       echo "$matcher_out" | awk -F'\t' 'NF==2 {printf "  - %s: %s\n", $1, $2}' >&2
       cat >&2 <<NUDGE_FOOTER
 Consider filing a prompt-pattern issue so the recipe library tracks the gap:
-  gh issue create --repo IsmaelMartinez/delegate-local \\
+  gh issue create --repo ${github_repo} \\
     --label prompt-pattern \\
     --title "<recipe-name>: <one-line pattern summary>" \\
     --body "See .github/ISSUE_TEMPLATE/prompt-pattern.md — paste the matched MISS reasons above, the prompt, the model output, and a suggested fix if known."

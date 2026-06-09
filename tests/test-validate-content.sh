@@ -114,6 +114,38 @@ else
   fi
 fi
 
+# 15-18. DELEGATE_CONTENT_ALLOW_ORG parameterizes the github.com org in the
+# URL allowlist so forks can pass their own org without editing the script.
+
+# 15. Default behaviour unchanged: github.com/IsmaelMartinez URLs pass,
+#     other orgs flag URL_EXTERNAL.
+TMPMD=$(mktemp /tmp/content-org-XXXXXX.md)
+printf '# Fixture\nSee https://github.com/IsmaelMartinez/delegate-local for details.\n' > "$TMPMD"
+out=$(ALLOW_FILE="$EMPTY_ALLOW" bash "$SCRIPT" "$TMPMD" 2>&1); ec=$?
+assert_exit 0 "$ec" "default org: github.com/IsmaelMartinez URL passes"
+printf '# Fixture\nSee https://github.com/SomeOtherOrg/forked-skill for details.\n' > "$TMPMD"
+out=$(ALLOW_FILE="$EMPTY_ALLOW" bash "$SCRIPT" "$TMPMD" 2>&1); ec=$?
+assert_exit 1 "$ec" "default org: github.com/SomeOtherOrg URL flags"
+assert_contains "URL_EXTERNAL" "$out" "default org: other-org hit names URL_EXTERNAL"
+
+# 16. Override allows the fork's org.
+out=$(DELEGATE_CONTENT_ALLOW_ORG=SomeOtherOrg ALLOW_FILE="$EMPTY_ALLOW" bash "$SCRIPT" "$TMPMD" 2>&1); ec=$?
+assert_exit 0 "$ec" "org override: github.com/SomeOtherOrg URL passes"
+
+# 17. Override replaces rather than extends: the upstream org now flags.
+printf '# Fixture\nSee https://github.com/IsmaelMartinez/delegate-local for details.\n' > "$TMPMD"
+out=$(DELEGATE_CONTENT_ALLOW_ORG=SomeOtherOrg ALLOW_FILE="$EMPTY_ALLOW" bash "$SCRIPT" "$TMPMD" 2>&1); ec=$?
+assert_exit 1 "$ec" "org override: upstream org flags under a different org"
+assert_contains "URL_EXTERNAL" "$out" "org override: upstream-org hit names URL_EXTERNAL"
+
+# 18. Regex metacharacters in the override match literally — a value like
+#     ".*" must not widen the allowlist to every github.com URL.
+printf '# Fixture\nSee https://github.com/EvilOrg/payload for details.\n' > "$TMPMD"
+out=$(DELEGATE_CONTENT_ALLOW_ORG='.*' ALLOW_FILE="$EMPTY_ALLOW" bash "$SCRIPT" "$TMPMD" 2>&1); ec=$?
+assert_exit 1 "$ec" "org override: '.*' value cannot widen the allowlist"
+assert_contains "URL_EXTERNAL" "$out" "org override: '.*' hit names URL_EXTERNAL"
+rm -f "$TMPMD"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

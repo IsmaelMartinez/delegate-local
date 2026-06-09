@@ -14,7 +14,15 @@
 # still flags violations — but the gates only call it on SKILL.md by design.
 #
 # Usage: validate-skill-content.sh <file>
-# Env:   ALLOW_FILE  override path to .content-check-allow (default: repo root)
+# Env:   ALLOW_FILE                 override path to .content-check-allow
+#                                   (default: repo root)
+#        DELEGATE_CONTENT_ALLOW_ORG GitHub org/user whose github.com URLs the
+#                                   URL_EXTERNAL allowlist accepts (default
+#                                   IsmaelMartinez; forks set their own org).
+#                                   Must be a plain org name — the value is
+#                                   regex-escaped before interpolation, so
+#                                   metacharacters match literally and cannot
+#                                   widen the allowlist.
 # Exit:  0 clean, 1 unjustified hit, 2 usage error.
 
 set -uo pipefail
@@ -27,6 +35,11 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 allow_file="${ALLOW_FILE:-$repo_root/.content-check-allow}"
+allow_org="${DELEGATE_CONTENT_ALLOW_ORG:-IsmaelMartinez}"
+# The org is interpolated into an ERE, so escape metacharacters first: a value
+# like ".*" must match the literal two characters, never widen the allowlist.
+# GitHub org names are alphanumerics and hyphens, so a plain name is unchanged.
+allow_org_re=$(printf '%s' "$allow_org" | sed 's/[][\.|$(){}?+*^\\]/\\&/g')
 
 # Normalize $file to a repo-root-relative path so allow-file keys are stable
 # regardless of whether the caller passed `./SKILL.md`, `SKILL.md`, or an
@@ -48,8 +61,9 @@ declare -a CATEGORIES=(
 # Note: OBFUSC_HEX (\\x.. sequences) is not scanned because it false-positives
 # heavily on shell examples in markdown. Add later if a real exfil pattern emerges.
 
-# URL allowlist: localhost, our org, anthropic, ollama, huggingface, etc.
-URL_ALLOW='^https?://(localhost|127\.0\.0\.1|::1|github\.com/IsmaelMartinez|github\.com/anthropics|docs\.anthropic\.com|platform\.claude\.com|claude\.com|claude\.ai|ollama\.com|huggingface\.co|embracethered\.com)'
+# URL allowlist: localhost, the configured org (DELEGATE_CONTENT_ALLOW_ORG),
+# anthropic, ollama, huggingface, etc.
+URL_ALLOW="^https?://(localhost|127\.0\.0\.1|::1|github\.com/${allow_org_re}|github\.com/anthropics|docs\.anthropic\.com|platform\.claude\.com|claude\.com|claude\.ai|ollama\.com|huggingface\.co|embracethered\.com)"
 
 # Read allow-file into a newline-delimited string, leading + trailing newline so
 # membership checks via `*$'\n'key$'\n'*` are unambiguous. Bash 3-compatible

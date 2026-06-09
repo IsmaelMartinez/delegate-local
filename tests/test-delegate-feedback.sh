@@ -384,6 +384,24 @@ if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  stopword-only re
 else echo "  FAIL  stopword-only reason: nudge fired"; fail=$((fail+1)); fi
 rm -rf "$tmp"
 
+# n27b: nudge's draft gh command targets the default repo when
+# DELEGATE_GITHUB_REPO is unset, and the override repo when set (fork support).
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 2
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
+assert_eq 0 "$EC" "repo default: exit 0"
+assert_contains "--repo IsmaelMartinez/delegate-local" "$out" "repo default: nudge targets IsmaelMartinez/delegate-local"
+rm -rf "$tmp"
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 2
+EC=0
+out=$(DELEGATE_GITHUB_REPO="someorg/forked-skill" DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+      bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
+assert_eq 0 "$EC" "repo override: exit 0"
+assert_contains "--repo someorg/forked-skill" "$out" "repo override: nudge targets DELEGATE_GITHUB_REPO"
+if [[ "$out" != *"IsmaelMartinez/delegate-local"* ]]; then echo "  PASS  repo override: default repo absent from nudge"; pass=$((pass+1))
+else echo "  FAIL  repo override: default repo still present in nudge"; fail=$((fail+1)); fi
+rm -rf "$tmp"
+
 # ---------------------------------------------------------------------------
 # Single-row-per-invocation regression (issue #171)
 # Every code path through delegate-feedback.sh must append exactly one new
