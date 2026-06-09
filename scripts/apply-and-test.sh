@@ -121,7 +121,20 @@ has_refuse=$(printf '%s' "$patch_text" | awk '
 # identifiers or comments and must round-trip verbatim.
 blocks_file=$(mktemp)
 patched_file=$(mktemp)
-trap 'rm -f "$blocks_file" "$patched_file"' EXIT
+# Single EXIT trap for every tempfile this script creates. Later phases used
+# to overwrite this trap (dropping $patched_file from the cleanup list and
+# leaking it); a cleanup function with all paths — including the not-yet-
+# created $log_file and the in-flight $next_file rotation — fixes that.
+# Variables not yet assigned are empty and skipped.
+log_file=""
+next_file=""
+cleanup() {
+  rm -f "$blocks_file" "$patched_file"
+  [[ -n "$log_file" ]] && rm -f "$log_file"
+  [[ -n "$next_file" ]] && rm -f "$next_file"
+  return 0
+}
+trap cleanup EXIT
 printf '%s' "$patch_text" | perl -CSD -0777 -ne '
   while (/<{5,}\s*SEARCH\s*\n(.*?)\n={5,}\s*\n(.*?)\n>{5,}\s*REPLACE/sg) {
     print $1, "\0", $2, "\0";
@@ -203,6 +216,7 @@ while IFS= read -r -d '' search <&3 && IFS= read -r -d '' replace <&3; do
     print $text;
   ' < "$patched_file" > "$next_file"
   mv "$next_file" "$patched_file"
+  next_file=""
 done
 exec 3<&-
 
@@ -225,7 +239,6 @@ cp "$patched_file" "$out_dir/$source_name"
 # a python module so the shebang of pytest doesn't matter — only the chosen
 # interpreter does.
 log_file=$(mktemp)
-trap 'rm -f "$blocks_file" "$log_file"' EXIT
 
 run_pytest() {
   if command -v timeout >/dev/null 2>&1; then
