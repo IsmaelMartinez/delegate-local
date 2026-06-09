@@ -4,6 +4,8 @@ inputs:
   ask: string
   recipient: string?
   signoff: string?
+checks:
+  no_padding_tail: true
 ---
 # maintainer-reply
 
