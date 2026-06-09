@@ -4495,6 +4495,180 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
+# --- #277 dir 5: --recipe auto inference -----------------------------------
+# A diff_sample heredoc is the canonical "context that looks like a unified
+# diff" used across the auto tests.
+read -r -d '' DIFF_SAMPLE <<'DIFF' || true
+diff --git a/foo.txt b/foo.txt
+index e69de29..4b825dc 100644
+--- a/foo.txt
++++ b/foo.txt
+@@ -0,0 +1 @@
++hello
+DIFF
+
+# A1. --recipe auto + piped diff -> resolves to commit-message. recent_commits
+# and diff_stat are passed explicitly here so the backfill is skipped (A4
+# covers the git-backfill path); this isolates the diff->commit-message NAME
+# mapping plus the metrics recipe field.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp); : > "$metrics"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/commit-message.md" <<'EOF'
+# commit-message
+
+## When to use
+Stub.
+
+## Prompt template
+
+```
+RECENT
+{{recent_commits}}
+STAT
+{{diff_stat}}
+WHY
+{{why}}
+```
+
+## Calibration notes
+n/a
+EOF
+EC=0
+err="$tmp/err.txt"
+out=$(printf '%s' "$DIFF_SAMPLE" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe auto --var recent_commits=rc --var diff_stat=ds --var why=because prose "go" 2>"$err") || EC=$?
+assert_eq 0 "$EC" "--recipe auto (diff): exits 0"
+assert_contains "inferred commit-message" "$(cat "$err")" "--recipe auto (diff): announces inference on stderr"
+assert_contains '"recipe":"commit-message"' "$(cat "$metrics")" "--recipe auto (diff): metrics recipe=commit-message"
+payload=$(cat "$sniff")
+assert_contains 'WHY' "$payload" "--recipe auto (diff): commit-message template used"
+assert_contains 'because' "$payload" "--recipe auto (diff): {{why}} from --var substituted"
+rm -rf "$tmp" "$metrics"
+
+# A2. --recipe auto + non-diff context -> exit 2, clear "could not infer".
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); : > "$metrics"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+EC=0
+out=$(printf 'just some prose, not a diff at all' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe auto prose "go" 2>&1) || EC=$?
+assert_eq 2 "$EC" "--recipe auto (non-diff): exit 2"
+assert_contains "could not infer" "$out" "--recipe auto (non-diff): clear error"
+rm -rf "$tmp" "$metrics"
+
+# A3. --recipe auto with no piped context -> exit 2, "needs context".
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); : > "$metrics"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe auto prose "go" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "--recipe auto (no stdin): exit 2"
+assert_contains "needs context" "$out" "--recipe auto (no stdin): clear error"
+rm -rf "$tmp" "$metrics"
+
+# A stub commit-message recipe with the three placeholders the auto path fills.
+make_auto_cm_recipe() {
+  local dir="$1"; mkdir -p "$dir"
+  cat > "$dir/commit-message.md" <<'EOF'
+# commit-message
+
+## When to use
+Stub.
+
+## Prompt template
+
+```
+RECENT
+{{recent_commits}}
+STAT
+{{diff_stat}}
+WHY
+{{why}}
+```
+
+## Calibration notes
+n/a
+EOF
+}
+
+# A4. --recipe auto: diff_stat is derived from the PIPED diff (not git state),
+# recent_commits is backfilled from git log. The repo stages a DIFFERENT file
+# (a.txt) than the piped diff (foo.txt); the payload must mention foo.txt (from
+# the piped diff) and NOT a.txt — proving diff_stat tracks what was piped and
+# cannot diverge to the index. Passing only --var why must exit 0.
+if command -v git >/dev/null 2>&1; then
+  tmp=$(mktemp -d)
+  make_mock_ollama "$tmp"
+  sniff="$tmp/payload.json"
+  make_mock_curl_ok "$tmp" "$sniff"
+  metrics=$(mktemp); : > "$metrics"
+  prompts="$tmp/prompts"; make_auto_cm_recipe "$prompts"
+  repo="$tmp/gitrepo"; mkdir -p "$repo"
+  (
+    cd "$repo"
+    git init -q
+    git config user.email t@t.t; git config user.name t
+    printf 'one\n' > a.txt; git add a.txt; git commit -qm "initial commit"
+    printf 'two\n' >> a.txt; git add a.txt
+  )
+  EC=0
+  out=$(cd "$repo" && printf '%s' "$DIFF_SAMPLE" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_METRICS_FILE="$metrics" \
+    DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe auto --var why=because prose "go") || EC=$?
+  assert_eq 0 "$EC" "--recipe auto (backfill): exit 0 with only --var why"
+  payload=$(cat "$sniff")
+  assert_contains 'initial commit' "$payload" "--recipe auto (backfill): recent_commits from git log"
+  assert_contains 'foo.txt' "$payload" "--recipe auto (backfill): diff_stat derived from the piped diff"
+  if [[ "$payload" == *"a.txt"* ]]; then
+    echo "  FAIL  --recipe auto (backfill): diff_stat leaked git index (a.txt) instead of piped diff"; fail=$((fail+1))
+  else
+    echo "  PASS  --recipe auto (backfill): diff_stat does NOT leak the staged index file"; pass=$((pass+1))
+  fi
+  rm -rf "$tmp" "$metrics"
+
+  # A5. Clean working tree (nothing staged, diff piped from elsewhere e.g.
+  # `git show`): diff_stat still fills from the piped diff, so the call must NOT
+  # hard-fail on a missing diff_stat. This is the Bug-1 regression guard.
+  tmp=$(mktemp -d)
+  make_mock_ollama "$tmp"
+  sniff="$tmp/payload.json"
+  make_mock_curl_ok "$tmp" "$sniff"
+  metrics=$(mktemp); : > "$metrics"
+  prompts="$tmp/prompts"; make_auto_cm_recipe "$prompts"
+  repo="$tmp/gitrepo2"; mkdir -p "$repo"
+  (
+    cd "$repo"
+    git init -q
+    git config user.email t@t.t; git config user.name t
+    printf 'one\n' > a.txt; git add a.txt; git commit -qm "initial commit"
+  )  # nothing staged after the commit — clean tree
+  EC=0
+  out=$(cd "$repo" && printf '%s' "$DIFF_SAMPLE" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_METRICS_FILE="$metrics" \
+    DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe auto --var why=because prose "go" 2>&1) || EC=$?
+  assert_eq 0 "$EC" "--recipe auto (clean tree): exit 0 — diff_stat from piped diff, no hard-fail"
+  rm -rf "$tmp" "$metrics"
+else
+  echo "  SKIP  --recipe auto (backfill): git not on PATH"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

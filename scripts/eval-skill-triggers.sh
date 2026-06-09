@@ -76,17 +76,24 @@ done
 [[ -f "$skill" ]]    || { echo "missing skill: $skill" >&2; exit 2; }
 command -v jq >/dev/null || { echo "jq not on PATH" >&2; exit 2; }
 
-# Shape checks (always run).
+# Shape checks (always run). positive/negative count only GATED rows (gate !=
+# false): the >=8 thresholds exist to guarantee enough cases in the population
+# the recall/precision gate actually scores, and diagnostic (gate:false) rows
+# are excluded from that gate, so counting them here would let a set pass shape
+# while having too few gated cases to score meaningfully. jq's `!= false` is
+# safe (unlike `// false`) — absent gate is null, null != false is true, so an
+# entry is gated unless it explicitly sets gate:false.
 total=$(jq '.queries | length' "$eval_set")
-pos=$(jq '[.queries[] | select(.expect == "trigger")] | length' "$eval_set")
-neg=$(jq '[.queries[] | select(.expect == "no-trigger")] | length' "$eval_set")
+pos=$(jq '[.queries[] | select(.expect == "trigger" and (.gate != false))] | length' "$eval_set")
+neg=$(jq '[.queries[] | select(.expect == "no-trigger" and (.gate != false))] | length' "$eval_set")
+diagnostic=$(jq '[.queries[] | select(.gate == false)] | length' "$eval_set")
 missing_fields=$(jq '[.queries[] | select((.id // "") == "" or (.tag // "") == "" or (.expect // "") == "" or (.query // "") == "")] | length' "$eval_set")
 
-echo "shape: total=$total positive=$pos negative=$neg missing-fields=$missing_fields"
+echo "shape: total=$total positive=$pos negative=$neg diagnostic=$diagnostic missing-fields=$missing_fields"
 
 (( total >= 16 ))         || { echo "FAIL: need >=16 total queries" >&2; exit 1; }
-(( pos >= 8 ))            || { echo "FAIL: need >=8 positives (got $pos)" >&2; exit 1; }
-(( neg >= 8 ))            || { echo "FAIL: need >=8 negatives (got $neg)" >&2; exit 1; }
+(( pos >= 8 ))            || { echo "FAIL: need >=8 gated positives (got $pos)" >&2; exit 1; }
+(( neg >= 8 ))            || { echo "FAIL: need >=8 gated negatives (got $neg)" >&2; exit 1; }
 (( missing_fields == 0 )) || { echo "FAIL: $missing_fields queries missing fields" >&2; exit 1; }
 
 if [[ "$mode" == "shape" ]]; then
@@ -269,18 +276,31 @@ jq -r '.[] | "\(.id)\t\(.verdict)"' <<<"$verdicts_json" \
   > "$verdict_map"
 
 tp=0; fn=0; tn=0; fp=0
+# Diagnostic counters (#277 dir 3): queries flagged `"gate": false` are scored
+# and reported but NOT folded into the pass/fail recall/precision gate. The
+# embedded-sub-step cases ("implement X, then commit and open a PR") live here:
+# they probe whether the trigger surface flags a delegatable commit/PR sub-step
+# buried inside a multi-step build instruction — the production miss the binary
+# gate's standalone paraphrases never exercised. They are expected to lag until
+# the control-flow fix (the boundary hook, #282) closes the gap, so gating on
+# them would just wedge an advisory eval; tracking them separately is the point.
+dtp=0; dfn=0; dtn=0; dfp=0; diag=0
 missing_verdicts=0
 while read -r row; do
   id=$(jq -r '.id'     <<<"$row")
   expect=$(jq -r '.expect' <<<"$row")
   query=$(jq -r '.query'   <<<"$row")
+  # Explicit compare, NOT `.gate // true`: jq's `//` treats false as absent, so
+  # `.gate // true` would wrongly return true for a `"gate": false` entry. Only
+  # an explicit false marks a query diagnostic; absent or true means gating.
+  gate=$(jq -r 'if .gate == false then "false" else "true" end' <<<"$row")
   verdict=$(awk -F'\t' -v id="$id" '$1 == id { print $2; exit }' "$verdict_map")
   if [[ -z "$verdict" ]]; then
     missing_verdicts=$((missing_verdicts + 1))
     verdict="MISSING"
   fi
-  jq -nc --arg id "$id" --arg expect "$expect" --arg verdict "$verdict" --arg query "$query" \
-    '{id:$id, expect:$expect, verdict:$verdict, query:$query}' >> "$results_file"
+  jq -nc --arg id "$id" --arg expect "$expect" --arg verdict "$verdict" --arg query "$query" --argjson gate "$gate" \
+    '{id:$id, expect:$expect, verdict:$verdict, query:$query, gate:$gate}' >> "$results_file"
   # Classify the verdict. Order matters: NOTRIGGER must be checked before
   # TRIGGER because the latter is a prefix of the former. Glob match tolerates
   # stray punctuation that survived the alpha-only normalisation (it cannot,
@@ -291,7 +311,14 @@ while read -r row; do
   if   [[ "$verdict" == NOTRIGGER* ]]; then is_notrigger=1
   elif [[ "$verdict" == TRIGGER* ]];   then is_trigger=1
   fi
-  if [[ "$expect" == "trigger" ]]; then
+  if [[ "$gate" == "false" ]]; then
+    diag=$((diag+1))
+    if [[ "$expect" == "trigger" ]]; then
+      if (( is_trigger )); then dtp=$((dtp+1)); else dfn=$((dfn+1)); fi
+    else
+      if (( is_notrigger )); then dtn=$((dtn+1)); else dfp=$((dfp+1)); fi
+    fi
+  elif [[ "$expect" == "trigger" ]]; then
     if (( is_trigger )); then tp=$((tp+1)); else fn=$((fn+1)); fi
   else
     if (( is_notrigger )); then tn=$((tn+1)); else fp=$((fp+1)); fi
@@ -307,6 +334,14 @@ if (( missing_verdicts > 0 )); then
 fi
 
 echo "results: tp=$tp fn=$fn tn=$tn fp=$fp recall=$recall negative-precision=$neg_prec"
+if (( diag > 0 )); then
+  # Diagnostic embedded-sub-step recall (#277 dir 3): informational only, never
+  # gates. This is the number the boundary hook (#282) should move over time —
+  # a low value here next to a high gating recall above is the blind spot the
+  # binary eval's standalone paraphrases hid, made visible.
+  drecall=$(awk -v tp="$dtp" -v fn="$dfn" 'BEGIN{ if(tp+fn==0) print "n/a"; else printf "%.3f", tp/(tp+fn) }')
+  echo "diagnostic (non-gating, embedded sub-step): dtp=$dtp dfn=$dfn embedded-recall=$drecall"
+fi
 echo "raw:     $results_file"
 
 ok=1
