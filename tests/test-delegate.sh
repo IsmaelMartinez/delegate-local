@@ -537,6 +537,71 @@ assert_eq 2 "$EC" "--var without '=' -> exit 2"
 assert_contains "key=value" "$out" "--var: error mentions key=value form"
 rm -rf "$tmp" "$metrics"
 
+# 14a. --var key containing glob metacharacters is rejected. The key is
+# interpolated into a bash pattern replacement (`${tpl//\{\{$key\}\}/...}`),
+# so a non-identifier key would produce a malformed/overbroad substitution
+# instead of a literal {{key}} match — reject with a clear error instead.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); : > "$metrics"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/x.md" <<'EOF'
+# x
+
+## When to use
+t
+
+## Prompt template
+
+```
+hello {{a}}
+```
+
+## Calibration notes
+n/a
+EOF
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe x --var 'a*b=x' prose "p" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "--var with glob-metachar key -> exit 2"
+assert_contains "invalid key 'a*b'" "$out" "--var: error names the bad key"
+rm -rf "$tmp" "$metrics"
+
+# 14b. --var key that is a plain identifier (letters, digits, underscore)
+# still substitutes normally after the key-shape guard.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/ident.md" <<'EOF'
+# ident
+
+## When to use
+t
+
+## Prompt template
+
+```
+hello {{a_b1}}
+```
+
+## Calibration notes
+n/a
+EOF
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe ident --var a_b1=ok prose "p" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "--var with identifier key (underscore + digit): exits 0"
+assert_contains 'hello ok' "$(cat "$sniff")" "--var: identifier key substituted into payload"
+rm -rf "$tmp" "$metrics"
+
 # 15. --var value containing {{...}} (Vue/Angular bindings, Go templates,
 # logs with curly braces) must NOT trigger the unsubstituted-placeholder
 # guard. The guard checks the original template's placeholders, not the

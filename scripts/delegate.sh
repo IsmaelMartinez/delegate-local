@@ -780,6 +780,15 @@ if [[ -n "$recipe" ]]; then
       echo "delegate: --var has empty key in '$kv'" >&2
       exit 2
     fi
+    # The key is interpolated into a bash pattern replacement below, so glob
+    # metacharacters (* ? [ ]) in a key would produce a malformed/overbroad
+    # substitution instead of a literal {{key}} match. Reject anything that
+    # isn't a plain identifier — the same shape the placeholder scan accepts.
+    if ! [[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+      echo "delegate: --var has invalid key '$key' in '$kv'" >&2
+      echo "         keys must match ^[a-zA-Z_][a-zA-Z0-9_]*$ (letters, digits, underscore)" >&2
+      exit 2
+    fi
     recipe_template="${recipe_template//\{\{$key\}\}/$value}"
     recipe_checks="${recipe_checks//\{\{$key\}\}/$value}"
     satisfied_keys="${satisfied_keys}{{${key}}}"$'\n'

@@ -15,6 +15,10 @@
 #   DELEGATE_FEEDBACK_NUDGE_AT            minimum bucket size to emit a draft
 #                                         (default 3)
 #   DELEGATE_FEEDBACK_SIMILAR_THRESHOLD   Jaccard cutoff (default 0.4)
+#   DELEGATE_GITHUB_REPO                  owner/repo the draft `gh issue create`
+#                                         commands target
+#                                         (default IsmaelMartinez/delegate-local;
+#                                         forks set their own)
 # Exit:   0 OK (with or without buckets), 1 file/dep missing, 2 usage error.
 
 set -uo pipefail
@@ -42,6 +46,7 @@ metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metri
 nudge_at="${DELEGATE_FEEDBACK_NUDGE_AT:-3}"
 window_days="${DELEGATE_FEEDBACK_NUDGE_WINDOW_DAYS:-30}"
 similar_threshold="${DELEGATE_FEEDBACK_SIMILAR_THRESHOLD:-0.4}"
+github_repo="${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}"
 window_secs=$((window_days * 86400))
 
 [[ -f "$metrics_file" ]] || { echo "metrics file not found: $metrics_file" >&2; exit 1; }
@@ -167,7 +172,7 @@ echo
 # Stream the buckets back out as human-readable summaries plus a draft
 # `gh issue create` command per bucket. The body is built with printf so
 # embedded newlines survive into the gh --body argument unmolested.
-printf '%s\n' "$out" | awk -F'\t' '
+printf '%s\n' "$out" | awk -F'\t' -v repo="$github_repo" '
   /^BUCKET_START/ {
     # Strip the leading "id=" / "count=" / "rep=" prefixes.
     id=$2; sub(/^id=/, "", id)
@@ -202,7 +207,7 @@ printf '%s\n' "$out" | awk -F'\t' '
     body=body "See .github/ISSUE_TEMPLATE/prompt-pattern.md for the full template — paste the prompt, the model output, and a suggested fix if known."
     gsub(/\x27/, "\x27\\\x27\x27", body)
     printf "\nDraft issue command:\n"
-    printf "  gh issue create --repo IsmaelMartinez/delegate-local \\\n"
+    printf "  gh issue create --repo %s \\\n", repo
     printf "    --label prompt-pattern \\\n"
     printf "    --title \x27%s\x27 \\\n", title
     printf "    --body \x27%s\x27\n\n", body

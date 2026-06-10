@@ -119,6 +119,19 @@ assert_contains "no pushable entries" "$out" "T7: warns about skipped rows"
 assert_eq "1" "$(cat "$state3" 2>/dev/null)" "T7: watermark advanced past unsyncable rows"
 if [[ -f "$body3" ]]; then echo "  FAIL  T7: nothing should have been pushed"; fail=$((fail+1)); else echo "  PASS  T7: no push body written"; pass=$((pass+1)); fi
 
+# --- T8: response tempfile is mktemp-based and cleaned up on exit -----------
+# (was a predictable /tmp/loki_push_resp.$$ path; now mktemp + EXIT trap).
+# Point TMPDIR at a fresh dir so any leaked mktemp file is visible.
+tmpd="$tmp/tmpd"; mkdir -p "$tmpd"
+state4="$tmp/state4"; body4="$tmp/body4.json"
+make_mock_curl "$tmp" "$body4"
+EC=0
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" TMPDIR="$tmpd" \
+  bash "$SCRIPT" --full --metrics-file "$met" --state-file "$state4" --loki-url http://x >/dev/null 2>&1 || EC=$?
+assert_eq "0" "$EC" "T8: push run exits 0 with TMPDIR override"
+leftover=$(ls -A "$tmpd" 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "0" "$leftover" "T8: no tempfile leaked in TMPDIR after exit"
+
 rm -rf "$tmp"
 echo
 echo "$pass passed, $fail failed"

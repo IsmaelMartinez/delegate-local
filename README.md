@@ -91,7 +91,7 @@ After install, run the audit from wherever the skill landed:
 bash <install-path>/scripts/audit-models.sh
 ```
 
-### Personalising routing (optional)
+### Personalising routing (recommended)
 
 The shipped `pick-model.sh` is one preference list for everyone. To override the order on a specific machine without forking the repo, drop a bash file at `~/.claude/skills/delegate-local/config.sh`. `pick-model.sh` sources it after the shipped defaults are set, so any tier the file touches wins. Untouched tiers fall through to shipped defaults; an absent file changes nothing.
 
@@ -104,13 +104,47 @@ case "$tier" in
 esac
 ```
 
-`scripts/init.sh` writes a starter override based on what's currently installed — read-only, prints to stdout, never auto-writes:
+Recommended first step on any new machine or user: `scripts/init.sh` writes a starter override based on what's currently installed, so tier routing matches *your* models rather than the shipped preference list — read-only, prints to stdout, never auto-writes:
 
 ```bash
 bash <install-path>/scripts/init.sh > ~/.claude/skills/delegate-local/config.sh
 ```
 
 Set `DELEGATE_LOCAL_CONFIG=/some/other/path.sh` to redirect the override path (useful for testing or per-project overrides).
+
+## Forking / adopting this skill
+
+The mechanisms are fork-friendly out of the box — routing, metrics, and the feedback loop are all driven by env vars and the per-user `config.sh` above. What needs repointing is a handful of author-specific defaults:
+
+1. **Generate your routing override.** First step on any new machine or user (see [Personalising routing](#personalising-routing-recommended)):
+
+   ```bash
+   bash <install-path>/scripts/init.sh > ~/.claude/skills/delegate-local/config.sh
+   ```
+
+2. **Repoint the author-specific defaults** via env vars where they don't suit you:
+
+   | Variable | Default | What it repoints |
+   |----------|---------|------------------|
+   | `DELEGATE_GITHUB_REPO` | `IsmaelMartinez/delegate-local` | Repo targeted by the drafted `gh issue create` commands (`delegate-feedback.sh`, `audit-metrics.sh`) |
+   | `DELEGATE_CONTENT_ALLOW_ORG` | `IsmaelMartinez` | GitHub org/user allowed by the content-scan URL allowlist (`validate-skill-content.sh`) |
+   | `DELEGATE_METRICS_FILE` | `~/.claude/skills/delegate-local/metrics.jsonl` | Metrics JSONL location |
+   | `DELEGATE_PROMPTS_DIR` | `<install-path>/prompts` | Recipe directory |
+   | `OLLAMA_HOST` / `MLX_HOST` | `http://localhost:11434` / `http://localhost:8080` | Backend endpoints |
+
+3. **Install from your fork** the same way as upstream:
+
+   ```bash
+   npx skills add <your-user>/delegate-local
+   ```
+
+4. **Re-baseline for your models.** The dated fixtures under `experiments/fixtures/` and `evals/eval-set.json` carry example content from the upstream project's history. Routing works without touching them, but a fork gets the best calibration by re-running the baseline against its own installed models:
+
+   ```bash
+   bash experiments/run-baseline.sh <model> [<model>...]
+   ```
+
+5. **Update `CODEOWNERS`** to point `*` at your own handle so review requests go to you, not the upstream author.
 
 ## Files
 
@@ -202,7 +236,7 @@ The skill intentionally avoids frameworks. Local models are good summarisers and
 
 ## Related projects
 
-This skill sits at the intersection of three personal projects, and is observed by a fourth.
+This skill sits at the intersection of three personal projects, and is observed by a fourth. These are the upstream author's portfolio infrastructure — useful context for the design decisions, but none of them is required to use or fork the skill (`llmfit` remains an optional PATH check either way).
 
 [`local-brain`](https://github.com/IsmaelMartinez/local-brain) is the source of the framing this skill operationalises. The core finding — local models are strong summarisers and weak agents, so delegation is a shell pipe rather than an orchestration layer — comes directly from that work, and is why this skill is implemented as bash scripts rather than a framework.
 
@@ -210,7 +244,7 @@ This skill sits at the intersection of three personal projects, and is observed 
 
 [`llmfit`](https://github.com/IsmaelMartinez/llmfit) is an optional dependency that enables hardware-aware upgrade suggestions in `audit-models.sh`. When llmfit is not on PATH the audit prints routing only and skips the upgrade-check section with a hint. When it is present, the audit feeds llmfit's hardware-scored recommendations through a first-party-provider filter and surfaces upgrades that beat the installed leader by 3+ points. Patterns the audit script learns about Ollama-vs-HuggingFace name mappings (`hf_stem` normalisation) flow back to llmfit when worth generalising.
 
-[`repo-butler`](https://github.com/IsmaelMartinez/repo-butler) tracks repo health across the portfolio. No integration work is needed here — repo-butler picks up new repos automatically once they exist on GitHub, and this one is now visible to it.
+[`repo-butler`](https://github.com/IsmaelMartinez/repo-butler) tracks repo health across the portfolio. No integration work is needed here — repo-butler picks up new repos automatically once they exist on GitHub, and this one is now visible to it. It monitors the upstream repo only; forks are not observed and lose nothing by it.
 
 ## Maintenance
 
