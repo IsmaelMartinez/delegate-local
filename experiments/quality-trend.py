@@ -49,8 +49,13 @@ def load_rows(path):
 
 
 def week_of(ts):
-    """The Monday of the ISO week containing the YYYY-MM-DD prefix of ts."""
-    d = dt.datetime.strptime(ts[:10], "%Y-%m-%d").date()
+    """The Monday of the ISO week containing the YYYY-MM-DD prefix of ts, or
+    None if ts is missing/malformed — tolerated the same way load_rows tolerates
+    a bad JSON line, so one corrupt row can't crash the whole rollup."""
+    try:
+        d = dt.datetime.strptime((ts or "")[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
     return (d - dt.timedelta(days=d.weekday())).isoformat()
 
 
@@ -132,15 +137,26 @@ def main(argv):
     rec_m = defaultdict(int)
 
     for r in deleg:
-        vol[week_of(r["ts"])] += 1
+        w = week_of(r.get("ts"))
+        if w:
+            vol[w] += 1
     for r in feedback:
-        t = r.get("ref_ts") or r.get("ts")
-        if not t:
+        w = week_of(r.get("ref_ts") or r.get("ts"))
+        if not w:
             continue
         kept = r.get("kept") is True
-        (hits if kept else miss)[week_of(t)] += 1
+        (hits if kept else miss)[w] += 1
+        # ref_ts joins the verdict back to its delegation to recover the recipe.
+        # A ref_ts that resolves to no delegate row (e.g. a trimmed metrics
+        # file) is its own "(ref-not-found)" bucket rather than being silently
+        # folded into the genuine-bare count. (Sub-second ts collisions can
+        # still mis-credit a recipe — the join key is ts, not a row id — but
+        # that is rare and structural to the feedback->delegate linkage.)
         deleg_row = by_ts.get(r.get("ref_ts"))
-        recipe = (deleg_row or {}).get("recipe") or "(bare/no-recipe)"
+        if deleg_row is None:
+            recipe = "(ref-not-found)"
+        else:
+            recipe = deleg_row.get("recipe") or "(bare/no-recipe)"
         (rec_h if kept else rec_m)[recipe] += 1
 
     weeks = sorted(set(vol) | set(hits) | set(miss))
@@ -156,9 +172,13 @@ def main(argv):
     total_hits = sum(hits.values())
     total_verdicts = total_hits + sum(miss.values())
     total_deleg = len(deleg)
-    print(f"\nlifetime  {total_hits}/{total_verdicts} HIT = {100 * total_hits / total_verdicts:.0f}%"
-          f"   ·   {total_deleg} delegations"
-          f"   ·   {100 * total_verdicts / total_deleg:.0f}% verdict coverage")
+    if not total_verdicts:
+        print("quality-trend: no verdicts with a usable timestamp to summarise", file=sys.stderr)
+        return 1
+    hit_pct = 100 * total_hits / total_verdicts
+    coverage = f"{100 * total_verdicts / total_deleg:.0f}% verdict coverage" if total_deleg else "coverage n/a (no delegation rows)"
+    print(f"\nlifetime  {total_hits}/{total_verdicts} HIT = {hit_pct:.0f}%"
+          f"   ·   {total_deleg} delegations   ·   {coverage}")
     return 0
 
 
