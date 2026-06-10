@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.18.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.17.0...v0.18.0) (2026-06-10)
+
+
+### Features
+
+* add commit/PR boundary hook for delegate-local trigger rate ([#282](https://github.com/IsmaelMartinez/delegate-local/issues/282)) ([8f4a37d](https://github.com/IsmaelMartinez/delegate-local/commit/8f4a37d1b45bbee948c2ecb32b8e5e4cbc231cf5))
+* add maintainer-reply recipe for outbound PR and issue replies ([#284](https://github.com/IsmaelMartinez/delegate-local/issues/284)) ([13a1a70](https://github.com/IsmaelMartinez/delegate-local/commit/13a1a70580adac0e3726cf87e9e1f7f9d88c58c2))
+* add roadmap-status recipe for forward-looking plan items ([#281](https://github.com/IsmaelMartinez/delegate-local/issues/281)) ([80a5ace](https://github.com/IsmaelMartinez/delegate-local/commit/80a5ace84ed6bd44aebc9434aa9d75c4c2cb3dfc))
+* complete [#277](https://github.com/IsmaelMartinez/delegate-local/issues/277) trigger-rate directions (keyword narrowing, embedded-sub-step diagnostic, --recipe auto) ([#285](https://github.com/IsmaelMartinez/delegate-local/issues/285)) ([4f0d5a1](https://github.com/IsmaelMartinez/delegate-local/commit/4f0d5a1366e5bab47725573017a91bc48b536d5a))
+* fork-adoption generalization, security hardening, and forking docs ([#287](https://github.com/IsmaelMartinez/delegate-local/issues/287)) ([3bb4657](https://github.com/IsmaelMartinez/delegate-local/commit/3bb4657cce19368433fe93b228b87e39eb047fca))
+
+
+### Bug Fixes
+
+* add SCOPE directive to commit-message prompt ([#280](https://github.com/IsmaelMartinez/delegate-local/issues/280)) ([b051c46](https://github.com/IsmaelMartinez/delegate-local/commit/b051c460de35c3a2fb9172a1c2690b5b77a3ad45))
+* **auth:** deterministically. ([b051c46](https://github.com/IsmaelMartinez/delegate-local/commit/b051c460de35c3a2fb9172a1c2690b5b77a3ad45))
+* make `npx skills add` install work (remove cyclic AAIF self-symlink) ([#286](https://github.com/IsmaelMartinez/delegate-local/issues/286)) ([5e9e965](https://github.com/IsmaelMartinez/delegate-local/commit/5e9e9656b8034d4f4d323beeb93eaf05769ed114))
+
 ## [0.17.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.16.0...v0.17.0) (2026-06-07)
 
 
