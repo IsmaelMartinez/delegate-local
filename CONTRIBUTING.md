@@ -27,7 +27,7 @@ bash scripts/eval-skill-triggers.sh   # shape check (no model call)
 bash tests/run-tests.sh
 ```
 
-Each script has its own per-script test file under `tests/` (there are many — `test-delegate.sh`, `test-score-t3.sh` through `test-score-t8.sh`, `test-run-api-cell.sh`, `test-apply-and-test.sh`, `test-delegate-feedback.sh`, `test-prompts-library.sh`, `test-audit-metrics.sh`, and more). Rather than enumerate them here, the authoritative list of gates is [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — run the `tests/test-*.sh` step that matches the script you touched, and run the full set before opening the PR to match CI.
+Each script has its own per-script test file under `tests/` (there are many — `test-delegate.sh`, `test-score-t3.sh` through `test-score-t9.sh`, `test-run-api-cell.sh`, `test-apply-and-test.sh`, `test-delegate-feedback.sh`, `test-prompts-library.sh`, `test-audit-metrics.sh`, and more). Rather than enumerate them here, the authoritative list of gates is [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — run the `tests/test-*.sh` step that matches the script you touched, and run the full set before opening the PR to match CI.
 
 If you edit the `description` field in `SKILL.md` frontmatter, run the trigger eval against a real model before opening the PR:
 
