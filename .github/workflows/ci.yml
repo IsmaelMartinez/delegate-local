@@ -104,6 +104,9 @@ jobs:
       - name: Model-change-audit tests
         run: bash tests/test-model-change-audit.sh
 
+      - name: Quality-trend tests
+        run: bash tests/test-quality-trend.sh
+
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh
 

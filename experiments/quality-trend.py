@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Weekly recipe-quality trend over the delegate-local metrics JSONL.
+
+This is the reproducible method behind `experiments/results/<date>-quality-trend.md`.
+It reads the hit/miss verdict feedback rows (the calibration signal) and the
+delegation rows from the metrics file and prints four views:
+
+  1. a weekly HIT-rate line chart   — output kept verbatim = HIT, the quality signal;
+  2. weekly delegation volume        — so each HIT-rate point can be weighted by sample size;
+  3. per-recipe HIT rate             — where quality is strong (input-digestion recipes)
+                                       vs weak (taste-calibrated prose recipes);
+  4. a lifetime summary              — overall hit rate plus verdict coverage.
+
+Re-run it as data accumulates to augment the trend; when the picture shifts,
+drop a new dated `experiments/results/<date>-quality-trend.md` writeup that
+embeds the fresh charts and the interpretation. Verdicts are attributed to the
+delegation time (`ref_ts`) so quality lands in the week the work happened, not
+the week it was scored.
+
+Usage:
+  python3 experiments/quality-trend.py [METRICS_JSONL]
+
+METRICS_JSONL defaults to $DELEGATE_METRICS_FILE, else
+~/.claude/skills/delegate-local/metrics.jsonl (where delegate.sh appends).
+Stdlib only — no third-party dependencies, in keeping with the repo's
+portability rule.
+"""
+import json
+import os
+import sys
+import datetime as dt
+from collections import defaultdict
+
+MIN_RECIPE_VERDICTS = 5  # don't report a recipe's hit rate below this sample size
+
+
+def load_rows(path):
+    rows = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue  # tolerate a partially-written trailing line
+    return rows
+
+
+def week_of(ts):
+    """The Monday of the ISO week containing the YYYY-MM-DD prefix of ts."""
+    d = dt.datetime.strptime(ts[:10], "%Y-%m-%d").date()
+    return (d - dt.timedelta(days=d.weekday())).isoformat()
+
+
+def render_trend(series):
+    """series: list of (week, volume, verdicts, hits, hit_pct_or_None)."""
+    lo, hi, height, colspace = 50, 100, 11, 8
+    width = len(series) * colspace
+    grid = [[" "] * width for _ in range(height)]
+
+    def row(pct):
+        return height - 1 - round((pct - lo) / (hi - lo) * (height - 1))
+
+    pts = [(i * colspace + 1, row(s[4])) for i, s in enumerate(series) if s[4] is not None]
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):  # interpolate the connecting line
+        steps = x1 - x0
+        for s in range(steps + 1):
+            x = x0 + s
+            y = round(y0 + (y1 - y0) * s / steps)
+            if 0 <= y < height and 0 <= x < width and grid[y][x] == " ":
+                grid[y][x] = "·"
+    for x, y in pts:
+        grid[y][x] = "●"
+
+    out = ["", "  delegate-local — weekly recipe quality (HIT-rate of recorded verdicts)", ""]
+    for r in range(height):
+        pct = hi - round(r / (height - 1) * (hi - lo))
+        label = f"{pct:3d}% ┤" if pct % 10 == 0 else "     │"
+        out.append("  " + label + "".join(grid[r]))
+    out.append("       └" + "─" * width)
+    out.append("      " + "".join(s[0][5:].ljust(colspace) for s in series))
+    out.append("  n=  " + "".join(str(s[2]).ljust(colspace) for s in series) + "  verdicts/wk")
+    out.append("  hit=" + "".join((f"{s[4]}%" if s[4] is not None else "-").ljust(colspace) for s in series))
+    return "\n".join(out)
+
+
+def render_volume(series):
+    out = ["", "  weekly delegation volume", ""]
+    mx = max((s[1] for s in series), default=1) or 1
+    for w, vol, *_ in series:
+        out.append(f"  {w[5:]} │{'█' * round(40 * vol / mx)} {vol}")
+    return "\n".join(out)
+
+
+def render_recipes(rec_h, rec_m):
+    out = ["", f"  per-recipe quality (recorded verdicts, recipes with >= {MIN_RECIPE_VERDICTS})", "",
+           f"  {'recipe':<30}{'n':>4}{'hit%':>6}   bar"]
+    recipes = sorted(set(rec_h) | set(rec_m), key=lambda k: -(rec_h[k] + rec_m[k]))
+    for k in recipes:
+        n = rec_h[k] + rec_m[k]
+        if n < MIN_RECIPE_VERDICTS:
+            continue
+        hr = 100 * rec_h[k] / n
+        filled = round(20 * hr / 100)
+        out.append(f"  {k:<30}{n:>4}{hr:>5.0f}%   {'▰' * filled}{'▱' * (20 - filled)}")
+    return "\n".join(out)
+
+
+def main(argv):
+    default = os.environ.get("DELEGATE_METRICS_FILE") or os.path.expanduser(
+        "~/.claude/skills/delegate-local/metrics.jsonl")
+    path = argv[1] if len(argv) > 1 else default
+    if not os.path.exists(path):
+        print(f"quality-trend: metrics file not found at {path}", file=sys.stderr)
+        return 1
+
+    rows = load_rows(path)
+    deleg = [r for r in rows if r.get("source") == "delegate"]
+    feedback = [r for r in rows if r.get("source") == "feedback"]
+    if not feedback:
+        print("quality-trend: no feedback rows yet — record verdicts with "
+              "scripts/delegate-feedback.sh hit|miss", file=sys.stderr)
+        return 1
+
+    by_ts = {r.get("ts"): r for r in deleg if r.get("ts")}
+    vol = defaultdict(int)
+    hits = defaultdict(int)
+    miss = defaultdict(int)
+    rec_h = defaultdict(int)
+    rec_m = defaultdict(int)
+
+    for r in deleg:
+        vol[week_of(r["ts"])] += 1
+    for r in feedback:
+        t = r.get("ref_ts") or r.get("ts")
+        if not t:
+            continue
+        kept = r.get("kept") is True
+        (hits if kept else miss)[week_of(t)] += 1
+        deleg_row = by_ts.get(r.get("ref_ts"))
+        recipe = (deleg_row or {}).get("recipe") or "(bare/no-recipe)"
+        (rec_h if kept else rec_m)[recipe] += 1
+
+    weeks = sorted(set(vol) | set(hits) | set(miss))
+    series = []
+    for w in weeks:
+        v = hits[w] + miss[w]
+        series.append((w, vol[w], v, hits[w], round(100 * hits[w] / v) if v else None))
+
+    print(render_trend(series))
+    print(render_volume(series))
+    print(render_recipes(rec_h, rec_m))
+
+    total_hits = sum(hits.values())
+    total_verdicts = total_hits + sum(miss.values())
+    total_deleg = len(deleg)
+    print(f"\nlifetime  {total_hits}/{total_verdicts} HIT = {100 * total_hits / total_verdicts:.0f}%"
+          f"   ·   {total_deleg} delegations"
+          f"   ·   {100 * total_verdicts / total_deleg:.0f}% verdict coverage")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
