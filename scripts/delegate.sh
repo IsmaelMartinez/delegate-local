@@ -438,43 +438,27 @@ log_metric() {
   # $recipe_name (recipe names are filename-safe today but model names come
   # from `ollama list` parsing and are not under our control) escapes
   # correctly rather than producing invalid JSON.
-  if [[ -n "$recipe_name" ]]; then
-    jq -nc \
-      --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" \
-      --arg model "$model" --arg recipe "$recipe_name" --arg project "$project" \
-      --arg trace_id "$trace_id" --arg span_id "$span_id" \
-      --arg s_temp "$s_temp" --arg s_top_p "$s_top_p" --arg s_top_k "$s_top_k" --arg s_pp "$s_pp" \
-      --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
-      --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
-      --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
-      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, recipe:$recipe, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
-       + (if $project != "" then {project:$project} else {} end)
-       + (if $trace_id != "" then {otel_trace_id:$trace_id} else {} end)
-       + (if $span_id != "" then {otel_span_id:$span_id} else {} end)
-       + (if $s_temp != "" then {sampling_temperature:($s_temp|tonumber)} else {} end)
-       + (if $s_top_p != "" then {sampling_top_p:($s_top_p|tonumber)} else {} end)
-       + (if $s_top_k != "" then {sampling_top_k:($s_top_k|tonumber)} else {} end)
-       + (if $s_pp != "" then {sampling_presence_penalty:($s_pp|tonumber)} else {} end)' \
-      >> "$metrics_file" 2>/dev/null || true
-  else
-    jq -nc \
-      --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" --arg model "$model" \
-      --arg project "$project" \
-      --arg trace_id "$trace_id" --arg span_id "$span_id" \
-      --arg s_temp "$s_temp" --arg s_top_p "$s_top_p" --arg s_top_k "$s_top_k" --arg s_pp "$s_pp" \
-      --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
-      --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
-      --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
-      '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
-       + (if $project != "" then {project:$project} else {} end)
-       + (if $trace_id != "" then {otel_trace_id:$trace_id} else {} end)
-       + (if $span_id != "" then {otel_span_id:$span_id} else {} end)
-       + (if $s_temp != "" then {sampling_temperature:($s_temp|tonumber)} else {} end)
-       + (if $s_top_p != "" then {sampling_top_p:($s_top_p|tonumber)} else {} end)
-       + (if $s_top_k != "" then {sampling_top_k:($s_top_k|tonumber)} else {} end)
-       + (if $s_pp != "" then {sampling_presence_penalty:($s_pp|tonumber)} else {} end)' \
-      >> "$metrics_file" 2>/dev/null || true
-  fi
+  # recipe joins the other optional fields as a conditional append, so the row
+  # shape (recipe present iff this was a --recipe call) holds without a second
+  # jq block.
+  jq -nc \
+    --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" --arg model "$model" \
+    --arg recipe "$recipe_name" --arg project "$project" \
+    --arg trace_id "$trace_id" --arg span_id "$span_id" \
+    --arg s_temp "$s_temp" --arg s_top_p "$s_top_p" --arg s_top_k "$s_top_k" --arg s_pp "$s_pp" \
+    --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
+    --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
+    --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
+    '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
+     + (if $recipe != "" then {recipe:$recipe} else {} end)
+     + (if $project != "" then {project:$project} else {} end)
+     + (if $trace_id != "" then {otel_trace_id:$trace_id} else {} end)
+     + (if $span_id != "" then {otel_span_id:$span_id} else {} end)
+     + (if $s_temp != "" then {sampling_temperature:($s_temp|tonumber)} else {} end)
+     + (if $s_top_p != "" then {sampling_top_p:($s_top_p|tonumber)} else {} end)
+     + (if $s_top_k != "" then {sampling_top_k:($s_top_k|tonumber)} else {} end)
+     + (if $s_pp != "" then {sampling_presence_penalty:($s_pp|tonumber)} else {} end)' \
+    >> "$metrics_file" 2>/dev/null || true
 }
 
 # OTel ID generation and OTLP/HTTP span emission live in scripts/lib/otel.sh —
@@ -500,6 +484,25 @@ start_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 # as-linked-span (delegate-feedback.sh) both work without a second pass.
 otel_trace_id=$(otel_gen_id 32)
 otel_span_id=$(otel_gen_id 16)
+
+# Emit the metrics row + OTel span for an early-exit failure (pick-model,
+# flaky-gate, canary). All three share the same shape — zero output chars,
+# the whole elapsed time attributed to generation_ms — so the char/duration/
+# token computation and the long log_metric + emit_otel_span argument lists
+# live here once instead of being copy-pasted at each exit. The optional
+# sampling args default to empty for the early paths that fail before the
+# sampler profile is resolved; the canary passes its resolved metric_sampling_*.
+emit_failure() {
+  local fstatus="$1" fmodel="$2" fs_temp="${3:-}" fs_top_p="${4:-}" fs_top_k="${5:-}" fs_pp="${6:-}"
+  local fend fdur fp fc ftoks
+  fend=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
+  fdur=$((fend - start_epoch_ms))
+  fp=$(( ${#recipe_template} + ${#prompt} ))
+  fc=${#context}
+  ftoks=$(compute_tokens_local "$fp" "$fc" 0)
+  log_metric "$ts_start" "$tier" "$fmodel" "$fp" "$fc" 0 "$fdur" "$fstatus" "$recipe" 0 "$fdur" "$otel_trace_id" "$otel_span_id" "$fs_temp" "$fs_top_p" "$fs_top_k" "$fs_pp" "$delegate_project"
+  emit_otel_span "$start_epoch_ms" "$fdur" "$fstatus" "$otel_trace_id" "$otel_span_id" "$fmodel" "$backend" "$tier" "$recipe" "$fp" "$fc" 0 0 "$fdur" "$ftoks" "${recipe_template}${prompt}" "$context" "" "$delegate_project"
+}
 
 # Read stdin into a variable if anything is piped in (needed early so {{stdin}}
 # substitution can run before the model resolution, and so the recipe-driven
@@ -867,13 +870,7 @@ if [[ -n "$recipe" ]]; then
 fi
 
 if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
-  end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
-  fail_dur_ms=$((end_epoch_ms - start_epoch_ms))
-  fail_pchars=$(( ${#recipe_template} + ${#prompt} ))
-  fail_cchars=${#context}
-  fail_toks=$(compute_tokens_local "$fail_pchars" "$fail_cchars" 0)
-  log_metric "$ts_start" "$tier" "(none)" "$fail_pchars" "$fail_cchars" 0 "$fail_dur_ms" 1 "$recipe" 0 "$fail_dur_ms" "$otel_trace_id" "$otel_span_id" "" "" "" "" "$delegate_project"
-  emit_otel_span "$start_epoch_ms" "$fail_dur_ms" 1 "$otel_trace_id" "$otel_span_id" "(none)" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks" "${recipe_template}${prompt}" "$context" "" "$delegate_project"
+  emit_failure 1 "(none)"
   echo "delegate: pick-model failed for tier '$tier'" >&2
   exit 1
 fi
@@ -916,13 +913,7 @@ if [[ -n "$recipe" ]] && [[ "${DELEGATE_FORCE_FLAKY:-}" != "1" ]]; then
       fi
     done <<< "$flaky_list"
     if [[ -n "$matched_pat" ]]; then
-      end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
-      fail_dur_ms=$((end_epoch_ms - start_epoch_ms))
-      fail_pchars=$(( ${#recipe_template} + ${#prompt} ))
-      fail_cchars=${#context}
-      fail_toks=$(compute_tokens_local "$fail_pchars" "$fail_cchars" 0)
-      log_metric "$ts_start" "$tier" "$model" "$fail_pchars" "$fail_cchars" 0 "$fail_dur_ms" 4 "$recipe" 0 "$fail_dur_ms" "$otel_trace_id" "$otel_span_id" "" "" "" "" "$delegate_project"
-      emit_otel_span "$start_epoch_ms" "$fail_dur_ms" 4 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$fail_pchars" "$fail_cchars" 0 0 "$fail_dur_ms" "$fail_toks" "${recipe_template}${prompt}" "$context" "" "$delegate_project"
+      emit_failure 4 "$model"
       {
         echo "delegate: recipe '$recipe' is flagged as flaky on model '$model'"
         echo "         (matched frontmatter pattern '$matched_pat'; see prompts/$recipe.md calibration notes)"
@@ -1049,13 +1040,7 @@ if [[ -n "$recipe" ]] \
   curl -sS --fail --max-time "$preflight_timeout" -X POST "$canary_url" -d @- >/dev/null 2>&1 <<< "$canary_payload"
   canary_status=$?
   if (( canary_status != 0 )); then
-    end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
-    canary_dur_ms=$((end_epoch_ms - start_epoch_ms))
-    canary_pchars=$(( ${#recipe_template} + ${#prompt} ))
-    canary_cchars=${#context}
-    canary_toks=$(compute_tokens_local "$canary_pchars" "$canary_cchars" 0)
-    log_metric "$ts_start" "$tier" "$model" "$canary_pchars" "$canary_cchars" 0 "$canary_dur_ms" 3 "$recipe" 0 "$canary_dur_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project"
-    emit_otel_span "$start_epoch_ms" "$canary_dur_ms" 3 "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$canary_pchars" "$canary_cchars" 0 0 "$canary_dur_ms" "$canary_toks" "${recipe_template}${prompt}" "$context" "" "$delegate_project"
+    emit_failure 3 "$model" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty"
     # Distinguish curl exit codes so the recovery advice points at the
     # right knob. 28 is the --max-time-fired timeout (the case the canary
     # was designed for); 7 is "can't reach host" (daemon down or wrong
