@@ -561,25 +561,27 @@ assert_contains "valid: auto|ollama|mlx" "$OUT" "bogus error names auto in valid
 rm -rf "$tmp"
 
 echo
-echo "=== AAIF symlink ==="
+echo "=== no installer-breaking AAIF self-symlink ==="
 
-# AAIF compliance: .agents/skills/delegate-local must be a symlink to the
-# repo root, not a regular file or directory copy. Catches the case where a
-# Windows-without-symlinks checkout (or an accidental `cp -L`) replaces the
-# entry with a regular file containing the literal string "../..".
-AAIF_LINK="$SKILL_DIR/.agents/skills/delegate-local"
-if [[ -L "$AAIF_LINK" ]]; then
-  echo "  PASS  AAIF entry is a symlink"
-  pass=$((pass+1))
-else
-  echo "  FAIL  AAIF entry is not a symlink (path: $AAIF_LINK)"
+# Regression guard for the `npx skills add` ENAMETOOLONG failure. A symlink under
+# .agents/skills/ that resolves to the repo root makes Vercel's `skills` CLI recurse
+# .agents/skills/<name>/.agents/skills/<name>/... forever while it copies the skill,
+# dying with ENAMETOOLONG — and it exits 0, so the failure is silent. The skill is
+# discovered from the root SKILL.md instead, so no repo-root self-symlink may exist.
+SELF_LINK="$SKILL_DIR/.agents/skills/delegate-local"
+if [[ -L "$SELF_LINK" ]] && \
+   [[ "$(cd "$(dirname "$SELF_LINK")" && cd "$(readlink "$SELF_LINK" 2>/dev/null)" 2>/dev/null && pwd -P)" == "$(cd "$SKILL_DIR" && pwd -P)" ]]; then
+  echo "  FAIL  .agents/skills/delegate-local symlinks the repo root (re-creates the npx install recursion)"
   fail=$((fail+1))
+else
+  echo "  PASS  no repo-root self-symlink under .agents/skills/"
+  pass=$((pass+1))
 fi
-if [[ -f "$AAIF_LINK/SKILL.md" ]]; then
-  echo "  PASS  AAIF symlink resolves to a directory containing SKILL.md"
+if [[ -f "$SKILL_DIR/SKILL.md" ]]; then
+  echo "  PASS  root SKILL.md present (the location the installer copies from)"
   pass=$((pass+1))
 else
-  echo "  FAIL  $AAIF_LINK/SKILL.md does not resolve"
+  echo "  FAIL  root SKILL.md missing"
   fail=$((fail+1))
 fi
 

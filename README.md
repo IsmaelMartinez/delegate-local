@@ -7,8 +7,8 @@ An agent skill that routes summarisation, triage, and bulk-text tasks to locally
 One linear path from nothing to a first delegated call:
 
 ```bash
-# 1. Install (symlinks the skill into every detected agent tool)
-npx skills add IsmaelMartinez/delegate-local
+# 1. Install the whole skill (SKILL.md + scripts/) into Claude Code, user-scoped
+npx skills add IsmaelMartinez/delegate-local -a claude-code -g
 
 # 2. Confirm at least one local model is installed and see how tiers route
 bash ~/.claude/skills/delegate-local/scripts/audit-models.sh
@@ -57,17 +57,17 @@ Force a specific backend with `DELEGATE_BACKEND=ollama` or `DELEGATE_BACKEND=mlx
 
 ### Universal (recommended)
 
-Use [Vercel Labs' `skills` CLI](https://github.com/vercel-labs/skills), which symlinks the skill into every detected agent tool (Claude Code, Codex, OpenCode, Cursor, Copilot, and many others) so updates propagate everywhere at once:
+Use [Vercel Labs' `skills` CLI](https://github.com/vercel-labs/skills). It clones the repo and installs the whole skill directory — `SKILL.md` plus `scripts/`, `prompts/`, and `docs/` — into every detected agent tool (Claude Code, Codex, OpenCode, Cursor, Copilot, and many others) at once, so the `scripts/…` commands below work straight after install and updates propagate everywhere:
 
 ```bash
 npx skills add IsmaelMartinez/delegate-local
 ```
 
-Pass `-g` to install globally (`~/<agent>/skills/`) instead of per-project, `--copy` to make independent copies on systems without symlink support, or `-a claude-code` to limit to a specific agent.
+Pass `-g` to install user-scoped (`~/<agent>/skills/`) instead of per-project, `--copy` to make independent copies on systems without symlink support, or `-a claude-code` to limit to a specific agent.
 
 ### Per-tool guides
 
-When the universal install is the wrong fit (per-machine routing, MCP-only consumers, AAIF-only setups), the per-tool docs cover the specifics:
+When the universal install is the wrong fit (per-machine routing, MCP-only consumers), the per-tool docs cover the specifics:
 
 - [Claude Code](docs/install-claude-code.md)
 - [Codex](docs/install-codex.md)
@@ -76,7 +76,7 @@ When the universal install is the wrong fit (per-machine routing, MCP-only consu
 
 ### Manual copy
 
-The skill is conformant with the [Agent Skills standard](https://agentskills.io/specification) — `SKILL.md` at the directory root with `name` and `description` frontmatter — so any tool that reads that format can use it. The repo is also AAIF-discoverable directly: a symlink at `.agents/skills/delegate-local` points at the repo root, so tools that scan the AAIF layout (Cursor, Copilot, OpenCode) find the skill without per-tool copying. For tools that do not support AAIF discovery, drop the directory into the tool's expected skills path:
+The skill is conformant with the [Agent Skills standard](https://agentskills.io/specification) — `SKILL.md` at the directory root with `name` and `description` frontmatter — so any tool that reads that format can use it. To install without the `skills` CLI, clone the repo and drop the directory into the tool's expected skills path:
 
 ```bash
 git clone https://github.com/IsmaelMartinez/delegate-local

@@ -1,6 +1,6 @@
 # Install — OpenCode
 
-OpenCode reads skills from `~/.config/opencode/skills/` (user-scoped) and from any `.agents/skills/` directory in the project root via AAIF discovery. The skill auto-loads when its frontmatter `description` triggers — no manual activation needed.
+OpenCode reads skills from `~/.config/opencode/skills/` (user-scoped). The skill auto-loads when its frontmatter `description` triggers — no manual activation needed.
 
 ## Recommended
 
@@ -9,16 +9,6 @@ npx skills add IsmaelMartinez/delegate-local -a opencode
 ```
 
 The `-a opencode` flag scopes the install to OpenCode only. Add `-g` for a user-scoped install (`~/.config/opencode/skills/delegate-local`) instead of project-scoped, and `--copy` if symlinks do not work on your filesystem.
-
-## AAIF auto-discovery
-
-The repo ships an AAIF symlink at `.agents/skills/delegate-local` pointing back at the repo root. If you have cloned the repo into a project that OpenCode is reading, the skill is already discoverable — no copy needed. Verify with:
-
-```bash
-ls .agents/skills/delegate-local/SKILL.md
-```
-
-If the file resolves through the symlink, OpenCode will find it on its next session. AAIF discovery is the most portable install path — it survives repo updates without re-running the install command.
 
 ## Manual
 
@@ -41,7 +31,7 @@ Ask OpenCode for something the skill should fire on (a log summary, a commit-mes
 bash ~/.config/opencode/skills/delegate-local/scripts/audit-models.sh
 ```
 
-If OpenCode answers without delegating, check that the SKILL.md is reachable through one of the documented paths (user-scoped, project-scoped, or AAIF) and that the Ollama daemon is running.
+If OpenCode answers without delegating, check that the SKILL.md is reachable at `~/.config/opencode/skills/delegate-local/SKILL.md` and that the Ollama daemon is running.
 
 ## Per-machine routing override
 
