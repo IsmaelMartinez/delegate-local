@@ -36,7 +36,9 @@ MIN_RECIPE_VERDICTS = 5  # don't report a recipe's hit rate below this sample si
 
 def load_rows(path):
     rows = []
-    with open(path) as f:
+    # Explicit utf-8: metrics carry arbitrary commit/PR text, and the default
+    # encoding is not utf-8 on every platform.
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -66,6 +68,7 @@ def render_trend(series):
     grid = [[" "] * width for _ in range(height)]
 
     def row(pct):
+        pct = max(lo, min(hi, pct))  # clamp: a sub-50% week pins to the floor, not off-grid
         return height - 1 - round((pct - lo) / (hi - lo) * (height - 1))
 
     pts = [(i * colspace + 1, row(s[4])) for i, s in enumerate(series) if s[4] is not None]

@@ -30,6 +30,10 @@ assert_eq() {
 # Fixture: 8 delegations (6 commit-message across two weeks, 2 bare), 7 verdicts.
 # commit-message: 5 HIT / 1 MISS = 6 verdicts, 83%. bare: 1 HIT. One bare
 # delegation has no verdict (untracked) so coverage is 7/8 = 88%.
+# All fixtures are temp files cleaned up by a trap, so an early exit or
+# interrupt cannot leave them behind.
+fixture="" nofb="" malformed="" phantom="" nots=""
+trap 'rm -f "$fixture" "$nofb" "$malformed" "$phantom" "$nots"' EXIT
 fixture=$(mktemp)
 cat > "$fixture" <<'EOF'
 {"ts":"2026-05-04T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q"}
@@ -107,7 +111,24 @@ EOF
 out=$(python3 "$TREND" "$nots" 2>&1); ec=$?
 assert_eq 1 "$ec" "verdicts with no usable timestamp → exit 1 (no ZeroDivisionError)"
 
-rm -f "$fixture" "$nofb" "$malformed" "$phantom" "$nots"
+# A week below the 50% chart floor must not push the plotted row off-grid
+# (1 HIT / 3 MISS = 25%); the row() clamp keeps it on the floor instead of
+# raising IndexError.
+lowweek=$(mktemp)
+cat > "$lowweek" <<'EOF'
+{"ts":"2026-05-04T10:00:00Z","source":"delegate","recipe":"commit-message"}
+{"ts":"2026-05-04T11:00:00Z","source":"delegate","recipe":"commit-message"}
+{"ts":"2026-05-04T12:00:00Z","source":"delegate","recipe":"commit-message"}
+{"ts":"2026-05-04T13:00:00Z","source":"delegate","recipe":"commit-message"}
+{"ts":"2026-05-04T10:05:00Z","source":"feedback","ref_ts":"2026-05-04T10:00:00Z","kept":true}
+{"ts":"2026-05-04T11:05:00Z","source":"feedback","ref_ts":"2026-05-04T11:00:00Z","kept":false}
+{"ts":"2026-05-04T12:05:00Z","source":"feedback","ref_ts":"2026-05-04T12:00:00Z","kept":false}
+{"ts":"2026-05-04T13:05:00Z","source":"feedback","ref_ts":"2026-05-04T13:00:00Z","kept":false}
+EOF
+out=$(python3 "$TREND" "$lowweek" 2>&1); ec=$?
+assert_eq 0 "$ec" "sub-50% week renders without IndexError"
+assert_contains "lifetime  1/4 HIT = 25%" "$out" "sub-50% week counted correctly"
+rm -f "$lowweek"
 echo ""
 echo "=== Results ==="
 echo "$pass passed, $fail failed"
