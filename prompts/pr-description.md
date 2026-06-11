@@ -14,6 +14,8 @@ flaky_on_models:
 ---
 # pr-description
 
+> **Status (2026-06-11): accepted as hand-written on 35B+/80B prose-tier hosts.** This recipe is production-measured at 45% HIT (the worst in the library); the failure mode is model parameter-count stall, not taste, so the ADR 0013 flavor-profile split was considered and declined. This is a terminal decision, not an open tuning task — see ADR 0013 "Topic E" and ADR 0012 (the `flaky_on_models` gate that already enforces it). The recipe stays available where the prose tier resolves to a smaller model.
+
 ## When to use
 
 The user has a branch with one or more commits and wants a GitHub PR description ready to paste into `gh pr create --body "..."`. Standard project shape: `## Summary` bullet list at the top, optional narrative subsections in flowing prose, `## Test plan` checkbox list at the end.
