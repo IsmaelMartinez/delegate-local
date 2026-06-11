@@ -113,6 +113,22 @@ out=$(bash "$SCRIPT" --bogus 2>&1); ec=$?
 assert_eq "2" "$ec" "T8: unknown flag -> exit 2"
 assert_contains "unknown arg" "$out" "T8: names the bad flag"
 
+# --- T9: a non-numeric window env var is rejected at the boundary ------------
+met="$tmp/t9.jsonl"; seed "$met"
+out=$(DELEGATE_SWEEP_WINDOW_HOURS=abc bash "$SCRIPT" --file "$met" </dev/null 2>&1); ec=$?
+assert_eq "2" "$ec" "T9: non-numeric window -> exit 2"
+assert_contains "non-negative integer" "$out" "T9: explains the bad window value"
+
+# --- T10: a malformed feedback row (no ref_ts) doesn't crash the jq join -----
+met="$tmp/t10.jsonl"
+{
+  echo "{\"ts\":\"$R1\",\"source\":\"delegate\",\"recipe\":\"commit-message\",\"tier\":\"prose\",\"exit_status\":0}"
+  echo "{\"ts\":\"$(iso_ago 3590)\",\"source\":\"feedback\",\"kept\":true}"
+} > "$met"
+out=$(printf 's\n' | DELEGATE_SWEEP_ASSUME_TTY=1 bash "$SCRIPT" --file "$met" 2>&1); ec=$?
+assert_eq "0" "$ec" "T10: malformed feedback row (no ref_ts) does not crash"
+assert_contains "$R1" "$out" "T10: the untracked delegate row is still listed"
+
 echo
 echo "$pass passed, $fail failed"
 if [[ "$fail" -gt 0 ]]; then exit 1; fi

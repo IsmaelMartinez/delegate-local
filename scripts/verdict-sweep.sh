@@ -27,6 +27,13 @@ set -uo pipefail
 metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
 window_hours="${DELEGATE_SWEEP_WINDOW_HOURS:-24}"
 
+# Validate the window at the env-var boundary: a non-numeric value would make
+# perl evaluate it as 0 and silently sweep an empty window.
+if ! [[ "$window_hours" =~ ^[0-9]+$ ]]; then
+  echo "verdict-sweep: DELEGATE_SWEEP_WINDOW_HOURS must be a non-negative integer, got '$window_hours'" >&2
+  exit 2
+fi
+
 while (($# > 0)); do
   case "$1" in
     --file)
@@ -57,9 +64,12 @@ cutoff_iso=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime
 # Untracked = a delegate row that produced output (exit_status 0, or absent on
 # pre-exit_status rows) within the window, with no feedback row referencing its
 # ts. jq does the set-membership join in one pass.
+# The `.ref_ts != null` guard keeps a malformed feedback row (no ref_ts) from
+# crashing jq with "Cannot use null as object key". A jq failure on a corrupt
+# file surfaces as exit 2 rather than a silent "nothing to sweep".
 rows=$(jq -rs --arg cutoff "$cutoff_iso" '
   def src: .source // "delegate";
-  (reduce (.[] | select(src == "feedback")) as $f ({}; .[$f.ref_ts] = true)) as $fb
+  (reduce (.[] | select(src == "feedback" and .ref_ts != null)) as $f ({}; .[$f.ref_ts] = true)) as $fb
   | map(select(src == "delegate"
         and (.ts != null)
         and ((.exit_status // 0) == 0)
@@ -67,7 +77,7 @@ rows=$(jq -rs --arg cutoff "$cutoff_iso" '
         and ($fb[.ts] | not)))
   | .[]
   | [.ts, (.recipe // "(bare/no-recipe)"), (.tier // "-"), (.model // "-")] | @tsv
-' "$metrics_file")
+' "$metrics_file") || { echo "verdict-sweep: failed to parse metrics file $metrics_file" >&2; exit 2; }
 
 if [[ -z "$rows" ]]; then
   echo "verdict-sweep: no untracked delegations in the last ${window_hours}h." >&2
