@@ -71,9 +71,9 @@ assert_eq 1 "$ec" "missing metrics file → exit 1"
 assert_contains "not found" "$out" "missing file error names the cause"
 
 # A directory path → exit 1 cleanly (not an IsADirectoryError from open()).
-dirpath=$(mktemp -d)
-out=$(python3 "$TREND" "$dirpath" 2>&1); ec=$?
-rmdir "$dirpath"
+# Use an existing directory (SCRIPT_DIR) rather than a temp dir, so there is
+# nothing to leak.
+out=$(python3 "$TREND" "$SCRIPT_DIR" 2>&1); ec=$?
 assert_eq 1 "$ec" "directory path → exit 1 (isfile guard, no IsADirectoryError)"
 assert_contains "not a file" "$out" "directory path error names the cause"
 
