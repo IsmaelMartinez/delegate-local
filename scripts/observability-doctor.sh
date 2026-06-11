@@ -121,11 +121,14 @@ if [[ ! -f "$metrics_file" ]]; then
   exit 2
 fi
 
-file_newest=$(jq -rs '
+# The metrics file is append-only and roughly chronological, so the newest ts
+# is in the last handful of rows — read only the tail rather than slurping the
+# whole (potentially large) file into jq.
+file_newest=$(tail -n 200 "$metrics_file" 2>/dev/null | jq -rs '
   [ .[] | (.ts? // empty)
     | select(test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
     | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime ] | (max // empty)
-' "$metrics_file" 2>/dev/null)
+' 2>/dev/null)
 
 if [[ -z "$file_newest" ]]; then
   file_age="n/a"
@@ -223,9 +226,15 @@ if [[ "$ready_after" != "200" ]]; then
   summary "fix-ready-timeout"
   exit 1
 fi
-DELEGATE_LOKI_URL="$loki_url" DELEGATE_METRICS_FILE="$metrics_file" \
-  bash "$REPO/scripts/sync-metrics-to-loki.sh" >/dev/null 2>&1 || true
-echo "observability-doctor: recovered — Loki is ready again and the sync has re-run." >&2
+# Loki is ready again either way; the sync is a best-effort backfill. Let its
+# stderr through (only stdout is muted) and warn rather than claim success if it
+# fails, so a sync problem is visible instead of hidden behind "recovered".
 ready_code="$ready_after"
+if DELEGATE_LOKI_URL="$loki_url" DELEGATE_METRICS_FILE="$metrics_file" \
+     bash "$REPO/scripts/sync-metrics-to-loki.sh" >/dev/null; then
+  echo "observability-doctor: recovered — Loki is ready again and the sync has re-run." >&2
+else
+  echo "observability-doctor: Loki is ready again, but the metrics sync failed (see its stderr above); data may be stale until the next successful sync." >&2
+fi
 summary "recovered"
 exit 0
