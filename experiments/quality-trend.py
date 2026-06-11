@@ -36,17 +36,20 @@ MIN_RECIPE_VERDICTS = 5  # don't report a recipe's hit rate below this sample si
 
 def load_rows(path):
     rows = []
-    # Explicit utf-8: metrics carry arbitrary commit/PR text, and the default
-    # encoding is not utf-8 on every platform.
-    with open(path, encoding="utf-8") as f:
+    # Explicit utf-8 with errors="replace": metrics carry arbitrary commit/PR
+    # text, the default encoding is not utf-8 on every platform, and a stray
+    # invalid byte shouldn't abort the whole read.
+    with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             try:
-                rows.append(json.loads(line))
+                row = json.loads(line)
             except json.JSONDecodeError:
                 continue  # tolerate a partially-written trailing line
+            if isinstance(row, dict):  # skip a valid-JSON-but-non-object line
+                rows.append(row)
     return rows
 
 

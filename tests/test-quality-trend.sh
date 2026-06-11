@@ -89,12 +89,15 @@ assert_contains "no feedback rows yet" "$out" "no-feedback error points at deleg
 malformed=$(mktemp)
 cat > "$malformed" <<'EOF'
 {"ts":"2026-05","source":"delegate","recipe":"commit-message"}
+42
+["not", "an", "object"]
+"a bare string"
 {"ts":"2026-05-04T10:00:00Z","source":"delegate","recipe":"commit-message"}
 {"ts":"2026-05-04T10:05:00Z","source":"feedback","ref_ts":"2026-05-04T10:00:00Z","kept":true}
 EOF
 out=$(python3 "$TREND" "$malformed" 2>&1); ec=$?
-assert_eq 0 "$ec" "malformed ts on a delegate row is tolerated (no crash)"
-assert_contains "lifetime  1/1 HIT" "$out" "malformed row skipped, valid pair still counted"
+assert_eq 0 "$ec" "malformed ts + non-object JSON lines are tolerated (no crash)"
+assert_contains "lifetime  1/1 HIT" "$out" "non-dict lines skipped, valid pair still counted"
 
 # A verdict whose ref_ts resolves to no delegate row is bucketed as
 # (ref-not-found), not silently counted as bare.
