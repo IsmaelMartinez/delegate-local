@@ -120,8 +120,8 @@ def main(argv):
     default = os.environ.get("DELEGATE_METRICS_FILE") or os.path.expanduser(
         "~/.claude/skills/delegate-local/metrics.jsonl")
     path = argv[1] if len(argv) > 1 else default
-    if not os.path.exists(path):
-        print(f"quality-trend: metrics file not found at {path}", file=sys.stderr)
+    if not os.path.isfile(path):
+        print(f"quality-trend: metrics file not found or is not a file at {path}", file=sys.stderr)
         return 1
 
     rows = load_rows(path)

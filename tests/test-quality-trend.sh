@@ -32,8 +32,8 @@ assert_eq() {
 # delegation has no verdict (untracked) so coverage is 7/8 = 88%.
 # All fixtures are temp files cleaned up by a trap, so an early exit or
 # interrupt cannot leave them behind.
-fixture="" nofb="" malformed="" phantom="" nots=""
-trap 'rm -f "$fixture" "$nofb" "$malformed" "$phantom" "$nots"' EXIT
+fixture="" nofb="" malformed="" phantom="" nots="" lowweek=""
+trap 'rm -f "$fixture" "$nofb" "$malformed" "$phantom" "$nots" "$lowweek"' EXIT
 fixture=$(mktemp)
 cat > "$fixture" <<'EOF'
 {"ts":"2026-05-04T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q"}
@@ -69,6 +69,13 @@ assert_eq 0 "$bare_line" "recipe below the sample-size floor is omitted"
 out=$(python3 "$TREND" "/nonexistent/metrics.jsonl" 2>&1); ec=$?
 assert_eq 1 "$ec" "missing metrics file → exit 1"
 assert_contains "not found" "$out" "missing file error names the cause"
+
+# A directory path → exit 1 cleanly (not an IsADirectoryError from open()).
+dirpath=$(mktemp -d)
+out=$(python3 "$TREND" "$dirpath" 2>&1); ec=$?
+rmdir "$dirpath"
+assert_eq 1 "$ec" "directory path → exit 1 (isfile guard, no IsADirectoryError)"
+assert_contains "not a file" "$out" "directory path error names the cause"
 
 # A metrics file with no feedback rows → exit 1, actionable message.
 nofb=$(mktemp)
@@ -128,7 +135,6 @@ EOF
 out=$(python3 "$TREND" "$lowweek" 2>&1); ec=$?
 assert_eq 0 "$ec" "sub-50% week renders without IndexError"
 assert_contains "lifetime  1/4 HIT = 25%" "$out" "sub-50% week counted correctly"
-rm -f "$lowweek"
 echo ""
 echo "=== Results ==="
 echo "$pass passed, $fail failed"
