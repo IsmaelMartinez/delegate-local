@@ -110,6 +110,9 @@ jobs:
       - name: Quality-trend tests
         run: bash tests/test-quality-trend.sh
 
+      - name: Verdict-sweep tests
+        run: bash tests/test-verdict-sweep.sh
+
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh
 
