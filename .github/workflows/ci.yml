@@ -74,6 +74,9 @@ jobs:
       - name: Sync-metrics-to-loki tests
         run: bash tests/test-sync-metrics-to-loki.sh
 
+      - name: Observability-doctor tests
+        run: bash tests/test-observability-doctor.sh
+
       - name: Run-api-cell tests
         run: bash tests/test-run-api-cell.sh
 
@@ -106,6 +109,9 @@ jobs:
 
       - name: Quality-trend tests
         run: bash tests/test-quality-trend.sh
+
+      - name: Verdict-sweep tests
+        run: bash tests/test-verdict-sweep.sh
 
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh
