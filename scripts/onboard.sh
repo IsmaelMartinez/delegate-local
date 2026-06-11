@@ -10,10 +10,12 @@
 #
 # Without a terminal it degrades to print-only: both candidate files go to
 # stdout with the manual redirect commands, and nothing is written — the same
-# read-only contract init.sh and derive-flavor.sh already keep. Files are only
-# ever written after an explicit per-file confirmation, with a timestamped
-# .bak.<ts> backup when the target already exists, and chmod 600 so the
-# profile passes load-flavor.sh's owner/mode trust check immediately.
+# read-only contract init.sh and derive-flavor.sh already keep. Nothing is
+# written without explicit confirmation: the profile after its values are
+# individually confirmed, the routing override after its own [y/N], and an
+# existing target additionally gets an overwrite confirm with a timestamped
+# .bak.<ts> backup first. Writes are chmod 600 so the profile passes
+# load-flavor.sh's owner/mode trust check immediately.
 #
 # Env:
 #   DELEGATE_LOCAL_CONFIG       config.sh target
@@ -27,42 +29,60 @@ set -uo pipefail
 
 while (($# > 0)); do
   case "$1" in
-    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "onboard: unknown arg '$1'" >&2; exit 2;;
   esac
 done
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-config_target="${DELEGATE_LOCAL_CONFIG:-$HOME/.claude/skills/delegate-local/config.sh}"
+# Same target resolution (including the legacy env name) as pick-model.sh's
+# config hook — writing where the consumer doesn't read would be a silent no-op.
+config_target="${DELEGATE_LOCAL_CONFIG:-${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-local/config.sh}}"
 profile_target="${DELEGATE_LOCAL_PROFILE:-$HOME/.claude/skills/delegate-local/profile.sh}"
 
 interactive=0
 [[ "${DELEGATE_ONBOARD_ASSUME_TTY:-}" == "1" || -t 0 ]] && interactive=1
 
+err_tmp=$(mktemp)
+trap 'rm -f "$err_tmp"' EXIT
+
 # --- Probe 1: environment (facts, no questions) ------------------------------
 # init.sh prints a routing override built from `ollama list`; a host without
 # ollama or models just skips this section — flavor-only onboarding still works.
+# Relay init.sh's own stderr reason (no-ollama vs no-models differ) rather than
+# guessing one.
 config_candidate=""
-if ! config_candidate=$(bash "$script_dir/init.sh" 2>/dev/null); then
+if ! config_candidate=$(bash "$script_dir/init.sh" 2>"$err_tmp"); then
   config_candidate=""
-  echo "onboard: environment probe skipped (init.sh found no usable ollama install)." >&2
+  reason=$(head -1 "$err_tmp")
+  echo "onboard: environment probe skipped (${reason:-init.sh failed})." >&2
 fi
 
 # --- Probe 2: flavor from the user's own git history -------------------------
 # derive-flavor.sh reads the cwd's repo; outside a repo (or with no commits)
 # the shipped defaults become the prefill instead.
 derived=""
-if ! derived=$(bash "$script_dir/derive-flavor.sh" 2>/dev/null); then
+if ! derived=$(bash "$script_dir/derive-flavor.sh" 2>"$err_tmp"); then
   derived=""
-  echo "onboard: no git history here — flavor prefills fall back to shipped defaults." >&2
+  reason=$(head -1 "$err_tmp")
+  echo "onboard: flavor derivation skipped (${reason:-derive-flavor failed}) — prefills fall back to shipped defaults." >&2
 fi
 derived_subject_max=$(printf '%s\n' "$derived" | sed -n 's/^FLAVOR_COMMIT_SUBJECT_MAX=\(.*\)$/\1/p')
 derived_types=$(printf '%s\n' "$derived" | sed -n 's/^FLAVOR_COMMIT_TYPES="\(.*\)"$/\1/p')
 corpus_line=$(printf '%s\n' "$derived" | sed -n 's/^# Source corpus: \([^.]*\)\..*$/\1/p')
 
+# Surface (not silently drop) any derived FLAVOR_* key this wizard doesn't
+# handle yet — a future derive-flavor key lands here before the wizard learns it.
+extra_keys=$(printf '%s\n' "$derived" \
+  | sed -n 's/^\(FLAVOR_[A-Z_]*\)=.*/\1/p' \
+  | grep -v -e '^FLAVOR_COMMIT_SUBJECT_MAX$' -e '^FLAVOR_COMMIT_TYPES$' || true)
+[[ -n "$extra_keys" ]] && echo "onboard: derived keys this wizard doesn't handle yet ($(printf '%s' "$extra_keys" | tr '\n' ' ' | sed 's/ $//')) — install them with derive-flavor.sh directly." >&2
+
 # Shipped defaults give every key a prefill even on a thin corpus.
+defaults_file="$script_dir/flavor-defaults.sh"
+[[ -f "$defaults_file" ]] || { echo "onboard: missing $defaults_file — broken install?" >&2; exit 2; }
 # shellcheck source=/dev/null
-source "$script_dir/flavor-defaults.sh"
+source "$defaults_file"
 default_subject_max="$FLAVOR_COMMIT_SUBJECT_MAX"
 default_types="$FLAVOR_COMMIT_TYPES"
 prefill_subject_max="${derived_subject_max:-$default_subject_max}"
@@ -80,11 +100,18 @@ build_profile_body() { # $1=subject_max-or-empty $2=types-or-empty
 if (( ! interactive )); then
   if [[ -n "$config_candidate" ]]; then
     printf '# ---- routing override candidate — write to: %s ----\n' "$config_target"
-    printf '#   bash scripts/init.sh > %s\n' "$config_target"
+    printf '#   bash %s/init.sh > %s\n' "$script_dir" "$config_target"
     printf '%s\n\n' "$config_candidate"
   fi
   printf '# ---- flavor profile candidate — write to: %s ----\n' "$profile_target"
-  printf '#   bash scripts/derive-flavor.sh > %s\n' "$profile_target"
+  # Only suggest the redirect when the probe actually succeeded: a shell
+  # redirect truncates the target BEFORE the command runs, so suggesting it
+  # for a failing derive-flavor would destroy an existing profile.
+  if [[ -n "$derived" ]]; then
+    printf '#   bash %s/derive-flavor.sh > %s\n' "$script_dir" "$profile_target"
+  else
+    printf '#   (derive-flavor found no usable git history here — shipped defaults shown; no profile needed)\n'
+  fi
   build_profile_body "$prefill_subject_max" "$prefill_types"
   echo "onboard: no interactive terminal — printed candidates only, wrote nothing. Run in a terminal to confirm-and-write." >&2
   exit 0
@@ -110,13 +137,15 @@ ask_value() { # $1=label $2=prefill $3=default $4=validation-regex $5=validation
     printf '%s: derived %s (shipped default %s)\n' "$label" "$prefill" "$default" >&2
     printf '  [Enter]=accept %s, or type a value, s=skip this key, q=quit without writing: ' "$prefill" >&2
     _ans=""
-    read_answer || _ans="q"
+    # On EOF read returns non-zero but still fills $_ans with an unterminated
+    # final line — only treat a truly empty read as quit/decline.
+    read_answer || [[ -n "$_ans" ]] || _ans="q"
     case "$_ans" in
       "") confirmed="$prefill"; return 0;;
       s|S) confirmed=""; return 0;;
       q|Q) quit=1; return 0;;
       *)
-        if printf '%s' "$_ans" | grep -Eq "$regex"; then
+        if [[ "$_ans" =~ $regex ]]; then
           confirmed="$_ans"; return 0
         fi
         echo "    invalid value ($hint) — try again." >&2;;
@@ -132,14 +161,21 @@ write_confirmed() { # $1=target $2=content $3=what
   if [[ -f "$target" ]]; then
     printf '%s already exists at %s — overwrite (a .bak copy is kept)? [y/N]: ' "$what" "$target" >&2
     _ans=""
-    read_answer || _ans="n"
+    read_answer || [[ -n "$_ans" ]] || _ans="n"
     case "$_ans" in
-      y|Y) cp -p "$target" "$target.bak.$(date +%Y%m%d%H%M%S)";;
+      y|Y)
+        if ! cp -p "$target" "$target.bak.$(date +%Y%m%d%H%M%S)"; then
+          echo "  backup failed — keeping existing $what untouched." >&2
+          return 1
+        fi;;
       *) echo "  kept existing $what untouched." >&2; return 1;;
     esac
   fi
   mkdir -p "$(dirname "$target")"
-  printf '%s\n' "$content" > "$target"
+  if ! printf '%s\n' "$content" > "$target"; then
+    echo "  failed to write $target" >&2
+    return 1
+  fi
   chmod 600 "$target"
   echo "  wrote $what to $target" >&2
   return 0
@@ -174,7 +210,7 @@ if [[ -n "$config_candidate" ]]; then
   printf '\nRouting override candidate (puts your installed models first per tier):\n%s\n' "$config_candidate" >&2
   printf 'install routing override at %s? [y/N]: ' "$config_target" >&2
   _ans=""
-  read_answer || _ans="n"
+  read_answer || [[ -n "$_ans" ]] || _ans="n"
   case "$_ans" in
     y|Y) write_confirmed "$config_target" "$config_candidate" "routing override" && wrote_config=1;;
     *) echo "  routing override not installed (shipped preference lists stay active)." >&2;;

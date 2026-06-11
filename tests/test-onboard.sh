@@ -36,8 +36,11 @@ chmod +x "$mock/ollama"
 # feat outnumbers fix so the frequency ordering is deterministic — a 2/2 tie
 # falls into sort(1)'s unstable last-resort comparison.
 corpus="$tmp/corpus"; mkdir -p "$corpus"
-git -C "$corpus" init -q -b main
-gc() { git -C "$corpus" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$1"; }
+# Neutralise the developer's global/system git config (gpg signing, hooks)
+# so the corpus commits are deterministic on any machine, not just CI.
+ggit() { env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$corpus" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+ggit init -q -b main
+gc() { ggit commit -q --allow-empty -m "$1"; }
 gc "feat: aaaa"          # 10
 gc "feat: bbbbbbbb"      # 14
 gc "feat: zzz"           # 9
@@ -72,7 +75,9 @@ assert_eq "0" "$ec" "T2: accept-all exits 0"
 assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=14" "$(cat "$tmp/t2p.sh")" "T2: profile carries derived subject max"
 assert_contains 'FLAVOR_COMMIT_TYPES="feat, fix"' "$(cat "$tmp/t2p.sh")" "T2: profile carries derived types"
 assert_contains 'case "$tier" in' "$(cat "$tmp/t2c.sh")" "T2: config carries the routing override"
-mode=$(stat -f '%Lp' "$tmp/t2p.sh" 2>/dev/null || stat -c '%a' "$tmp/t2p.sh")
+# perl for the mode read — GNU stat treats -f as "filesystem status" and
+# SUCCEEDS with the wrong semantics, so a BSD-first || fallback never fires.
+mode=$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 0777' "$tmp/t2p.sh")
 assert_eq "600" "$mode" "T2: profile written mode 600"
 
 # --- T3: typed override replaces the prefill ---------------------------------
@@ -141,6 +146,12 @@ assert_contains "flavor_commit_types=feat, fix" "$out" "T11: load-flavor resolve
 out=$(bash "$SCRIPT" --bogus 2>&1); ec=$?
 assert_eq "2" "$ec" "T12: unknown flag -> exit 2"
 assert_contains "unknown arg" "$out" "T12: names the bad flag"
+
+# --- T13: an unterminated final answer (EOF, no newline) is still honoured ----
+# read returns non-zero at EOF but fills the variable; the q/n fallback must
+# only fire on a truly empty read.
+out=$(run_onboard '\n\ny' "$tmp/t13p.sh" "$tmp/t13c.sh")
+assert_contains 'case "$tier" in' "$(cat "$tmp/t13c.sh")" "T13: config written from an unterminated trailing y"
 
 echo
 echo "$pass passed, $fail failed"

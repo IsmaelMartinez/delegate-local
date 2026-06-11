@@ -117,7 +117,7 @@ bash <install-path>/scripts/init.sh > ~/.claude/skills/delegate-local/config.sh
 bash <install-path>/scripts/derive-flavor.sh > ~/.claude/skills/delegate-local/profile.sh
 ```
 
-Set `DELEGATE_LOCAL_CONFIG=/some/other/path.sh` to redirect the override path (useful for testing or per-project overrides).
+Set `DELEGATE_LOCAL_CONFIG=/some/other/path.sh` to redirect the routing-override path, and `DELEGATE_LOCAL_PROFILE=/some/other/profile.sh` to redirect the flavor-profile path (useful for testing or per-project overrides — `onboard.sh`, `pick-model.sh`, and `load-flavor.sh` all honour them).
 
 ## Forking / adopting this skill
 
