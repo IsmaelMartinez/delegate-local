@@ -70,6 +70,21 @@ The dashboards are powered by **TraceQL metrics** (`rate()`, `count_over_time()`
 
 In short: the per-recipe / per-tier / calibration trend panels fill in over the following day or two of real use; the trace-search view is available for the whole history immediately after a backfill.
 
+## Dashboards went blank after the machine slept
+
+Single-binary Loki runs its own hash ring, and when the workstation sleeps and wakes the instance's heartbeat goes stale; the ring marks its sole member unhealthy (`at least 1 healthy replica required, could only find 0 ... auto-forgetting instance 127.0.0.1:9096 from the ring`) and refuses queries until it re-forgets the dead member. While the ring has zero healthy members the query path is down, so the Grafana dashboards — which read history from Loki — show nothing, even though Tempo and live trace search are unaffected (the trace path does not touch Loki's ring). It self-heals once the auto-forget period of roughly ten minutes elapses and the instance rejoins.
+
+To confirm the diagnosis and, if you don't want to wait out the auto-forget, force a clean rejoin, run the doctor. Without `--fix` it is read-only — it reports the stack state, Loki readiness, the ring log signature, and how the newest data in Loki compares with the newest row in `metrics.jsonl`:
+
+```bash
+bash scripts/observability-doctor.sh          # read-only diagnosis
+bash scripts/observability-doctor.sh --fix    # restart Loki + re-run the sync
+```
+
+The `--fix` path runs `docker compose -f observability/docker-compose.yml restart loki`, waits for Loki to report ready again, and re-runs `scripts/sync-metrics-to-loki.sh` to backfill anything the watermark had not yet pushed.
+
+A blank "last 1 hour" panel does not always mean the ring flapped — it may simply mean there were no delegations in that window. The doctor distinguishes the two by judging recency against the metrics file rather than against Loki: if `metrics.jsonl` itself has nothing recent, the empty panel is genuine idleness and nothing is wrong, so the doctor reports `idle` and leaves the stack alone. Only when the file has fresh rows but Loki lags behind them, or Loki's `/ready` returns 503, does it report a recoverable flap (exit 1) worth fixing. The Loki config is deliberately left unhardened here: a single-binary ring on an unbounded host sleep cannot be configured away (there is no quorum to fall back on, so one unhealthy member is zero healthy members by design), which is why the doctor script, not a config knob, is the pragmatic fix.
+
 ## Backfill historical traces (optional, for trace search)
 
 ```bash
