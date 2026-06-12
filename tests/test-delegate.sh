@@ -4401,7 +4401,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "flavor: exits 0 with shipped defaults"
 payload=$(cat "$sniff")
 assert_contains 'SUBJECT MAX: 72' "$payload" "flavor: default subject max injected"
-assert_contains 'TYPES: feat, fix, ci, docs, chore, refactor, test' "$payload" "flavor: default type vocabulary injected"
+assert_contains 'TYPES: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert' "$payload" "flavor: default type vocabulary injected"
 # 31b. A per-user profile overrides the defaults.
 prof="$tmp/profile.sh"
 printf 'FLAVOR_COMMIT_SUBJECT_MAX=50\nFLAVOR_COMMIT_TYPES="feat, fix, docs"\n' > "$prof"

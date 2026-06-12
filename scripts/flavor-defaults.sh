@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Shipped flavor defaults (ADR 0013, portable recipes). These reproduce the
-# style values the recipes carried inline before the flavor split, so a user
-# with no profile.sh gets byte-identical prompts — back-compat is the contract.
-# A per-user ~/.claude/skills/delegate-local/profile.sh overrides any of these;
-# scripts/derive-flavor.sh generates one from the user's own git history.
+# Shipped flavor defaults (ADR 0013, portable recipes). These are the
+# industry-standard conventional-commits values — the @commitlint/config-
+# conventional type enum and the 72-char git subject convention — NOT the
+# maintainer's personal taste, which lives in the maintainer's own profile.sh
+# like any other user's ("the maintainer becomes just another profile").
+# Run scripts/onboard.sh (or derive-flavor.sh) to derive yours from your own
+# git history; a per-user ~/.claude/skills/delegate-local/profile.sh overrides
+# any of these. T4-measured 2026-06-11: the standard list scores identically
+# to the previous curated subset (15/18 MLX prose, same residual).
 #
 # Sourced by load-flavor.sh — never executed directly. Every {{flavor_*}}
 # placeholder a recipe uses MUST have its FLAVOR_* default here, or the
@@ -11,4 +15,4 @@
 
 # commit-message recipe
 FLAVOR_COMMIT_SUBJECT_MAX=72
-FLAVOR_COMMIT_TYPES="feat, fix, ci, docs, chore, refactor, test"
+FLAVOR_COMMIT_TYPES="feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
