@@ -226,6 +226,10 @@ fi
 rm -rf "$tmp"
 
 # 4. pick-model failure (no model installed) is reflected in metrics + exit.
+# DELEGATE_BACKEND is pinned to ollama here (and in every other no-model
+# block below): under the `auto` default a live local mlx_lm.server would
+# answer the probe via the real curl in SAFE_PATH and resolve a real model
+# from the HF cache (HOME passes through), defeating the no-model mock.
 tmp=$(mktemp -d)
 cat > "$tmp/ollama" <<'EOF'
 #!/usr/bin/env bash
@@ -237,6 +241,7 @@ chmod +x "$tmp/ollama"
 metrics=$(mktemp); : > "$metrics"
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 1 "$EC" "pick-model failure -> exit 1"
@@ -1160,6 +1165,7 @@ metrics=$(mktemp); : > "$metrics"
 stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 1 "$EC" "verdict-nudge on failure: still exits 1"
@@ -1452,6 +1458,7 @@ stderr_file=$(mktemp)
 nudge_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama \
   DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
@@ -2059,6 +2066,7 @@ metrics=$(mktemp); : > "$metrics"
 stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 1 "$EC" "delegate-meta on failure: still exits 1"
@@ -2296,6 +2304,7 @@ chmod +x "$tmp/ollama"
 metrics=$(mktemp); : > "$metrics"
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 1 "$EC" "queue-wait split on pick-model failure: exit 1"
