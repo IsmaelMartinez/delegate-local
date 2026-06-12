@@ -871,7 +871,11 @@ fi
 
 if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
   emit_failure 1 "(none)"
-  echo "delegate: pick-model failed for tier '$tier'" >&2
+  {
+    echo "delegate: pick-model failed for tier '$tier'"
+    echo "         no installed model matches this tier — run scripts/audit-models.sh to see routing, or pull a model from the tier's preference list in scripts/pick-model.sh"
+    echo "         still broken? file a bug: https://github.com/${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}/issues/new?template=bug_report.md"
+  } >&2
   exit 1
 fi
 
@@ -1063,6 +1067,7 @@ if [[ -n "$recipe" ]] \
       echo "         - re-route to a smaller-parameter model on this host"
       echo "         - hand-write the output (recommended for 35B-class prose tiers on recipe-shaped prompts — see prompts/$recipe.md)"
       echo "         - silence the probe with DELEGATE_NO_PREFLIGHT=1 (sends the full request and inherits the failure)"
+      echo "         still broken? file a bug: https://github.com/${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}/issues/new?template=bug_report.md"
     } >&2
     exit 3
   fi
@@ -1170,6 +1175,18 @@ else
   else
     output=""
   fi
+fi
+
+# Dispatch-failure guidance. curl -sS already printed its own error line
+# (e.g. "curl: (7) Failed to connect"); this adds the delegate-branded
+# context and routes persistent breakage toward the bug template instead
+# of leaving the caller with a bare non-zero exit.
+if (( status != 0 )); then
+  {
+    echo "delegate: dispatch failed (curl exit $status) — model=\"$model\" tier=\"$tier\" backend=\"$backend\""
+    echo "         check the backend daemon (ollama serve / mlx_lm.server) and OLLAMA_HOST / MLX_HOST — see the README Troubleshooting section"
+    echo "         still broken? file a bug: https://github.com/${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}/issues/new?template=bug_report.md"
+  } >&2
 fi
 
 # Reasoning-trace strip. Some trace-emitting reasoning models (qwen3-next-

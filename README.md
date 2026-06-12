@@ -165,6 +165,20 @@ The mechanisms are fork-friendly out of the box — routing, metrics, and the fe
 - `mcp/` — optional Python MCP server that exposes `pick_model`, `audit_models`, and `list_tiers` to non-Claude tools (Codex, OpenCode, Cursor, custom MCP clients). Thin wrapper over the bash scripts, not a reimplementation. See [`mcp/README.md`](mcp/README.md) for install and config snippets.
 - `docs/observability/` — opt-in OTLP exporter. Set `DELEGATE_OTEL_ENDPOINT=<url>` and every `delegate.sh` call POSTs an OTLP span (off by default, zero overhead when unset). Content is redacted by default; only metadata (tier, model, recipe, char counts, durations, verdict) travels to the collector. Three backends documented: [Grafana Cloud](docs/observability/grafana-cloud.md), [Langfuse](docs/observability/langfuse-self-host.md), and [Phoenix](docs/observability/phoenix.md). See [`docs/otel-schema.md`](docs/otel-schema.md) for the wire format.
 
+## Troubleshooting
+
+The wrapper's failure modes map onto its exit codes, and every hard failure prints recovery options on stderr.
+
+Exit 1 (`pick-model failed for tier`) means no installed model matches the tier's preference list. Run `bash scripts/audit-models.sh` to see what is installed and how tiers currently route, then either pull a model from the tier's preference list in `scripts/pick-model.sh` or edit that list to match your hardware. If you run MLX, also check that `DELEGATE_BACKEND` resolves to the backend you expect — `auto` probes `MLX_HOST` and falls back to Ollama.
+
+Exit 3 (`pre-flight canary`) means the resolved model did not answer a 1-token probe within `DELEGATE_PREFLIGHT_TIMEOUT` (default 10 s). The stderr message distinguishes a cold-load timeout (retry with a larger timeout), a connection refusal (start `ollama serve` or `mlx_lm.server`, confirm `OLLAMA_HOST` / `MLX_HOST`), and an HTTP error (usually a bad model name).
+
+A non-zero curl exit on the dispatch itself (commonly 7, connection refused) means the backend daemon went away between the canary and the full request, or no canary ran (bare non-recipe calls skip it). The same daemon/host checks apply.
+
+Empty or whitespace-only output from an MLX model usually means a raw completions endpoint was hit instead of chat-completions — `delegate.sh` always uses the right one, so this points at a hand-rolled `curl` bypassing the wrapper.
+
+If a failure persists after the suggested recovery, [file a bug](https://github.com/IsmaelMartinez/delegate-local/issues/new?template=bug_report.md) with the verbatim stderr and your `bash scripts/audit-models.sh` output. For quality problems (the model answered, but badly) use the hit/miss loop below instead — recurring misses graduate into [`prompt-pattern` issues](#calibration-feedback-loop), not bug reports.
+
 ## Validation
 
 Three scripts gate every PR via GitHub Actions:
