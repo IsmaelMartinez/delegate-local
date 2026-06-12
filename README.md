@@ -95,7 +95,7 @@ bash <install-path>/scripts/audit-models.sh
 
 The shipped `pick-model.sh` is one preference list for everyone. To override the order on a specific machine without forking the repo, drop a bash file at `~/.claude/skills/delegate-local/config.sh`. `pick-model.sh` sources it after the shipped defaults are set, so any tier the file touches wins. Untouched tiers fall through to shipped defaults; an absent file changes nothing.
 
-> **Trust note:** `config.sh` is sourced as bash by `pick-model.sh`, meaning its contents execute with your environment and privileges. This is arbitrary code execution by design, similar to `~/.aiderrc` or `~/.claude/settings.local.json`. Only place a `config.sh` you wrote yourself or fully trust at that path; never paste one from an untrusted source. See [SECURITY.md](SECURITY.md) for the full trust model.
+> **Trust note:** `config.sh` is sourced as bash by `pick-model.sh` (and `profile.sh` by `load-flavor.sh`), meaning their contents execute with your environment and privileges. This is arbitrary code execution by design, similar to `~/.aiderrc` or `~/.claude/settings.local.json`. Only place a `config.sh` or `profile.sh` you wrote yourself or fully trust at those paths; never paste one from an untrusted source. `load-flavor.sh` additionally skips a profile that isn't owned by you or is group/world-writable. See [SECURITY.md](SECURITY.md) for the full trust model.
 
 ```bash
 # ~/.claude/skills/delegate-local/config.sh
@@ -104,22 +104,29 @@ case "$tier" in
 esac
 ```
 
-Recommended first step on any new machine or user: `scripts/init.sh` writes a starter override based on what's currently installed, so tier routing matches *your* models rather than the shipped preference list — read-only, prints to stdout, never auto-writes:
+Recommended first step on any new machine or user: the onboarding wizard probes your environment (`init.sh`) and derives your commit-style flavor from your own git history (`derive-flavor.sh`), presents each value for confirm-or-edit, and writes both override files only on explicit confirmation (timestamped `.bak` before any overwrite). Run it from a repo whose history reflects your style:
+
+```bash
+bash <install-path>/scripts/onboard.sh
+```
+
+Without a terminal it degrades to print-only and writes nothing. The two probes also work standalone — each is read-only and prints to stdout, never auto-writes:
 
 ```bash
 bash <install-path>/scripts/init.sh > ~/.claude/skills/delegate-local/config.sh
+bash <install-path>/scripts/derive-flavor.sh > ~/.claude/skills/delegate-local/profile.sh
 ```
 
-Set `DELEGATE_LOCAL_CONFIG=/some/other/path.sh` to redirect the override path (useful for testing or per-project overrides).
+Set `DELEGATE_LOCAL_CONFIG=/some/other/path.sh` to redirect the routing-override path, and `DELEGATE_LOCAL_PROFILE=/some/other/profile.sh` to redirect the flavor-profile path (useful for testing or per-project overrides — `onboard.sh`, `pick-model.sh`, and `load-flavor.sh` all honour them).
 
 ## Forking / adopting this skill
 
 The mechanisms are fork-friendly out of the box — routing, metrics, and the feedback loop are all driven by env vars and the per-user `config.sh` above. What needs repointing is a handful of author-specific defaults:
 
-1. **Generate your routing override.** First step on any new machine or user (see [Personalising routing](#personalising-routing-recommended)):
+1. **Run the onboarding wizard.** First step on any new machine or user (see [Personalising routing](#personalising-routing-recommended)) — it derives both your routing override and your commit-style flavor profile from what is actually installed and your own git history:
 
    ```bash
-   bash <install-path>/scripts/init.sh > ~/.claude/skills/delegate-local/config.sh
+   bash <install-path>/scripts/onboard.sh
    ```
 
 2. **Repoint the author-specific defaults** via env vars where they don't suit you:

@@ -113,6 +113,9 @@ jobs:
       - name: Verdict-sweep tests
         run: bash tests/test-verdict-sweep.sh
 
+      - name: Onboard tests
+        run: bash tests/test-onboard.sh
+
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh
 
