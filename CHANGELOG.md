@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.20.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.19.0...v0.20.0) (2026-06-13)
+
+
+### Features
+
+* route persistent failures to the bug template ([#300](https://github.com/IsmaelMartinez/delegate-local/issues/300)) ([561cd91](https://github.com/IsmaelMartinez/delegate-local/commit/561cd918b12fe9c7edd8bd1768cc7fdf6bfaca32))
+
+
+### Maintenance
+
+* prune dead task types from the trigger surface ([#301](https://github.com/IsmaelMartinez/delegate-local/issues/301)) ([689e23c](https://github.com/IsmaelMartinez/delegate-local/commit/689e23c917e54e05c35bf42aeda6115c4fb56345))
+
 ## [0.19.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.18.0...v0.19.0) (2026-06-12)
 
 
