@@ -13,15 +13,20 @@ npx skills add IsmaelMartinez/delegate-local -a claude-code -g
 # 2. Confirm at least one local model is installed and see how tiers route
 bash ~/.claude/skills/delegate-local/scripts/audit-models.sh
 
-# 3. Make your first delegated call
+# 3. (optional) Personalise routing + commit style to this machine — derives a
+#    profile from your own git history, confirm-or-edit each value, writes nothing
+#    without confirmation. Run it from a repo whose history reflects your style.
+bash ~/.claude/skills/delegate-local/scripts/onboard.sh
+
+# 4. Make your first delegated call
 git diff | bash ~/.claude/skills/delegate-local/scripts/delegate.sh prose "Summarise this diff in 3 bullets."
 ```
 
-Step 2 requires [Ollama](https://ollama.com) (or [`mlx-lm`](https://github.com/ml-explore/mlx-lm) on Apple Silicon) with a model pulled — see [Requirements](#requirements) and [Backends](#backends). The rest of this README covers install options, backend selection, and the routing internals.
+Step 2 requires [Ollama](https://ollama.com) (or [`mlx-lm`](https://github.com/ml-explore/mlx-lm) on Apple Silicon) with a model pulled — see [Requirements](#requirements) and [Backends](#backends). Step 3 is optional but recommended on a new machine; the rest of this README covers install options, backend selection, and the routing internals. After install, the skill auto-delegates matching tasks inside your agent — the raw `delegate.sh` call in step 4 is just to confirm the backend works end-to-end.
 
 ## What it does
 
-When a task fits the "gather context once, send one prompt, return text" pattern — log triage, commit-message drafting, batch classification, structured extraction, prose rewriting, format conversion, regex generation, docstring stubbing — the agent delegates to a local model via `delegate.sh` instead of handling it itself. Reasoning, tool-calling, and repo-wide tasks still go to the cloud model.
+When a task fits the "gather context once, send one prompt, return text" pattern — log and PR/issue summarisation, commit-message and changelog drafting, batch triage and classification, structured field extraction, and prose rewriting — the agent delegates to a local model via `delegate.sh` instead of handling it itself. Reasoning, tool-calling, and repo-wide tasks still go to the cloud model.
 
 The skill auto-delegates by default. Saying "delegate where it fits" or "auto-delegate" once locks that behaviour for the rest of the conversation.
 
