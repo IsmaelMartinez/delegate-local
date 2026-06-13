@@ -13,9 +13,9 @@ npx skills add IsmaelMartinez/delegate-local -a claude-code -g
 # 2. Confirm at least one local model is installed and see how tiers route
 bash ~/.claude/skills/delegate-local/scripts/audit-models.sh
 
-# 3. (optional) Personalise routing + commit style to this machine — derives a
-#    profile from your own git history, confirm-or-edit each value, writes nothing
-#    without confirmation. Run it from a repo whose history reflects your style.
+# 3. (optional) Personalise routing + commit style to this machine: it derives a
+#    profile from your own git history, has you confirm or edit each value, and
+#    writes nothing without confirmation. Run it from a repo that reflects your style.
 bash ~/.claude/skills/delegate-local/scripts/onboard.sh
 
 # 4. Make your first delegated call
