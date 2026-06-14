@@ -11,7 +11,8 @@
 # re-considered the skill.
 #
 # On every Bash call:
-#   1. If the command is NOT a commit / PR-create / release-create boundary,
+#   1. If the command is NOT a delegatable boundary (commit, PR/MR-create,
+#      release-create, PR review-comment reply, or PR/issue/MR comment reply),
 #      exit 0 immediately — the cheap common path (no jq slurp, no metrics read).
 #   2. Otherwise derive the project (same rule as delegate.sh's metrics rows) and
 #      check metrics.jsonl for a delegate.sh row for THIS project within the last
@@ -59,6 +60,18 @@ elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+pr[[:space:]]+create' <<<"$cmd" \
   boundary="pr-create"; recipe="pr-description"
 elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+release[[:space:]]+create' <<<"$cmd"; then
   boundary="release-create"; recipe="release-note"
+# Inline PR review-comment reply: `gh api .../comments -X POST -f body=...` (the
+# /address-pr-comments inline path). Require an explicit POST so the read-only
+# fetch step (`gh api .../comments --jq ...`, no -X POST) is NOT a boundary.
+elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api([[:space:]]|$)' <<<"$cmd" \
+   && grep -Eq '/comments' <<<"$cmd" \
+   && grep -Eq -- '(-X[[:space:]]*POST|--method[[:space:]]+POST)' <<<"$cmd"; then
+  boundary="pr-review-comment"; recipe="pr-review-reply"
+# General PR / issue / MR comment reply authored inline.
+elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+pr[[:space:]]+comment([[:space:]]|$)' <<<"$cmd" \
+   || grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+issue[[:space:]]+comment([[:space:]]|$)' <<<"$cmd" \
+   || grep -Eq '(^|[^[:alnum:]_])glab[[:space:]]+mr[[:space:]]+(discussion[[:space:]]+)?note([[:space:]]|$)' <<<"$cmd"; then
+  boundary="comment-reply"; recipe="maintainer-reply"
 else
   exit 0
 fi
