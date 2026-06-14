@@ -319,7 +319,7 @@ out=$(bash "$SCRIPT" --file "$opp" 2>&1) || EC=$?
 assert_eq 0 "$EC" "trigger-rate: exits 0"
 assert_contains "delegate=1" "$out" "trigger-rate: only the delegate row counts as an invocation"
 assert_contains "Errors (non-zero):   0" "$out" "trigger-rate: opportunity rows not miscounted as errors"
-assert_contains "Trigger rate (commit/PR/release boundaries):" "$out" "trigger-rate: section header present"
+assert_contains "Trigger rate (commit/PR/release/comment boundaries):" "$out" "trigger-rate: section header present"
 assert_contains "alpha" "$out" "trigger-rate: alpha project listed"
 assert_contains "beta" "$out" "trigger-rate: beta project listed"
 assert_contains "opportunities=2  delegated=1  missed=1  rate=50%" "$out" "trigger-rate: alpha 50% (2 opps, 1 delegated)"
