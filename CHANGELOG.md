@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.20.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.19.0...v0.20.0) (2026-06-14)
+
+
+### Features
+
+* extend boundary hook to PR and issue comment replies ([#303](https://github.com/IsmaelMartinez/delegate-local/issues/303)) ([21f0481](https://github.com/IsmaelMartinez/delegate-local/commit/21f0481cb052000eb1bf795a3a2f8add114836d9))
+* route persistent failures to the bug template ([#300](https://github.com/IsmaelMartinez/delegate-local/issues/300)) ([561cd91](https://github.com/IsmaelMartinez/delegate-local/commit/561cd918b12fe9c7edd8bd1768cc7fdf6bfaca32))
+
+
+### Documentation
+
+* align README with trimmed trigger surface + surface onboard.sh in quickstart ([#302](https://github.com/IsmaelMartinez/delegate-local/issues/302)) ([99cbe64](https://github.com/IsmaelMartinez/delegate-local/commit/99cbe649059a6ae7b87b9fd561c0eb6c1b584018))
+
+
+### Maintenance
+
+* prune dead task types from the trigger surface ([#301](https://github.com/IsmaelMartinez/delegate-local/issues/301)) ([689e23c](https://github.com/IsmaelMartinez/delegate-local/commit/689e23c917e54e05c35bf42aeda6115c4fb56345))
+
 ## [0.19.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.18.0...v0.19.0) (2026-06-12)
 
 
