@@ -207,15 +207,15 @@ if (( n_recipe > 0 )); then
   echo
 fi
 
-# Trigger rate (#277): boundary events (commit / PR / release) recorded by the
-# delegate-boundary hook. Each source:"opportunity" row is one delegatable
+# Trigger rate (#277): boundary events (commit / PR / release / comment reply)
+# recorded by the delegate-boundary hook. Each source:"opportunity" row is one delegatable
 # opportunity; .delegated marks whether a local delegation preceded it inside the
 # look-back window. Rate = delegated / opportunities, per project — the
 # under-triggering number this signal exists to make visible. Only printed when
 # opportunity rows exist (i.e. the boundary hook is installed).
 n_opp=$(jq -rs 'map(select((.source // "") == "opportunity")) | length' "$metrics_file")
 if (( n_opp > 0 )); then
-  echo "Trigger rate (commit/PR/release boundaries):"
+  echo "Trigger rate (commit/PR/release/comment boundaries):"
   jq -rs '
     map(select((.source // "") == "opportunity"))
     | group_by(.project // "(none)")
