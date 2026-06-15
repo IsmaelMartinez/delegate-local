@@ -1,7 +1,7 @@
 MODEL: gpt-oss:120b
 BACKEND: ollama
 OLLAMA_API: 1
-DATE: 2026-06-15T07:14:08Z
+DATE: 2026-06-15T08:46:41Z
 REPS: 3
 T3_SNAPSHOT: 2026-04-28
 T4_SNAPSHOT: 2026-06-11
@@ -9,7 +9,7 @@ T5_SNAPSHOT: 2026-05-11
 T6_SNAPSHOT: 2026-05-11
 
 ===== T1-doc-drift rep 1 =====
-DURATION_SEC: 8
+DURATION_SEC: 26
 RUN_STATUS: 0
 OUTPUT:
 CLAIM_A: still-open — No retrospective “How we did” page or related code found in repository.  
@@ -24,7 +24,7 @@ OUTPUT:
 CLEAN
 
 ===== T3-merge-patterns rep 1 =====
-DURATION_SEC: 15
+DURATION_SEC: 16
 RUN_STATUS: 0
 OUTPUT:
 1. Possible duplicate `listPosition` values could still exist after the IGV branding normalisation, which would break candidate ordering.  
@@ -78,7 +78,7 @@ CLAIM_C: already-done — apply-party-positions.ts uses yaml.stringify with line
 CLAIM_D: already-done — Data loaders employ shallow Object.freeze consistently across six cached loaders.
 
 ===== T2-party-config rep 2 =====
-DURATION_SEC: 13
+DURATION_SEC: 14
 RUN_STATUS: 0
 OUTPUT:
 CLEAN
@@ -136,7 +136,7 @@ OUTPUT:
 ^\d{5}(?:-\d{4})?$
 
 ===== T1-doc-drift rep 3 =====
-DURATION_SEC: 523
+DURATION_SEC: 11
 RUN_STATUS: 0
 OUTPUT:
 CLAIM_A: still-open — No "How we did" retrospective page or related code found in the repository.  
@@ -145,13 +145,13 @@ CLAIM_C: already-done — apply-party-positions.ts uses yaml.stringify with line
 CLAIM_D: already-done — Data loaders employ shallow Object.freeze consistently across six cached loaders.
 
 ===== T2-party-config rep 3 =====
-DURATION_SEC: 1286
+DURATION_SEC: 13
 RUN_STATUS: 0
 OUTPUT:
 CLEAN
 
 ===== T3-merge-patterns rep 3 =====
-DURATION_SEC: 118
+DURATION_SEC: 16
 RUN_STATUS: 0
 OUTPUT:
 **1. ROADMAP may still contain placeholder text after the audit update**  
@@ -174,7 +174,7 @@ comm -23 /tmp/used.txt /tmp/defined.txt
 ```
 
 ===== T4-commit-message rep 3 =====
-DURATION_SEC: 13
+DURATION_SEC: 14
 RUN_STATUS: 0
 OUTPUT:
 feat: add T4 commit-message fixture and scoring script
