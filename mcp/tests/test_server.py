@@ -669,6 +669,82 @@ def test_recommend_prompt_counts_hits_and_misses(fake_prompts, tmp_path, monkeyp
     assert "anchored prompt" in out["recent_hits"][0]["reason"]
 
 
+def test_recommend_prompt_partitions_agent_verdicts(fake_prompts, tmp_path, monkeypatch):
+    """Phase E (ADR 0015): agent verdicts are a separate tier.
+
+    hit_count/miss_count must count HUMAN verdicts only — an agent HIT must not
+    inflate the quality signal — while agent_hit_count/agent_miss_count report
+    the agent tier separately. recent_hits surfaces human HITs only.
+    """
+    metrics_path = tmp_path / "metrics.jsonl"
+    rows = [
+        # human HIT
+        {"ts": "2026-06-14T10:00:00Z", "source": "delegate",
+         "model": "q", "recipe": "commit-message"},
+        {"ts": "2026-06-14T20:00:00Z", "source": "feedback",
+         "ref_ts": "2026-06-14T10:00:00Z", "kept": True,
+         "reason": "human kept it verbatim"},
+        # agent HIT (used) — must NOT count toward hit_count
+        {"ts": "2026-06-14T10:05:00Z", "source": "delegate",
+         "model": "q", "recipe": "commit-message"},
+        {"ts": "2026-06-14T20:01:00Z", "source": "feedback",
+         "ref_ts": "2026-06-14T10:05:00Z", "kept": True,
+         "verdict_source": "agent", "reason": "agent shipped it"},
+        # agent MISS (rewrote)
+        {"ts": "2026-06-14T10:10:00Z", "source": "delegate",
+         "model": "q", "recipe": "commit-message"},
+        {"ts": "2026-06-14T20:02:00Z", "source": "feedback",
+         "ref_ts": "2026-06-14T10:10:00Z", "kept": False,
+         "verdict_source": "agent", "reason": "agent rewrote it"},
+        # human MISS
+        {"ts": "2026-06-14T10:15:00Z", "source": "delegate",
+         "model": "q", "recipe": "commit-message"},
+        {"ts": "2026-06-14T20:03:00Z", "source": "feedback",
+         "ref_ts": "2026-06-14T10:15:00Z", "kept": False,
+         "reason": "human rewrote it"},
+    ]
+    metrics_path.write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("DELEGATE_METRICS_FILE", str(metrics_path))
+
+    out = server.recommend_prompt("draft a commit message")
+    assert out["hit_count"] == 1       # human HIT only, NOT the agent HIT
+    assert out["miss_count"] == 1      # human MISS only
+    assert out["agent_hit_count"] == 1
+    assert out["agent_miss_count"] == 1
+    assert len(out["recent_hits"]) == 1
+    assert out["recent_hits"][0]["ts"] == "2026-06-14T10:00:00Z"
+
+
+def test_recommend_prompt_agent_verdict_does_not_clobber_human(fake_prompts, tmp_path, monkeypatch):
+    """A human and an agent verdict on the SAME delegation count in separate
+    tiers — the agent verdict must not overwrite the human one (the single-map
+    clobber bug). Human MISS + later agent HIT on one ref_ts: hit_count stays 0.
+    """
+    metrics_path = tmp_path / "metrics.jsonl"
+    rows = [
+        {"ts": "2026-06-14T11:00:00Z", "source": "delegate",
+         "model": "q", "recipe": "commit-message"},
+        {"ts": "2026-06-14T21:00:00Z", "source": "feedback",
+         "ref_ts": "2026-06-14T11:00:00Z", "kept": False,
+         "reason": "human rewrote it"},
+        # later agent HIT on the same delegation — must not invert the human MISS
+        {"ts": "2026-06-14T21:01:00Z", "source": "feedback",
+         "ref_ts": "2026-06-14T11:00:00Z", "kept": True,
+         "verdict_source": "agent", "reason": "agent shipped it"},
+    ]
+    metrics_path.write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("DELEGATE_METRICS_FILE", str(metrics_path))
+
+    out = server.recommend_prompt("draft a commit message")
+    assert out["hit_count"] == 0       # human MISS preserved, not clobbered
+    assert out["miss_count"] == 1
+    assert out["agent_hit_count"] == 1
+
+
 def test_recommend_prompt_latest_feedback_wins(fake_prompts, tmp_path, monkeypatch):
     """Two feedback rows for the same ref_ts: the latter must overwrite.
 

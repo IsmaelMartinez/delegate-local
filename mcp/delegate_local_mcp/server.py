@@ -437,18 +437,36 @@ def _parse_recipe(path: Path) -> dict:
 def _read_recipe_metrics(recipe_name: str, max_examples: int) -> dict:
     """Walk the metrics JSONL and roll up hit/miss counts for one recipe.
 
-    Returns {"hit_count", "miss_count", "recent_hits"} where recent_hits is a
-    list of up to ``max_examples`` HIT events (newest first), each annotated
-    with the matched feedback reason and the delegating model. If the metrics
-    file is absent or unreadable, all counts are zero — this is the cold-start
-    case, not an error.
+    Returns {"hit_count", "miss_count", "agent_hit_count", "agent_miss_count",
+    "recent_hits"}. hit_count/miss_count count HUMAN verdicts only — the quality
+    signal — while agent_hit_count/agent_miss_count report the agent-observed
+    tier (the agent's own "did I use it" record) as a separate usage figure.
+    recent_hits is a list of up to ``max_examples`` human HIT events (newest
+    first), each annotated with the matched feedback reason and the delegating
+    model. If the metrics file is absent or unreadable, all counts are zero —
+    this is the cold-start case, not an error.
+
+    Phase E (ADR 0015): the two tiers are kept separate so an auto-recorded
+    agent verdict never inflates the recipe hit-rate surfaced to MCP clients,
+    mirroring the human-only partition in metrics-summary.sh and quality-trend.py.
     """
+    zero = {
+        "hit_count": 0, "miss_count": 0,
+        "agent_hit_count": 0, "agent_miss_count": 0,
+        "recent_hits": [],
+    }
     path = metrics_file()
     if not path.exists():
-        return {"hit_count": 0, "miss_count": 0, "recent_hits": []}
+        return dict(zero)
 
     delegate_rows: list[dict] = []
-    feedback_by_ref: dict[str, dict] = {}
+    # Two maps, one per tier, keyed by ref_ts. A delegation can carry both a
+    # human and an agent verdict; splitting the maps means the agent verdict
+    # never clobbers the human one (last-write-wins applies within a tier only).
+    # A feedback row with no verdict_source is a human (or pre-tier legacy)
+    # verdict. The file is append-only, so plain overwrite gives latest-wins.
+    human_by_ref: dict[str, dict] = {}
+    agent_by_ref: dict[str, dict] = {}
     # Stream line-by-line rather than read_text().splitlines() so memory stays
     # flat as the JSONL grows — the metrics file is append-only and unbounded.
     try:
@@ -468,36 +486,46 @@ def _read_recipe_metrics(recipe_name: str, max_examples: int) -> dict:
                 elif source == "feedback":
                     ref = row.get("ref_ts")
                     if ref:
-                        # Latest verdict for a given ref_ts wins. File is
-                        # append-only so plain overwrite gives the right
-                        # semantics.
-                        feedback_by_ref[ref] = row
+                        if (row.get("verdict_source") or "human") == "agent":
+                            agent_by_ref[ref] = row
+                        else:
+                            human_by_ref[ref] = row
     except OSError:
-        return {"hit_count": 0, "miss_count": 0, "recent_hits": []}
+        return dict(zero)
 
     hits = 0
     misses = 0
+    agent_hits = 0
+    agent_misses = 0
     hit_events: list[dict] = []
     for d in delegate_rows:
-        fb = feedback_by_ref.get(d.get("ts"))
-        if fb is None:
-            continue
-        if fb.get("kept"):
-            hits += 1
-            hit_events.append(
-                {
-                    "ts": d.get("ts", ""),
-                    "model": d.get("model", ""),
-                    "reason": fb.get("reason", ""),
-                }
-            )
-        else:
-            misses += 1
+        ts = d.get("ts")
+        fb = human_by_ref.get(ts)
+        if fb is not None:
+            if fb.get("kept"):
+                hits += 1
+                hit_events.append(
+                    {
+                        "ts": d.get("ts", ""),
+                        "model": d.get("model", ""),
+                        "reason": fb.get("reason", ""),
+                    }
+                )
+            else:
+                misses += 1
+        afb = agent_by_ref.get(ts)
+        if afb is not None:
+            if afb.get("kept"):
+                agent_hits += 1
+            else:
+                agent_misses += 1
 
     hit_events.sort(key=lambda r: r["ts"], reverse=True)
     return {
         "hit_count": hits,
         "miss_count": misses,
+        "agent_hit_count": agent_hits,
+        "agent_miss_count": agent_misses,
         "recent_hits": hit_events[:max_examples],
     }
 
@@ -520,9 +548,13 @@ def recommend_prompt(
     text so callers see what worked on this host.
 
     Returns ``{"task", "recipe", "path", "tier", "when_to_use", "template",
-    "variables", "invocation", "hit_count", "miss_count", "recent_hits"}``.
-    Raises RuntimeError if no recipe matches the task; the error message lists
-    every available recipe so the caller can retry with a better phrasing.
+    "variables", "invocation", "hit_count", "miss_count", "agent_hit_count",
+    "agent_miss_count", "recent_hits"}``. hit_count/miss_count count human
+    verdicts only (the quality signal); agent_hit_count/agent_miss_count report
+    the agent-observed tier separately (ADR 0015) so it never inflates the
+    hit-rate. Raises RuntimeError if no recipe matches the task; the error
+    message lists every available recipe so the caller can retry with a better
+    phrasing.
     """
     recipes = _list_recipes()
     if not recipes:
@@ -549,6 +581,8 @@ def recommend_prompt(
         "invocation": parsed["invocation"],
         "hit_count": metrics["hit_count"],
         "miss_count": metrics["miss_count"],
+        "agent_hit_count": metrics["agent_hit_count"],
+        "agent_miss_count": metrics["agent_miss_count"],
         "recent_hits": metrics["recent_hits"] if include_examples else [],
     }
 

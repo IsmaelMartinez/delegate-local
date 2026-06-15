@@ -279,6 +279,14 @@ emit_otel_span() {
 
 # emit_otel_feedback_span <fb_ts> <verdict> <reason> <parent_trace_id>
 #   <parent_span_id> <parent_model> [<parent_recipe>] [<project>]
+#   [<verdict_source>]
+#
+# verdict_source is the agent-observed-verdict tier tag (Phase E): "human"
+# (default) for a maintainer-recorded verdict, "agent" for one the agent
+# auto-recorded about its own use of the output. It is metadata, not content,
+# so it always travels — unaffected by DELEGATE_OTEL_INCLUDE_CONTENT. Without
+# it, an OTel-backed dashboard could not reproduce the human-only hit-rate
+# partition and the agent tier would contaminate the quality signal downstream.
 #
 # Emit a feedback-as-linked-span per ADR 0007: NEW trace, NEW span, with
 # `links: [{traceId, spanId}]` pointing at the parent delegation when the
@@ -296,7 +304,7 @@ emit_otel_feedback_span() {
   [[ -z "${DELEGATE_OTEL_ENDPOINT:-}" ]] && return 0
   local fb_ts="$1" verdict="$2" reason="$3" parent_trace_id="$4"
   local parent_span_id="$5" parent_model="$6" parent_recipe="${7:-}"
-  local project="${8:-}"
+  local project="${8:-}" verdict_source="${9:-human}"
 
   # Generate this span's own identifiers. Per ADR 0007, the feedback is in a
   # new trace because the parent trace has already been flushed by the time
@@ -306,13 +314,13 @@ emit_otel_feedback_span() {
   span_id=$(otel_gen_id 16) || return 0
 
   emit_otel_feedback_span_with_ids "$trace_id" "$span_id" \
-    "$fb_ts" "$verdict" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model" "$parent_recipe" "$project"
+    "$fb_ts" "$verdict" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model" "$parent_recipe" "$project" "$verdict_source"
   return 0
 }
 
 # emit_otel_feedback_span_with_ids <trace_id> <span_id> <fb_ts> <verdict>
 #   <reason> <parent_trace_id> <parent_span_id> <parent_model>
-#   [<parent_recipe>] [<project>]
+#   [<parent_recipe>] [<project>] [<verdict_source>]
 #
 # The same as emit_otel_feedback_span but with this span's trace_id /
 # span_id supplied by the caller rather than generated fresh. Used by
@@ -330,6 +338,7 @@ emit_otel_feedback_span_with_ids() {
   local parent_trace_id="$6" parent_span_id="$7" parent_model="$8"
   local parent_recipe="${9:-}"
   local project="${10:-}"
+  local verdict_source="${11:-human}"
   local include_content="${DELEGATE_OTEL_INCLUDE_CONTENT:-0}"
 
   # Convert the feedback row's ISO ts to nanoseconds and derive end_ns
@@ -373,6 +382,7 @@ emit_otel_feedback_span_with_ids() {
     --arg model "$parent_model" --arg recipe "$parent_recipe" \
     --arg project "$project" \
     --arg verdict "$verdict" --arg reason "$reason" \
+    --arg verdict_source "$verdict_source" \
     --arg start_ns "$start_ns" --arg end_ns "$end_ns" \
     --arg include_content "$include_content" \
     --argjson span_kind "$span_kind" --argjson status_code "$status_code" \
@@ -395,6 +405,7 @@ emit_otel_feedback_span_with_ids() {
               endTimeUnixNano: $end_ns,
               attributes: ([
                 {key: "delegate.feedback.verdict", value: {stringValue: $verdict}},
+                {key: "delegate.feedback.source", value: {stringValue: $verdict_source}},
                 {key: "delegate.feedback.parent_trace_id", value: {stringValue: $parent_trace_id}},
                 {key: "delegate.feedback.parent_span_id", value: {stringValue: $parent_span_id}}
               ]

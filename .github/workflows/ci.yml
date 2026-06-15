@@ -113,6 +113,9 @@ jobs:
       - name: Verdict-sweep tests
         run: bash tests/test-verdict-sweep.sh
 
+      - name: Verdict-stop-hook tests
+        run: bash tests/test-delegate-verdict-stop-hook.sh
+
       - name: Onboard tests
         run: bash tests/test-onboard.sh
 

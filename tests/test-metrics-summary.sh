@@ -349,6 +349,71 @@ case "$out" in
 esac
 rm -f "$opp"
 
+# 16. Phase E agent-observed verdict tier. Fixture: 4 commit-message recipe
+# delegations — D1 human HIT, D2 agent HIT (used), D3 agent MISS (rewrote),
+# D4 untracked. The honesty property: the human hit-rate counts D1 only (NOT
+# the agent HIT), while coverage and untracked count BOTH tiers, and a separate
+# Agent-observed line reports the agent usage rate.
+agenttier=$(mktemp)
+cat > "$agenttier" <<'EOF'
+{"ts":"2026-06-14T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-06-14T10:05:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4100,"exit_status":0,"estimated_tokens_avoided":110}
+{"ts":"2026-06-14T10:10:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":120}
+{"ts":"2026-06-14T10:15:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4300,"exit_status":0,"estimated_tokens_avoided":130}
+{"ts":"2026-06-14T20:00:00Z","source":"feedback","ref_ts":"2026-06-14T10:00:00Z","kept":true}
+{"ts":"2026-06-14T20:01:00Z","source":"feedback","ref_ts":"2026-06-14T10:05:00Z","kept":true,"verdict_source":"agent"}
+{"ts":"2026-06-14T20:02:00Z","source":"feedback","ref_ts":"2026-06-14T10:10:00Z","kept":false,"verdict_source":"agent"}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$agenttier" 2>&1) || EC=$?
+assert_eq 0 "$EC" "agent-tier: exits 0"
+# Honesty property: human hits=1 (NOT 2 — the agent HIT must not inflate it),
+# agent column shows 2, untracked=1 (only D4), coverage=75% (3 of 4 covered).
+assert_contains "Recipe delegations (calibration signal): n=4  hits=1  misses=0  agent=2  untracked=1  coverage=75%" "$out" "agent-tier: human hit-rate excludes agent verdicts; coverage+untracked count both"
+# Dedicated agent-observed usage line.
+assert_contains "Agent-observed (usage, not quality): n=2  used=1  rewrote=1  usage_rate=50%" "$out" "agent-tier: agent usage reported as its own figure"
+# Per-recipe rollup gains the agent column.
+assert_contains "commit-message" "$out" "agent-tier: per-recipe lists commit-message"
+recipe_line=$(printf '%s\n' "$out" | grep -E "^  commit-message" | tail -1)
+assert_contains "agent=2" "$recipe_line" "agent-tier: per-recipe row carries agent column"
+rm -f "$agenttier"
+
+# 16b. A delegation carrying BOTH a human and an agent verdict counts in both
+# columns (never merged): the human HIT keeps the quality signal, the agent
+# MISS shows in the agent column, and the delegation is covered (untracked=0).
+bothtier=$(mktemp)
+cat > "$bothtier" <<'EOF'
+{"ts":"2026-06-14T11:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-06-14T21:00:00Z","source":"feedback","ref_ts":"2026-06-14T11:00:00Z","kept":true}
+{"ts":"2026-06-14T21:01:00Z","source":"feedback","ref_ts":"2026-06-14T11:00:00Z","kept":false,"verdict_source":"agent"}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$bothtier" 2>&1) || EC=$?
+assert_eq 0 "$EC" "both-tier: exits 0"
+assert_contains "Recipe delegations (calibration signal): n=1  hits=1  misses=0  agent=1  untracked=0  coverage=100%" "$out" "both-tier: human hit + agent verdict count in separate columns, delegation covered once"
+rm -f "$bothtier"
+
+# 16c. With NO agent verdicts, the agent column and the Agent-observed line are
+# both absent — single-tier files print exactly as before.
+noagent=$(mktemp)
+cat > "$noagent" <<'EOF'
+{"ts":"2026-06-14T12:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-06-14T22:00:00Z","source":"feedback","ref_ts":"2026-06-14T12:00:00Z","kept":true}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$noagent" 2>&1) || EC=$?
+assert_eq 0 "$EC" "no-agent: exits 0"
+case "$out" in
+  *"agent="*) echo "  FAIL  no-agent: agent column must be absent without agent verdicts"; fail=$((fail+1));;
+  *) echo "  PASS  no-agent: agent column absent without agent verdicts"; pass=$((pass+1));;
+esac
+case "$out" in
+  *"Agent-observed"*) echo "  FAIL  no-agent: Agent-observed line must be absent without agent verdicts"; fail=$((fail+1));;
+  *) echo "  PASS  no-agent: Agent-observed line absent without agent verdicts"; pass=$((pass+1));;
+esac
+assert_contains "Recipe delegations (calibration signal): n=1  hits=1  misses=0  untracked=0  coverage=100%" "$out" "no-agent: legacy single-tier line shape unchanged"
+rm -f "$noagent"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

@@ -298,7 +298,7 @@ emit_delegate_row() {
 #   collector deduplicates on re-emit via OTel ID space.
 emit_feedback_row() {
   local row="$1"
-  local fb_ts ref_ts kept reason verdict project
+  local fb_ts ref_ts kept reason verdict project verdict_source
   ROW_KIND="feedback"
 
   # One jq call extracts every field into a 0x1F-separated record — same
@@ -315,9 +315,10 @@ emit_feedback_row() {
     .ref_ts // "",
     (.kept // false | tostring),
     .reason // "",
-    .project // ""
+    .project // "",
+    (.verdict_source // "human")
   ] | join("\u001f")' <<< "$row")
-  IFS=$'\x1f' read -r fb_ts ref_ts kept reason project <<< "$fields"
+  IFS=$'\x1f' read -r fb_ts ref_ts kept reason project verdict_source <<< "$fields"
 
   if [[ -z "$fb_ts" ]]; then
     ROW_RESULT="ERROR malformed feedback row (no ts)"
@@ -385,9 +386,11 @@ emit_feedback_row() {
   # Position 9 (parent_recipe) is left empty — the parent_lookup TSV does not
   # carry recipe, so backfilled feedback spans omit delegate.recipe (unchanged
   # behaviour). Position 10 (project) comes from the feedback row's own field,
-  # which delegate-feedback.sh records at verdict time.
+  # which delegate-feedback.sh records at verdict time. Position 11
+  # (verdict_source) is the Phase E tier tag, defaulting to "human" for rows
+  # that pre-date the tier so backfilled spans match the live partition.
   emit_otel_feedback_span_with_ids "$fb_trace" "$fb_span" \
-    "$fb_ts" "$verdict" "$reason" "$parent_trace" "$parent_span" "$parent_model" "" "$project"
+    "$fb_ts" "$verdict" "$reason" "$parent_trace" "$parent_span" "$parent_model" "" "$project" "$verdict_source"
   ROW_RESULT="OK"
   return 0
 }
