@@ -138,6 +138,53 @@ EOF
 out=$(python3 "$TREND" "$lowweek" 2>&1); ec=$?
 assert_eq 0 "$ec" "sub-50% week renders without IndexError"
 assert_contains "lifetime  1/4 HIT = 25%" "$out" "sub-50% week counted correctly"
+
+# Phase E agent-observed verdict tier. Fixture: 9 commit-message delegations.
+# Human verdicts on D0-D5: 5 HIT + 1 MISS (= 6 human verdicts, 83%). Agent
+# verdicts on D6-D8: 2 used + 1 rewrote (= 3 agent verdicts, 67% usage). All 9
+# delegations are covered → 100% coverage. The honesty property: the human
+# hit-rate (5/6) must NOT be inflated by the agent HITs, the per-recipe quality
+# count must be the 6 human verdicts (not 9), and the agent tier is its own
+# lifetime figure.
+agentq=$(mktemp)
+agentonly=$(mktemp)
+trap 'rm -f "$fixture" "$nofb" "$malformed" "$phantom" "$nots" "$lowweek" "$agentq" "$agentonly"' EXIT
+{
+  for i in 0 1 2 3 4 5 6 7 8; do
+    printf '{"ts":"2026-05-04T10:0%d:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q"}\n' "$i"
+  done
+  for i in 0 1 2 3 4; do
+    printf '{"ts":"2026-05-04T20:0%d:00Z","source":"feedback","ref_ts":"2026-05-04T10:0%d:00Z","kept":true}\n' "$i" "$i"
+  done
+  printf '{"ts":"2026-05-04T20:05:00Z","source":"feedback","ref_ts":"2026-05-04T10:05:00Z","kept":false}\n'
+  printf '{"ts":"2026-05-04T21:06:00Z","source":"feedback","ref_ts":"2026-05-04T10:06:00Z","kept":true,"verdict_source":"agent"}\n'
+  printf '{"ts":"2026-05-04T21:07:00Z","source":"feedback","ref_ts":"2026-05-04T10:07:00Z","kept":true,"verdict_source":"agent"}\n'
+  printf '{"ts":"2026-05-04T21:08:00Z","source":"feedback","ref_ts":"2026-05-04T10:08:00Z","kept":false,"verdict_source":"agent"}\n'
+} > "$agentq"
+out=$(python3 "$TREND" "$agentq" 2>&1); ec=$?
+assert_eq 0 "$ec" "agent-tier: exits 0"
+assert_contains "lifetime  5/6 HIT = 83%" "$out" "agent-tier: human hit-rate excludes agent verdicts (5/6, not 7/9)"
+assert_contains "100% verdict coverage" "$out" "agent-tier: coverage counts both tiers (9/9)"
+assert_contains "agent-observed 2/3 used = 67%" "$out" "agent-tier: agent usage reported as its own figure"
+assert_contains "HIT-rate of human verdicts" "$out" "agent-tier: trend header labels the human partition"
+# Per-recipe quality counts human verdicts only: commit-message has 6, not 9.
+recipe_line=$(printf '%s' "$out" | grep -E "^  commit-message")
+assert_contains "human verdicts" "$out" "agent-tier: per-recipe header labels human partition"
+n_in_line=$(printf '%s' "$recipe_line" | awk '{print $2}')
+assert_eq 6 "$n_in_line" "agent-tier: per-recipe n is human verdicts only (6, not 9)"
+
+# Agent-only file (early rollout): no human verdicts, but agent verdicts and
+# coverage still summarised rather than erroring.
+cat > "$agentonly" <<'EOF'
+{"ts":"2026-05-04T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q"}
+{"ts":"2026-05-04T20:00:00Z","source":"feedback","ref_ts":"2026-05-04T10:00:00Z","kept":true,"verdict_source":"agent"}
+EOF
+out=$(python3 "$TREND" "$agentonly" 2>&1); ec=$?
+assert_eq 0 "$ec" "agent-only: exits 0 (not treated as no verdicts)"
+assert_contains "no human verdicts" "$out" "agent-only: human partition reports no verdicts gracefully"
+assert_contains "agent-observed 1/1 used = 100%" "$out" "agent-only: agent usage still reported"
+assert_contains "100% verdict coverage" "$out" "agent-only: coverage counts the agent verdict"
+
 echo ""
 echo "=== Results ==="
 echo "$pass passed, $fail failed"

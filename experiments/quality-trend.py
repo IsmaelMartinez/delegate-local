@@ -11,6 +11,12 @@ delegation rows from the metrics file and prints four views:
                                        vs weak (taste-calibrated prose recipes);
   4. a lifetime summary              — overall hit rate plus verdict coverage.
 
+The HIT-rate trend and per-recipe quality count HUMAN verdicts only (Phase E):
+agent-observed verdicts (verdict_source:"agent") record whether the agent used
+its own delegated output, which is usage, not a maintainer taste judgment, so
+they are reported as a separate lifetime figure and excluded from the quality
+signal. Coverage counts both tiers. See ADR 0015.
+
 Re-run it as data accumulates to augment the trend; when the picture shifts,
 drop a new dated `experiments/results/<date>-quality-trend.md` writeup that
 embeds the fresh charts and the interpretation. Verdicts are attributed to the
@@ -85,7 +91,7 @@ def render_trend(series):
     for x, y in pts:
         grid[y][x] = "●"
 
-    out = ["", "  delegate-local — weekly recipe quality (HIT-rate of recorded verdicts)", ""]
+    out = ["", "  delegate-local — weekly recipe quality (HIT-rate of human verdicts)", ""]
     for r in range(height):
         pct = hi - round(r / (height - 1) * (hi - lo))
         label = f"{pct:3d}% ┤" if pct % 10 == 0 else "     │"
@@ -106,7 +112,7 @@ def render_volume(series):
 
 
 def render_recipes(rec_h, rec_m):
-    out = ["", f"  per-recipe quality (recorded verdicts, recipes with >= {MIN_RECIPE_VERDICTS})", "",
+    out = ["", f"  per-recipe quality (human verdicts, recipes with >= {MIN_RECIPE_VERDICTS})", "",
            f"  {'recipe':<30}{'n':>4}{'hit%':>6}   bar"]
     recipes = sorted(set(rec_h) | set(rec_m), key=lambda k: -(rec_h[k] + rec_m[k]))
     for k in recipes:
@@ -145,6 +151,13 @@ def main(argv):
     miss = defaultdict(int)
     rec_h = defaultdict(int)
     rec_m = defaultdict(int)
+    # Agent-observed verdict tier (Phase E). Agent verdicts record whether the
+    # agent used its own delegated output, not a maintainer taste judgment, so
+    # they are kept out of the quality trend and per-recipe hit-rate (which stay
+    # human-only) and reported separately as a usage figure. They still count
+    # toward coverage. See ADR 0015.
+    agent_hits = 0
+    agent_miss = 0
 
     for r in deleg:
         w = week_of(r.get("ts"))
@@ -155,6 +168,14 @@ def main(argv):
         if not w:
             continue
         kept = r.get("kept") is True
+        # Partition by tier: agent verdicts are usage, not quality. A row with
+        # no verdict_source is a human (or pre-tier legacy) verdict.
+        if (r.get("verdict_source") or "human") == "agent":
+            if kept:
+                agent_hits += 1
+            else:
+                agent_miss += 1
+            continue
         (hits if kept else miss)[w] += 1
         # ref_ts joins the verdict back to its delegation to recover the recipe.
         # A ref_ts that resolves to no delegate row (e.g. a trimmed metrics
@@ -179,24 +200,38 @@ def main(argv):
     print(render_volume(series))
     print(render_recipes(rec_h, rec_m))
 
-    total_hits = sum(hits.values())
+    total_hits = sum(hits.values())          # human verdicts only — the quality signal
     total_verdicts = total_hits + sum(miss.values())
+    agent_total = agent_hits + agent_miss
     total_deleg = len(deleg)
-    if not total_verdicts:
+    # Hard error only when NEITHER tier produced a usable-timestamp verdict.
+    # An agent-only file (early rollout) still has coverage + a usage figure to
+    # report, so it must not be treated as "nothing to summarise".
+    if not total_verdicts and not agent_total:
         print("quality-trend: no verdicts with a usable timestamp to summarise", file=sys.stderr)
         return 1
-    hit_pct = 100 * total_hits / total_verdicts
-    # Coverage counts DISTINCT included delegations that carry a verdict, not raw
-    # verdict rows: a delegation can have several feedback rows (verdict revision)
-    # and a verdict can reference a delegation excluded from the denominator
-    # (failed, or one whose row predates this filter), either of which would push
-    # a verdict-row/delegation ratio above 100%. This mirrors metrics-summary.sh's
-    # ref_ts->kept map, where each delegation contributes at most one verdict.
+    # Coverage counts DISTINCT included delegations that carry a verdict in
+    # EITHER tier, not raw verdict rows: a delegation can have several feedback
+    # rows (verdict revision, or a human + an agent verdict) and a verdict can
+    # reference a delegation excluded from the denominator (failed, or one whose
+    # row predates this filter), either of which would push a verdict-row/
+    # delegation ratio above 100%. This mirrors metrics-summary.sh's ref_ts->kept
+    # map, where each delegation contributes at most one verdict per tier.
     feedback_refs = {r.get("ref_ts") for r in feedback if r.get("ref_ts")}
     covered_deleg = sum(1 for ts in by_ts if ts in feedback_refs)
     coverage = f"{100 * covered_deleg / total_deleg:.0f}% verdict coverage" if total_deleg else "coverage n/a (no delegation rows)"
-    print(f"\nlifetime  {total_hits}/{total_verdicts} HIT = {hit_pct:.0f}%"
-          f"   ·   {total_deleg} delegations   ·   {coverage}")
+    # Headline hit-rate is human verdicts only — agent verdicts never inflate it.
+    if total_verdicts:
+        human_part = f"{total_hits}/{total_verdicts} HIT = {100 * total_hits / total_verdicts:.0f}%"
+    else:
+        human_part = "no human verdicts"
+    line = (f"\nlifetime  {human_part}"
+            f"   ·   {total_deleg} delegations   ·   {coverage}")
+    # Agent-observed usage is appended as its own figure so it never reads as a
+    # quality number — "used" = the agent shipped the delegated output as-is.
+    if agent_total:
+        line += f"   ·   agent-observed {agent_hits}/{agent_total} used = {100 * agent_hits / agent_total:.0f}%"
+    print(line)
     return 0
 
 
