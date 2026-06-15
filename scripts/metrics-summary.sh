@@ -125,12 +125,19 @@ fi
 # didn't.) The ref_ts -> kept map is built in one reduce pass; direct $fb_map[.ts]
 # access (NOT // false) so a recorded miss (false) isn't coerced back to null and
 # dropped, and latest feedback for a delegate wins (verdict revision).
+#
+# Failed delegations (exit_status != 0 — canary timeout exit 3, flaky-gate exit 4,
+# pick-model/dispatch failure exit 1/2) produced no output, so there is nothing to
+# judge hit/miss against. Counting them would inflate "untracked" and depress
+# coverage with operational failures that belong to the exit_status error metric,
+# not the calibration signal. The rollup therefore scopes to exit_status==0 (or
+# absent, for pre-exit_status rows) delegations only.
 if (( n_feedback > 0 )); then
   echo "Delegation feedback (hit/miss):"
   jq -rs '
     def src: .source // "delegate";
     (reduce (.[] | select(src == "feedback")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $fb_map
-    | (map(select(src == "delegate") | {recipe, tier, kept: $fb_map[.ts]})) as $d
+    | (map(select(src == "delegate" and (.exit_status // 0) == 0) | {recipe, tier, kept: $fb_map[.ts]})) as $d
     | ($d | map(select(.recipe != null))) as $rx
     | ($d | map(select(.recipe == null))) as $raw
     | ($rx | length) as $rn

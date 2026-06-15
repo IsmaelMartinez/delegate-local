@@ -114,6 +114,24 @@ assert_contains "coverage=75%" "$out" "feedback: recipe verdict coverage headlin
 assert_contains "Tokens avoided (≈):  530" "$out" "feedback: tokens not inflated by feedback rows"
 rm -f "$fb"
 
+# 5b. Failed delegations (exit_status != 0) are excluded from the coverage
+# denominator: a canary-timeout (exit 3) produced no output, so it cannot carry a
+# hit/miss verdict and must not count as "untracked". Fixture: one successful
+# recipe delegation with a hit, plus one failed (exit 3) recipe delegation with
+# no verdict. Coverage must be 100% (1/1), not 50% (1/2).
+fbx=$(mktemp)
+cat > "$fbx" <<'EOF'
+{"ts":"2026-06-15T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-06-15T10:05:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":50,"exit_status":3,"estimated_tokens_avoided":0}
+{"ts":"2026-06-15T20:00:00Z","source":"feedback","ref_ts":"2026-06-15T10:00:00Z","kept":true}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$fbx" 2>&1) || EC=$?
+assert_eq 0 "$EC" "failed-excluded: exits 0"
+assert_contains "Recipe delegations (calibration signal): n=1  hits=1  misses=0  untracked=0" "$out" "failed-excluded: exit!=0 recipe row dropped from calibration n"
+assert_contains "coverage=100%" "$out" "failed-excluded: coverage over successful delegations only (not 50%)"
+rm -f "$fbx"
+
 # 6. Latest-feedback-wins: two feedback rows for the same delegate, recorded
 # in chronological order (hit, then miss). The later miss should win — the
 # user revised their verdict — and be counted as the miss.

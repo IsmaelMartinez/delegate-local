@@ -128,7 +128,11 @@ def main(argv):
         return 1
 
     rows = load_rows(path)
-    deleg = [r for r in rows if r.get("source") == "delegate"]
+    # Exclude failed delegations (exit_status != 0): they produced no output, so
+    # there is nothing to record a hit/miss against, and counting them in the
+    # coverage denominator depresses coverage with operational failures rather
+    # than missing verdicts. Rows predating the exit_status field count as success.
+    deleg = [r for r in rows if r.get("source") == "delegate" and (r.get("exit_status") or 0) == 0]
     feedback = [r for r in rows if r.get("source") == "feedback"]
     if not feedback:
         print("quality-trend: no feedback rows yet — record verdicts with "
