@@ -141,8 +141,12 @@ fi
 # column and the dedicated agent-observed line are shown only when at least one
 # agent verdict exists, so single-tier files (the common case today) print
 # exactly as before. ADR 0015 covers why the tiers stay separate.
-n_agent=$(jq -rs 'map(select((.source // "") == "feedback" and (.verdict_source // "human") == "agent")) | length' "$metrics_file")
+# n_agent is guaranteed 0 when there are no feedback rows, so the scan only runs
+# inside the n_feedback>0 guard; the per-project / per-recipe blocks below read
+# n_agent too, hence the unconditional 0 initialiser.
+n_agent=0
 if (( n_feedback > 0 )); then
+  n_agent=$(jq -rs 'map(select((.source // "") == "feedback" and (.verdict_source // "human") == "agent")) | length' "$metrics_file")
   echo "Delegation feedback (hit/miss):"
   jq -rs --argjson show_agent "$([[ "$n_agent" -gt 0 ]] && echo true || echo false)" '
     def src: .source // "delegate";
