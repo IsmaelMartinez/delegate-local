@@ -125,12 +125,19 @@ fi
 # didn't.) The ref_ts -> kept map is built in one reduce pass; direct $fb_map[.ts]
 # access (NOT // false) so a recorded miss (false) isn't coerced back to null and
 # dropped, and latest feedback for a delegate wins (verdict revision).
+#
+# Failed delegations (exit_status != 0 — canary timeout exit 3, flaky-gate exit 4,
+# pick-model/dispatch failure exit 1/2) produced no output, so there is nothing to
+# judge hit/miss against. Counting them would inflate "untracked" and depress
+# coverage with operational failures that belong to the exit_status error metric,
+# not the calibration signal. The rollup therefore scopes to exit_status==0 (or
+# absent, for pre-exit_status rows) delegations only.
 if (( n_feedback > 0 )); then
   echo "Delegation feedback (hit/miss):"
   jq -rs '
     def src: .source // "delegate";
     (reduce (.[] | select(src == "feedback")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $fb_map
-    | (map(select(src == "delegate") | {recipe, tier, kept: $fb_map[.ts]})) as $d
+    | (map(select(src == "delegate" and (.exit_status // 0) == 0) | {recipe, tier, kept: $fb_map[.ts]})) as $d
     | ($d | map(select(.recipe != null))) as $rx
     | ($d | map(select(.recipe == null))) as $raw
     | ($rx | length) as $rn
@@ -151,7 +158,7 @@ fi
 # direct $fb_map[.ts] access (NOT // false) so a recorded miss (false) isn't
 # coerced back to null and dropped.
 n_projects=$(jq -rs '
-  map(select((.source // "delegate") == "delegate"))
+  map(select((.source // "delegate") == "delegate" and (.exit_status // 0) == 0))
   | map(.project // "(none)")
   | unique
   | length
@@ -161,7 +168,7 @@ if (( n_projects > 1 )); then
   jq -rs '
     def src: .source // "delegate";
     (reduce (.[] | select(src == "feedback")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $fb_map
-    | map(select(src == "delegate") | {ts, project: (.project // "(none)"), duration_ms, kept: $fb_map[.ts]})
+    | map(select(src == "delegate" and (.exit_status // 0) == 0) | {ts, project: (.project // "(none)"), duration_ms, kept: $fb_map[.ts]})
     | group_by(.project)
     | map({
         project: .[0].project,
@@ -183,7 +190,7 @@ fi
 # one recipe row exists. Same feedback-join shape as the per-project block so a
 # recorded miss is counted, not dropped. This answers "which recipes underperform."
 n_recipe=$(jq -rs '
-  map(select((.source // "delegate") == "delegate" and .recipe != null))
+  map(select((.source // "delegate") == "delegate" and .recipe != null and (.exit_status // 0) == 0))
   | length
 ' "$metrics_file")
 if (( n_recipe > 0 )); then
@@ -191,7 +198,7 @@ if (( n_recipe > 0 )); then
   jq -rs '
     def src: .source // "delegate";
     (reduce (.[] | select(src == "feedback")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $fb_map
-    | map(select(src == "delegate" and .recipe != null) | {ts, recipe, kept: $fb_map[.ts]})
+    | map(select(src == "delegate" and .recipe != null and (.exit_status // 0) == 0) | {ts, recipe, kept: $fb_map[.ts]})
     | group_by(.recipe)
     | map({
         recipe: .[0].recipe,
