@@ -172,6 +172,19 @@ assert_eq 0 "$ec" "T12: empty payload → exit 0"
 assert_empty "$out" "T12: empty payload → no output (no session_id to scope)"
 rm -rf "$tmp"
 
+# --- T13. Payload with cwd but NO session_id → never inject ----------------
+# The marker is the loop guard and it is keyed by session_id; without one the
+# hook cannot guard against a re-inject loop, so it must NOT inject at all even
+# when an untracked delegation exists (fail open to a clean stop).
+tmp=$(mktemp -d); proj=$(basename "$tmp")
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+no_sid_payload=$(jq -nc --arg c "$tmp" '{cwd:$c, hook_event_name:"Stop"}')
+out=$(printf '%s' "$no_sid_payload" | DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" 2>/dev/null); ec=$?
+assert_eq 0 "$ec" "T13: no session_id → exit 0"
+assert_empty "$out" "T13: no session_id → no inject (guardless re-inject would loop)"
+[[ -d "$tmp/.verdict-stop-markers" ]] && { fail=$((fail+1)); echo "  FAIL  T13: no marker dir should be created without a session_id"; } || { pass=$((pass+1)); echo "  PASS  T13: no marker written without a session_id"; }
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

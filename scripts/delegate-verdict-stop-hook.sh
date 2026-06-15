@@ -71,14 +71,13 @@ window_hours="${DELEGATE_SWEEP_WINDOW_HOURS:-24}"
 # The marker is written only when a batch is actually surfaced (step 5). Its
 # presence on a later Stop in the SAME session makes the hook exit 0 without
 # re-injecting, so a declined or ignored prompt cannot loop the agent to the
-# turn limit. A session with no session_id (shouldn't happen, but fail open
-# safely) skips the guard and relies on idempotency over the tracked set.
+# turn limit. The marker IS the loop guard, keyed by session_id — so a Stop
+# with no session_id (shouldn't happen) cannot be guarded, and we fail open by
+# NOT injecting rather than risk a guardless re-inject on every Stop.
+[[ -z "$session_id" ]] && exit 0
 marker_dir="$(dirname "$metrics_file")/.verdict-stop-markers"
-marker=""
-if [[ -n "$session_id" ]]; then
-  marker="$marker_dir/$session_id"
-  [[ -f "$marker" ]] && exit 0
-fi
+marker="$marker_dir/$session_id"
+[[ -f "$marker" ]] && exit 0
 
 # --- derive the project name (mirror delegate.sh / lib/otel.sh) -----------
 [[ -n "$hook_cwd" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
@@ -118,16 +117,16 @@ rows=$(jq -rs --arg cutoff "$cutoff_iso" --arg proj "$project" '
 [[ -z "$rows" ]] && exit 0
 
 # --- write the session marker (must succeed before we inject) -------------
-# If the marker can't be written, do NOT inject: injecting without a durable
-# marker would let the next Stop re-surface the same batch and loop.
-if [[ -n "$marker" ]]; then
-  mkdir -p "$marker_dir" 2>/dev/null || exit 0
-  : > "$marker" 2>/dev/null || exit 0
-  # Opportunistic prune so per-session markers don't accumulate forever. Bounded
-  # by the rare inject path and tolerant of find flag differences (BSD + GNU
-  # both support -mtime/-delete); failure is non-fatal.
-  find "$marker_dir" -type f -mtime +7 -delete 2>/dev/null || true
-fi
+# session_id is guaranteed non-empty here (we exit 0 above when it is absent),
+# so the marker path is always set. If the marker can't be written, do NOT
+# inject: injecting without a durable marker would let the next Stop re-surface
+# the same batch and loop.
+mkdir -p "$marker_dir" 2>/dev/null || exit 0
+: > "$marker" 2>/dev/null || exit 0
+# Opportunistic prune so per-session markers don't accumulate forever. Bounded
+# by the rare inject path and tolerant of find flag differences (BSD + GNU both
+# support -mtime/-delete); failure is non-fatal.
+find "$marker_dir" -type f -mtime +7 -delete 2>/dev/null || true
 
 # --- surface the batch and hand it back to the agent ----------------------
 count=$(printf '%s\n' "$rows" | grep -c '')

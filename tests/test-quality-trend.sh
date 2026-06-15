@@ -170,6 +170,7 @@ assert_contains "HIT-rate of human verdicts" "$out" "agent-tier: trend header la
 # Per-recipe quality counts human verdicts only: commit-message has 6, not 9.
 recipe_line=$(printf '%s' "$out" | grep -E "^  commit-message")
 assert_contains "human verdicts" "$out" "agent-tier: per-recipe header labels human partition"
+# $2 is the per-recipe `n` column — safe because recipe stems carry no spaces.
 n_in_line=$(printf '%s' "$recipe_line" | awk '{print $2}')
 assert_eq 6 "$n_in_line" "agent-tier: per-recipe n is human verdicts only (6, not 9)"
 
