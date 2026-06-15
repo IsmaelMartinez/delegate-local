@@ -88,18 +88,22 @@ github_repo="${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}"
 
 usage() {
   cat >&2 <<'EOF'
-usage: delegate-feedback.sh [--ts <iso8601>] hit|miss [reason words...]
+usage: delegate-feedback.sh [--ts <iso8601>] [--source human|agent] hit|miss [reason words...]
   Without --ts, the verdict attaches to the most recent delegate row in
   the metrics JSONL — but only if that row is fresh (default 300 s).
   Pass --ts to pin the verdict to a specific delegate row when metrics
   were off, or the delegation was killed before its row was written, or
   enough time has passed that the most recent row is no longer "yours".
+  --source records the verdict tier: human (default, a maintainer taste
+  judgment) or agent (the agent's record of whether it used its own
+  delegated output). Reporting keeps the two tiers separate.
 EOF
   exit 2
 }
 
 # Argument parsing — flags come first, then verdict, then reason.
 override_ts=""
+verdict_source="human"
 while (($# > 0)); do
   case "$1" in
     --ts)
@@ -113,11 +117,32 @@ while (($# > 0)); do
         echo 'delegate-feedback: --ts requires a value' >&2; exit 2
       fi
       shift;;
+    --source)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo 'delegate-feedback: --source requires a value (human|agent)' >&2; exit 2
+      fi
+      verdict_source="$2"; shift 2;;
+    --source=*)
+      verdict_source="${1#--source=}"
+      if [[ -z "$verdict_source" ]]; then
+        echo 'delegate-feedback: --source requires a value (human|agent)' >&2; exit 2
+      fi
+      shift;;
     -h|--help) usage;;
     --) shift; break;;
     *) break;;
   esac
 done
+
+# The agent-observed-verdict tier (Phase E). "human" (default) is a maintainer
+# taste judgment; "agent" is the agent's honest record of whether it used its
+# own delegated output as-is. They are kept as separate tiers downstream — the
+# headline hit-rate counts human verdicts only, coverage counts both — so an
+# invalid value must fail loudly rather than silently contaminate either axis.
+case "$verdict_source" in
+  human|agent) ;;
+  *) echo "delegate-feedback: --source must be 'human' or 'agent' (got '$verdict_source')" >&2; exit 2 ;;
+esac
 
 [[ $# -ge 1 ]] || usage
 
@@ -231,14 +256,18 @@ ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 feedback_project=$(delegate_project_name)
 
 # Build the feedback row. `reason` is omitted when the caller didn't supply
-# one so empty-string entries don't pollute future filters.
+# one so empty-string entries don't pollute future filters. `verdict_source`
+# is written only for the "agent" tier — a human verdict (default) omits the
+# field, so it is indistinguishable from the legacy rows written before this
+# tier existed, and the reporting partition maps both to human. Only the
+# agent tier carries the marker.
 if [[ -n "$reason" ]]; then
-  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --arg reason "$reason" --arg project "$feedback_project" \
-    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept, reason:$reason} + (if $project != "" then {project:$project} else {} end)' \
+  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --arg reason "$reason" --arg project "$feedback_project" --arg vsource "$verdict_source" \
+    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept, reason:$reason} + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end)' \
     >> "$metrics_file"
 else
-  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --arg project "$feedback_project" \
-    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $project != "" then {project:$project} else {} end)' \
+  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --arg project "$feedback_project" --arg vsource "$verdict_source" \
+    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end)' \
     >> "$metrics_file"
 fi
 
@@ -260,7 +289,7 @@ if [[ -n "${parent_meta:-}" ]]; then
   IFS=$'\t' read -r parent_trace_id parent_span_id parent_model parent_recipe <<< "$parent_meta"
 fi
 verdict_lower=$([[ "$kept" == "true" ]] && echo "hit" || echo "miss")
-emit_otel_feedback_span "$ts" "$verdict_lower" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model" "$parent_recipe" "$feedback_project"
+emit_otel_feedback_span "$ts" "$verdict_lower" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model" "$parent_recipe" "$feedback_project" "$verdict_source"
 
 echo "$verdict_word recorded against delegate ts=$ref_ts${reason:+ ($reason)}"
 

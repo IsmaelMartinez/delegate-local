@@ -1211,6 +1211,127 @@ recipe_attr=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0
 assert_eq "commit-message" "$recipe_attr" "FB-OT19: delegate.recipe pulled from --ts pinned row, not most-recent"
 rm -rf "$tmp"
 
+# ---------------------------------------------------------------------------
+# Phase E — agent-observed verdict tier (--source human|agent)
+# The default is human (a maintainer taste judgment); --source agent records
+# the agent's own honest record of whether it used the delegated output. The
+# tier is kept separate from the human hit-rate downstream, so the recorder
+# must (a) default to human, (b) write verdict_source ONLY for the agent tier
+# (so human/legacy rows are indistinguishable and the partition maps both to
+# human), and (c) reject any other value loudly rather than silently
+# contaminate the quality signal.
+# ---------------------------------------------------------------------------
+
+# FB-SRC1. Default (no --source): the feedback row OMITS verdict_source, so it
+# is byte-identical in shape to a pre-tier legacy row.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-SRC1: default source → exits 0"
+last=$(tail -1 "$tmp/m.jsonl")
+[[ "$last" == *'"verdict_source"'* ]] && { fail=$((fail+1)); echo "  FAIL  FB-SRC1: verdict_source MUST be absent by default (human)"; } || { pass=$((pass+1)); echo "  PASS  FB-SRC1: verdict_source absent by default (human)"; }
+rm -rf "$tmp"
+
+# FB-SRC2. --source agent: the row carries verdict_source:"agent".
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --source agent hit 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-SRC2: --source agent → exits 0"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains '"verdict_source":"agent"' "$last" "FB-SRC2: agent row carries verdict_source:agent"
+vs=$(echo "$last" | jq -r '.verdict_source')
+assert_eq "agent" "$vs" "FB-SRC2: verdict_source parses back as agent"
+rm -rf "$tmp"
+
+# FB-SRC3. --source human (explicit): still OMITS the field — an explicit
+# human verdict is indistinguishable from a legacy one, which is what the
+# reporting partition assumes.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --source human miss "rewrote it" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-SRC3: --source human → exits 0"
+last=$(tail -1 "$tmp/m.jsonl")
+[[ "$last" == *'"verdict_source"'* ]] && { fail=$((fail+1)); echo "  FAIL  FB-SRC3: explicit human must still omit verdict_source"; } || { pass=$((pass+1)); echo "  PASS  FB-SRC3: explicit human omits verdict_source (legacy-identical)"; }
+assert_contains '"kept":false' "$last" "FB-SRC3: miss verdict still recorded with --source"
+rm -rf "$tmp"
+
+# FB-SRC4. --source=agent (equals form) is accepted the same as the space form.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --source=agent hit 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-SRC4: --source=agent → exits 0"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains '"verdict_source":"agent"' "$last" "FB-SRC4: equals form sets agent tier"
+rm -rf "$tmp"
+
+# FB-SRC5. An invalid --source value is rejected with exit 2 — a typo must
+# never silently fall back to a tier.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --source robot hit 2>&1) || EC=$?
+assert_eq 2 "$EC" "FB-SRC5: invalid --source → exit 2"
+assert_contains "must be 'human' or 'agent'" "$out" "FB-SRC5: error names the allowed values"
+rm -rf "$tmp"
+
+# FB-SRC6. --source with no value (flags parse first, nothing follows) → exit 2.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --source 2>&1) || EC=$?
+assert_eq 2 "$EC" "FB-SRC6: --source with no value → exit 2"
+assert_contains "requires a value" "$out" "FB-SRC6: error explains --source needs a value"
+rm -rf "$tmp"
+
+# FB-SRC7. --source agent composes with --ts and a reason (flags first, then
+# verdict, then reason).
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts "$TS_LATEST" --source agent miss "rewrote the bullets" 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-SRC7: --ts + --source agent + reason → exits 0"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains '"verdict_source":"agent"' "$last" "FB-SRC7: agent tier recorded with --ts"
+assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "FB-SRC7: --ts pin still honoured alongside --source"
+assert_contains '"reason":"rewrote the bullets"' "$last" "FB-SRC7: reason captured alongside --source"
+EC=0; echo "$last" | jq -e . >/dev/null 2>&1 || EC=$?
+assert_eq 0 "$EC" "FB-SRC7: agent feedback row is valid JSON"
+rm -rf "$tmp"
+
+# FB-SRC8. OTel: --source agent emits delegate.feedback.source=agent on the span.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" --source agent hit 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-SRC8: --source agent + OTel → exits 0"
+otel_body=$(cat "$otel_sniff")
+assert_contains '"delegate.feedback.source"' "$otel_body" "FB-SRC8: delegate.feedback.source attribute present"
+src_attr=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].attributes[] | select(.key=="delegate.feedback.source") | .value.stringValue')
+assert_eq "agent" "$src_attr" "FB-SRC8: source attribute value is agent"
+rm -rf "$tmp"
+
+# FB-SRC9. OTel: default (no --source) emits delegate.feedback.source=human —
+# the attribute is unconditional metadata so the dashboard can reproduce the
+# human-only partition without it being gated.
+tmp=$(mktemp -d)
+seed_metrics_with_otel "$tmp/m.jsonl"
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+EC=0
+out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" hit 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-SRC9: default source + OTel → exits 0"
+otel_body=$(cat "$otel_sniff")
+src_attr=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].attributes[] | select(.key=="delegate.feedback.source") | .value.stringValue')
+assert_eq "human" "$src_attr" "FB-SRC9: default source attribute value is human"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
