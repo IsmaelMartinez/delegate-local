@@ -158,7 +158,7 @@ fi
 # direct $fb_map[.ts] access (NOT // false) so a recorded miss (false) isn't
 # coerced back to null and dropped.
 n_projects=$(jq -rs '
-  map(select((.source // "delegate") == "delegate"))
+  map(select((.source // "delegate") == "delegate" and (.exit_status // 0) == 0))
   | map(.project // "(none)")
   | unique
   | length
@@ -190,7 +190,7 @@ fi
 # one recipe row exists. Same feedback-join shape as the per-project block so a
 # recorded miss is counted, not dropped. This answers "which recipes underperform."
 n_recipe=$(jq -rs '
-  map(select((.source // "delegate") == "delegate" and .recipe != null))
+  map(select((.source // "delegate") == "delegate" and .recipe != null and (.exit_status // 0) == 0))
   | length
 ' "$metrics_file")
 if (( n_recipe > 0 )); then
