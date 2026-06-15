@@ -186,7 +186,15 @@ def main(argv):
         print("quality-trend: no verdicts with a usable timestamp to summarise", file=sys.stderr)
         return 1
     hit_pct = 100 * total_hits / total_verdicts
-    coverage = f"{100 * total_verdicts / total_deleg:.0f}% verdict coverage" if total_deleg else "coverage n/a (no delegation rows)"
+    # Coverage counts DISTINCT included delegations that carry a verdict, not raw
+    # verdict rows: a delegation can have several feedback rows (verdict revision)
+    # and a verdict can reference a delegation excluded from the denominator
+    # (failed, or one whose row predates this filter), either of which would push
+    # a verdict-row/delegation ratio above 100%. This mirrors metrics-summary.sh's
+    # ref_ts->kept map, where each delegation contributes at most one verdict.
+    feedback_refs = {r.get("ref_ts") for r in feedback if r.get("ref_ts")}
+    covered_deleg = sum(1 for ts in by_ts if ts in feedback_refs)
+    coverage = f"{100 * covered_deleg / total_deleg:.0f}% verdict coverage" if total_deleg else "coverage n/a (no delegation rows)"
     print(f"\nlifetime  {total_hits}/{total_verdicts} HIT = {hit_pct:.0f}%"
           f"   ·   {total_deleg} delegations   ·   {coverage}")
     return 0

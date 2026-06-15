@@ -168,7 +168,7 @@ if (( n_projects > 1 )); then
   jq -rs '
     def src: .source // "delegate";
     (reduce (.[] | select(src == "feedback")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $fb_map
-    | map(select(src == "delegate") | {ts, project: (.project // "(none)"), duration_ms, kept: $fb_map[.ts]})
+    | map(select(src == "delegate" and (.exit_status // 0) == 0) | {ts, project: (.project // "(none)"), duration_ms, kept: $fb_map[.ts]})
     | group_by(.project)
     | map({
         project: .[0].project,
@@ -198,7 +198,7 @@ if (( n_recipe > 0 )); then
   jq -rs '
     def src: .source // "delegate";
     (reduce (.[] | select(src == "feedback")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $fb_map
-    | map(select(src == "delegate" and .recipe != null) | {ts, recipe, kept: $fb_map[.ts]})
+    | map(select(src == "delegate" and .recipe != null and (.exit_status // 0) == 0) | {ts, recipe, kept: $fb_map[.ts]})
     | group_by(.recipe)
     | map({
         recipe: .[0].recipe,
