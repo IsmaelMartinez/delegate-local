@@ -39,3 +39,48 @@ Each boundary writes one opportunity row, so the denominator the whole problem i
 ## Uninstall
 
 Remove the `Bash` matcher block you added to `~/.claude/settings.json`. The opportunity rows already written are harmless and are simply ignored once no more accrue; delete them from `metrics.jsonl` if you want a clean slate.
+
+---
+
+# Verdict-sweep Stop hook (opt-in, Phase E)
+
+The boundary hook above makes delegation more automatic, which is half the loop. The other half — recording whether the delegated output was actually used — stayed manual, so verdict coverage slips as auto-delegation rises: the session-end sweep meant to catch the backlog (`scripts/verdict-sweep.sh`) is interactive and never runs on background jobs. The decisive observation is that auto-delegation moved the decision-maker from the human to the agent, and the agent is the only party that knows whether it used an output — and only while it is still running. A `Stop` hook fits exactly there: it fires when the main agent finishes a turn, the agent is still alive, and the hook can hand the just-finished session's untracked delegations back to it for a verdict before it stops.
+
+The hook is `scripts/delegate-verdict-stop-hook.sh`. On every `Stop` event it derives the current project (the same rule `delegate.sh` and the boundary hook use) and scans `metrics.jsonl` for that project's successful delegations inside the look-back window that carry no verdict — `verdict-sweep.sh`'s base join (delegate rows with `exit_status == 0` and no referencing feedback row) plus a `.project` filter and minus the tty prompt. When the set is empty it exits immediately and does nothing. When it is non-empty it lists the batch (each delegation's `ts`, `recipe`, and `tier`) and re-engages the agent with `{"decision":"block","reason":…}` — `decision:"block"` is what makes a stopping agent continue; plain `additionalContext` does not reliably re-engage it. The instruction asks the agent, for each delegation it recognises from the current session, to record whether it *used* the output as-is (hit) or rewrote/discarded it (miss) with `delegate-feedback.sh --ts <ts> --source agent hit|miss`, and to leave any `ts` it does not recognise for the interactive sweep.
+
+These verdicts are tagged `verdict_source:"agent"` and live in a separate tier from human verdicts (ADR 0015): the agent can honestly report a fact about its own behaviour ("I used it" / "I rewrote it"), but not the maintainer's taste judgment ("it was good"). The headline hit-rate counts human verdicts only; coverage counts both. `metrics-summary.sh` and `experiments/quality-trend.py` surface the agent tier as its own usage figure, never folded into the quality number.
+
+## Install
+
+Like the boundary hook, this is opt-in. Add a `Stop` entry to your global `~/.claude/settings.json` (alongside the `PreToolUse` boundary-hook entry if you use it):
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/skills/delegate-local/scripts/delegate-verdict-stop-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The hook needs `jq` and `perl` on `PATH` (both already skill requirements). It fails open: any error, missing `jq`, unparseable payload, or an unwritable marker exits zero, so a verdict sweep can never wedge a session.
+
+## The session-once loop guard
+
+Because `decision:"block"` re-engages the agent, an unguarded hook would loop: if the agent declines or ignores the prompt, the next `Stop` sees the same untracked rows and blocks again, up to the turn limit. The guard is a session-once marker. The `Stop` payload carries a `session_id`; the first time the hook surfaces a batch it writes a marker file keyed by that id under `metrics.jsonl`'s directory (`.verdict-stop-markers/`). Every later `Stop` in the same session sees the marker and exits zero without re-injecting, so the agent always stops cleanly — even if it recorded nothing. The marker is written only when a batch is actually surfaced, so a session that delegated nothing leaves no marker and a later delegation in the same session can still be swept. Idempotency across sessions still holds: a recorded verdict drops its `ts` from the next scan, and per-session markers are pruned after seven days so they don't accumulate.
+
+## Modes
+
+The default mode is `warn`: the batch is surfaced once per session. Set `DELEGATE_VERDICT_STOP_MODE=off` to disable the hook entirely. There is deliberately no `enforce` mode — coercing a verdict is both hostile and dishonest, and a forced verdict is not a fact. The look-back window defaults to 24 hours and shares `DELEGATE_SWEEP_WINDOW_HOURS` with `verdict-sweep.sh`.
+
+## Uninstall
+
+Remove the `Stop` block from `~/.claude/settings.json`. The marker directory (`.verdict-stop-markers/` next to `metrics.jsonl`) and any agent-tagged feedback rows are harmless; delete the directory if you want a clean slate.
