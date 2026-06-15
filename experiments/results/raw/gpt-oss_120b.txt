@@ -1,0 +1,204 @@
+MODEL: gpt-oss:120b
+BACKEND: ollama
+OLLAMA_API: 1
+DATE: 2026-06-15T08:46:41Z
+REPS: 3
+T3_SNAPSHOT: 2026-04-28
+T4_SNAPSHOT: 2026-06-11
+T5_SNAPSHOT: 2026-05-11
+T6_SNAPSHOT: 2026-05-11
+
+===== T1-doc-drift rep 1 =====
+DURATION_SEC: 26
+RUN_STATUS: 0
+OUTPUT:
+CLAIM_A: still-open — No retrospective “How we did” page or related code found in repository.  
+CLAIM_B: already-done — grep finds no defaultProjection template; scripts/populate-projections.ts lacks a dead default.  
+CLAIM_C: already-done — apply-party-positions.ts uses yaml.stringify(data, { lineWidth: 0 }) matching populate-projections.ts.  
+CLAIM_D: already-done — src/lib/data.ts applies shallow Object.freeze uniformly across six cached loaders; no deep‑freeze present.
+
+===== T2-party-config rep 1 =====
+DURATION_SEC: 15
+RUN_STATUS: 0
+OUTPUT:
+CLEAN
+
+===== T3-merge-patterns rep 1 =====
+DURATION_SEC: 16
+RUN_STATUS: 0
+OUTPUT:
+1. Possible duplicate `listPosition` values could still exist after the IGV branding normalisation, which would break candidate ordering.  
+   **CONCERN**: Duplicate `listPosition`s in regional‑candidate data → **FILE/PATTERN**: `grep -R "^ *listPosition:" data/regional-candidates/*.yaml | sort | uniq -d`
+
+2. The move of candidate‑display constants to the library may leave page components still importing the old file, causing runtime errors.  
+   **CONCERN**: Stale imports of the removed candidate‑display constant module → **FILE/PATTERN**: `grep -R "candidate-display" src/pages/candidates | wc -l` (should be 0)
+
+3. After centralising party colours in `src/lib/party-config.ts`, hard‑coded hex colour strings might remain in chart components, leading to inconsistent UI.  
+   **CONCERN**: Hard‑coded party colour literals still present → **FILE/PATTERN**: `grep -RE "#[0-9A-Fa-f]{6}" src/components/*.tsx`
+
+4. The RSS‑feed refresh edits to `data/news.json` could have introduced a syntax error (e.g., trailing commas) that would break JSON parsing on the site.  
+   **CONCERN**: Invalid JSON in the news data file → **FILE/PATTERN**: `cat data/news.json | python -m json.tool` (should exit cleanly).
+
+===== T4-commit-message rep 1 =====
+DURATION_SEC: 14
+RUN_STATUS: 0
+OUTPUT:
+feat: add T4 commit-message fixture and scoring script
+
+The change introduces the T4 commit‑message fixture and accompanying scoring script. The fixture records the literal substituted recipe prompt for any installed Ollama model, while score‑t4.sh runs six deterministic structural checks that mirror the hardened anti‑padding directives from Phase 7 of the roadmap.
+
+The experiment runner is extended with a --t4-snapshot DATE option so each fixture version can be tied to the existing T3 snapshot convention. This addition makes the commit‑message recipe measurable across models and enables direct comparison of pass rates against historical calibration data.
+
+===== T5-json-shape rep 1 =====
+DURATION_SEC: 8
+RUN_STATUS: 0
+OUTPUT:
+{
+  "owner": "ismael",
+  "items": [
+    { "task": "update the data-retention policy doc to reflect the new 90-day window.", "due": "2026-04-22" },
+    { "task": "draft the SOC2 type-II evidence pack for the auth service.", "due": "2026-05-08" },
+    { "task": "review the privacy impact assessment for the new search index.", "due": "2026-04-30" }
+  ]
+}
+
+===== T6-regex-generation rep 1 =====
+DURATION_SEC: 5
+RUN_STATUS: 0
+OUTPUT:
+^\d{5}(?:-\d{4})?$
+
+===== T1-doc-drift rep 2 =====
+DURATION_SEC: 12
+RUN_STATUS: 0
+OUTPUT:
+CLAIM_A: still-open — No "How we did" retrospective page or related code found in the repository.  
+CLAIM_B: already-done — No defaultProjection template present; scripts use explicit overrides only.  
+CLAIM_C: already-done — apply-party-positions.ts uses yaml.stringify with lineWidth:0 matching other scripts.  
+CLAIM_D: already-done — Data loaders employ shallow Object.freeze consistently across six cached loaders.
+
+===== T2-party-config rep 2 =====
+DURATION_SEC: 14
+RUN_STATUS: 0
+OUTPUT:
+CLEAN
+
+===== T3-merge-patterns rep 2 =====
+DURATION_SEC: 17
+RUN_STATUS: 0
+OUTPUT:
+**1. ROADMAP may still contain placeholder text after the audit update**  
+`grep -n "TODO\|FIXME" docs/ROADMAP.md`
+
+**2. Region‑card count logic in the homepage might be out of sync with the destination page**  
+`grep -R "regionCardCount\|regionCards" src/pages/index.astro src/pages/*`
+
+**3. Some regional candidate YAMLs could still have non‑numeric or out‑of‑range `listPosition` values after the IGV normalisation**  
+`grep -R "^ *listPosition:" data/regional-candidates/*.yaml | grep -vE "^[[:space:]]*listPosition:[[:space:]]*[0-9]+$"`
+
+**4. New centralised colour map may be missing entries for parties referenced in charts, leading to undefined colours at runtime**  
+```bash
+# Find all party keys used in the code
+grep -Rho "partyConfig\[['\"]\([^'\"]*\)['\"]\]" src/components | cut -d'"' -f2 | sort -u > /tmp/used.txt
+# List keys defined in the config
+jq -r 'keys[]' src/lib/party-config.ts > /tmp/defined.txt
+# Show any used but not defined
+comm -23 /tmp/used.txt /tmp/defined.txt
+```
+
+===== T4-commit-message rep 2 =====
+DURATION_SEC: 14
+RUN_STATUS: 0
+OUTPUT:
+feat: add T4 commit-message fixture and scoring script
+
+Phase 7 of the roadmap introduces a dedicated commit‑message fixture to the empirical‑accuracy framework. The previous hardening of the recipe lacked any per‑model measurement, so this addition provides a concrete test case that can be tracked across model snapshots.
+
+The new T4 fixture (experiments/fixtures/task-4-commit-message-2026-05-11.txt) is exercised by experiments/score-t4.sh, which runs six deterministic structural checks on each model’s output. A corresponding runner flag (--t4-snapshot DATE) and test suite ensure the fixture is versioned and validated consistently. The runner now supports --t4-snapshot to version fixtures.
+
+===== T5-json-shape rep 2 =====
+DURATION_SEC: 7
+RUN_STATUS: 0
+OUTPUT:
+{
+  "owner": "ismael",
+  "items": [
+    { "task": "update the data-retention policy doc to reflect the new 90-day window.", "due": "2026-04-22" },
+    { "task": "draft the SOC2 type-II evidence pack for the auth service.", "due": "2026-05-08" },
+    { "task": "review the privacy impact assessment for the new search index.", "due": "2026-04-30" }
+  ]
+}
+
+===== T6-regex-generation rep 2 =====
+DURATION_SEC: 5
+RUN_STATUS: 0
+OUTPUT:
+^\d{5}(?:-\d{4})?$
+
+===== T1-doc-drift rep 3 =====
+DURATION_SEC: 11
+RUN_STATUS: 0
+OUTPUT:
+CLAIM_A: still-open — No "How we did" retrospective page or related code found in the repository.  
+CLAIM_B: already-done — No defaultProjection template present; scripts use explicit overrides only.  
+CLAIM_C: already-done — apply-party-positions.ts uses yaml.stringify with lineWidth:0 matching other scripts.  
+CLAIM_D: already-done — Data loaders employ shallow Object.freeze consistently across six cached loaders.
+
+===== T2-party-config rep 3 =====
+DURATION_SEC: 13
+RUN_STATUS: 0
+OUTPUT:
+CLEAN
+
+===== T3-merge-patterns rep 3 =====
+DURATION_SEC: 16
+RUN_STATUS: 0
+OUTPUT:
+**1. ROADMAP may still contain placeholder text after the audit update**  
+`grep -n "TODO\|FIXME" docs/ROADMAP.md`
+
+**2. Region‑card count logic in the homepage might be out of sync with the destination page**  
+`grep -R "regionCardCount\|regionCards" src/pages/index.astro src/pages/*`
+
+**3. Some regional candidate YAMLs could still have non‑numeric or out‑of‑range `listPosition` values after the IGV normalisation**  
+`grep -R "^ *listPosition:" data/regional-candidates/*.yaml | grep -vE "^[[:space:]]*listPosition:[[:space:]]*[0-9]+$"`
+
+**4. New centralised colour map may be missing entries for parties referenced in charts, leading to undefined colours at runtime**  
+```bash
+# Find all party keys used in the code
+grep -Rho "partyConfig\[['\"]\([^'\"]*\)['\"]\]" src/components | cut -d'"' -f2 | sort -u > /tmp/used.txt
+# List keys defined in the config
+jq -r 'keys[]' src/lib/party-config.ts > /tmp/defined.txt
+# Show any used but not defined
+comm -23 /tmp/used.txt /tmp/defined.txt
+```
+
+===== T4-commit-message rep 3 =====
+DURATION_SEC: 14
+RUN_STATUS: 0
+OUTPUT:
+feat: add T4 commit-message fixture and scoring script
+
+Phase 7 of the roadmap introduces a dedicated commit‑message fixture to the empirical‑accuracy framework. The previous hardening of the recipe lacked any per‑model measurement, so this addition provides a concrete test case that can be tracked across model snapshots.
+
+The new T4 fixture (experiments/fixtures/task-4-commit-message-2026-05-11.txt) is exercised by experiments/score-t4.sh, which runs six deterministic structural checks on each model’s output. A corresponding runner flag (--t4-snapshot DATE) and test suite ensure the fixture is versioned and validated consistently. The runner now supports --t4-snapshot to version fixtures.
+
+===== T5-json-shape rep 3 =====
+DURATION_SEC: 7
+RUN_STATUS: 0
+OUTPUT:
+{
+  "owner": "ismael",
+  "items": [
+    { "task": "update the data-retention policy doc to reflect the new 90-day window.", "due": "2026-04-22" },
+    { "task": "draft the SOC2 type-II evidence pack for the auth service.", "due": "2026-05-08" },
+    { "task": "review the privacy impact assessment for the new search index.", "due": "2026-04-30" }
+  ]
+}
+
+===== T6-regex-generation rep 3 =====
+DURATION_SEC: 5
+RUN_STATUS: 0
+OUTPUT:
+^\d{5}(?:-\d{4})?$
+
