@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Unit tests for experiments/score-t4.sh.
 # Builds synthetic raw output files (no fixture lookup needed — T4 scoring
-# is structural, not citation-based) and asserts each of the six checks
+# is structural, not citation-based) and asserts each of the seven checks
 # fires as documented.
 
 set -u
@@ -70,7 +70,7 @@ Phase 7 of the roadmap asked for a commit-message fixture and this delivers it. 
 Each check came from a real past MISS so model pass rate maps directly to the recipe's calibration history."
 out=$(run_score "$raw")
 assert_contains "T4_SUMMARY:" "$out" "test 1: emits T4_SUMMARY line"
-assert_contains "rep 1: 6/6" "$out" "test 1: clean commit scores 6/6"
+assert_contains "rep 1: 7/7" "$out" "test 1: clean commit scores 7/7"
 assert_contains "mean=1.0000" "$out" "test 1: mean is 1.0"
 rm -rf "$sandbox"
 
@@ -84,7 +84,7 @@ Short flush-left body paragraph that does not pad.
 
 Another short paragraph."
 out=$(run_score "$raw")
-assert_contains "rep 1: 5/6" "$out" "test 2: subject too long → 5/6"
+assert_contains "rep 1: 6/7" "$out" "test 2: subject too long → 6/7"
 assert_contains "fails=SUBJECT_LEN" "$out" "test 2: fails list names SUBJECT_LEN"
 rm -rf "$sandbox"
 
@@ -97,7 +97,7 @@ Body paragraph that is short and clean.
 
 Another body paragraph."
 out=$(run_score "$raw")
-assert_contains "rep 1: 5/6" "$out" "test 3: no type prefix → 5/6"
+assert_contains "rep 1: 6/7" "$out" "test 3: no type prefix → 6/7"
 assert_contains "SUBJECT_TYPE" "$out" "test 3: fails list names SUBJECT_TYPE"
 rm -rf "$sandbox"
 
@@ -110,7 +110,7 @@ Short body paragraph one.
 
 Short body paragraph two."
 out=$(run_score "$raw")
-assert_contains "rep 1: 5/6" "$out" "test 4: (#NN) suffix → 5/6"
+assert_contains "rep 1: 6/7" "$out" "test 4: (#NN) suffix → 6/7"
 assert_contains "SUBJECT_NO_PR" "$out" "test 4: fails list names SUBJECT_NO_PR"
 rm -rf "$sandbox"
 
@@ -123,7 +123,7 @@ build_raw "$raw" "feat: add T4 commit-message fixture and scorer
 
     Another indented paragraph."
 out=$(run_score "$raw")
-assert_contains "rep 1: 5/6" "$out" "test 5: indented body → 5/6"
+assert_contains "rep 1: 6/7" "$out" "test 5: indented body → 6/7"
 assert_contains "BODY_FLUSH_LEFT" "$out" "test 5: fails list names BODY_FLUSH_LEFT"
 rm -rf "$sandbox"
 
@@ -136,7 +136,7 @@ build_raw "$raw" "feat: add T4 commit-message fixture and scorer
 - another bullet
 - a third bullet"
 out=$(run_score "$raw")
-assert_contains "rep 1: 5/6" "$out" "test 6: bullet body → 5/6"
+assert_contains "rep 1: 6/7" "$out" "test 6: bullet body → 6/7"
 assert_contains "BODY_NO_BULLETS" "$out" "test 6: fails list names BODY_NO_BULLETS"
 rm -rf "$sandbox"
 
@@ -147,34 +147,50 @@ build_raw "$raw" "feat: add T4 commit-message fixture and scorer
 
 The commit-message recipe lacked a guard against participial-padding tails, ensuring that every recurring miss has a clear path."
 out=$(run_score "$raw")
-assert_contains "rep 1: 5/6" "$out" "test 7: padding tail → 5/6"
+assert_contains "rep 1: 6/7" "$out" "test 7: padding tail → 6/7"
 assert_contains "BODY_NO_PADDING" "$out" "test 7: fails list names BODY_NO_PADDING"
 rm -rf "$sandbox"
 
 # --- Test 8: multiple failures stack ---
 # Subject: no conventional prefix + >72 chars + ends with (#99) → fails 3 subject checks.
-# Body: indented + bullet marker + comma-led "ensuring" padding → fails 3 body checks.
+# Body: indented + bullet marker + comma-led "ensuring" padding → fails 3 body-quality
+# checks; the body IS present, so BODY_PRESENT passes → 1/7.
 sandbox=$(mktemp -d)
 raw="$sandbox/raw.txt"
 build_raw "$raw" "no conventional prefix and a deliberately very long subject that exceeds the seventy-two char budget by a margin (#99)
 
     - indented bulleted body line, ensuring that nothing here passes"
 out=$(run_score "$raw")
-assert_contains "rep 1: 0/6" "$out" "test 8: every check fails → 0/6"
+assert_contains "rep 1: 1/7" "$out" "test 8: subject + body-quality checks fail, body present → 1/7"
 assert_contains "SUBJECT_LEN" "$out" "test 8: lists SUBJECT_LEN"
 assert_contains "SUBJECT_TYPE" "$out" "test 8: lists SUBJECT_TYPE"
 assert_contains "SUBJECT_NO_PR" "$out" "test 8: lists SUBJECT_NO_PR"
 assert_contains "BODY_FLUSH_LEFT" "$out" "test 8: lists BODY_FLUSH_LEFT"
 assert_contains "BODY_NO_BULLETS" "$out" "test 8: lists BODY_NO_BULLETS"
 assert_contains "BODY_NO_PADDING" "$out" "test 8: lists BODY_NO_PADDING"
+assert_not_contains "BODY_PRESENT" "$out" "test 8: body present (bullet line) → BODY_PRESENT not flagged"
 rm -rf "$sandbox"
 
-# --- Test 9: empty output fails everything (0/6) ---
+# --- Test 9: empty output fails everything (0/7) ---
 sandbox=$(mktemp -d)
 raw="$sandbox/raw.txt"
 build_raw "$raw" ""
 out=$(run_score "$raw")
-assert_contains "rep 1: 0/6" "$out" "test 9: empty output → 0/6"
+assert_contains "rep 1: 0/7" "$out" "test 9: empty output → 0/7"
+rm -rf "$sandbox"
+
+# --- Test 9b: subject-only commit (dropped body) fails BODY_PRESENT only ---
+# The body-drop the warn-only body_required check (ADR 0014) catches in
+# production. A valid subject with no body passes the three subject checks
+# and the three BODY_* quality checks (which vacuously pass on an empty body)
+# but fails the new BODY_PRESENT check → 6/7.
+sandbox=$(mktemp -d)
+raw="$sandbox/raw.txt"
+build_raw "$raw" "feat: a valid subject with no body at all"
+out=$(run_score "$raw")
+assert_contains "rep 1: 6/7" "$out" "test 9b: subject-only commit → 6/7"
+assert_contains "BODY_PRESENT" "$out" "test 9b: fails list names BODY_PRESENT"
+assert_not_contains "BODY_FLUSH_LEFT" "$out" "test 9b: body-quality checks vacuously pass on empty body"
 rm -rf "$sandbox"
 
 # --- Test 10: multi-rep aggregation (mean, min, max) ---
@@ -192,10 +208,10 @@ Short body, ensuring that things are clear." \
     - indented bullet body line, ensuring that this is crucial"
 out=$(run_score "$raw")
 assert_contains "reps: 3" "$out" "test 10: three reps detected"
-assert_contains "rep 1: 6/6" "$out" "test 10: rep 1 clean"
-assert_contains "rep 2: 5/6" "$out" "test 10: rep 2 misses padding"
-assert_contains "rep 3: 0/6" "$out" "test 10: rep 3 misses everything"
-assert_contains "min: 0.00" "$out" "test 10: min = 0.00"
+assert_contains "rep 1: 7/7" "$out" "test 10: rep 1 clean"
+assert_contains "rep 2: 6/7" "$out" "test 10: rep 2 misses padding"
+assert_contains "rep 3: 1/7" "$out" "test 10: rep 3 misses all but body-present"
+assert_contains "min: 0.14" "$out" "test 10: min = 0.14 (rep 3 = 1/7)"
 assert_contains "max: 1.00" "$out" "test 10: max = 1.00"
 rm -rf "$sandbox"
 
@@ -252,11 +268,11 @@ build_raw "$raw" "feat: mid-sentence ensuring is not padding
 
 This change is about ensuring data integrity across writes."
 out=$(run_score "$raw")
-assert_contains "rep 1: 6/6" "$out" "test 14c: mid-sentence 'ensuring' without comma is not flagged"
+assert_contains "rep 1: 7/7" "$out" "test 14c: mid-sentence 'ensuring' without comma is not flagged"
 rm -rf "$sandbox"
 
 # --- Test 14d: declarative "This ensures" sentence-starter is caught.
-# Drawn from the PR #86 T4 dogfood that scored 6/6 on the old participial-
+# Drawn from the PR #86 T4 dogfood that scored 7/7 on the old participial-
 # only regex set while still emitting this exact shape.
 sandbox=$(mktemp -d)
 raw="$sandbox/raw.txt"
@@ -289,7 +305,7 @@ build_raw "$raw" "feat: substantive mid-sentence usage stays clean
 
 The contract is that this ensures correct behaviour under concurrent writes by serialising the queue."
 out=$(run_score "$raw")
-assert_contains "rep 1: 6/6" "$out" "test 14f: mid-sentence 'this ensures' is not flagged"
+assert_contains "rep 1: 7/7" "$out" "test 14f: mid-sentence 'this ensures' is not flagged"
 rm -rf "$sandbox"
 
 # --- Test 14f1: declarative pattern fires after non-period sentence
@@ -450,7 +466,7 @@ build_raw "$raw" "feat: short-word coordination list
 
 The schema covers ring, wing, and king geometries used by the calibration suite."
 out=$(run_score "$raw")
-assert_contains "rep 1: 6/6" "$out" "test 14l: short-word coordination list not flagged by generalised matcher"
+assert_contains "rep 1: 7/7" "$out" "test 14l: short-word coordination list not flagged by generalised matcher"
 rm -rf "$sandbox"
 
 # --- Test 14l acknowledged-false-positive: `string` (6 chars, `str` prefix
@@ -476,7 +492,7 @@ build_raw "$raw" "feat: clean
 
 Short body."
 out=$(run_score "$raw")
-assert_contains "T4_SUMMARY: reps=1 total_passed=6 total_checks=6 mean=1.0000" "$out" \
+assert_contains "T4_SUMMARY: reps=1 total_passed=7 total_checks=7 mean=1.0000" "$out" \
   "test 15: T4_SUMMARY shape"
 rm -rf "$sandbox"
 
