@@ -4567,6 +4567,43 @@ if [[ "$out" == *"subject_type' FAILED"* || "$out" == *"{{type}}"* ]]; then
 else
   echo "  PASS  checks: subject_type skipped when optional type omitted"; pass=$((pass+1))
 fi
+# body_required recipe: fail a subject-only output, pass a subject+body.
+cat > "$prompts/bodyreq.md" <<'EOF'
+---
+checks:
+  body_required: true
+---
+# bodyreq
+
+## When to use
+Body-required check test recipe.
+
+## Prompt template
+
+```
+GO
+```
+
+## Calibration notes
+n/a
+EOF
+# 33f. Subject-only output (no body) -> body_required FAILED + checks_failed=1.
+make_mock_curl_think "$tmp" 'feat: a subject with no body'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe bodyreq prose "go" </dev/null 2>&1)
+assert_contains "check 'body_required' FAILED" "$out" "checks: body_required flags a subject-only output"
+assert_contains "checks_failed=1" "$out" "checks: body_required failure rides the delegate-meta line"
+# 33g. Subject + blank line + body -> body_required not flagged.
+make_mock_curl_think "$tmp" 'feat: a subject\n\nthe body explains the change in full'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe bodyreq prose "go" </dev/null 2>&1)
+if [[ "$out" == *"body_required' FAILED"* || "$out" == *"checks_failed="* ]]; then
+  echo "  FAIL  checks: body_required passes when a body is present"; fail=$((fail+1))
+else
+  echo "  PASS  checks: body_required passes when a body is present"; pass=$((pass+1))
+fi
 rm -rf "$tmp" "$metrics"
 
 # --- #277 dir 5: --recipe auto inference -----------------------------------

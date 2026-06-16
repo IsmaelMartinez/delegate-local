@@ -1284,6 +1284,22 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
           fi
         fi
         ;;
+      body_required)
+        # A commit body is required: fail when the model returns a subject-only
+        # message (fewer than 2 non-empty lines). Mirrors the no_padding_tail
+        # boolean gate. Strips carriage returns first so a CRLF blank separator
+        # (a lone \r is non-whitespace to awk and would otherwise count as a
+        # line) is not miscounted, then counts non-empty lines with the NF idiom
+        # so an LF blank separator between subject and body is not counted. The
+        # `+ 0` keeps the count numeric (0) on empty output so the compare can't choke.
+        if [[ "$cval" == "true" ]]; then
+          body_lines=$(printf '%s' "$output" | awk '{ gsub(/\r/, "") } NF { n++ } END { print n + 0 }')
+          if (( body_lines < 2 )); then
+            echo "delegate: check 'body_required' FAILED — output is subject-only ($body_lines non-empty line(s), need >= 2)" >&2
+            checks_failed=$((checks_failed + 1))
+          fi
+        fi
+        ;;
       *)
         echo "delegate: unknown check '$ckey' in recipe '$recipe' — ignored" >&2
         ;;
