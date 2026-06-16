@@ -99,7 +99,7 @@ Score a model's T3 output deterministically (citation-rate against the dated T3 
 bash experiments/score-t3.sh experiments/results/raw/<slug>.txt [--t3-snapshot DATE]
 ```
 
-Score a model's T4 output deterministically (seven structural checks against the commit-message recipe's guards: subject ≤72 chars, conventional-commit type prefix, no `(#NN)` suffix, body flush-left, no bullet markers, no participial-padding tails, body present). Each rep gets `pass=N/7 fails=[...]`; aggregated mean/min/max/stdev plus a machine-parseable `T4_SUMMARY:` line:
+Score a model's T4 output deterministically (seven structural checks against the commit-message recipe's guards: subject ≤72 chars, conventional-commit type prefix, no `(#NN)` suffix, body flush-left, no bullet markers, no participial-padding tails, body present). Each rep gets `rep N: <passed>/7 → <rate>` plus a `fails=<csv>` suffix when any check fails; aggregated mean/min/max/stdev plus a machine-parseable `T4_SUMMARY:` line:
 
 ```bash
 bash experiments/score-t4.sh experiments/results/raw/<slug>.txt

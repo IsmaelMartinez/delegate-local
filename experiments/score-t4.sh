@@ -14,11 +14,11 @@
 #   4. BODY_FLUSH_LEFT — no body line starts with whitespace
 #   5. BODY_NO_BULLETS — no body line starts with -, *, or • (bullet markers)
 #   6. BODY_NO_PADDING — no body sentence ends in a participial-padding tail
-#                        matched by the PADDING_PATTERNS regex below.
+#                        matched by the PADDING_REGEXES array below.
 #   7. BODY_PRESENT    — at least one non-empty body line after the subject
 #                        (fails a subject-only commit, i.e. a dropped body)
 #
-# Per-rep output: rep N: pass=N/7 fails=[check_name,check_name,...]
+# Per-rep output: "rep N: <passed>/7 → <rate>" plus "  fails=<csv>" when any check fails.
 # Aggregate: mean, min, max, stdev across reps + machine-parseable T4_SUMMARY.
 
 set -euo pipefail
@@ -241,8 +241,9 @@ score_one() {
   # Catches the subject-only / body-drop the warn-only body_required check
   # (ADR 0014) flags in production; without it a subject-only commit scored a
   # full pass because the three BODY_* checks above vacuously pass on an empty
-  # body. Strips whitespace so a body of only blank lines counts as absent.
-  if [[ -n "${body//[[:space:]]/}" ]]; then
+  # body. The regex matches any non-whitespace character, so an empty or
+  # blank-only body (the accumulated newlines are whitespace) counts as absent.
+  if [[ "$body" =~ [^[:space:]] ]]; then
     body_present_pass=1
   else
     fails+=("BODY_PRESENT")
