@@ -12,8 +12,9 @@
 #
 # On every Bash call:
 #   1. If the command is NOT a delegatable boundary (commit, PR/MR-create,
-#      release-create, PR review-comment reply, or PR/issue/MR comment reply),
-#      exit 0 immediately — the cheap common path (no jq slurp, no metrics read).
+#      issue-create with an inline body, release-create, PR review-comment reply,
+#      or PR/issue/MR comment reply), exit 0 immediately — the cheap common path
+#      (no jq slurp, no metrics read).
 #   2. Otherwise derive the project (same rule as delegate.sh's metrics rows) and
 #      check metrics.jsonl for a delegate.sh row for THIS project within the last
 #      N minutes. Its presence means the artifact was drafted locally; its
@@ -58,6 +59,13 @@ if grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+commit([[:space:]]|$)' <<<"$cmd" \
 elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+pr[[:space:]]+create' <<<"$cmd" \
    || grep -Eq '(^|[^[:alnum:]_])glab[[:space:]]+mr[[:space:]]+create' <<<"$cmd"; then
   boundary="pr-create"; recipe="pr-description"
+# New issue authored with an inline body (--body / -b / --body-file / -F), but
+# not the interactive editor or the --web form — those have no inline drafting
+# moment, same reasoning as commit --amend.
+elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+issue[[:space:]]+create' <<<"$cmd" \
+   && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[bF]|--body)' <<<"$cmd" \
+   && ! grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*w|--web)([[:space:]]|$)' <<<"$cmd"; then
+  boundary="issue-create"; recipe="github-issue-body"
 elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+release[[:space:]]+create' <<<"$cmd"; then
   boundary="release-create"; recipe="release-note"
 # Inline PR review-comment reply: `gh api .../comments -X POST -f body=...` (the
