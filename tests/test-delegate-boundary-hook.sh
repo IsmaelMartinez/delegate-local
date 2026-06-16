@@ -97,6 +97,32 @@ payload 'gh release create v1.0.0 --notes x' "$tmpcwd" | DELEGATE_METRICS_FILE="
 assert_eq release-create "$(jq -r .boundary <<<"$(last_row)")" "release-create: boundary"
 assert_eq release-note "$(jq -r .suggested_recipe <<<"$(last_row)")" "release-create: recipe"
 
+# 8h. gh issue create WITH an inline body -> issue-create / github-issue-body.
+: > "$METRICS"
+out=$(payload 'gh issue create --title t --body "long body here"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq issue-create "$(jq -r .boundary <<<"$(last_row)")" "gh issue create --body: boundary"
+assert_eq github-issue-body "$(jq -r .suggested_recipe <<<"$(last_row)")" "gh issue create --body: recipe"
+assert_contains 'github-issue-body' "$out" "gh issue create --body: nudge names recipe"
+
+# 8h-bis. The --body-file / -F form also authors a body inline -> boundary.
+: > "$METRICS"
+payload 'gh issue create -t t -F body.md' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq issue-create "$(jq -r .boundary <<<"$(last_row)")" "gh issue create -F: boundary"
+
+# 8h-ter. gh issue create --web (browser form) is NOT a boundary: no inline body.
+: > "$METRICS"
+ec=0
+out=$(payload 'gh issue create --web' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK") || ec=$?
+assert_eq 0 "$ec" "gh issue create --web: exit 0"
+assert_eq "" "$out" "gh issue create --web: no nudge"
+assert_eq 0 "$(nrows)" "gh issue create --web: no row (no inline body)"
+
+# 8h-quater. gh issue create with no body flag (interactive editor) is NOT a boundary.
+: > "$METRICS"
+out=$(payload 'gh issue create --title t' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq "" "$out" "gh issue create no-body: no nudge"
+assert_eq 0 "$(nrows)" "gh issue create no-body: no row (interactive editor, no inline body)"
+
 # 8c. gh pr comment -> comment-reply / maintainer-reply recipe.
 : > "$METRICS"
 out=$(payload 'gh pr comment 12 --body "Applied in abc123"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
