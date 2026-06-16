@@ -7,6 +7,7 @@ inputs:
 checks:
   subject_max: {{flavor_commit_subject_max}}
   no_padding_tail: true
+  body_required: true
   subject_type: {{type}}
 ---
 # commit-message
@@ -34,7 +35,7 @@ Draft a git commit message from the staged diff and recent-commit anchors below.
 
 Draft a git commit message in EXACTLY the same shape as these recent examples.
 Subject ≤ {{flavor_commit_subject_max}} chars starting with '<TYPE>:' ({{flavor_commit_types}}).
-Then a blank line, then 1-2 short flowing-prose paragraphs (NO bullet lists, NO indentation).
+Then a blank line, then 1-2 short flowing-prose paragraphs (NO bullet lists, NO indentation). A body is MANDATORY even if the examples below are subject-only; never copy a subject-only shape. A subject with no body is REJECTED.
 
 Subject length — first match wins, non-negotiable:
 Count the characters in your subject line including the '<TYPE>:' prefix.
@@ -119,6 +120,7 @@ The trailing prompt arg is the reinforcement instruction; the recipe template ca
 - "EXACTLY the same shape" — generic "match the style" produces bullets.
 - "Subject ≤ 72 chars starting with '<TYPE>:'" — without this, the model inflates subjects past 100 chars or invents non-conventional prefixes.
 - "NO bullet lists, NO indentation" — required because `git log --pretty=fuller` outputs bodies indented 4 spaces; the model copies the indentation literally if not told otherwise.
+- "A body is MANDATORY even if the examples below are subject-only … never copy a subject-only shape" — addresses a body-drop cluster observed 2026-06-12 / 06-13 (5 of 17 `commit-message` calls returned a subject-only message) where bodyless `{{recent_commits}}` anchors (from `git log --oneline` or squash-merged history) led the model to copy the missing-body shape. Paired with the warn-only `body_required` check (ADR 0014) as the deterministic backstop.
 - "Subjects ending in (#NN) are REJECTED ... non-negotiable" with a Wrong/Correct contrastive
   example — the bare negation `Do NOT append any (#NN)` did not hold across sessions: the
   model pattern-matched on the `(#NN)` suffix in every recent-commits anchor and inferred
@@ -160,7 +162,7 @@ The trailing prompt arg is the reinforcement instruction; the recipe template ca
  follow-up work, related issues>
 ```
 
-Verify before recording verdict: subject is ≤ 72 chars and starts with a conventional-commit type, body is flush-left flowing prose with no bullets, no fake `(#NN)` reference, no surrounding meta-prose.
+Verify before recording verdict: subject is ≤ 72 chars and starts with a conventional-commit type, a body is present (a subject-only message is rejected), body is flush-left flowing prose with no bullets, no fake `(#NN)` reference, no surrounding meta-prose.
 
 ## Calibration notes
 
@@ -190,7 +192,7 @@ The fix mirrors the SKILL.md guidance: an explicit "Stop each paragraph after th
 
 Side observation worth recording: re-running Ollama (`qwen3.6:35b-a3b-q8_0`, same 3 reps) against the same new fixture dropped from 18/18 on the 2026-05-11 fixture to 15/18, all three reps failing SUBJECT_LEN with a 77-char subject (`feat: add T4 commit-message fixture and score-t4.sh for empirical calibration`). The new directive paragraph is ~150 chars longer than the old one; the extra preamble appears to nudge Ollama toward a longer subject. Same MISS shape PR #94 documented. The recipe's existing 2026-05-11 calibration entry already notes the next step if SUBJECT_LEN recurs: promote the length reminder from the invocation example's trailing prompt into a directive inside the template body, with a v5/v7 Wrong/Correct one-shot. Not bundling that promotion into this PR — it's a separate calibration question with its own dogfooding cycle.
 
-Load-bearing layout finding (added 2026-05-13 after PR #119 review): the line break inside `"This closes the gap in X"` (currently split across lines 36-37 in this file's `## Prompt template` section) is empirically load-bearing. gemini-code-assist's PR #119 review reasonably suggested keeping the quoted string on one line to avoid potential literal-newline reproduction. Tested in dogfood: removing the line break made MLX (`mlx-community/Qwen3.6-35B-A3B-8bit`, 3 reps) regress from 18/18 to 12/18, with all three reps hitting both SUBJECT_LEN (77-char subject) AND BODY_NO_PADDING — the latter via a second paragraph ending `, closing the gap between asserted hardening and measured accuracy.`, the exact failure shape the directive paragraph was supposed to prevent. Restoring the line break restored 18/18. The current layout stays. Speculative explanation: the line-break-mid-quote anchors the model's attention on the rule by interrupting fluent reading of the surrounding examples; removing it lets the eye skim past and the rule weight drops. Don't reflow this paragraph for readability without a fresh empirical re-measurement.
+Load-bearing layout finding (added 2026-05-13 after PR #119 review): the line break inside the `This closes the gap …` Wrong/Correct one-shot in this file's `## Prompt template` section is empirically load-bearing. gemini-code-assist's PR #119 review reasonably suggested keeping the quoted string on one line to avoid potential literal-newline reproduction. Tested in dogfood: removing the line break made MLX (`mlx-community/Qwen3.6-35B-A3B-8bit`, 3 reps) regress from 18/18 to 12/18, with all three reps hitting both SUBJECT_LEN (77-char subject) AND BODY_NO_PADDING — the latter via a second paragraph ending `, closing the gap between asserted hardening and measured accuracy.`, the exact failure shape the directive paragraph was supposed to prevent. Restoring the line break restored 18/18. The current layout stays. Speculative explanation: the line-break-mid-quote anchors the model's attention on the rule by interrupting fluent reading of the surrounding examples; removing it lets the eye skim past and the rule weight drops. Don't reflow this paragraph for readability without a fresh empirical re-measurement.
 
 ### 2026-05-12 — finite-verb closes-the-gap form caught by T4 in MLX baseline
 
@@ -313,3 +315,13 @@ The fix adds a one-line SCOPE directive with a v5/v7 Wrong/Correct one-shot afte
 The flavor split's shipped default for `{{flavor_commit_types}}` was still the maintainer's curated subset (`feat, fix, ci, docs, chore, refactor, test`), which contradicted ADR 0013's "maintainer becomes just another profile" framing — a new adopter inherited the maintainer's taste as the default. The flip replaces it with the `@commitlint/config-conventional` standard enum (`feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert`); the subject ceiling stays 72, which already is the git convention. The maintainer's own values (82-char P90, `feat, docs, chore, fix, experiment, ci`) move into their per-user `profile.sh` via `scripts/onboard.sh`, exactly like any other user's.
 
 The risk profile was the documented "longer preamble nudges the subject longer" trade-off (2026-05-13, 2026-06-08 entries): the standard list is ~30 chars longer in the type allowlist line. Measured twice, both clean. A pre-flip A/B spike (same 2026-06-08 anchors, only the type list swapped, 3 reps each, MLX `Qwen3.6-35B-A3B-8bit`, temperature 0) scored control 15/18 and treatment 15/18 with identical per-rep failures. The formal re-measurement against the regenerated `task-4-commit-message-2026-06-11.txt` fixture (runner default bumped in lock-step) confirmed 15/18, stdev 0 — SUBJECT_LEN passing on all reps, the only residual being the model-independent BODY_NO_PADDING ceiling (ADR 0014, warn-only detection). The scorer's `CONVENTIONAL_TYPES` allowlist already contained all eleven standard types, so no scorer change ships with this flip.
+
+### 2026-06-16 — mandatory-body directive + `body_required` check after the subject-only body-drop cluster
+
+A review of two days of metrics (06-12 / 06-13) found 5 of 17 `commit-message` calls returning a subject-only message (54-81 chars, no body) while the other 12 returned a full subject plus body — all on the same MLX model at temperature 0. Because identical input is deterministic at temperature 0, two ~5000-char prompts producing 450 vs 81 chars means the driver was the input, not the backend: when the `{{recent_commits}}` anchor is itself subject-only — `git log --oneline` strips bodies, and squash-merged history often carries bodyless commits — the template's "EXACTLY the same shape as these recent examples" instructs the model to copy the missing-body shape. The memory note `feedback_delegate_commit_message_use_recipe_auto.md` flags the same input trap; the fix here makes the recipe robust to it rather than relying on the caller always passing full-bodied anchors.
+
+The fix is two-layered, matching the recipe's belt-and-braces pattern. The template body line now mandates the body ("A body is MANDATORY even if the examples below are subject-only; never copy a subject-only shape. A subject with no body is REJECTED."), carving out an explicit exception to the "EXACTLY the same shape as these recent examples" instruction. The deterministic backstop is a new warn-only `body_required: true` check (ADR 0014): `delegate.sh` adds to `checks_failed` when the output has fewer than two non-empty lines, so a body-drop can no longer slip past unnoticed.
+
+The directive was kept terse to respect the documented "longer preamble nudges the subject longer" SUBJECT_LEN trade-off (2026-05-13 / 2026-06-08 / 2026-06-11 entries), and that gate was measured rather than deferred. An old-vs-new A/B against the 2026-06-11 fixture anchors on `mlx-community/Qwen3.6-35B-A3B-8bit` (prose tier, temperature 0) produced a byte-identical 51-char subject and an identical 5/6 T4 score under both templates — the lone residual is the pre-existing BODY_NO_PADDING ceiling, present on both — so the directive adds zero SUBJECT_LEN or padding regression and matches the 2026-06-11 15/18 baseline. A subject-only-anchor dogfood confirmed the directive's intent: handed bodyless anchors, the new recipe emitted a full body and `body_required` passed; the same synthetic anchors did not reproduce a drop on the old recipe, consistent with the drop being input-dependent (~30% in the production cluster), so the deterministic `body_required` check — not the directive — is the load-bearing guarantee.
+
+One known gap is recorded rather than fixed here: `experiments/score-t4.sh` still scores a subject-only commit 6/6, because each of its three BODY_* checks is guarded by a non-empty body and the only all-fail short-circuit is an empty subject. So the T4 scorer does not yet penalise a body-drop. Closing that is a flagged follow-up kept out of this change because adding a body-present check changes the /6 denominator and ripples through `tests/test-score-t4.sh` and a T4 baseline re-run — a separate calibration decision. The production lever (the warn-only `body_required` check) is what actually catches the drop at delegation time. A related caveat: because the check is purely structural, it also emits a (dismissable, warn-only) FAILED line on a legitimately trivial subject-only commit — a one-line change whose WHY needs no paragraph; there the stderr line is expected and ignorable rather than a signal to act on.
