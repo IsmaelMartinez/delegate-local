@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Mechanical T4 scoring — six deterministic structural checks against the
+# Mechanical T4 scoring — seven deterministic structural checks against the
 # commit-message recipe's guards. Each check came from a real past MISS
 # observed in this project's sessions, so per-rep pass rate is directly
 # comparable to the recipe's empirical calibration history.
 #
 # Usage: score-t4.sh <raw-output-file>
 #
-# Scoring rubric (each PASS = 1, each FAIL = 0; per-rep score = passed / 6):
+# Scoring rubric (each PASS = 1, each FAIL = 0; per-rep score = passed / 7):
 #   1. SUBJECT_LEN     — first non-empty line ≤ 72 chars
 #   2. SUBJECT_TYPE    — first non-empty line matches
 #                        ^(feat|fix|chore|docs|ci|refactor|test|perf|style|build|revert):
@@ -14,9 +14,11 @@
 #   4. BODY_FLUSH_LEFT — no body line starts with whitespace
 #   5. BODY_NO_BULLETS — no body line starts with -, *, or • (bullet markers)
 #   6. BODY_NO_PADDING — no body sentence ends in a participial-padding tail
-#                        matched by the PADDING_PATTERNS regex below.
+#                        matched by the PADDING_REGEXES array below.
+#   7. BODY_PRESENT    — at least one non-empty body line after the subject
+#                        (fails a subject-only commit, i.e. a dropped body)
 #
-# Per-rep output: rep N: pass=N/6 fails=[check_name,check_name,...]
+# Per-rep output: "rep N: <passed>/7 → <rate>" plus "  fails=<csv>" when any check fails.
 # Aggregate: mean, min, max, stdev across reps + machine-parseable T4_SUMMARY.
 
 set -euo pipefail
@@ -141,6 +143,7 @@ score_one() {
   local body_flush_left_pass=1
   local body_no_bullets_pass=1
   local body_no_padding_pass=1
+  local body_present_pass=0
   local fails=()
 
   # Subject = first non-empty line. Body = everything after the first blank
@@ -164,9 +167,9 @@ score_one() {
     body+="$line"$'\n'
   done < "$rep_file"
 
-  # Empty output → all six checks fail.
+  # Empty output → all seven checks fail.
   if [[ -z "$subject" ]]; then
-    echo "0/6 SUBJECT_LEN,SUBJECT_TYPE,SUBJECT_NO_PR,BODY_FLUSH_LEFT,BODY_NO_BULLETS,BODY_NO_PADDING"
+    echo "0/7 SUBJECT_LEN,SUBJECT_TYPE,SUBJECT_NO_PR,BODY_FLUSH_LEFT,BODY_NO_BULLETS,BODY_NO_PADDING,BODY_PRESENT"
     return
   fi
 
@@ -234,12 +237,24 @@ score_one() {
   fi
   (( body_no_padding_pass == 0 )) && fails+=("BODY_NO_PADDING")
 
-  local passed=$((subject_len_pass + subject_type_pass + subject_no_pr_pass + body_flush_left_pass + body_no_bullets_pass + body_no_padding_pass))
+  # Check 7: a body is present — at least one non-empty line after the subject.
+  # Catches the subject-only / body-drop the warn-only body_required check
+  # (ADR 0014) flags in production; without it a subject-only commit scored a
+  # full pass because the three BODY_* checks above vacuously pass on an empty
+  # body. The regex matches any non-whitespace character, so an empty or
+  # blank-only body (the accumulated newlines are whitespace) counts as absent.
+  if [[ "$body" =~ [^[:space:]] ]]; then
+    body_present_pass=1
+  else
+    fails+=("BODY_PRESENT")
+  fi
+
+  local passed=$((subject_len_pass + subject_type_pass + subject_no_pr_pass + body_flush_left_pass + body_no_bullets_pass + body_no_padding_pass + body_present_pass))
   local fail_csv=""
   if (( ${#fails[@]} > 0 )); then
     fail_csv=$(IFS=,; echo "${fails[*]}")
   fi
-  echo "$passed/6 $fail_csv"
+  echo "$passed/7 $fail_csv"
 }
 
 # Aggregate across reps.
@@ -255,13 +270,13 @@ for (( i=1; i<=n_reps; i++ )); do
   result=$(score_one "$rep_file")
   passed="${result%% *}"
   fail_csv="${result#* }"
-  # passed is like "5/6"
+  # passed is like "5/7"
   p="${passed%%/*}"
   total_passed=$((total_passed + p))
-  total_checks=$((total_checks + 6))
+  total_checks=$((total_checks + 7))
   per_rep_passed[i]=$p
   per_rep_fails[i]="$fail_csv"
-  scores+=( "$((p * SCORE_SCALE / 6))" )
+  scores+=( "$((p * SCORE_SCALE / 7))" )
 done
 
 # Mean.
@@ -294,9 +309,9 @@ for (( i=1; i<=n_reps; i++ )); do
   p=${per_rep_passed[i]}
   f=${per_rep_fails[i]}
   if [[ -z "$f" ]]; then
-    printf "    rep %d: %d/6 → %0.2f\n" "$i" "$p" "$(perl -e "printf '%f', $p / 6")"
+    printf "    rep %d: %d/7 → %0.2f\n" "$i" "$p" "$(perl -e "printf '%f', $p / 7")"
   else
-    printf "    rep %d: %d/6 → %0.2f  fails=%s\n" "$i" "$p" "$(perl -e "printf '%f', $p / 6")" "$f"
+    printf "    rep %d: %d/7 → %0.2f  fails=%s\n" "$i" "$p" "$(perl -e "printf '%f', $p / 7")" "$f"
   fi
 done
 printf "  totals: %d passed / %d total across all reps\n" "$total_passed" "$total_checks"
