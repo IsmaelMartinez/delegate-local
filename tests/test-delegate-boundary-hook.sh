@@ -108,14 +108,28 @@ assert_contains 'github-issue-body' "$out" "gh issue create --body: nudge names 
 : > "$METRICS"
 payload 'gh issue create -t t -F body.md' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq issue-create "$(jq -r .boundary <<<"$(last_row)")" "gh issue create -F: boundary"
+assert_eq github-issue-body "$(jq -r .suggested_recipe <<<"$(last_row)")" "gh issue create -F: recipe"
 
-# 8h-ter. gh issue create --web (browser form) is NOT a boundary: no inline body.
+# 8h-ter. gh issue create --web / -w (browser form) is NOT a boundary: no inline body.
 : > "$METRICS"
 ec=0
 out=$(payload 'gh issue create --web' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK") || ec=$?
 assert_eq 0 "$ec" "gh issue create --web: exit 0"
 assert_eq "" "$out" "gh issue create --web: no nudge"
 assert_eq 0 "$(nrows)" "gh issue create --web: no row (no inline body)"
+
+: > "$METRICS"
+ec=0
+out=$(payload 'gh issue create -w' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK") || ec=$?
+assert_eq 0 "$ec" "gh issue create -w: exit 0"
+assert_eq "" "$out" "gh issue create -w: no nudge"
+assert_eq 0 "$(nrows)" "gh issue create -w: no row (no inline body)"
+
+# 8h-ter-bis. A --web SUBSTRING (--webhooks) in a title/body must NOT suppress the
+# boundary — the --web exclusion is anchored to a standalone flag.
+: > "$METRICS"
+payload 'gh issue create --title "Fix --webhooks handling" --body "long body here"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq issue-create "$(jq -r .boundary <<<"$(last_row)")" "gh issue create with --webhooks substring: still a boundary"
 
 # 8h-quater. gh issue create with no body flag (interactive editor) is NOT a boundary.
 : > "$METRICS"

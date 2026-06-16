@@ -64,7 +64,7 @@ elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+pr[[:space:]]+create' <<<"$cmd" \
 # moment, same reasoning as commit --amend.
 elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+issue[[:space:]]+create' <<<"$cmd" \
    && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[bF]|--body)' <<<"$cmd" \
-   && ! grep -Eq -- '--web' <<<"$cmd"; then
+   && ! grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*w|--web)([[:space:]]|$)' <<<"$cmd"; then
   boundary="issue-create"; recipe="github-issue-body"
 elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+release[[:space:]]+create' <<<"$cmd"; then
   boundary="release-create"; recipe="release-note"
