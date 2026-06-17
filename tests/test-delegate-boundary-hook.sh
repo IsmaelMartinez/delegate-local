@@ -79,6 +79,44 @@ jq -nc --arg ts "$nowts" \
 payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "commit/other-project delegation: delegated=false"
 
+# 5a. Recipe-aware MATCH: a recent pr-description delegation captures a pr-create
+# boundary -> delegated=true, no nudge.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"pr-description"}' >> "$METRICS"
+out=$(payload 'gh pr create --title t --body b' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "pr-create/matching pr-description delegation: delegated=true"
+assert_eq "" "$out" "pr-create/matching delegation: no nudge"
+
+# 5b. Recipe-aware MISMATCH (the #312 fix): a recent commit-message delegation does
+# NOT capture a pr-create boundary -> delegated=false, nudge still names pr-description.
+# Before the fix the project-only match marked this true and suppressed the nudge,
+# so the PR body went un-delegated yet counted as captured.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+out=$(payload 'gh pr create --title t --body b' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "pr-create/commit-message delegation: delegated=false (recipe mismatch)"
+assert_contains 'pr-description' "$out" "pr-create/commit-message delegation: nudge still fires for pr-description"
+
+# 5c. Recipe-aware MISMATCH for review replies: a recent commit-message delegation
+# does not capture a pr-review-comment boundary -> delegated=false, nudge names
+# pr-review-reply.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+out=$(payload 'gh api repos/o/r/pulls/12/comments -X POST -f body="x" -F in_reply_to=9' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "pr-review-comment/commit-message delegation: delegated=false (recipe mismatch)"
+assert_contains 'pr-review-reply' "$out" "pr-review-comment/commit-message delegation: nudge names pr-review-reply"
+
+# 5d. A bare (no-recipe) delegation no longer counts for any boundary: the nudge
+# steers toward the calibrated recipe.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose"}' >> "$METRICS"
+payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "commit/bare delegation: delegated=false (no recipe to match)"
+
 # 6. gh pr create -> pr-description recipe.
 : > "$METRICS"
 out=$(payload 'gh pr create --title t --body b' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
