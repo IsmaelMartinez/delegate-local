@@ -95,16 +95,24 @@ else
   project=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
 fi
 
-# --- was there a local delegation for this project, recently? -------------
+# --- was there a local delegation for THIS boundary's recipe, recently? ----
+# Recipe-aware: only a delegation whose recipe matches this boundary's recipe
+# counts as capturing it. Matching on project alone over-counted — a commit-message
+# delegation marked a later `gh pr create` / review-comment reply as captured even
+# though the PR body / reply was authored inline, which both inflated the trigger
+# rate AND suppressed the nudge (delegated:true skips it below), so the artifact the
+# boundary is about was never delegated. A bare (no-recipe) delegation no longer
+# counts for any boundary — the calibrated recipe the nudge names is the path.
 metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
 window_min="${DELEGATE_BOUNDARY_WINDOW_MIN:-10}"
 now_epoch=$(date -u +%s)
 delegated=false
 if [[ -f "$metrics_file" ]]; then
-  recent=$(jq -rs --argjson win "$((window_min * 60))" --arg proj "$project" --argjson now "$now_epoch" '
+  recent=$(jq -rs --argjson win "$((window_min * 60))" --arg proj "$project" --arg recipe "$recipe" --argjson now "$now_epoch" '
     [ .[]
       | select((.source // "delegate") == "delegate")
       | select((.project // "") == $proj)
+      | select((.recipe // "") == $recipe)
       | ((.ts | fromdateiso8601?) // 0)
       | select(. > ($now - $win)) ] | length' "$metrics_file" 2>/dev/null) || recent=0
   [[ "${recent:-0}" -gt 0 ]] && delegated=true

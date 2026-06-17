@@ -414,6 +414,69 @@ esac
 assert_contains "Recipe delegations (calibration signal): n=1  hits=1  misses=0  untracked=0  coverage=100%" "$out" "no-agent: legacy single-tier line shape unchanged"
 rm -f "$noagent"
 
+# 17. --since window: restricts every section to rows at or after the cutoff.
+# Fixture spans three dates; --since 2026-06-15 keeps the last two.
+windowfix=$(mktemp)
+cat > "$windowfix" <<'EOF'
+{"ts":"2026-01-01T08:00:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-06-15T08:00:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":200}
+{"ts":"2026-06-16T08:00:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":300}
+EOF
+# Baseline (no window): all 3 rows.
+out=$(bash "$SCRIPT" --file "$windowfix" 2>&1)
+assert_contains "Total invocations:   3" "$out" "window: no flag -> all 3 rows"
+case "$out" in *"Window:"*) echo "  FAIL  window: no Window line without a flag"; fail=$((fail+1));; *) echo "  PASS  window: no Window line without a flag"; pass=$((pass+1));; esac
+# --since DATE form: 2026-06-15 keeps the 06-15 and 06-16 rows.
+EC=0
+out=$(bash "$SCRIPT" --file "$windowfix" --since 2026-06-15 2>&1) || EC=$?
+assert_eq 0 "$EC" "window: --since exits 0"
+assert_contains "Window:              since 2026-06-15T00:00:00Z  (2 of 3 rows)" "$out" "window: --since header shows cutoff and counts"
+assert_contains "Total invocations:   2" "$out" "window: --since drops the pre-cutoff row"
+assert_contains "Tokens avoided (≈):  500" "$out" "window: --since tokens summed over window only"
+assert_contains "Time range:          2026-06-15T08:00:00Z" "$out" "window: --since first ts is in-window"
+# --since full ISO timestamp form: keeps only the 06-16 row.
+out=$(bash "$SCRIPT" --file "$windowfix" --since 2026-06-16T00:00:00Z 2>&1)
+assert_contains "Total invocations:   1" "$out" "window: --since ISO timestamp keeps one row"
+assert_contains "Tokens avoided (≈):  300" "$out" "window: --since ISO tokens over one row"
+# Window that matches nothing -> exit 0 with an explicit note (not the empty-file note).
+EC=0
+out=$(bash "$SCRIPT" --file "$windowfix" --since 2030-01-01 2>&1) || EC=$?
+assert_eq 0 "$EC" "window: empty window exits 0"
+assert_contains "no rows in window" "$out" "window: empty window gives a windowed note, not 'empty file'"
+rm -f "$windowfix"
+
+# 18. --days window: relative to now. Build one row ~now and one ~100 days old;
+# --days 30 keeps only the recent one.
+now_s=$(date -u +%s)
+recent_ts=$(jq -rn --argjson n "$now_s" '$n | todateiso8601')
+old_ts=$(jq -rn --argjson n "$now_s" '($n - 100 * 86400) | todateiso8601')
+daysfix=$(mktemp)
+jq -nc --arg t "$recent_ts" '{ts:$t, source:"delegate", tier:"prose", model:"q", duration_ms:4000, exit_status:0, estimated_tokens_avoided:100}' >> "$daysfix"
+jq -nc --arg t "$old_ts" '{ts:$t, source:"delegate", tier:"prose", model:"q", duration_ms:4000, exit_status:0, estimated_tokens_avoided:999}' >> "$daysfix"
+EC=0
+out=$(bash "$SCRIPT" --file "$daysfix" --days 30 2>&1) || EC=$?
+assert_eq 0 "$EC" "window: --days exits 0"
+assert_contains "Window:" "$out" "window: --days prints a Window line"
+assert_contains "Total invocations:   1" "$out" "window: --days 30 keeps the recent row only"
+assert_contains "Tokens avoided (≈):  100" "$out" "window: --days 30 excludes the 100-day-old row"
+rm -f "$daysfix"
+
+# 19. Window arg validation: mutually exclusive flags and malformed values exit 2.
+vfix=$(mktemp)
+echo '{"ts":"2026-06-16T08:00:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":1,"exit_status":0,"estimated_tokens_avoided":1}' > "$vfix"
+EC=0; out=$(bash "$SCRIPT" --file "$vfix" --since 2026-06-15 --days 5 2>&1) || EC=$?
+assert_eq 2 "$EC" "window: --since + --days together -> exit 2"
+assert_contains "either --since or --days" "$out" "window: mutual-exclusion message"
+EC=0; out=$(bash "$SCRIPT" --file "$vfix" --since not-a-date 2>&1) || EC=$?
+assert_eq 2 "$EC" "window: invalid --since -> exit 2"
+assert_contains "invalid --since" "$out" "window: invalid --since message"
+EC=0; out=$(bash "$SCRIPT" --file "$vfix" --days abc 2>&1) || EC=$?
+assert_eq 2 "$EC" "window: non-integer --days -> exit 2"
+assert_contains "positive integer" "$out" "window: --days integer message"
+EC=0; out=$(bash "$SCRIPT" --file "$vfix" --days 0 2>&1) || EC=$?
+assert_eq 2 "$EC" "window: --days 0 -> exit 2"
+rm -f "$vfix"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

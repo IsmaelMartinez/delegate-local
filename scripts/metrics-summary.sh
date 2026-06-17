@@ -6,18 +6,24 @@
 # `delegate` for backward compatibility with lines written before the
 # source field landed.
 #
-# Usage:  metrics-summary.sh [--file path]
+# Usage:  metrics-summary.sh [--file path] [--since YYYY-MM-DD|ISO-8601] [--days N]
+#         --since / --days restrict every section to rows at or after the cutoff
+#         (a windowed view of recent activity; --days N == "the last N days").
 # Env:    DELEGATE_METRICS_FILE   override default metrics path
 # Exit:   0 OK, 1 file missing, 2 usage error.
 
 set -uo pipefail
 
 metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
+since=""
+days=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --file) metrics_file="$2"; shift 2 ;;
-    -h|--help) echo "usage: metrics-summary.sh [--file path]"; exit 0 ;;
+    --since) since="$2"; shift 2 ;;
+    --days) days="$2"; shift 2 ;;
+    -h|--help) echo "usage: metrics-summary.sh [--file path] [--since YYYY-MM-DD|ISO] [--days N]"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -30,9 +36,48 @@ fi
 
 command -v jq >/dev/null || { echo "jq not on PATH" >&2; exit 2; }
 
+# Optional time window. --since DATE|ISO or --days N restricts every section
+# below to rows at or after the cutoff. The cutoff is resolved with jq (now /
+# fromdateiso8601) rather than `date` arithmetic so there is no BSD-vs-GNU epoch
+# portability split. Matching rows are filtered once into a temp file; every
+# downstream jq pass then reads that file unchanged.
+display_file="$metrics_file"
+window_active=0
+cutoff_iso=""
+orig_total=0
+if [[ -n "$since" || -n "$days" ]]; then
+  if [[ -n "$since" && -n "$days" ]]; then
+    echo "use either --since or --days, not both" >&2; exit 2
+  fi
+  if [[ -n "$days" ]]; then
+    [[ "$days" =~ ^[0-9]+$ && "$days" -gt 0 ]] \
+      || { echo "--days takes a positive integer, got '$days'" >&2; exit 2; }
+    cutoff_iso=$(jq -rn --argjson d "$days" '(now - ($d * 86400)) | todateiso8601')
+  else
+    case "$since" in
+      [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) cutoff_iso="${since}T00:00:00Z" ;;
+      *) cutoff_iso="$since" ;;
+    esac
+  fi
+  cutoff_epoch=$(jq -rn --arg c "$cutoff_iso" '$c | fromdateiso8601' 2>/dev/null) \
+    || { echo "invalid --since value '$since' (use YYYY-MM-DD or an ISO-8601 timestamp)" >&2; exit 2; }
+  orig_total=$(jq -s 'length' "$metrics_file")
+  filtered=$(mktemp "${TMPDIR:-/tmp}/delegate-metrics.XXXXXX") \
+    || { echo "cannot create temp file for --since window" >&2; exit 2; }
+  trap 'rm -f "$filtered"' EXIT
+  jq -c --argjson cutoff "$cutoff_epoch" \
+    'select(((.ts // "") | fromdateiso8601?) >= $cutoff)' "$metrics_file" > "$filtered"
+  metrics_file="$filtered"
+  window_active=1
+fi
+
 total=$(jq -s 'length' "$metrics_file")
 if (( total == 0 )); then
-  echo "metrics file is empty: $metrics_file"
+  if (( window_active )); then
+    echo "no rows in window (since $cutoff_iso) — $orig_total total rows in $display_file"
+  else
+    echo "metrics file is empty: $metrics_file"
+  fi
   exit 0
 fi
 
@@ -56,7 +101,8 @@ IFS=$'\t' read -r ts_first ts_last total_avoided errors n_delegate n_experiment 
   ] | @tsv' "$metrics_file")
 
 echo "=== delegate-local metrics ==="
-echo "File:                $metrics_file"
+echo "File:                $display_file"
+(( window_active )) && echo "Window:              since $cutoff_iso  ($total of $orig_total rows)"
 echo "Time range:          $ts_first  →  $ts_last"
 echo "Total invocations:   $total  (delegate=$n_delegate, experiment=$n_experiment)"
 echo "Errors (non-zero):   $errors"
