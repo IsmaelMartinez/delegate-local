@@ -20,9 +20,9 @@ days=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --file) metrics_file="$2"; shift 2 ;;
-    --since) since="$2"; shift 2 ;;
-    --days) days="$2"; shift 2 ;;
+    --file) [[ $# -ge 2 ]] || { echo "--file requires a path" >&2; exit 2; }; metrics_file="$2"; shift 2 ;;
+    --since) [[ $# -ge 2 ]] || { echo "--since requires a value (YYYY-MM-DD or ISO-8601)" >&2; exit 2; }; since="$2"; shift 2 ;;
+    --days) [[ $# -ge 2 ]] || { echo "--days requires a positive integer" >&2; exit 2; }; days="$2"; shift 2 ;;
     -h|--help) echo "usage: metrics-summary.sh [--file path] [--since YYYY-MM-DD|ISO] [--days N]"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -52,18 +52,22 @@ if [[ -n "$since" || -n "$days" ]]; then
   if [[ -n "$days" ]]; then
     [[ "$days" =~ ^[0-9]+$ && "$days" -gt 0 ]] \
       || { echo "--days takes a positive integer, got '$days'" >&2; exit 2; }
-    cutoff_iso=$(jq -rn --argjson d "$days" '(now - ($d * 86400)) | todateiso8601')
+    # We generate the cutoff, so its epoch and ISO form come from one jq pass —
+    # no second jq to re-parse a self-generated timestamp. The error path below
+    # is --since-only because a generated cutoff cannot be invalid.
+    IFS=$'\t' read -r cutoff_epoch cutoff_iso \
+      < <(jq -rn --argjson d "$days" '((now | floor) - ($d * 86400)) | [., todateiso8601] | @tsv')
   else
     case "$since" in
       [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) cutoff_iso="${since}T00:00:00Z" ;;
       *) cutoff_iso="$since" ;;
     esac
+    cutoff_epoch=$(jq -rn --arg c "$cutoff_iso" '$c | fromdateiso8601' 2>/dev/null) \
+      || { echo "invalid --since value '$since' (use YYYY-MM-DD or an ISO-8601 timestamp)" >&2; exit 2; }
   fi
-  cutoff_epoch=$(jq -rn --arg c "$cutoff_iso" '$c | fromdateiso8601' 2>/dev/null) \
-    || { echo "invalid --since value '$since' (use YYYY-MM-DD or an ISO-8601 timestamp)" >&2; exit 2; }
   orig_total=$(jq -s 'length' "$metrics_file")
   filtered=$(mktemp "${TMPDIR:-/tmp}/delegate-metrics.XXXXXX") \
-    || { echo "cannot create temp file for --since window" >&2; exit 2; }
+    || { echo "cannot create temp file for the metrics window" >&2; exit 2; }
   trap 'rm -f "$filtered"' EXIT
   jq -c --argjson cutoff "$cutoff_epoch" \
     'select(((.ts // "") | fromdateiso8601?) >= $cutoff)' "$metrics_file" > "$filtered"

@@ -475,6 +475,13 @@ assert_eq 2 "$EC" "window: non-integer --days -> exit 2"
 assert_contains "positive integer" "$out" "window: --days integer message"
 EC=0; out=$(bash "$SCRIPT" --file "$vfix" --days 0 2>&1) || EC=$?
 assert_eq 2 "$EC" "window: --days 0 -> exit 2"
+# Value-taking flags with no following value exit 2 cleanly — under set -u this
+# would otherwise crash with 'unbound variable' (gemini/Copilot HIGH on PR #312).
+for flag in --file --since --days; do
+  EC=0; out=$(bash "$SCRIPT" "$flag" 2>&1) || EC=$?
+  assert_eq 2 "$EC" "window: $flag with no value -> exit 2 (not unbound-var crash)"
+  assert_contains "requires" "$out" "window: $flag missing-value message"
+done
 rm -f "$vfix"
 
 echo
