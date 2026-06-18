@@ -62,6 +62,9 @@ jobs:
       - name: Metrics-summary tests
         run: bash tests/test-metrics-summary.sh
 
+      - name: Quality-report tests
+        run: bash tests/test-quality-report.sh
+
       - name: Delegate-boundary-hook tests
         run: bash tests/test-delegate-boundary-hook.sh
 
