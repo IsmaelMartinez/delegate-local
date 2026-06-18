@@ -1287,7 +1287,10 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
                 }
                 $_ = join("\n", @l);
               ')
-              if [[ "$new_output" != "$output" ]]; then
+              # Require a non-empty result: if perl fails or returns nothing for
+              # any reason, do NOT adopt it (that would silently ship empty
+              # output as an "auto-fix"). A failed strip degrades to warn-only.
+              if [[ -n "$new_output" && "$new_output" != "$output" ]]; then
                 output="$new_output"
                 check_first_line=$(printf '%s' "$output" | awk 'NF { print; exit }')
                 check_last_line=$(printf '%s' "$output" | awk 'NF { l=$0 } END { print l }')
