@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fanout-eval.sh — PROTOTYPE evaluation of fan-out (sampled-ensemble) delegation.
 #
-# Premise (see docs/adr/0018-fan-out-ensemble.md): a single greedy (temperature 0)
+# Premise (see docs/adr/0018-fan-out-ensemble-prototype.md): a single greedy (temperature 0)
 # generation occasionally lands on a bad mode — a hallucinated claim, a padding
 # tail, a malformed field. The MLX server parallelises concurrent requests at
 # ~1.5x the cost of one (measured 2026-06-18), so drawing N *sampled* generations
@@ -68,13 +68,19 @@ trap 'rm -rf "$work"' EXIT
 # identical samples. Diversity therefore has to be injected through the prompt:
 # $4 is an optional per-sample suffix that perturbs the request enough to move
 # the deterministic decode onto a different path.
+# Returns non-zero on a backend error (curl --fail) or empty content, so callers
+# can fail fast rather than silently scoring a missing sample.
 gen() { # temperature max_tokens outfile [perturb-suffix]
   local p="$prompt"; [[ -n "${4:-}" ]] && p="$prompt"$'\n\n'"$4"
-  jq -nc --arg m "$model" --arg p "$p" --argjson t "$1" --argjson mt "$2" \
+  local resp
+  resp=$(jq -nc --arg m "$model" --arg p "$p" --argjson t "$1" --argjson mt "$2" \
     '{model:$m, messages:[{role:"user",content:$p}], stream:false, temperature:$t, max_tokens:$mt, chat_template_kwargs:{enable_thinking:false}}' \
-  | curl -sS --max-time 300 -X POST "$mlx/v1/chat/completions" -d @- \
-  | jq -r '.choices[0].message.content // ""' > "$3"
+    | curl -sS --fail --max-time 300 -X POST "$mlx/v1/chat/completions" -d @-) || return 1
+  printf '%s' "$resp" | jq -r '.choices[0].message.content // ""' > "$3"
+  [[ -s "$3" ]] || return 1
 }
+# date +%s.%N is GNU-only; on stock BSD/macOS date it degrades to whole-second
+# resolution (awk parses the literal "N" as 0), which is harmless here.
 secs() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f", b-a}'; }
 
 # Write sample file(s) as runner-format reps so the existing scorer can read them.
@@ -95,7 +101,9 @@ echo "fan-out eval   task=$task  model=$model  N=$n  temp=$temp"
 echo "================================================================"
 
 # Baseline: one greedy (temperature 0) generation.
-s=$(date +%s.%N); gen 0 "$max_tokens" "$work/base"; e=$(date +%s.%N); base_lat=$(secs "$s" "$e")
+s=$(date +%s.%N)
+gen 0 "$max_tokens" "$work/base" || { echo "baseline generation failed (MLX backend error or empty output)" >&2; exit 1; }
+e=$(date +%s.%N); base_lat=$(secs "$s" "$e")
 write_raw "$work/base.raw" "$work/base"
 base_sum=$(summ "$work/base.raw")
 echo "baseline greedy(temp0):  score=$(field mean "$base_sum")   latency=${base_lat}s"
@@ -114,8 +122,12 @@ pids=()
 for ((i=1;i<=n;i++)); do
   gen "$temp" "$max_tokens" "$work/s$i" "${perturbs[$(((i-1) % ${#perturbs[@]}))]}" & pids+=($!)
 done
-wait
+# wait per-pid and fail fast: a silently-empty sample would otherwise score 0 and
+# corrupt the reported mean/max (this is what made an earlier T3 run report 0.0).
+fan_ok=1
+for pid in "${pids[@]}"; do wait "$pid" || fan_ok=0; done
 e=$(date +%s.%N); fan_lat=$(secs "$s" "$e")
+(( fan_ok )) || { echo "a fan-out sample failed (MLX backend error or empty output) — aborting to avoid corrupt scores" >&2; exit 1; }
 samples=(); for ((i=1;i<=n;i++)); do samples+=("$work/s$i"); done
 write_raw "$work/fan.raw" "${samples[@]}"
 fan_sum=$(summ "$work/fan.raw")
@@ -128,7 +140,7 @@ if [[ "$task" == "T3" ]]; then
   need=$(( (n + 1) / 2 ))
   for ((i=1;i<=n;i++)); do
     awk -F'|' 'NF>=2 { p=$NF; gsub(/^[ \t]+|[ \t]+$/,"",p); if (p!="") print p }' "$work/s$i" | sort -u
-  done | sort | uniq -c | awk -v need="$need" '$1>=need { $1=""; sub(/^ /,""); print "consensus | " $0 }' > "$work/consensus_lines"
+  done | sort | uniq -c | awk -v need="$need" '{ c=$1+0; if (c>=need) { sub(/^[ \t]*[0-9]+[ \t]+/,""); print "consensus | " $0 } }' > "$work/consensus_lines"
   if [[ -s "$work/consensus_lines" ]]; then
     write_raw "$work/cons.raw" "$work/consensus_lines"
     cons_sum=$(summ "$work/cons.raw")
