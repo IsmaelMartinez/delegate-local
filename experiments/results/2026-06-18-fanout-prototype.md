@@ -11,7 +11,7 @@ Backend: MLX (`mlx_lm.server`, localhost:8080). Decoding: greedy (temperature 0)
 | mlx-community/Qwen3.6-35B-A3B-8bit | 3/4 (75%) | 6/7 (86%) | 6/6 (100%) | 6/6 (100%) | 27s |
 | mlx-community/DeepSeek-R1-Distill-Qwen-32B-MLX-8Bit | empty output — unusable on the MLX think-off path | | | | |
 
-Readings: the capable 30–35B MoE models are strong and fast — T5/T6 perfect, T4 dropping one check (`BODY_NO_PADDING`, a trailing participial the model copies from the fixture's example anchors), and faithfulness the one axis where the 35B slips (it hallucinated one of four T3 claims). Qwen3-Coder-30B is the best all-rounder. The 0.6B is below the capability floor for regex. DeepSeek-R1-Distill ignores `enable_thinking:false`, emits reasoning into a separate `.reasoning` field, and returns empty `.content`, so it is unusable on the path the runner and `delegate.sh` use for MLX.
+Readings: the capable 30–35B MoE models are strong and fast — T5/T6 perfect, T4 dropping one check (`BODY_NO_PADDING`, a trailing participial tail the model copies from the fixture's example anchors), and faithfulness the one axis where the 35B slips (it hallucinated one of four T3 claims). Qwen3-Coder-30B is the best all-rounder. The 0.6B is below the capability floor for regex. DeepSeek-R1-Distill ignores `enable_thinking:false`, emits reasoning into a separate `.reasoning` field, and returns empty `.content`, so it is unusable on the path the runner and `delegate.sh` use for MLX.
 
 ## Latency (warm, capable MoE)
 
