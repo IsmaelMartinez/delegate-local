@@ -28,7 +28,7 @@ One line per commit subject, in order. The title summarises the whole branch, so
 Write exactly ONE GitHub pull-request title that summarises the WHOLE branch below.
 
 Rules:
-- Conventional-commit form: `type: summary` or `type(scope): summary`. Choose the single type that best covers the branch as a whole (feat, fix, docs, refactor, perf, test, chore, style, build, ci).
+- Conventional-commit form: `type: summary` or `type(scope): summary`. Choose the single type that best covers the branch as a whole ({{flavor_commit_types}}).
 - Maximum 72 characters total. Shorter is better.
 - Imperative mood, lower-case after the colon, no trailing period.
 - Synthesise across ALL the commit subjects into one line. Do NOT just copy the first or last subject; describe what the branch does as a unit.
@@ -53,15 +53,18 @@ Example:
 
 - `{{commit_subjects}}` — the branch's commit subject lines, one per line, oldest first (the shape anchor for the whole-branch summary). Piped in or passed via `--var`; no body, just subjects.
 - `{{why}}` — optional one-line statement of the branch's intent, when the commit subjects alone do not make the "why" obvious. Omit it and the section stays empty; the title then rests on the subjects alone.
+- `{{flavor_commit_types}}` — allowed conventional-commit type vocabulary for the title prefix. Injected from the flavor profile, not passed via `--var`: shipped default `feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert` (the @commitlint/config-conventional standard enum), overridable per-user. Shared with `commit-message.md` so the title and the commit messages draw on the same type set.
 
 ## Invocation
 
 ```bash
-git log main..HEAD --reverse --pretty=format:'%s' \
-  | bash scripts/delegate.sh --recipe pr-title \
-      --var commit_subjects="$(git log main..HEAD --reverse --pretty=format:'%s')" \
-      --var why="recover capability-check failures on a stronger model" \
-      code "One conventional-commit title, <=72 chars, no (#NN). Output only the title line."
+# Pass the subjects via --var only (the template uses {{commit_subjects}}, not
+# {{stdin}}, so do NOT also pipe — that would duplicate them and run git twice).
+subjects="$(git log main..HEAD --reverse --pretty=format:'%s')"
+bash scripts/delegate.sh --recipe pr-title \
+  --var commit_subjects="$subjects" \
+  --var why="recover capability-check failures on a stronger model" \
+  code "One conventional-commit title, <=72 chars, no (#NN). Output only the title line."
 ```
 
 After the call, verify (see Expected output shape) and record the verdict:
@@ -78,7 +81,7 @@ The `subject_max: 72` check is a capability check, so pairing this recipe with `
 - "Synthesise across ALL the commit subjects ... do NOT just copy the first or last" — on a multi-commit branch the weak-model default is to echo one subject verbatim, which under-describes the branch. The synthesise directive plus the multi-line worked example pushes toward a unifying summary.
 - "Do NOT append a PR number, `(#NN)`, an issue reference, or the branch name" — the same `(#NN)`-suffix miss the commit-message recipe guards against, which breaks the clean conventional-commit shape and double-references the number GitHub already shows.
 - "Output ONLY the single title line — no body ... no markdown fence" — small models otherwise wrap the title in a ` ```text ` fence or add a one-line explanation, which the caller then has to strip before `gh pr create --title`.
-- The single-type rule ("choose the single type that best covers the branch as a whole") — a branch that mixes a fix and a test should not produce `fix, test:`; conventional commit allows exactly one type. Naming the closed type set inline keeps the model from inventing a compound or non-standard type.
+- The single-type rule ("choose the single type that best covers the branch as a whole") — a branch that mixes a fix and a test should not produce `fix, test:`; conventional commit allows exactly one type. Naming the closed type set in the prompt (via the shared `{{flavor_commit_types}}` vocabulary, the same source `commit-message.md` uses) keeps the model from inventing a compound or non-standard type.
 
 ## Expected output shape
 
@@ -90,4 +93,6 @@ Verify before recording the verdict: exactly one line; `type:` or `type(scope):`
 
 ## Calibration notes
 
-Graduated 2026-06-18 from the session-transcript corpus rather than a single recorded HIT. A mining pass over the session history found "draft PR title (conventional-commit, ≤72 chars)" recurring verbatim across multiple projects, folded into `pr-description.md` each time even when only the title was wanted. Splitting it out gives the agent a small, reliable title-only delegation that is not subject to the body recipe's 35B/80B `flaky_on_models` stall, and a `subject_max: 72` capability check that the ADR 0020 escalation gate can act on. The prompt skeleton reuses the proven guards from `commit-message.md` (no `(#NN)` suffix, single conventional-commit type, output-only discipline) narrowed to a single line, plus the whole-branch-synthesis directive specific to titles spanning multiple commits.
+Graduated 2026-06-18 from the session-transcript corpus rather than a single recorded HIT. A mining pass over the session history found "draft PR title (conventional-commit, ≤72 chars)" recurring verbatim across multiple projects, folded into `pr-description.md` each time even when only the title was wanted. Splitting it out gives the agent a small, reliable title-only delegation that is not subject to the body recipe's 35B/80B `flaky_on_models` stall, and a `subject_max: 72` capability check that the ADR 0020 escalation gate can act on. The prompt skeleton reuses the proven guards from `commit-message.md` (no `(#NN)` suffix, single conventional-commit type via the shared `{{flavor_commit_types}}` vocabulary, output-only discipline) narrowed to a single line, plus the whole-branch-synthesis directive specific to titles spanning multiple commits.
+
+First dogfood (2026-06-18, 3-commit branch): the 0.6B produced a clean 55-char title (`feat: productionise verify-and-escalate gate in delegate.sh`) — a HIT — while the Coder-30B on the same input produced a faithful but 73-char title that the `subject_max: 72` check correctly flagged. The check does its job, and this is exactly the case the ADR 0020 escalation gate exists for when the primary is a smaller model; the directive's "Shorter is better" line plus the deterministic check are the two levers, not a longer prompt.
