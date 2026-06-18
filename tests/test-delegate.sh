@@ -4455,7 +4455,9 @@ GO
 n/a
 EOF
 # 32a. Output that violates both checks -> two FAILED warnings + checks_failed=2.
-make_mock_curl_think "$tmp" 'This first line is far longer than ten chars\n\nthe body works, ensuring everything is fine'
+# The padding here is the "This-X" restating shape, which is NOT auto-stripped
+# (only the safe participial-comma shape is), so it stays a genuine failure.
+make_mock_curl_think "$tmp" 'This first line is far longer than ten chars\n\nthe body works fine. This approach ensures simplicity'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe chk prose "go" </dev/null 2>&1)
@@ -4471,6 +4473,42 @@ if [[ "$out" == *"FAILED"* || "$out" == *"checks_failed="* ]]; then
   echo "  FAIL  checks: clean output triggers no check warnings"; fail=$((fail+1))
 else
   echo "  PASS  checks: clean output triggers no check warnings"; pass=$((pass+1))
+fi
+# 32c. A participial-comma padding tail is AUTO-FIXED: stripped from the output,
+# reported as AUTO-FIXED (not FAILED), counted as checks_autofixed, persisted.
+make_mock_curl_think "$tmp" 'short\n\nthe body drops the per-call cost, ensuring nothing regresses'
+errf=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe chk prose "go" </dev/null 2>"$errf")
+err=$(cat "$errf"); rm -f "$errf"
+assert_contains "check 'no_padding_tail' AUTO-FIXED" "$err" "checks: participial tail auto-fixed (not failed)"
+assert_contains "checks_autofixed=1" "$err" "checks: autofix count rides the delegate-meta line"
+if [[ "$out" == *"ensuring nothing regresses"* ]]; then
+  echo "  FAIL  checks: padding clause not stripped from output"; fail=$((fail+1))
+else
+  echo "  PASS  checks: padding clause stripped from output"; pass=$((pass+1))
+fi
+if [[ "$out" == *"the body drops the per-call cost"* ]]; then
+  echo "  PASS  checks: content before the padding clause is preserved"; pass=$((pass+1))
+else
+  echo "  FAIL  checks: content before padding clause lost"; fail=$((fail+1))
+fi
+if grep -q '"checks_autofixed":1' "$metrics"; then
+  echo "  PASS  checks: checks_autofixed persisted to metrics"; pass=$((pass+1))
+else
+  echo "  FAIL  checks: checks_autofixed missing from metrics"; fail=$((fail+1))
+fi
+# 32d. DELEGATE_NO_AUTOFIX=1 restores warn-only: the same tail FAILS, not fixed.
+make_mock_curl_think "$tmp" 'short\n\nthe body drops the per-call cost, ensuring nothing regresses'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_AUTOFIX=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe chk prose "go" </dev/null 2>&1)
+assert_contains "check 'no_padding_tail' FAILED" "$out" "checks: DELEGATE_NO_AUTOFIX restores warn-only"
+if [[ "$out" == *"AUTO-FIXED"* ]]; then
+  echo "  FAIL  checks: NO_AUTOFIX still auto-fixed"; fail=$((fail+1))
+else
+  echo "  PASS  checks: NO_AUTOFIX did not strip"; pass=$((pass+1))
 fi
 rm -rf "$tmp" "$metrics"
 
@@ -4506,7 +4544,7 @@ make_mock_curl_think "$tmp" 'short subject\n\nthe body drops the per-call cost, 
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe pad prose "go" </dev/null 2>&1)
-assert_contains "check 'no_padding_tail' FAILED" "$out" "checks: structural matcher catches unenumerated gerund tail"
+assert_contains "check 'no_padding_tail' AUTO-FIXED" "$out" "checks: structural matcher catches+auto-fixes unenumerated gerund tail"
 # 33b. A clean finite-verb tail is not flagged.
 make_mock_curl_think "$tmp" 'short subject\n\nthe body drops the per-call cost and stops here'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4516,6 +4554,36 @@ if [[ "$out" == *"no_padding_tail' FAILED"* ]]; then
   echo "  FAIL  checks: clean finite-verb tail not flagged"; fail=$((fail+1))
 else
   echo "  PASS  checks: clean finite-verb tail not flagged"; pass=$((pass+1))
+fi
+# 33c. Safety: an allowlisted filler verb but with a comma INSIDE the clause
+# (the gerund is not the trailing filler) is detected as padding but must NOT be
+# auto-stripped — it stays a FAILED warning so no real content is removed.
+make_mock_curl_think "$tmp" 'short subject\n\nthe list is built, ensuring order, then returned to the caller'
+errf=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe pad prose "go" </dev/null 2>"$errf")
+err=$(cat "$errf"); rm -f "$errf"
+assert_contains "check 'no_padding_tail' FAILED" "$err" "checks: ambiguous multi-comma tail not auto-stripped (stays a warning)"
+if [[ "$out" == *"then returned to the caller"* ]]; then
+  echo "  PASS  checks: ambiguous tail content preserved (not stripped)"; pass=$((pass+1))
+else
+  echo "  FAIL  checks: ambiguous tail was wrongly stripped"; fail=$((fail+1))
+fi
+# 33d. Precision: a gerund tail whose verb is NOT in the filler allowlist is
+# DETECTED (broad matcher) but NOT auto-stripped — a meaningful participial is
+# left for the reviewer rather than silently deleted.
+make_mock_curl_think "$tmp" 'short subject\n\nthe cache is rebuilt, surfacing the new latency numbers'
+errf=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe pad prose "go" </dev/null 2>"$errf")
+err=$(cat "$errf"); rm -f "$errf"
+assert_contains "check 'no_padding_tail' FAILED" "$err" "checks: non-allowlisted gerund detected but not auto-stripped"
+if [[ "$out" == *"surfacing the new latency numbers"* ]]; then
+  echo "  PASS  checks: non-allowlisted participial preserved"; pass=$((pass+1))
+else
+  echo "  FAIL  checks: non-allowlisted participial wrongly stripped"; fail=$((fail+1))
 fi
 # subject_type recipe: optional type input echoed into the check value.
 cat > "$prompts/typ.md" <<'EOF'

@@ -405,7 +405,8 @@ compute_tokens_local() {
 log_metric() {
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
-    s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}"
+    s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}" \
+    checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}"
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$ochars")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -449,6 +450,7 @@ log_metric() {
     --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
     --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
     --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
+    --arg crun "$checks_run" --arg cfail "$checks_failed" --arg cfix "$checks_autofixed" \
     '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
      + (if $recipe != "" then {recipe:$recipe} else {} end)
      + (if $project != "" then {project:$project} else {} end)
@@ -457,7 +459,8 @@ log_metric() {
      + (if $s_temp != "" then {sampling_temperature:($s_temp|tonumber)} else {} end)
      + (if $s_top_p != "" then {sampling_top_p:($s_top_p|tonumber)} else {} end)
      + (if $s_top_k != "" then {sampling_top_k:($s_top_k|tonumber)} else {} end)
-     + (if $s_pp != "" then {sampling_presence_penalty:($s_pp|tonumber)} else {} end)' \
+     + (if $s_pp != "" then {sampling_presence_penalty:($s_pp|tonumber)} else {} end)
+     + (if ($crun != "" and ($crun|tonumber) > 0) then {checks_run:($crun|tonumber), checks_failed:($cfail|tonumber), checks_autofixed:($cfix|tonumber)} else {} end)' \
     >> "$metrics_file" 2>/dev/null || true
 }
 
@@ -1214,15 +1217,21 @@ if (( strip_think == 1 )) && [[ "$output" == *"</think>"* ]]; then
   output="${output#"${output%%[![:space:]]*}"}"
 fi
 
-# Deterministic output checks (ADR 0014): a recipe's frontmatter `checks:` block
-# declares constraints that run on the finalised output. Warn-only — they never
-# change the output or the exit status. The value is converting a failure the
-# prompt cannot reliably prevent under greedy decoding (an over-long subject, a
-# trailing padding clause) from "the caller might notice" into "the wrapper
-# always flags it". Gated on the same clean-stderr conditions as the meta line
-# so batch runs (NO_META) and failed calls stay quiet. The surfaced count rides
-# the delegate-meta line below as checks_failed=N.
+# Deterministic output checks (ADR 0014, extended by ADR 0017): a recipe's
+# frontmatter `checks:` block declares constraints that run on the finalised
+# output. Most are warn-only — a failure flags on stderr and never changes the
+# exit status. The one exception is no_padding_tail, which ADR 0017 makes
+# actionable: it AUTO-STRIPS the safe trailing participial-comma padding clause
+# (recorded as checks_autofixed; still never touches the exit status). The value
+# is converting a failure the prompt cannot reliably prevent under greedy
+# decoding (an over-long subject, a trailing padding clause) from "the caller
+# might notice" into "the wrapper always flags it, and fixes it where safe".
+# Gated on the same clean-stderr conditions as the meta line so batch runs
+# (NO_META) and failed calls stay quiet. The counts ride the delegate-meta line
+# below (checks_failed=N / checks_autofixed=N) and persist to the metrics row.
 checks_failed=0
+checks_run=0
+checks_autofixed=0
 if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${recipe_checks:-}" ]]; then
   # Signatures of the recurring BODY_NO_PADDING failure: a trailing participial
   # clause, a "This-X" declarative rephrase, or a known restating phrase. The
@@ -1252,15 +1261,61 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
     fi
     case "$ckey" in
       subject_max)
-        if [[ "$cval" =~ ^[0-9]+$ ]] && (( ${#check_first_line} > cval )); then
-          echo "delegate: check 'subject_max' FAILED — first line is ${#check_first_line} chars (> $cval)" >&2
-          checks_failed=$((checks_failed + 1))
+        if [[ "$cval" =~ ^[0-9]+$ ]]; then
+          checks_run=$((checks_run + 1))
+          if (( ${#check_first_line} > cval )); then
+            echo "delegate: check 'subject_max' FAILED — first line is ${#check_first_line} chars (> $cval)" >&2
+            checks_failed=$((checks_failed + 1))
+          fi
         fi
         ;;
       no_padding_tail)
-        if [[ "$cval" == "true" ]] && printf '%s' "$check_last_line" | grep -Eiq "$padding_re"; then
-          echo "delegate: check 'no_padding_tail' FAILED — output ends on a padding/restating clause" >&2
-          checks_failed=$((checks_failed + 1))
+        if [[ "$cval" == "true" ]]; then
+          checks_run=$((checks_run + 1))
+          if printf '%s' "$check_last_line" | grep -Eiq "$padding_re"; then
+            # Padding detected. Detection (above) is intentionally broad — any
+            # `, <gerund>` tail — for full recall. The auto-strip is deliberately
+            # NARROWER for precision: it fires only on a trailing
+            # ", <filler-gerund> ...<end>" clause where the gerund is one of a
+            # focused FILLER-verb allowlist and there is no comma inside the
+            # clause. The allowlist (not the broad structural matcher) is what
+            # keeps the mutation from deleting a meaningful participial like
+            # "..., preserving insertion order" — those stay a FAILED warning for
+            # the reviewer rather than being silently removed. The strip is then
+            # adopted only if it is non-empty (a perl failure returns nothing) AND
+            # actually clears the padding; otherwise the original output is kept
+            # untouched, so a FAILED verdict always matches the emitted text. The
+            # "This-X"/"in summary" shapes are never auto-stripped. Opt out with
+            # DELEGATE_NO_AUTOFIX=1.
+            stripped=0
+            if [[ "${DELEGATE_NO_AUTOFIX:-}" != "1" ]]; then
+              new_output=$(printf '%s' "$output" | perl -0777 -pe '
+                my @l = split /\n/, $_, -1;
+                for (my $i = $#l; $i >= 0; $i--) {
+                  next if $l[$i] =~ /^\s*$/;            # skip trailing blank lines
+                  $l[$i] =~ s/(\S.*\S)\s*,\s+(?:ensuring|confirming|allowing|enabling|providing|leading|reflecting|making|supporting|helping|keeping|maintaining|delivering|guaranteeing|underscoring|highlighting|streamlining|facilitating|promoting|fostering|paving|cementing|reinforcing)\b[^,.!?]*([.!?])?\s*$/$1 . (defined $2 ? $2 : ".")/ie;
+                  last;                                  # only the last non-empty line
+                }
+                $_ = join("\n", @l);
+              ')
+              if [[ -n "$new_output" && "$new_output" != "$output" ]]; then
+                new_last=$(printf '%s' "$new_output" | awk 'NF { l=$0 } END { print l }')
+                if ! printf '%s' "$new_last" | grep -Eiq "$padding_re"; then
+                  output="$new_output"
+                  check_first_line=$(printf '%s' "$output" | awk 'NF { print; exit }')
+                  check_last_line="$new_last"
+                  stripped=1
+                fi
+              fi
+            fi
+            if (( stripped )); then
+              echo "delegate: check 'no_padding_tail' AUTO-FIXED — stripped a trailing participial padding clause" >&2
+              checks_autofixed=$((checks_autofixed + 1))
+            else
+              echo "delegate: check 'no_padding_tail' FAILED — output ends on a padding/restating clause" >&2
+              checks_failed=$((checks_failed + 1))
+            fi
+          fi
         fi
         ;;
       subject_type)
@@ -1275,6 +1330,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         # `!` and `(scope)` from the subject's pre-colon segment so the full
         # conventional shape (type, type(scope), type!, type(scope)!) is honoured.
         if [[ -n "$cval" ]]; then
+          checks_run=$((checks_run + 1))
           subj_type="${check_first_line%%:*}"   # segment before the first colon
           subj_type="${subj_type%!}"            # drop a trailing ! (type!: form)
           subj_type="${subj_type%%(*}"          # drop a (scope) suffix
@@ -1294,6 +1350,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         # blank separator between subject and body is not counted. The `+ 0` keeps
         # the count numeric (0) on empty output so the compare can't choke.
         if [[ "$cval" == "true" ]]; then
+          checks_run=$((checks_run + 1))
           body_lines=$(printf '%s\n' "$output" | tr -d '\r' | awk 'NF { n++ } END { print n + 0 }')
           if (( body_lines < 2 )); then
             echo "delegate: check 'body_required' FAILED — output is subject-only ($body_lines non-empty line(s), need >= 2)" >&2
@@ -1341,7 +1398,7 @@ context_chars=${#context}
 output_chars=${#output}
 tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$output_chars")
 
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project"
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed"
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to
@@ -1371,6 +1428,9 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] \
   fi
   if (( checks_failed > 0 )); then
     meta="$meta checks_failed=$checks_failed"
+  fi
+  if (( checks_autofixed > 0 )); then
+    meta="$meta checks_autofixed=$checks_autofixed"
   fi
   echo "delegate-meta: $meta" >&2
 fi
