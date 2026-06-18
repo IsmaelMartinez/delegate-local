@@ -140,11 +140,11 @@ else
     | while IFS=$'\t' read -r n reason; do
         d=$(printf '%s' "$reason" | tr '[:upper:]' '[:lower:]')
         if printf '%s' "$d" | grep -Eq 'edited|stripped|strip |removed|trimmed|hallucinat|rewrot|rewritten|corrected|dropped|de-?indent|tweaked|adjusted|reworded|by hand|hand-|had to|minor edit|light edit|one edit|mechanical edit|miss-with-edit'; then
-          echo -e "$n\tFIXEDKW"
+          printf '%s\t%s\n' "$n" "FIXEDKW"
         elif printf '%s' "$d" | grep -Eq 'verbatim|as-is|as is|used as is|no edit|no changes|unchanged|used clean'; then
-          echo -e "$n\tCLEAN"
+          printf '%s\t%s\n' "$n" "CLEAN"
         else
-          echo -e "$n\tAMBIG"
+          printf '%s\t%s\n' "$n" "AMBIG"
         fi
       done > "$cats_file"
 fi
