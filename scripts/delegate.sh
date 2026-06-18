@@ -1217,14 +1217,18 @@ if (( strip_think == 1 )) && [[ "$output" == *"</think>"* ]]; then
   output="${output#"${output%%[![:space:]]*}"}"
 fi
 
-# Deterministic output checks (ADR 0014): a recipe's frontmatter `checks:` block
-# declares constraints that run on the finalised output. Warn-only — they never
-# change the output or the exit status. The value is converting a failure the
-# prompt cannot reliably prevent under greedy decoding (an over-long subject, a
-# trailing padding clause) from "the caller might notice" into "the wrapper
-# always flags it". Gated on the same clean-stderr conditions as the meta line
-# so batch runs (NO_META) and failed calls stay quiet. The surfaced count rides
-# the delegate-meta line below as checks_failed=N.
+# Deterministic output checks (ADR 0014, extended by ADR 0017): a recipe's
+# frontmatter `checks:` block declares constraints that run on the finalised
+# output. Most are warn-only — a failure flags on stderr and never changes the
+# exit status. The one exception is no_padding_tail, which ADR 0017 makes
+# actionable: it AUTO-STRIPS the safe trailing participial-comma padding clause
+# (recorded as checks_autofixed; still never touches the exit status). The value
+# is converting a failure the prompt cannot reliably prevent under greedy
+# decoding (an over-long subject, a trailing padding clause) from "the caller
+# might notice" into "the wrapper always flags it, and fixes it where safe".
+# Gated on the same clean-stderr conditions as the meta line so batch runs
+# (NO_META) and failed calls stay quiet. The counts ride the delegate-meta line
+# below (checks_failed=N / checks_autofixed=N) and persist to the metrics row.
 checks_failed=0
 checks_run=0
 checks_autofixed=0
@@ -1269,35 +1273,42 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         if [[ "$cval" == "true" ]]; then
           checks_run=$((checks_run + 1))
           if printf '%s' "$check_last_line" | grep -Eiq "$padding_re"; then
-            # Padding detected. Auto-strip the SAFE shape only: a trailing
-            # ", <gerund> ...<end>" clause with no comma inside it (so a
-            # multi-clause sentence where the gerund is not the trailing filler
-            # is left untouched and reported as a failure). The strip is
-            # deterministic and recorded as checks_autofixed so it is fully
-            # observable; the riskier "This-X"/"in summary" shapes are never
-            # auto-stripped. Opt out entirely with DELEGATE_NO_AUTOFIX=1.
+            # Padding detected. Detection (above) is intentionally broad — any
+            # `, <gerund>` tail — for full recall. The auto-strip is deliberately
+            # NARROWER for precision: it fires only on a trailing
+            # ", <filler-gerund> ...<end>" clause where the gerund is one of a
+            # focused FILLER-verb allowlist and there is no comma inside the
+            # clause. The allowlist (not the broad structural matcher) is what
+            # keeps the mutation from deleting a meaningful participial like
+            # "..., preserving insertion order" — those stay a FAILED warning for
+            # the reviewer rather than being silently removed. The strip is then
+            # adopted only if it is non-empty (a perl failure returns nothing) AND
+            # actually clears the padding; otherwise the original output is kept
+            # untouched, so a FAILED verdict always matches the emitted text. The
+            # "This-X"/"in summary" shapes are never auto-stripped. Opt out with
+            # DELEGATE_NO_AUTOFIX=1.
             stripped=0
             if [[ "${DELEGATE_NO_AUTOFIX:-}" != "1" ]]; then
               new_output=$(printf '%s' "$output" | perl -0777 -pe '
                 my @l = split /\n/, $_, -1;
                 for (my $i = $#l; $i >= 0; $i--) {
                   next if $l[$i] =~ /^\s*$/;            # skip trailing blank lines
-                  $l[$i] =~ s/(\S.*\S)\s*,\s+[a-z]{3,}ing[^,.!?]*([.!?])?\s*$/$1 . (defined $2 ? $2 : ".")/ie;
+                  $l[$i] =~ s/(\S.*\S)\s*,\s+(?:ensuring|confirming|allowing|enabling|providing|leading|reflecting|making|supporting|helping|keeping|maintaining|delivering|guaranteeing|underscoring|highlighting|streamlining|facilitating|promoting|fostering|paving|cementing|reinforcing)\b[^,.!?]*([.!?])?\s*$/$1 . (defined $2 ? $2 : ".")/ie;
                   last;                                  # only the last non-empty line
                 }
                 $_ = join("\n", @l);
               ')
-              # Require a non-empty result: if perl fails or returns nothing for
-              # any reason, do NOT adopt it (that would silently ship empty
-              # output as an "auto-fix"). A failed strip degrades to warn-only.
               if [[ -n "$new_output" && "$new_output" != "$output" ]]; then
-                output="$new_output"
-                check_first_line=$(printf '%s' "$output" | awk 'NF { print; exit }')
-                check_last_line=$(printf '%s' "$output" | awk 'NF { l=$0 } END { print l }')
-                stripped=1
+                new_last=$(printf '%s' "$new_output" | awk 'NF { l=$0 } END { print l }')
+                if ! printf '%s' "$new_last" | grep -Eiq "$padding_re"; then
+                  output="$new_output"
+                  check_first_line=$(printf '%s' "$output" | awk 'NF { print; exit }')
+                  check_last_line="$new_last"
+                  stripped=1
+                fi
               fi
             fi
-            if (( stripped )) && ! printf '%s' "$check_last_line" | grep -Eiq "$padding_re"; then
+            if (( stripped )); then
               echo "delegate: check 'no_padding_tail' AUTO-FIXED — stripped a trailing participial padding clause" >&2
               checks_autofixed=$((checks_autofixed + 1))
             else

@@ -4555,10 +4555,10 @@ if [[ "$out" == *"no_padding_tail' FAILED"* ]]; then
 else
   echo "  PASS  checks: clean finite-verb tail not flagged"; pass=$((pass+1))
 fi
-# 33c. Safety: an ambiguous gerund clause with a comma inside it (the gerund is
-# NOT the trailing filler) is detected as padding but must NOT be auto-stripped
-# — it stays a FAILED warning so no real content is silently removed.
-make_mock_curl_think "$tmp" 'short subject\n\nthe list is built, preserving order, then returned to the caller'
+# 33c. Safety: an allowlisted filler verb but with a comma INSIDE the clause
+# (the gerund is not the trailing filler) is detected as padding but must NOT be
+# auto-stripped — it stays a FAILED warning so no real content is removed.
+make_mock_curl_think "$tmp" 'short subject\n\nthe list is built, ensuring order, then returned to the caller'
 errf=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -4569,6 +4569,21 @@ if [[ "$out" == *"then returned to the caller"* ]]; then
   echo "  PASS  checks: ambiguous tail content preserved (not stripped)"; pass=$((pass+1))
 else
   echo "  FAIL  checks: ambiguous tail was wrongly stripped"; fail=$((fail+1))
+fi
+# 33d. Precision: a gerund tail whose verb is NOT in the filler allowlist is
+# DETECTED (broad matcher) but NOT auto-stripped — a meaningful participial is
+# left for the reviewer rather than silently deleted.
+make_mock_curl_think "$tmp" 'short subject\n\nthe cache is rebuilt, surfacing the new latency numbers'
+errf=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe pad prose "go" </dev/null 2>"$errf")
+err=$(cat "$errf"); rm -f "$errf"
+assert_contains "check 'no_padding_tail' FAILED" "$err" "checks: non-allowlisted gerund detected but not auto-stripped"
+if [[ "$out" == *"surfacing the new latency numbers"* ]]; then
+  echo "  PASS  checks: non-allowlisted participial preserved"; pass=$((pass+1))
+else
+  echo "  FAIL  checks: non-allowlisted participial wrongly stripped"; fail=$((fail+1))
 fi
 # subject_type recipe: optional type input echoed into the check value.
 cat > "$prompts/typ.md" <<'EOF'
