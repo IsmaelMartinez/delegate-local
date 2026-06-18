@@ -1408,7 +1408,7 @@ if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] \
   # clean. The two branches keep fd=2 callers simple and only pay the
   # absorption cost on the gotcha-prone redirect path. Pin verified on
   # macOS bash 3.2.57.
-  nudge_msg='delegate: record verdict → bash scripts/delegate-feedback.sh hit (or miss "<reason>")'
+  nudge_msg='delegate: record verdict → bash scripts/delegate-feedback.sh --source agent hit (or miss "<reason>"); drop --source if you are a human recording a taste judgment'
   if (( nudge_fd == 2 )); then
     echo "$nudge_msg" >&2
   else

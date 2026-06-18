@@ -1056,8 +1056,9 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "verdict-nudge: happy path exits 0"
 stderr_content=$(cat "$stderr_file")
 assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge: prints to stderr on success"
-assert_contains "delegate-feedback.sh hit" "$stderr_content" "verdict-nudge: names hit"
+assert_contains "delegate-feedback.sh --source agent hit" "$stderr_content" "verdict-nudge: names hit (agent-sourced)"
 assert_contains "miss" "$stderr_content" "verdict-nudge: names miss"
+assert_contains "drop --source" "$stderr_content" "verdict-nudge: names human-default (drop --source)"
 # Nudge stays on stderr — stdout should hold only the model output, so
 # downstream pipes (e.g. `delegate.sh prose "..." | jq ...`) keep working.
 if echo "$out" | grep -q "record verdict"; then

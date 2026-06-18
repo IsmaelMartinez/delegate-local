@@ -50,6 +50,8 @@ The hook is `scripts/delegate-verdict-stop-hook.sh`. On every `Stop` event it de
 
 These verdicts are tagged `verdict_source:"agent"` and live in a separate tier from human verdicts (ADR 0015): the agent can honestly report a fact about its own behaviour ("I used it" / "I rewrote it"), but not the maintainer's taste judgment ("it was good"). The headline hit-rate counts human verdicts only; coverage counts both. `metrics-summary.sh` and `experiments/quality-trend.py` surface the agent tier as its own usage figure, never folded into the quality number.
 
+Update (2026-06-18): the inline verdict path SKILL.md teaches — `delegate-feedback.sh` run right after a delegation — was found to be agent-operated too, but had been defaulting to the human tier because the inline command carried no `--source`. It now passes `--source agent`, and the historical inline rows were backfilled, so this Stop hook is the backstop for verdicts the agent did not record inline rather than the only agent-tier source. See ADR 0015's 2026-06-18 update for the evidence and the backfill heuristic.
+
 ## Install
 
 Like the boundary hook, this is opt-in. Add a `Stop` entry to your global `~/.claude/settings.json` (alongside the `PreToolUse` boundary-hook entry if you use it):
