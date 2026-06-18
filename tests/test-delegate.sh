@@ -4849,6 +4849,234 @@ else
   echo "  SKIP  --recipe auto (backfill): git not on PATH"
 fi
 
+# ===========================================================================
+# Verify-and-escalate gate (ADR 0019). A model-aware mock curl returns a
+# capability-FAILING response for the primary model and a PASSING response for
+# the escalate model, so the gate's adopt / reject / skip / fallback paths run
+# deterministically. The mock greps the POSTed payload for the escalate-model
+# substring; the /v1/models probe still exits 7 (forces the ollama path) and
+# the recipe pre-flight canary still succeeds (any non-error body, exit 0).
+# ===========================================================================
+assert_not_contains() {
+  local needle="$1" haystack="$2" name="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then echo "  PASS  $name"; pass=$((pass+1))
+  else echo "  FAIL  $name (unexpected '$needle')"; fail=$((fail+1)); fi
+}
+
+# mock ollama that lists two models, so an escalate TIER can resolve to a model
+# distinct from the primary tier's pick.
+make_mock_ollama_two() {
+  local dir="$1"
+  cat > "$dir/ollama" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  list)
+    cat <<'LIST'
+NAME             ID SIZE   MODIFIED
+qwen3.6:35b-a3b  aa 30 GB  1 day ago
+deepseek-r1:32b  bb 30 GB  1 day ago
+LIST
+    ;;
+esac
+EOF
+  chmod +x "$dir/ollama"
+}
+
+# $1 dir, $2 escalate-model substring, $3 cheap .response, $4 strong .response.
+make_mock_curl_escalate() {
+  local dir="$1" esc="$2" cheap="$3" strong="$4"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+out_file=""; write_out=""; saw_probe=0
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *"/v1/models"*) saw_probe=1; shift ;;
+    *) shift ;;
+  esac
+done
+if (( saw_probe == 1 )); then exit 7; fi
+payload="\$(cat)"
+if printf '%s' "\$payload" | grep -q '${esc}'; then
+  body='{"response":"${strong}"}'
+else
+  body='{"response":"${cheap}"}'
+fi
+if [[ -n "\$out_file" ]]; then printf '%s' "\$body" > "\$out_file"; else printf '%s' "\$body"; fi
+if [[ -n "\$write_out" ]]; then printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"; fi
+EOF
+  chmod +x "$dir/curl"
+}
+
+# Variant whose escalate-model dispatch FAILS (exit 7), to exercise the gate's
+# fall-back-to-primary path. The primary (and the canary) still succeed.
+make_mock_curl_escalate_fail() {
+  local dir="$1" esc="$2" cheap="$3"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+out_file=""; write_out=""; saw_probe=0
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *"/v1/models"*) saw_probe=1; shift ;;
+    *) shift ;;
+  esac
+done
+if (( saw_probe == 1 )); then exit 7; fi
+payload="\$(cat)"
+if printf '%s' "\$payload" | grep -q '${esc}'; then
+  cat > /dev/null
+  echo "curl: escalate dispatch refused" >&2
+  exit 7
+fi
+body='{"response":"${cheap}"}'
+if [[ -n "\$out_file" ]]; then printf '%s' "\$body" > "\$out_file"; else printf '%s' "\$body"; fi
+if [[ -n "\$write_out" ]]; then printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"; fi
+EOF
+  chmod +x "$dir/curl"
+}
+
+# Write the gate test recipe with a caller-supplied checks: block.
+write_esc_recipe() {
+  local prompts="$1" checks="$2"
+  mkdir -p "$prompts"
+  cat > "$prompts/esc.md" <<EOF
+---
+checks:
+${checks}
+---
+
+# esc
+
+## When to use
+Gate test recipe.
+
+## Prompt template
+
+\`\`\`
+Write something.
+{{stdin}}
+\`\`\`
+EOF
+}
+
+# --- esc-1: OFF by default — capability check fails, but no escalate target set
+#     -> primary output kept, no escalation fields anywhere.
+tmp=$(mktemp -d); make_mock_ollama "$tmp"
+make_mock_curl_escalate "$tmp" "strongmodel" "subject only" "good subject\\n\\nproper body"
+write_esc_recipe "$tmp/prompts" "  body_required: true"
+metrics=$(mktemp); : > "$metrics"
+EC=0
+out=$(printf 'ctx' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$tmp/prompts" \
+  bash "$SCRIPT" --recipe esc prose "go" 2>&1) || EC=$?
+assert_eq 0 "$EC" "esc-1 off-by-default: exit 0"
+assert_contains "subject only" "$out" "esc-1 off-by-default: primary output kept"
+assert_not_contains "escalated_to" "$out" "esc-1 off-by-default: no escalation on stderr"
+assert_not_contains "escalation_adopted" "$(cat "$metrics")" "esc-1 off-by-default: no escalation field in metrics"
+rm -rf "$tmp" "$metrics"
+
+# --- esc-2: ADOPT — capability check fails on primary, passes on escalate.
+tmp=$(mktemp -d); make_mock_ollama "$tmp"
+make_mock_curl_escalate "$tmp" "strongmodel" "subject only" "good subject\\n\\nproper body"
+write_esc_recipe "$tmp/prompts" "  body_required: true"
+metrics=$(mktemp); : > "$metrics"
+EC=0
+out=$(printf 'ctx' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$tmp/prompts" \
+  DELEGATE_ESCALATE_MODEL="strongmodel" \
+  bash "$SCRIPT" --recipe esc prose "go" 2>&1) || EC=$?
+assert_eq 0 "$EC" "esc-2 adopt: exit 0"
+assert_contains "proper body" "$out" "esc-2 adopt: escalated output is on stdout"
+assert_contains "ADOPTED strongmodel" "$out" "esc-2 adopt: adoption announced"
+assert_contains 'escalation_adopted=true' "$out" "esc-2 adopt: meta shows adopted"
+assert_contains '"escalation_adopted":true' "$(cat "$metrics")" "esc-2 adopt: metrics escalation_adopted true"
+assert_contains '"escalated_to":"strongmodel"' "$(cat "$metrics")" "esc-2 adopt: metrics escalated_to"
+assert_contains '"primary_model":"qwen3.6' "$(cat "$metrics")" "esc-2 adopt: metrics records primary_model"
+assert_contains '"model":"strongmodel"' "$(cat "$metrics")" "esc-2 adopt: metrics model is the kept (escalated) model"
+rm -rf "$tmp" "$metrics"
+
+# --- esc-3: SKIP on a style-only failure — no_padding_tail fails (capability=0)
+#     so the gate must NOT escalate even with a target set.
+tmp=$(mktemp -d); make_mock_ollama "$tmp"
+make_mock_curl_escalate "$tmp" "strongmodel" "fixed it, preventing bugs" "good subject\\n\\nproper body"
+write_esc_recipe "$tmp/prompts" "  no_padding_tail: true"
+metrics=$(mktemp); : > "$metrics"
+EC=0
+out=$(printf 'ctx' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$tmp/prompts" \
+  DELEGATE_ESCALATE_MODEL="strongmodel" \
+  bash "$SCRIPT" --recipe esc prose "go" 2>&1) || EC=$?
+assert_eq 0 "$EC" "esc-3 style-skip: exit 0"
+assert_contains "fixed it" "$out" "esc-3 style-skip: primary output kept"
+assert_not_contains "escalated_to" "$out" "esc-3 style-skip: style failure did not escalate"
+rm -rf "$tmp" "$metrics"
+
+# --- esc-4: REJECT — escalate model fails the same capability check, so the
+#     primary output is kept and the escalation is recorded as not adopted.
+tmp=$(mktemp -d); make_mock_ollama "$tmp"
+make_mock_curl_escalate "$tmp" "strongmodel" "subject only" "still subject only"
+write_esc_recipe "$tmp/prompts" "  body_required: true"
+metrics=$(mktemp); : > "$metrics"
+EC=0
+out=$(printf 'ctx' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$tmp/prompts" \
+  DELEGATE_ESCALATE_MODEL="strongmodel" \
+  bash "$SCRIPT" --recipe esc prose "go" 2>&1) || EC=$?
+assert_eq 0 "$EC" "esc-4 reject: exit 0"
+assert_contains "subject only" "$out" "esc-4 reject: primary output kept"
+assert_contains "REJECTED strongmodel" "$out" "esc-4 reject: rejection announced"
+assert_contains '"escalation_adopted":false' "$(cat "$metrics")" "esc-4 reject: metrics escalation_adopted false"
+rm -rf "$tmp" "$metrics"
+
+# --- esc-5: same-model guard — escalate target equals the primary model, so
+#     the gate is a no-op.
+tmp=$(mktemp -d); make_mock_ollama "$tmp"
+make_mock_curl_escalate "$tmp" "strongmodel" "subject only" "good subject\\n\\nproper body"
+write_esc_recipe "$tmp/prompts" "  body_required: true"
+metrics=$(mktemp); : > "$metrics"
+EC=0
+out=$(printf 'ctx' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$tmp/prompts" \
+  DELEGATE_ESCALATE_MODEL="qwen3.6:35b-a3b" \
+  bash "$SCRIPT" --recipe esc prose "go" 2>&1) || EC=$?
+assert_eq 0 "$EC" "esc-5 same-model: exit 0"
+assert_not_contains "escalated_to" "$out" "esc-5 same-model: no escalation when target==primary"
+rm -rf "$tmp" "$metrics"
+
+# --- esc-6: escalate dispatch FAILS — primary output kept, exit stays 0.
+tmp=$(mktemp -d); make_mock_ollama "$tmp"
+make_mock_curl_escalate_fail "$tmp" "strongmodel" "subject only"
+write_esc_recipe "$tmp/prompts" "  body_required: true"
+metrics=$(mktemp); : > "$metrics"
+EC=0
+out=$(printf 'ctx' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$tmp/prompts" \
+  DELEGATE_ESCALATE_MODEL="strongmodel" \
+  bash "$SCRIPT" --recipe esc prose "go" 2>&1) || EC=$?
+assert_eq 0 "$EC" "esc-6 dispatch-fail: exit 0 (primary succeeded)"
+assert_contains "subject only" "$out" "esc-6 dispatch-fail: primary output kept"
+assert_contains "kept primary output" "$out" "esc-6 dispatch-fail: fallback announced"
+rm -rf "$tmp" "$metrics"
+
+# --- esc-7: TIER resolution — DELEGATE_ESCALATE_TIER resolves through
+#     pick-model.sh to a model distinct from the primary, then adopts.
+tmp=$(mktemp -d); make_mock_ollama_two "$tmp"
+make_mock_curl_escalate "$tmp" "deepseek" "subject only" "good subject\\n\\nproper body"
+write_esc_recipe "$tmp/prompts" "  body_required: true"
+metrics=$(mktemp); : > "$metrics"
+EC=0
+out=$(printf 'ctx' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$tmp/prompts" \
+  DELEGATE_ESCALATE_TIER="reasoning" \
+  bash "$SCRIPT" --recipe esc prose "go" 2>&1) || EC=$?
+assert_eq 0 "$EC" "esc-7 tier: exit 0"
+assert_contains "proper body" "$out" "esc-7 tier: escalated output adopted"
+assert_contains 'escalated_to="deepseek-r1:32b"' "$out" "esc-7 tier: tier resolved to a distinct model"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
