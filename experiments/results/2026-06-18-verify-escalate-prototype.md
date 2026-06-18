@@ -1,6 +1,6 @@
 # 2026-06-18 — Verify-and-escalate prototype
 
-Backend: MLX (`mlx_lm.server`, localhost:8080). Decoding: greedy (temperature 0), `enable_thinking:false`. Reproduce with `experiments/escalate-eval.sh`. Decision record: `docs/adr/0019-verify-and-escalate.md`. Complements the fan-out negative result (`docs/adr/0018-fan-out-ensemble-prototype.md`).
+Backend: MLX (`mlx_lm.server`, localhost:8080). Decoding: greedy (temperature 0), `enable_thinking:false`. Reproduce with `experiments/escalate-eval.sh`. Decision record: `docs/adr/0019-verify-and-escalate.md`. Complements the fan-out negative result (ADR 0018, landing via PR #317).
 
 Mechanism: run the cheap model, score with `experiments/score-t*.sh`, and escalate to the strong model only when the score is below the threshold (1.0 = perfect structural pass).
 
