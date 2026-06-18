@@ -154,12 +154,12 @@ fi
 # ---------------------------------------------------------------------------
 read -r clean_hit fixed_hit miss_classified faith padding structural style operational other_mode ambiguous classified < <(
   awk -F'\t' '
-    NR==FNR { kept[FNR]=$1; next }                  # reasoned_tsv: line -> kept
+    NR==FNR { kept[FNR]=$1; n=FNR; next }           # reasoned_tsv: line -> kept; n = row count (length(array) is gawk-only)
     { cat[$1]=$2 }                                  # cats_file: index -> CATEGORY
     END {
-      for (i=1; i<=length(kept); i++) {
-        c = (i in cat) ? cat[i] : "UNCLASSIFIED"
-        if (c != "UNCLASSIFIED") classified++
+      for (i=1; i<=n; i++) {
+        if (!(i in cat)) continue                   # parse gap -> indeterminate, never a problem case
+        c = cat[i]; classified++
         khit = (kept[i]=="true")
         if (khit && c=="CLEAN") clean_hit++
         else if (khit && c=="AMBIG") ambiguous++
@@ -195,11 +195,11 @@ printf '\n'
 printf 'Raw hit-rate (used):      %s   (%d/%d)   <- counts "used after fixing" as success\n' "$(pct "$hits" "$total")" "$hits" "$total"
 printf 'Clean-as-is rate:         %s   (%d/%d)   <- used verbatim, no edit\n' "$(pct "$clean_hit" "$total")" "$clean_hit" "$total"
 printf '\n'
-printf 'Re-reviewed verdicts (the %d with a reason):\n' "$reasoned"
-printf '  clean hit (used as-is):       %4d  (%s)\n' "$clean_hit" "$(pct "$clean_hit" "$reasoned")"
-printf '  fixed hit (used, then edited):%4d  (%s)\n' "$fixed_hit" "$(pct "$fixed_hit" "$reasoned")"
-(( classify == 0 )) && printf '  ambiguous hit (keyword unsure):%4d (%s)\n' "$ambiguous" "$(pct "$ambiguous" "$reasoned")"
-printf '  miss (rewritten / discarded): %4d  (%s)\n' "$miss_classified" "$(pct "$miss_classified" "$reasoned")"
+printf 'Re-reviewed verdicts (%d classified of %d reasoned):\n' "$classified" "$reasoned"
+printf '  clean hit (used as-is):       %4d  (%s)\n' "$clean_hit" "$(pct "$clean_hit" "$classified")"
+printf '  fixed hit (used, then edited):%4d  (%s)\n' "$fixed_hit" "$(pct "$fixed_hit" "$classified")"
+(( classify == 0 )) && printf '  ambiguous hit (keyword unsure):%4d (%s)\n' "$ambiguous" "$(pct "$ambiguous" "$classified")"
+printf '  miss (rewritten / discarded): %4d  (%s)\n' "$miss_classified" "$(pct "$miss_classified" "$classified")"
 printf 'Indeterminate (no reason):      %4d\n' "$unreasoned"
 printf '\n'
 if (( classify )); then
@@ -223,7 +223,7 @@ if (( by_recipe )); then
   printf '\nVerdict mix by recipe (reasoned verdicts only):\n'
   recipe_index=$(jq -s 'map(select((.source//"delegate")=="delegate" and .recipe!=null) | {(.ts): .recipe}) | add // {}' "$metrics_file")
   jq -rs --argjson rec "$recipe_index" '
-    map(. + {recipe: ($rec[.ref_ts] // "(none)")})
+    map(select((.reason//"")!="") | . + {recipe: ($rec[.ref_ts] // "(none)")})
     | map(select(.recipe != "(none)"))
     | group_by(.recipe)[]
     | {recipe: .[0].recipe, n: length,

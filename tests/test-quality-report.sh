@@ -96,7 +96,29 @@ assert_contains "mode: local-model classification" "$out" "classify: mode label"
 assert_contains "clean hit (used as-is):          1" "$out" "classify: one clean hit"
 assert_contains "Failure modes in the" "$out" "classify: failure-mode section present"
 assert_contains "faithfulness     1" "$out" "classify: one faithfulness problem"
-rm -f "$fx" "$stub"
+rm -f "$stub"
+
+# --- --classify with a parse gap (model returns no label for some rows) ------
+# Rows missing a classification must be indeterminate, NOT counted as fixed/miss
+# problem cases, and the breakdown percentages must use the classified count as
+# the denominator (Copilot findings on PR #315).
+stub2=$(mktemp); chmod +x "$stub2"
+cat > "$stub2" <<'STUB'
+#!/usr/bin/env bash
+# Only label the first two notes; leave the rest as parse gaps.
+while IFS= read -r line; do
+  [[ "$line" =~ ^([0-9]+)\. ]] || continue
+  n="${BASH_REMATCH[1]}"
+  (( n <= 2 )) && echo "$n: CLEAN"
+done
+STUB
+out=$(DELEGATE_QUALITY_DELEGATE_SH="$stub2" bash "$SCRIPT" --file "$fx" --classify 2>/dev/null)
+# 4 reasoned rows, only 2 classified (both CLEAN hits) -> clean=2 over classified=2 (100%).
+assert_contains "Re-reviewed verdicts (2 classified of 4 reasoned)" "$out" "parse-gap: classified denominator in header"
+assert_contains "clean hit (used as-is):          2  (100%)" "$out" "parse-gap: clean pct over classified, not reasoned"
+assert_contains "miss (rewritten / discarded):    0" "$out" "parse-gap: unclassified miss not counted as miss"
+assert_contains "2 reasoned rows were not classified" "$out" "parse-gap: indeterminate NOTE present"
+rm -f "$fx" "$stub2"
 
 echo ""
 echo "$pass passed, $fail failed"
