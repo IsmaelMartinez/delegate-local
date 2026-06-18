@@ -75,10 +75,13 @@ for c in "${cases[@]}"; do
   why="${rest%%|*}"; diff_enc="${rest#*|}"
   diff="$(printf '%b' "$diff_enc")"
   n=$((n+1))
-  printf '%s' "$diff" | env DELEGATE_BACKEND="$backend" DELEGATE_LOCAL_CONFIG="$cfg" \
+  if ! printf '%s' "$diff" | env DELEGATE_BACKEND="$backend" DELEGATE_LOCAL_CONFIG="$cfg" \
     DELEGATE_ESCALATE_MODEL="$escalate_model" DELEGATE_METRICS_FILE="$metrics" \
     DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 \
-    bash "$delegate" --recipe auto --var why="$why" --var type="$type" "$tier" >/dev/null 2>"$work/err"
+    bash "$delegate" --recipe auto --var why="$why" --var type="$type" "$tier" >/dev/null 2>"$work/err"; then
+    echo "  warn: delegate.sh failed for case '$name' — stderr:" >&2
+    sed 's/^/    /' "$work/err" >&2
+  fi
   row="$(tail -1 "$metrics")"
   esc="$(printf '%s' "$row" | jq -r '.escalated_to // ""')"
   adopt="$(printf '%s' "$row" | jq -r '.escalation_adopted // ""')"

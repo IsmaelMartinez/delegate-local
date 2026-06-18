@@ -1284,6 +1284,11 @@ fi
 # / body_required are capability checks a stronger model can plausibly clear, so
 # they do. New checks default to capability unless added to that style set.
 run_output_checks() {
+# Locals keep the per-call scratch state out of the global scope now that this
+# is a function (it ran at top level before the refactor). The result and the
+# counters the gate reads — output, checks_run/failed/autofixed, capability_failed
+# — are deliberately NOT local: they are the function's outputs.
+local padding_re check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines
 checks_failed=0
 checks_run=0
 checks_autofixed=0
@@ -1468,6 +1473,13 @@ if [[ -n "$escalate_target" ]] \
     if (( capability_failed < primary_capfail )); then
       escalation_adopted="true"
       model="$escalate_target"
+      # Keep queue_wait_ms anchored to the primary dispatch's first-byte time
+      # (the invocation's initial latency) rather than the escalation call's, so
+      # the metric keeps its "invoke -> first byte" meaning. duration_ms still
+      # spans both dispatches, so generation_ms absorbs the escalation
+      # generation. Mirrors the ttfb_s restore on the REJECT / dispatch-fail
+      # paths below.
+      ttfb_s="$primary_ttfb"
       echo "delegate: verify-and-escalate ADOPTED $escalate_target ($primary_capfail -> $capability_failed capability check(s) failed)" >&2
     else
       escalation_adopted="false"
