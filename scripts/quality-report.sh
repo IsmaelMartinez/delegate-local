@@ -54,7 +54,7 @@ while (($# > 0)); do
     --days=*) days="${1#--days=}"; shift ;;
     --classify) classify=1; shift ;;
     --by-recipe) by_recipe=1; shift ;;
-    -h|--help) sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR==1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; exit 0 ;;
     *) echo "quality-report: unknown arg '$1'" >&2; exit 2 ;;
   esac
 done
@@ -134,19 +134,17 @@ Examples: "used verbatim, 6/6 checks" -> CLEAN; "stripped a hallucinated PR numb
     echo "  classified $(( base < reasoned ? base : reasoned ))/$reasoned ..." >&2
   done
 else
-  # Keyword rules. Conservative on purpose; "fix" is excluded (collides with the
-  # conventional-commit type "fix:" quoted in commit-message reasons).
-  awk -F'\t' '{ print NR "\t" $2 }' "$reasoned_tsv" \
-    | while IFS=$'\t' read -r n reason; do
-        d=$(printf '%s' "$reason" | tr '[:upper:]' '[:lower:]')
-        if printf '%s' "$d" | grep -Eq 'edited|stripped|strip |removed|trimmed|hallucinat|rewrot|rewritten|corrected|dropped|de-?indent|tweaked|adjusted|reworded|by hand|hand-|had to|minor edit|light edit|one edit|mechanical edit|miss-with-edit'; then
-          printf '%s\t%s\n' "$n" "FIXEDKW"
-        elif printf '%s' "$d" | grep -Eq 'verbatim|as-is|as is|used as is|no edit|no changes|unchanged|used clean'; then
-          printf '%s\t%s\n' "$n" "CLEAN"
-        else
-          printf '%s\t%s\n' "$n" "AMBIG"
-        fi
-      done > "$cats_file"
+  # Keyword rules in a single awk pass (no per-row shell forks). Conservative on
+  # purpose; "fix" is excluded (collides with the conventional-commit type
+  # "fix:" quoted in commit-message reasons).
+  awk -F'\t' '
+    { d = tolower($2)
+      if (d ~ /edited|stripped|strip |removed|trimmed|hallucinat|rewrot|rewritten|corrected|dropped|de-?indent|tweaked|adjusted|reworded|by hand|hand-|had to|minor edit|light edit|one edit|mechanical edit|miss-with-edit/) c = "FIXEDKW"
+      else if (d ~ /verbatim|as-is|as is|used as is|no edit|no changes|unchanged|used clean/) c = "CLEAN"
+      else c = "AMBIG"
+      print NR "\t" c
+    }
+  ' "$reasoned_tsv" > "$cats_file"
 fi
 
 # ---------------------------------------------------------------------------
@@ -201,8 +199,8 @@ printf 'Re-reviewed verdicts (the %d with a reason):\n' "$reasoned"
 printf '  clean hit (used as-is):       %4d  (%s)\n' "$clean_hit" "$(pct "$clean_hit" "$reasoned")"
 printf '  fixed hit (used, then edited):%4d  (%s)\n' "$fixed_hit" "$(pct "$fixed_hit" "$reasoned")"
 (( classify == 0 )) && printf '  ambiguous hit (keyword unsure):%4d (%s)\n' "$ambiguous" "$(pct "$ambiguous" "$reasoned")"
-printf '  miss (rewritten / discarded): %4d  (%s)\n' "$miss" "$(pct "$miss" "$reasoned")"
-printf 'Indeterminate (hit, no reason): %4d\n' "$unreasoned"
+printf '  miss (rewritten / discarded): %4d  (%s)\n' "$miss_classified" "$(pct "$miss_classified" "$reasoned")"
+printf 'Indeterminate (no reason):      %4d\n' "$unreasoned"
 printf '\n'
 if (( classify )); then
   printf 'Failure modes in the %d problem cases (fixed-hits + misses):\n' "$problems"
@@ -223,8 +221,7 @@ printf 'accurate on-device breakdown (see ADR 0016).\n'
 # --- optional per-recipe breakdown -----------------------------------------
 if (( by_recipe )); then
   printf '\nVerdict mix by recipe (reasoned verdicts only):\n'
-  recipe_index=$(jq -c 'select((.source//"delegate")=="delegate" and .recipe!=null) | {ts, recipe}' "$metrics_file" \
-    | jq -s 'map({(.ts): .recipe}) | add // {}')
+  recipe_index=$(jq -s 'map(select((.source//"delegate")=="delegate" and .recipe!=null) | {(.ts): .recipe}) | add // {}' "$metrics_file")
   jq -rs --argjson rec "$recipe_index" '
     map(. + {recipe: ($rec[.ref_ts] // "(none)")})
     | map(select(.recipe != "(none)"))

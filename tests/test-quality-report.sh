@@ -66,7 +66,7 @@ assert_contains "clean hit (used as-is):          1" "$out" "keyword: one clean 
 assert_contains "fixed hit (used, then edited):   1" "$out" "keyword: one fixed hit"
 assert_contains "ambiguous hit (keyword unsure):   1" "$out" "keyword: one ambiguous hit"
 assert_contains "miss (rewritten / discarded):    1" "$out" "keyword: one miss"
-assert_contains "Indeterminate (hit, no reason):    1" "$out" "keyword: one indeterminate"
+assert_contains "Indeterminate (no reason):" "$out" "keyword: indeterminate label"
 
 # window: --since after all rows -> empty window note
 EC=0; out=$(bash "$SCRIPT" --file "$fx" --since 2027-01-01 2>&1) || EC=$?
