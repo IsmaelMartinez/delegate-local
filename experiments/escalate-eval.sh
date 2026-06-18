@@ -24,13 +24,16 @@ fixtures="$repo_root/experiments/fixtures"
 mlx="${MLX_HOST:-http://localhost:8080}"
 
 task="" cheap="" strong="" threshold="1.0" max_tokens=2048
+# Each flag guards `[[ $# -ge 2 ]]` before `shift 2`: on bash 3.2 a `shift 2`
+# with one positional left is a no-op, so an unguarded value-less trailing flag
+# (e.g. `--task` with nothing after it) would spin this loop forever.
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
-    --task) task="${2:-}"; shift 2 ;;
-    --cheap) cheap="${2:-}"; shift 2 ;;
-    --strong) strong="${2:-}"; shift 2 ;;
-    --threshold) threshold="${2:-}"; shift 2 ;;
-    --max-tokens) max_tokens="${2:-}"; shift 2 ;;
+    --task) [[ $# -ge 2 ]] || { echo "--task requires a value" >&2; exit 2; }; task="$2"; shift 2 ;;
+    --cheap) [[ $# -ge 2 ]] || { echo "--cheap requires a value" >&2; exit 2; }; cheap="$2"; shift 2 ;;
+    --strong) [[ $# -ge 2 ]] || { echo "--strong requires a value" >&2; exit 2; }; strong="$2"; shift 2 ;;
+    --threshold) [[ $# -ge 2 ]] || { echo "--threshold requires a value" >&2; exit 2; }; threshold="$2"; shift 2 ;;
+    --max-tokens) [[ $# -ge 2 ]] || { echo "--max-tokens requires a value" >&2; exit 2; }; max_tokens="$2"; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -62,7 +65,7 @@ gen() { # model outfile
     '{model:$m, messages:[{role:"user",content:$p}], stream:false, temperature:0, max_tokens:$mt, chat_template_kwargs:{enable_thinking:false}}' \
     | curl -sS --fail --max-time 300 -X POST "$mlx/v1/chat/completions" -d @-) || return 1
   printf '%s' "$resp" | jq -r '.choices[0].message.content // ""' > "$2"
-  [[ -s "$2" ]] || return 1
+  grep -q '[^[:space:]]' "$2" || return 1   # whitespace-only output is a failed generation, not a 1-byte "success"
 }
 # Portable high-resolution clock: perl Time::HiRes (perl is already a hard dep)
 # so sub-second timing works on BSD/macOS, where `date +%s.%N` emits a literal N.
