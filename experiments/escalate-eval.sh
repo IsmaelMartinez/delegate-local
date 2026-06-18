@@ -51,7 +51,8 @@ esac
 [[ -f "$fixture" ]] || { echo "fixture not found: $fixture" >&2; exit 2; }
 
 prompt="$(cat "$fixture")"$'\n\n'"$directive"
-work="$(mktemp -d "${TMPDIR:-/tmp}/escalate.XXXXXX")"
+work="$(mktemp -d "${TMPDIR:-/tmp}/escalate.XXXXXX")" || { echo "mktemp failed" >&2; exit 1; }
+[[ -n "$work" && -d "$work" ]] || { echo "could not create temp dir" >&2; exit 1; }
 trap 'rm -rf "$work"' EXIT
 
 # Returns non-zero on a backend error (curl --fail) or empty content.
@@ -63,7 +64,9 @@ gen() { # model outfile
   printf '%s' "$resp" | jq -r '.choices[0].message.content // ""' > "$2"
   [[ -s "$2" ]] || return 1
 }
-# date +%s.%N is GNU-only; degrades to whole-second on BSD/macOS date (harmless).
+# Portable high-resolution clock: perl Time::HiRes (perl is already a hard dep)
+# so sub-second timing works on BSD/macOS, where `date +%s.%N` emits a literal N.
+now() { perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
 secs() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f", b-a}'; }
 write_raw() { # outfile model sample
   { echo "MODEL: $2"; echo "BACKEND: mlx"; echo "REPS: 1"; echo "";
@@ -83,16 +86,18 @@ echo "  strong=$strong"
 echo "================================================================"
 
 # Step 1 — cheap model.
-s=$(date +%s.%N); gen "$cheap" "$work/cheap" || { echo "cheap generation failed (backend error/empty)" >&2; exit 1; }; e=$(date +%s.%N)
+s=$(now); gen "$cheap" "$work/cheap" || { echo "cheap generation failed (backend error/empty)" >&2; exit 1; }; e=$(now)
 cheap_lat=$(secs "$s" "$e"); cheap_score=$(score "$cheap" "$work/cheap")
+[[ -n "$cheap_score" ]] || { echo "scorer returned no score for the cheap output" >&2; exit 1; }
 echo "cheap:   score=$cheap_score   latency=${cheap_lat}s"
 
 # Step 2 — escalate only if the cheap output fails the check.
 if ge "$cheap_score" "$threshold"; then
   echo "verdict: PASS on cheap — no escalation. final=$cheap_score  total_latency=${cheap_lat}s"
 else
-  s=$(date +%s.%N); gen "$strong" "$work/strong" || { echo "strong generation failed (backend error/empty)" >&2; exit 1; }; e=$(date +%s.%N)
+  s=$(now); gen "$strong" "$work/strong" || { echo "strong generation failed (backend error/empty)" >&2; exit 1; }; e=$(now)
   strong_lat=$(secs "$s" "$e"); strong_score=$(score "$strong" "$work/strong")
+  [[ -n "$strong_score" ]] || { echo "scorer returned no score for the strong output" >&2; exit 1; }
   total_lat=$(awk -v a="$cheap_lat" -v b="$strong_lat" 'BEGIN{printf "%.1f", a+b}')
   echo "escalated -> strong:   score=$strong_score   latency=${strong_lat}s"
   if ge "$strong_score" "$threshold"; then
