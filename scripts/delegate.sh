@@ -1433,7 +1433,7 @@ fi
 # Run the checks on the primary (tier-resolved) output.
 run_output_checks
 
-# Verify-and-escalate gate (ADR 0019). Off by default. When the primary output
+# Verify-and-escalate gate (ADR 0020). Off by default. When the primary output
 # fails a CAPABILITY check (not the style-only no_padding_tail, which the auto-
 # strip owns and a stronger model is no better at), re-issue the identical
 # request to a stronger model and keep that output only if it clears strictly

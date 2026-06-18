@@ -46,7 +46,9 @@ work="$(mktemp -d)" || { echo "mktemp failed" >&2; exit 1; }
 [[ -n "$work" && -d "$work" ]] || { echo "bad workdir" >&2; exit 1; }
 trap 'rm -rf "$work"' EXIT
 cfg="$work/cheap.sh"
-printf 'prefs=(%s "${prefs[@]}")\n' "$primary_substr" > "$cfg"
+# %q shell-escapes the user-supplied substring so a value with shell
+# metacharacters can't break (or inject into) the config file pick-model sources.
+printf 'prefs=(%q "${prefs[@]}")\n' "$primary_substr" > "$cfg"
 chmod 600 "$cfg"
 metrics="$work/metrics.jsonl"; : > "$metrics"
 

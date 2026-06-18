@@ -4898,7 +4898,7 @@ while (( \$# > 0 )); do
 done
 if (( saw_probe == 1 )); then exit 7; fi
 payload="\$(cat)"
-if printf '%s' "\$payload" | grep -q '${esc}'; then
+if printf '%s' "\$payload" | grep -qF '${esc}'; then
   body='{"response":"${strong}"}'
 else
   body='{"response":"${cheap}"}'
@@ -4926,7 +4926,7 @@ while (( \$# > 0 )); do
 done
 if (( saw_probe == 1 )); then exit 7; fi
 payload="\$(cat)"
-if printf '%s' "\$payload" | grep -q '${esc}'; then
+if printf '%s' "\$payload" | grep -qF '${esc}'; then
   cat > /dev/null
   echo "curl: escalate dispatch refused" >&2
   exit 7
