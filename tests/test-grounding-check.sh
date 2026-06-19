@@ -37,7 +37,7 @@ assert_contains "UNGROUNDED" "$out" "drifted output -> UNGROUNDED"
 
 # 3. Distinctive-identifier rule: an output that only shares the coincidental
 #    common word "lock" (from the diff's intent, not a code symbol) must NOT
-#    count as grounded — this is the false-negative the naive version had.
+#    count as grounded — the naive version wrongly passed this as GROUNDED.
 EC=0
 out=$(printf 'chore: tidy up the lock file handling in the build' | bash "$GC" --input "$tmp/diff.txt") || EC=$?
 assert_eq 1 "$EC" "lone common-word overlap -> still UNGROUNDED"

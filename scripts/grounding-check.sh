@@ -46,12 +46,13 @@ if ! [[ "$min_idents" =~ ^[0-9]+$ ]]; then
   echo "grounding-check: --min-idents must be a non-negative integer" >&2; exit 2
 fi
 
-output="$(cat)"
-
-GC_INPUT="$input" GC_MIN="$min_idents" GC_OUTPUT="$output" perl -e '
+GC_INPUT="$input" GC_MIN="$min_idents" perl -e '
   my $input_file = $ENV{GC_INPUT};
   my $min        = $ENV{GC_MIN} + 0;
-  my $output     = lc $ENV{GC_OUTPUT};
+  # Read the model output from STDIN (not an env var) so a large output cannot
+  # exceed the OS environment-size limit.
+  my $output     = do { local $/; <STDIN> };
+  $output        = defined($output) ? lc $output : "";
 
   # Stoplist: programming keywords + structural English function words that
   # carry no grounding signal. Lowercased. Kept deliberately small — the
@@ -60,11 +61,11 @@ GC_INPUT="$input" GC_MIN="$min_idents" GC_OUTPUT="$output" perl -e '
   my %stop = map { $_ => 1 } qw(
     return import from class self this that with then else elif while
     true false none null void func function const static public private
-    print echo def end def0 args kwargs param value result data item items
+    print echo def end args kwargs param result data item items
     list dict array string number boolean object type test tests case cases
     when where which what have been will would should could into over under
-    your their there here some more most than them they your also each both
-    only just like such only does done make made used uses using only need
+    your their there here some more most than them they also each both
+    only just like such does done make made used uses using need
     line lines file files code text name names call calls main init exit
     error errors check checks valid value values
   );
@@ -87,7 +88,8 @@ GC_INPUT="$input" GC_MIN="$min_idents" GC_OUTPUT="$output" perl -e '
     $idents{$lc} = $distinctive if !exists $idents{$lc} || $distinctive > $idents{$lc};
   };
 
-  open(my $fh, "<", $input_file) or exit 0;
+  open(my $fh, "<", $input_file)
+    or do { print STDERR "grounding-check: cannot open input file: $!\n"; exit 2; };
   while (my $line = <$fh>) {
     chomp $line;
     if ($line =~ m{^diff --git a/(\S+) b/(\S+)} or
@@ -107,6 +109,7 @@ GC_INPUT="$input" GC_MIN="$min_idents" GC_OUTPUT="$output" perl -e '
 
   my @ids = sort keys %idents;
   my $m = scalar @ids;
+  my $dn = grep { $idents{$_} } @ids;   # how many of them are DISTINCTIVE
 
   # Lenient substring match (case-insensitive): an identifier "counts" if it
   # appears anywhere in the output. Track distinctive vs total matches.
@@ -127,8 +130,8 @@ GC_INPUT="$input" GC_MIN="$min_idents" GC_OUTPUT="$output" perl -e '
   my $sample = join(",", @show[0 .. ($#show > 3 ? 3 : $#show)]);
   $sample = "(none)" if $sample eq "";
 
-  if ($m < $min) {
-    printf "GROUNDING: SKIP       input_idents=%d (<%d — too few to judge)\n", $m, $min;
+  if ($dn < $min) {
+    printf "GROUNDING: SKIP       distinctive_idents=%d (<%d — too few to judge)\n", $dn, $min;
     exit 0;
   } elsif (!$grounded) {
     printf "GROUNDING: UNGROUNDED matched=%d distinctive=%d input_idents=%d sample=%s\n", $k, $d, $m, $sample;
