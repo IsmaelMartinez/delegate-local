@@ -101,6 +101,9 @@ jobs:
       - name: Apply-and-test tests
         run: bash tests/test-apply-and-test.sh
 
+      - name: Fanout-patch.sh tests
+        run: bash tests/test-fanout-patch.sh
+
       - name: Prompts-library tests
         run: bash tests/test-prompts-library.sh
 
