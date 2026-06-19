@@ -250,6 +250,14 @@
 #   DELEGATE_PRESENCE_PENALTY=<float>       # override presence_penalty.
 #                                           #   Default unset. Non-numeric
 #                                           #   exits 2.
+#   DELEGATE_SEED=<int>                      # per-request sampler seed. With
+#                                           #   temperature>0 repeat calls
+#                                           #   diverge deterministically
+#                                           #   (Ollama options.seed / MLX
+#                                           #   seed). Ollama-only until
+#                                           #   mlx-lm #1331 ships per-request
+#                                           #   seeds (#323). Non-integer
+#                                           #   exits 2.
 #   DELEGATE_OTEL_ENDPOINT=<url>            # Phase 11 Track A (#134). When
 #                                           #   set, POST one OTLP/HTTP span
 #                                           #   per invocation to this URL
@@ -1015,6 +1023,7 @@ metric_sampling_temperature=""
 metric_sampling_top_p=""
 metric_sampling_top_k=""
 metric_sampling_presence_penalty=""
+sampling_seed=""
 
 validate_numeric() {
   # Bash 3.2 =~ POSIX ERE — same idiom as the canary's preflight_timeout
@@ -1049,6 +1058,16 @@ if [[ -n "${DELEGATE_PRESENCE_PENALTY:-}" ]]; then
   validate_numeric "DELEGATE_PRESENCE_PENALTY" "$DELEGATE_PRESENCE_PENALTY"
   sampling_presence_penalty="$DELEGATE_PRESENCE_PENALTY"
   metric_sampling_presence_penalty="$DELEGATE_PRESENCE_PENALTY"
+fi
+# Per-request sampler seed (integer). With temperature>0 this makes repeat
+# calls diverge deterministically; the code-gen fan-out (fanout-patch.sh) relies
+# on it. Not written to the metrics row — a diversity knob, not a quality signal.
+if [[ -n "${DELEGATE_SEED:-}" ]]; then
+  if ! [[ "$DELEGATE_SEED" =~ ^-?[0-9]+$ ]]; then
+    echo "delegate: DELEGATE_SEED='$DELEGATE_SEED' is not an integer" >&2
+    exit 2
+  fi
+  sampling_seed="$DELEGATE_SEED"
 fi
 
 # Pre-flight canary — only fires when --recipe is set. Issue #110 documented
@@ -1181,10 +1200,12 @@ if [[ "$backend" == "ollama" ]]; then
   payload=$(jq -nc --arg m "$_model" --arg p "$full_input" --argjson th "$think" \
     --argjson temp "$sampling_temperature" \
     --arg top_p "$sampling_top_p" --arg top_k "$sampling_top_k" --arg pp "$sampling_presence_penalty" \
+    --arg seed "$sampling_seed" \
     '{model:$m, prompt:$p, stream:false, think:$th, options:({temperature:$temp}
       + (if $top_p != "" then {top_p:($top_p|tonumber)} else {} end)
       + (if $top_k != "" then {top_k:($top_k|tonumber)} else {} end)
-      + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end))}')
+      + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end)
+      + (if $seed != "" then {seed:($seed|tonumber)} else {} end))}')
   ttfb_s=$(curl -sS --fail -X POST "$ollama_host/api/generate" -d @- \
     -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
   status=$?
@@ -1213,10 +1234,12 @@ else
   payload=$(jq -nc --arg m "$_model" --arg p "$full_input" --argjson mt "$max_tokens" --argjson et "$think" \
     --argjson temp "$sampling_temperature" \
     --arg top_p "$sampling_top_p" --arg top_k "$sampling_top_k" --arg pp "$sampling_presence_penalty" \
+    --arg seed "$sampling_seed" \
     '{model:$m, messages:[{role:"user", content:$p}], stream:false, temperature:$temp, max_tokens:$mt, chat_template_kwargs:{enable_thinking:$et}}
       + (if $top_p != "" then {top_p:($top_p|tonumber)} else {} end)
       + (if $top_k != "" then {top_k:($top_k|tonumber)} else {} end)
-      + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end)')
+      + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end)
+      + (if $seed != "" then {seed:($seed|tonumber)} else {} end)')
   ttfb_s=$(curl -sS --fail -X POST "$mlx_host/v1/chat/completions" -d @- \
     -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
   status=$?
