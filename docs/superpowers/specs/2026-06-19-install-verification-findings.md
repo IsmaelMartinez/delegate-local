@@ -74,3 +74,24 @@ clean copy. The reset's value to the install story is (a) shrinking what ships
 re-running this exact exercise against the lean tree in WS6 to confirm the
 under-five-minutes goal end to end. No code changes were made in WS1; this is a
 facts-capture step.
+
+## WS6 re-verification (against the lean tree)
+
+Repeating the WS1 method (`git archive HEAD` of the cleanup branch into a clean
+tree, run the install path standalone) confirms the reset's effect on what a
+user downloads: the install dropped from 5.9MB / 534 files to 1.8MB / 127 files
+(69% smaller, 76% fewer files) — `experiments/` (3MB) and `mcp/` are gone. The
+runtime still works standalone: a bare prose call returned a clean summary in
+856ms and `pick-model.sh` resolves every tier. The largest remaining shipped
+items are `tests/` (440K), `docs/` (392K), `prompts/` (368K), and the
+release-please-managed `CHANGELOG.md` (196K); excluding `tests/` and the
+CHANGELOG from the installed payload via packaging metadata is the obvious
+next install-size win, left for the maintainer to decide (harmless bytes, not a
+blocker).
+
+Local-workspace artifacts intentionally left untouched (untracked, gitignored,
+not shipped, and the maintainer's own data): the `metrics.jsonl.bak-*` telemetry
+backups, `.verdict-stop-markers/`, `metrics.loki-sync`, and the stale
+`.claude/worktrees/agent-a362d7460185ae840` worktree (which still references the
+old `delegate-to-ollama` repo name and may contain uncommitted work). These are
+flagged for the maintainer rather than deleted autonomously.
