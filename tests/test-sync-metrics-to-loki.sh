@@ -132,6 +132,27 @@ assert_eq "0" "$EC" "T8: push run exits 0 with TMPDIR override"
 leftover=$(ls -A "$tmpd" 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "0" "$leftover" "T8: no tempfile leaked in TMPDIR after exit"
 
+# --- T9: ns timestamp is content-derived, stable across file POSITION --------
+# The hardening: a row re-pushed at a different line number must get the SAME
+# ns, so re-syncing a rewritten/reordered file does not duplicate it. The old
+# line-number-as-ns scheme failed this and caused the 2026-06-19 feedback
+# doubling in the local Loki.
+row9='{"ts":"2026-05-10T11:11:11Z","source":"delegate","tier":"prose","estimated_tokens_avoided":5,"exit_status":0,"project":"repo-z"}'
+met9a="$tmp/m9a.jsonl"; met9b="$tmp/m9b.jsonl"
+state9a="$tmp/s9a"; state9b="$tmp/s9b"; body9a="$tmp/b9a.json"; body9b="$tmp/b9b.json"
+printf '%s\n' "$row9" > "$met9a"                                     # row at line 1
+printf '%s\n%s\n%s\n' \
+  '{"ts":"2026-05-10T11:00:00Z","source":"delegate","tier":"code","project":"a"}' \
+  '{"ts":"2026-05-10T11:00:01Z","source":"delegate","tier":"code","project":"b"}' \
+  "$row9" > "$met9b"                                                 # SAME row at line 3
+make_mock_curl "$tmp" "$body9a"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" bash "$SCRIPT" --full --metrics-file "$met9a" --state-file "$state9a" --loki-url http://x >/dev/null 2>&1
+make_mock_curl "$tmp" "$body9b"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" bash "$SCRIPT" --full --metrics-file "$met9b" --state-file "$state9b" --loki-url http://x >/dev/null 2>&1
+ns9a=$(jq -r '.streams[].values[] | select((.[1]|fromjson).project=="repo-z") | .[0]' "$body9a")
+ns9b=$(jq -r '.streams[].values[] | select((.[1]|fromjson).project=="repo-z") | .[0]' "$body9b")
+assert_eq "$ns9a" "$ns9b" "T9: same row -> same ns regardless of file position (re-sync idempotent)"
+
 rm -rf "$tmp"
 echo
 echo "$pass passed, $fail failed"
