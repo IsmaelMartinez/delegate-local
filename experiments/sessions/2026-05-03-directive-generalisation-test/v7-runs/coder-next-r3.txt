@@ -1,1 +1,0 @@
-[{"id":"P1","category":"REFACTOR"},{"id":"P2","category":"BUGFIX"},{"id":"P3","category":"FEATURE"},{"id":"P4","category":"DOCS"},{"id":"P5","category":"PERF"}]
