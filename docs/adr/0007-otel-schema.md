@@ -6,8 +6,6 @@ Date: 2026-05-22 (Track A); amended 2026-05-22 (Track F); amended 2026-05-22 (#1
 
 Accepted. Track F amendment (privacy redaction default) accepted 2026-05-22. Issue #187 amendment (`delegate.recipe` on feedback span) accepted 2026-05-22.
 
-> Superseded — the implementation was archived in the 2026-06-19 lean-core reset (recoverable from tag pre-cleanup-2026-06-19). See ROADMAP.md.
-
 
 
 ## Context

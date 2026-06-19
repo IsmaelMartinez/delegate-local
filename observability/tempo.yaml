@@ -1,0 +1,88 @@
+# Monolithic single-binary Tempo for local delegate-local telemetry.
+#
+# Receives OTLP directly (no collector in front) and serves both TraceQL search
+# and TraceQL-metrics queries. The committed Grafana dashboards in
+# dashboards/grafana/ depend on TraceQL metrics (rate / count_over_time /
+# histogram_over_time / sum), which are computed by the local-blocks processor
+# enabled per-tenant in the overrides block below. Without it the dashboards
+# render empty even though traces are arriving.
+
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+
+query_frontend:
+  search:
+    # 0 = no cap. Default is 168h (7d); the dashboards' recent-activity tables
+    # stay well inside that, but lifting it avoids surprising "range exceeds"
+    # errors when a panel's time picker is widened.
+    max_duration: 0s
+  metrics:
+    # Default is 3h, which would break every multi-day trend panel. Match the
+    # 30-day block_retention so the TraceQL-metrics panels can span the window.
+    max_duration: 720h
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  # Cut blocks quickly so freshly-ingested traces become queryable in seconds
+  # rather than minutes — the workstation volume is tiny, so there is no cost.
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    # 30 days, matching the rolling window delegate-feedback.sh scans for the
+    # calibration loop. Older blocks are compacted away.
+    block_retention: 720h
+
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+  storage:
+    path: /var/tempo/generator/wal
+  traces_storage:
+    path: /var/tempo/generator/traces
+  processor:
+    local_blocks:
+      # delegate spans are CLIENT (the chat call) and INTERNAL (the feedback
+      # span), never server spans — so the default server-only filter must be
+      # off or every TraceQL-metrics query returns nothing.
+      filter_server_spans: false
+      # Persist computed blocks so metrics queries span more than the live
+      # in-memory window (needed for the multi-day trend panels).
+      flush_to_storage: true
+      # Keep completed metrics blocks queryable for the full retention window.
+      # WITHOUT this the generator defaults to complete_block_timeout: 1h, so
+      # every TraceQL-metrics query_range beyond the last hour fails with
+      # "time range must be within last 1h0m0s" and the multi-day trend panels
+      # silently show only the last hour regardless of the time picker. The
+      # generator is a forward-streaming aggregator: this makes metrics
+      # ACCUMULATE up to 30 days going forward — it does not retroactively
+      # compute metrics for spans backfilled with old timestamps (those land
+      # in TraceQL search, not in historical metric buckets).
+      complete_block_timeout: 720h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+overrides:
+  defaults:
+    metrics_generator:
+      # Enable TraceQL metrics for the default (single-workstation) tenant.
+      processors: [local-blocks]
+      generate_native_histograms: both

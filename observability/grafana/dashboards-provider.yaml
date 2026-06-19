@@ -1,0 +1,14 @@
+apiVersion: 1
+
+# Auto-load the three committed dashboards (mounted read-only at /etc/dashboards
+# by docker-compose.yml) into a "delegate-local" folder on startup.
+providers:
+  - name: delegate-local
+    orgId: 1
+    folder: delegate-local
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    options:
+      path: /etc/dashboards
+      foldersFromFilesStructure: false

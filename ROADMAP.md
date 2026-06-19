@@ -30,36 +30,37 @@ hit/miss verdicts that feed `metrics-summary.sh`, and gates every PR on a
 frontmatter + content + trigger-eval CI pipeline plus the bash test suite.
 
 The 2026-06-19 lean-core reset returned the repo to that core after a period of
-heavy accretion. It archived the maintainer-facing research and observability
-machinery out of the installed tree (the OpenTelemetry/Loki/Grafana exporters,
-the `experiments/` accuracy framework, the embeddings/semantic-search path, the
-Python MCP server, the verdict-automation hooks, the maintainer analysis tools,
-and the faithfulness-grounding prototype), trimmed the accreted verify-and-
+heavy accretion. It archived the maintainer-facing research machinery out of the
+installed tree (the `experiments/` accuracy framework, the
+embeddings/semantic-search path, the Python MCP server, the verdict-automation
+hooks, the maintainer analysis tools, and the faithfulness-grounding prototype),
+trimmed the accreted verify-and-
 escalate gate out of `delegate.sh`, cut the `commit-message` recipe from 62KB to
 ~14KB by removing inline calibration history, and pruned the dead recipe tail.
 The principle of the reset: recover quality by shrinking what a model and a
 reader have to take in, not by adding more gates. All of it is recoverable from
 the tag and archive branch named at the top of this file.
 
+The OpenTelemetry → Loki/Grafana observability pipeline is explicitly retained,
+not archived: `scripts/lib/otel.sh` span emission (opt-in via
+`DELEGATE_OTEL_ENDPOINT`), the `sync-metrics-to-loki.sh` and `backfill-otel.sh`
+exporters, the Grafana `dashboards/`, `observability/`, and the
+`docs/observability/` guides are the maintainer's live visibility into
+delegation traffic and stay in the core.
+
 ## Where we're going (next, priority-ordered)
 
-1. Decide whether to fully archive OTEL. `scripts/lib/otel.sh` is retained for
-   now because `delegate.sh` and `delegate-feedback.sh` source it for
-   `delegate_project_name` and (dormant, endpoint-gated) span emission. Fully
-   removing it means re-homing `delegate_project_name` into a tiny lib and
-   stripping the span-emission plumbing from the metrics path — a deliberate,
-   test-guarded follow-up rather than a casual edit.
-2. Decide on a deeper recipe prune. The reset kept every recipe with real usage
+1. Decide on a deeper recipe prune. The reset kept every recipe with real usage
    or a SKILL.md trigger; a further cut to the ~10-recipe high-usage head is
    available if the maintainer wants the library leaner still.
-3. Re-verify the install on a genuinely clean machine (not the dev symlink) and
+2. Re-verify the install on a genuinely clean machine (not the dev symlink) and
    keep the install path covered as the headline trust surface.
-4. Sweep the few in-code comments in `delegate.sh` that still reference the
+3. Sweep the few in-code comments in `delegate.sh` that still reference the
    removed escalate gate.
 
 Anything beyond this is a fresh, evidence-gated decision. Re-introducing an
-archived capability (observability, MCP, experiments) should be driven by a real
-consumer asking for it, not by default.
+archived capability (MCP, experiments) should be driven by a real consumer
+asking for it, not by default.
 
 ## Out of scope
 
