@@ -92,6 +92,9 @@ jobs:
       - name: Ground-check wrapper tests
         run: bash tests/test-ground-check.sh
 
+      - name: Grounding-check (faithfulness) tests
+        run: bash tests/test-grounding-check.sh
+
       - name: Runner argument-parsing tests
         run: bash tests/test-runner.sh
 
