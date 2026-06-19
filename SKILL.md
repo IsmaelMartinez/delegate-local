@@ -26,7 +26,7 @@ Fits:
 - First-pass "what does this file do" over many files.
 - Extract structured fields (JSON) from free-form text.
 - Reformat or rewrite prose.
-- Minimal single-file code patches where you supply the failing test alongside the source and verify by re-running the test after applying the patch. Scope is narrow and the verification step is load-bearing — multi-file edits, cross-module reasoning, and tests the director cannot re-run are out of scope. See the v8 probe evidence and the director-side pattern in the Reasoning-tier and Discipline sections.
+- Minimal single-file code patches where you supply the failing test alongside the source and verify by re-running the test after applying the patch. Scope is narrow and the verification step is load-bearing — multi-file edits, cross-module reasoning, and tests the director cannot re-run are out of scope. See the v8 probe evidence and the director-side pattern in the Reasoning-tier and Discipline sections. When you have several seeds to spare, `scripts/fanout-patch.sh` fans this out with the `fix-with-test` recipe and keeps the smallest patch that passes the test.
 
 Do NOT delegate:
 - Multi-step reasoning, planning, or tool-calling.
