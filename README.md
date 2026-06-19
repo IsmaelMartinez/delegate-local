@@ -138,7 +138,7 @@ The mechanisms are fork-friendly out of the box — routing, metrics, and the fe
 
    | Variable | Default | What it repoints |
    |----------|---------|------------------|
-   | `DELEGATE_GITHUB_REPO` | `IsmaelMartinez/delegate-local` | Repo targeted by the drafted `gh issue create` commands (`delegate-feedback.sh`, `audit-metrics.sh`) |
+   | `DELEGATE_GITHUB_REPO` | `IsmaelMartinez/delegate-local` | Repo targeted by the drafted `gh issue create` command (`delegate-feedback.sh`) |
    | `DELEGATE_CONTENT_ALLOW_ORG` | `IsmaelMartinez` | GitHub org/user allowed by the content-scan URL allowlist (`validate-skill-content.sh`) |
    | `DELEGATE_METRICS_FILE` | `~/.claude/skills/delegate-local/metrics.jsonl` | Metrics JSONL location |
    | `DELEGATE_PROMPTS_DIR` | `<install-path>/prompts` | Recipe directory |
@@ -150,10 +150,10 @@ The mechanisms are fork-friendly out of the box — routing, metrics, and the fe
    npx skills add <your-user>/delegate-local
    ```
 
-4. **Re-baseline for your models.** The dated fixtures under `experiments/fixtures/` and `evals/eval-set.json` carry example content from the upstream project's history. Routing works without touching them, but a fork gets the best calibration by re-running the baseline against its own installed models:
+4. **Re-calibrate triggering for your models.** `evals/eval-set.json` carries the trigger queries from the upstream project. Routing works without touching it, but a fork keeps the SKILL.md description calibrated by re-running the trigger eval against its own installed models:
 
    ```bash
-   bash experiments/run-baseline.sh <model> [<model>...]
+   bash scripts/eval-skill-triggers.sh --ollama
    ```
 
 5. **Update `CODEOWNERS`** to point `*` at your own handle so review requests go to you, not the upstream author.
@@ -164,11 +164,9 @@ The mechanisms are fork-friendly out of the box — routing, metrics, and the fe
 - `scripts/delegate.sh <tier> "<prompt>"` — wraps `pick-model.sh` + the backend's HTTP API (Ollama or MLX, auto-selected) with `think:false` and `temperature:0` defaults. Appends one JSON line per call to `~/.claude/skills/delegate-local/metrics.jsonl`. Use this instead of bare `ollama run` or hand-rolled `curl` calls.
 - `scripts/pick-model.sh <tier>` — resolves a tier to the best installed model via substring preference lists. Tiers are `code`, `prose`, `reasoning`, and `long-context` (active), plus `vision`, `embedding`, `premium-general`, and `reasoning-vision` (scaffolded). Edit this file (not the skill body) when your installed set changes.
 - `scripts/audit-models.sh` — prints installed models, tier routing, and llmfit-driven upgrade suggestions filtered to first-party providers. Read-only; never pulls.
-- `scripts/metrics-summary.sh` — reads the metrics JSONL and prints volume per tier, p50/p95 latency, total tokens-avoided, top models by frequency, and (when the boundary hook is installed) per-project trigger rate. Pass `--since YYYY-MM-DD` or `--days N` to window every section to recent rows. Read-only.
-- `scripts/delegate-boundary-hook.sh` — opt-in `PreToolUse` hook that fires at the commit / PR / release boundary, records whether the artifact was drafted locally, and reminds the agent to use the matching recipe when it was not. Addresses the turn-medial trigger gap from #277; see [`docs/boundary-hook.md`](docs/boundary-hook.md) for the opt-in install.
+- `scripts/metrics-summary.sh` — reads the metrics JSONL and prints volume per tier, p50/p95 latency, total tokens-avoided, top models by frequency, and per-project / per-recipe hit-rate. Pass `--since YYYY-MM-DD` or `--days N` to window every section to recent rows. Read-only.
+- `scripts/delegate-feedback.sh hit|miss [reason]` — records whether you used a delegation's output as-is (hit) or rewrote/discarded it (miss), appending a `feedback` row to the metrics JSONL. This is the calibration signal `metrics-summary.sh` rolls up.
 - `tests/` — unit tests for every script. Run with `bash tests/run-tests.sh` (and the per-script `bash tests/test-*.sh`).
-- `mcp/` — optional Python MCP server that exposes `pick_model`, `audit_models`, and `list_tiers` to non-Claude tools (Codex, OpenCode, Cursor, custom MCP clients). Thin wrapper over the bash scripts, not a reimplementation. See [`mcp/README.md`](mcp/README.md) for install and config snippets.
-- `docs/observability/` — opt-in OTLP exporter. Set `DELEGATE_OTEL_ENDPOINT=<url>` and every `delegate.sh` call POSTs an OTLP span (off by default, zero overhead when unset). Content is redacted by default; only metadata (tier, model, recipe, char counts, durations, verdict) travels to the collector. Three backends documented: [Grafana Cloud](docs/observability/grafana-cloud.md), [Langfuse](docs/observability/langfuse-self-host.md), and [Phoenix](docs/observability/phoenix.md). See [`docs/otel-schema.md`](docs/otel-schema.md) for the wire format.
 
 ## Troubleshooting
 
@@ -222,10 +220,6 @@ delegate.sh run                metrics.jsonl                delegate-feedback.sh
 ```
 
 The single-machine metrics JSONL has no scheduled job behind it; the nudge is the runtime signal. After the third similar MISS in the rolling window, `delegate-feedback.sh` prints the matched reasons and a draft `gh issue create` command pre-targeted at the `prompt-pattern` label. The nudge is advisory — it never opens the issue on its own — so each filing stays a deliberate call. Silence one invocation with `DELEGATE_FEEDBACK_NO_NUDGE=1`; tune the trigger via `DELEGATE_FEEDBACK_NUDGE_AT` (default 3), `DELEGATE_FEEDBACK_NUDGE_WINDOW_DAYS` (default 30), and `DELEGATE_FEEDBACK_SIMILAR_THRESHOLD` (default 0.4 Jaccard over stopword-stripped content tokens).
-
-`scripts/verdict-sweep.sh` closes the coverage gap at the other end. The per-call nudge is easy to skip in the moment, so a session-close sweep scans the metrics JSONL for delegations from the last 24h (`DELEGATE_SWEEP_WINDOW_HOURS`) that produced output but carry no verdict and presents them as one batch, recording each `hit`/`miss`/`skip` through the same `delegate-feedback.sh` path. It never blocks — it no-ops when there is nothing to verdict, when there is no interactive terminal, or when `DELEGATE_LOCAL_NO_SWEEP=1` — so it is safe to wire into a shell logout or run by hand.
-
-`scripts/audit-metrics.sh` is the on-demand counterpart to that runtime nudge — the same matcher applied many-vs-many across the whole JSONL instead of one-vs-many at MISS time. Run it for periodic review, or to scan a cross-machine JSONL the per-MISS nudge would never see (the JSONL is gitignored, so each host has its own). The script reads `DELEGATE_METRICS_FILE` and honours the same `DELEGATE_FEEDBACK_NUDGE_AT` / `_WINDOW_DAYS` / `_SIMILAR_THRESHOLD` envs, prints one draft `gh issue create` command per recurring bucket, and never writes to the JSONL itself.
 
 A `prompt-pattern` issue captures the task shape, tier and resolved model, verbatim prompt and model output, and (when known) the prompt that turned the MISS into a HIT. `prompts/README.md` documents how the maintainer graduates an issue into a `prompts/<new>.md` recipe paired with an `evals/eval-set.json` positive — closing the loop empirically rather than evaporating after one conversation.
 

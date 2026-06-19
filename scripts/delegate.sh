@@ -1128,12 +1128,9 @@ trap 'rm -f "$body_file"' EXIT
 
 # dispatch_to_model <model> — build the backend request, POST it, parse the
 # response into $output, and strip any leading reasoning trace. Sets the
-# globals $output, $status, $ttfb_s, $payload. Factored out of the former
-# single inline dispatch so the verify-and-escalate gate below can re-issue the
-# identical request to a stronger model when a capability check fails on the
-# primary output. Strip-think is folded in here (rather than after the first
-# dispatch) so an escalation to a trace-emitting reasoning model is stripped
-# the same way the primary output is.
+# globals $output, $status, $ttfb_s, $payload. Strip-think is folded in here so
+# a trace-emitting reasoning model has its chain-of-thought removed the same way
+# every other model's output is.
 dispatch_to_model() {
 local _model="$1"
 if [[ "$backend" == "ollama" ]]; then
@@ -1191,8 +1188,8 @@ else
   fi
 fi
 
-# Reasoning-trace strip, folded into dispatch so an escalation to a trace-
-# emitting reasoning model is stripped too. Drops everything up to and
+# Reasoning-trace strip, folded into dispatch so any trace-emitting reasoning
+# model is stripped. Drops everything up to and
 # including the first </think> and trims leading whitespace. Applies when
 # DELEGATE_STRIP_THINK=1, or for the reasoning tier by default
 # (DELEGATE_STRIP_THINK=0 force-disables even there). No-op when the response
@@ -1238,19 +1235,15 @@ fi
 # (NO_META) and failed calls stay quiet. The counts ride the delegate-meta line
 # below (checks_failed=N / checks_autofixed=N) and persist to the metrics row.
 # run_output_checks — run the recipe's declared deterministic checks on the
-# current $output, setting $checks_run / $checks_failed / $checks_autofixed and
-# $capability_failed. Called once on the primary output and (by the escalation
-# gate) again on an escalated output. capability_failed counts only the non-
-# style checks: a failed style check (no_padding_tail) is the auto-strip's job
-# and a stronger model is no better at it (ADR 0018's shared-padding
-# counterexample), so it must NOT trigger escalation; subject_max / subject_type
-# / body_required are capability checks a stronger model can plausibly clear, so
-# they do. New checks default to capability unless added to that style set.
+# current $output, setting $checks_run / $checks_failed / $checks_autofixed.
+# $capability_failed counts only the non-style checks (subject_max / subject_type
+# / body_required) and excludes the style check no_padding_tail (the auto-strip
+# owns it). It is retained as an observable counter; nothing currently reads it.
 run_output_checks() {
 # Locals keep the per-call scratch state out of the global scope now that this
 # is a function (it ran at top level before the refactor). The result and the
-# counters the gate reads — output, checks_run/failed/autofixed, capability_failed
-# — are deliberately NOT local: they are the function's outputs.
+# counters — output, checks_run/failed/autofixed, capability_failed — are
+# deliberately NOT local: they are the function's outputs.
 local padding_re check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines
 checks_failed=0
 checks_run=0

@@ -6,6 +6,10 @@ Date: 2026-06-18
 
 Accepted. Productionises the prototype recorded in ADR 0019 (verify-and-escalate, PR #318) as an opt-in gate inside `scripts/delegate.sh`. Follows ADR 0018 (the fan-out negative result, PR #317), which is what redirected the quality work from sampling-ensembles to escalation in the first place. If 0018 and 0019 land under different numbers, renumber this in lock-step; the dependency is on the findings, not the integers.
 
+> Superseded — the implementation was archived in the 2026-06-19 lean-core reset (recoverable from tag pre-cleanup-2026-06-19). See ROADMAP.md.
+
+
+
 ## Context
 
 The 2026-06-18 quality investigation put production miss rate at about 19.7%, with faithfulness roughly 23% of the problem cases (ADR 0016). ADR 0018 showed that sampling fan-out buys no quality on this backend because `mlx_lm.server` is deterministic per prompt and our failures are systematic rather than stochastic. ADR 0019 then prototyped the complement and found it works: run the task on a cheaper model, run the deterministic checks the wrapper already computes, and on a failed check escalate to a stronger model rather than re-prompting the small one. The prototype recovered the structured-output floors (T6 regex 0.50 to 1.00, T5 JSON 0.67 to 1.00) at a few seconds of added latency, paid only on failure.

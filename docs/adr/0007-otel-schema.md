@@ -6,6 +6,10 @@ Date: 2026-05-22 (Track A); amended 2026-05-22 (Track F); amended 2026-05-22 (#1
 
 Accepted. Track F amendment (privacy redaction default) accepted 2026-05-22. Issue #187 amendment (`delegate.recipe` on feedback span) accepted 2026-05-22.
 
+> Superseded — the implementation was archived in the 2026-06-19 lean-core reset (recoverable from tag pre-cleanup-2026-06-19). See ROADMAP.md.
+
+
+
 ## Context
 
 Phase 11 of the ROADMAP extends the on-disk JSONL telemetry that Phase 8 introduced out to an external OpenTelemetry backend, so that hit-rate, miss-reason distribution, and tokens-avoided rollups live in a real observability tool rather than only behind `metrics-summary.sh`. The exporter is filed as issue [#134](https://github.com/IsmaelMartinez/delegate-local/issues/134) (Track A). This ADR (Track B, issue [#154](https://github.com/IsmaelMartinez/delegate-local/issues/154)) lands the schema decisions Track A encodes, so Track A's review has a written reference to check the wire payload against rather than having to re-derive the rationale during code review.

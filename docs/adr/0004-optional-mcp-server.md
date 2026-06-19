@@ -6,6 +6,10 @@ Date: 2026-05-01
 
 Accepted.
 
+> Superseded — the implementation was archived in the 2026-06-19 lean-core reset (recoverable from tag pre-cleanup-2026-06-19). See ROADMAP.md.
+
+
+
 ## Context
 
 Phase 5 of the roadmap calls for an "optional MCP server wrapping the

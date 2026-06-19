@@ -6,6 +6,10 @@ Date: 2026-06-19
 
 Accepted as a measured prototype tool (`scripts/grounding-check.sh`) with a unit suite. Wiring it into `delegate.sh` as an opt-in `grounding` check is the documented follow-on (it depends on, and composes with, the ADR 0020 escalation gate, PR #319). Builds on ADR 0016 (the quality re-review that sized the faithfulness bucket) and ADR 0020 (which explicitly left faithfulness out of the gate's reach).
 
+> Superseded — the implementation was archived in the 2026-06-19 lean-core reset (recoverable from tag pre-cleanup-2026-06-19). See ROADMAP.md.
+
+
+
 ## Context
 
 ADR 0020 recovered capability failures but stated plainly that it cannot touch faithfulness — a structurally clean answer that is semantically wrong is invisible to the deterministic checks, and faithfulness is the dominant remaining miss bucket (~23%, ADR 0016). The live evidence was vivid: a 0.6B produced a perfectly well-formed commit message about a "stale lock file / daemon crash" for a diff that was actually about account lockout, and because it was structurally clean the gate correctly did not fire.

@@ -6,6 +6,10 @@ Date: 2026-06-18
 
 Accepted. Records a negative prototype result and the reasons it does not (yet) justify production work. Supersedes nothing; informs any future ensemble or sampling work.
 
+> Superseded — the implementation was archived in the 2026-06-19 lean-core reset (recoverable from tag pre-cleanup-2026-06-19). See ROADMAP.md.
+
+
+
 ## Context
 
 The 2026-06-18 quality investigation (see ADR 0016 for the re-review method) put a clear number on production quality — about 19% true miss rate, with faithfulness ~23% of problem cases — and asked what an established local-delegation approach does that our naive single-shot path does not. One candidate kept surfacing: fan-out, i.e. draw N generations and merge them (self-consistency / best-of-N), on the theory that a single greedy decode occasionally lands on a bad mode (a hallucinated claim, a padding tail) that a vote or a best-by-checks selection would filter out. The idea was attractive because a latency probe showed the MLX server runs three concurrent requests at ~1.5× the cost of one, so an ensemble looked cheap rather than N-fold. The maintainer had also seen ensembling work before, in earlier local-brain experiments that were dropped only for cost.
