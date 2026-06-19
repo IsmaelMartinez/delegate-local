@@ -1,0 +1,7 @@
+<<<<<<< SEARCH
+def last_n(items, n):
+    return items[len(items) - n - 1:]
+=======
+def last_n(items, n):
+    return items[len(items) - n:]
+>>>>>>> REPLACE

@@ -1,0 +1,9 @@
+<<<<<<< SEARCH
+def version_gt(a, b):
+    return a > b
+=======
+def version_gt(a, b):
+    pa = [int(x) for x in a.split(".")]
+    pb = [int(x) for x in b.split(".")]
+    return pa > pb
+>>>>>>> REPLACE

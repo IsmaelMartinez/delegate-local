@@ -207,6 +207,26 @@ case "$line" in
 esac
 rm -rf "$tmp" "$metrics"
 
+# 2b. Seed passthrough: DELEGATE_SEED reaches Ollama options.seed; absent when unset.
+tmp=$(mktemp -d); make_mock_ollama "$tmp"; sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_SEED=7 \
+  bash "$SCRIPT" prose "hello" </dev/null 2>/dev/null)
+payload=$(cat "$sniff")
+assert_contains '"seed":7' "$payload" "SEED: DELEGATE_SEED reaches options.seed"
+rm -rf "$tmp"
+
+tmp=$(mktemp -d); make_mock_ollama "$tmp"; sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOCAL_NO_METRICS=1 \
+  bash "$SCRIPT" prose "hello" </dev/null 2>/dev/null)
+payload=$(cat "$sniff")
+case "$payload" in
+  *'"seed"'*) echo "  FAIL  SEED: bare greedy must NOT carry seed"; fail=$((fail+1));;
+  *) echo "  PASS  SEED: bare greedy omits seed"; pass=$((pass+1));;
+esac
+rm -rf "$tmp"
+
 # 3. Opt-out env var suppresses metrics writing.
 tmp=$(mktemp -d)
 make_mock_ollama "$tmp"
