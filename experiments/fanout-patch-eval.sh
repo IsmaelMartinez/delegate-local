@@ -36,6 +36,8 @@ while [[ "${1:-}" == --* ]]; do
 done
 fixtures="${1:-}"
 [[ -n "$fixtures" && -d "$fixtures" ]] || { echo "usage: fanout-patch-eval.sh [opts] <fixtures-dir>" >&2; exit 2; }
+[[ "$n" =~ ^[1-9][0-9]*$ ]] || { echo "--n must be a positive integer" >&2; exit 2; }
+[[ "$reps" =~ ^[1-9][0-9]*$ ]] || { echo "--reps must be a positive integer" >&2; exit 2; }
 
 # Gather fixtures once (each must carry source.py + test_source.py).
 fxs=()
@@ -70,9 +72,13 @@ for ((r=1; r<=reps; r++)); do
     res=$(bash "$fanout" --n "$n" --tier "$tier" --temperature "$temperature" "$d" 2>/dev/null)
     bo_lat_total=$(( bo_lat_total + (SECONDS - t0) ))
     outcome=$(printf '%s' "$res" | sed -n 's/^FANOUT_RESULT: \([A-Z_]*\).*/\1/p' | head -1)
+    # escalation_rate counts every run where escalation FIRED — read from the
+    # escalated=N field — not just the ones that passed (a NO_PASS after a failed
+    # escalation still tried the strong tier and must count).
+    esc_flag=$(printf '%s' "$res" | sed -n 's/.*escalated=\([0-9]*\).*/\1/p' | head -1)
+    [[ "$esc_flag" == "1" ]] && esc=$((esc+1))
     case "$outcome" in
-      PASS_LOCAL)     bo_pass=$((bo_pass+1)); rep_bo=$((rep_bo+1)); fbo[$i]=$(( ${fbo[$i]} + 1 ));;
-      PASS_ESCALATED) bo_pass=$((bo_pass+1)); rep_bo=$((rep_bo+1)); esc=$((esc+1)); fbo[$i]=$(( ${fbo[$i]} + 1 ));;
+      PASS_LOCAL|PASS_ESCALATED) bo_pass=$((bo_pass+1)); rep_bo=$((rep_bo+1)); fbo[$i]=$(( ${fbo[$i]} + 1 ));;
       *) handback=$((handback+1));;
     esac
     i=$((i+1))

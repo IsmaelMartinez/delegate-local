@@ -50,8 +50,10 @@ EOF
 run() { # extra-env... -- args...   (returns stdout; sets EC)
   local -a envv=(); while [[ "$1" != "--" ]]; do envv+=("$1"); shift; done; shift
   EC=0
+  # bash 3.2-safe empty-array expansion: "${arr[@]}" on an empty array aborts
+  # under set -u on macOS bash 3.2, so guard with the +-expansion idiom.
   out=$(env FANOUT_DELEGATE_SH="$BIN/delegate.sh" FANOUT_APPLY_AND_TEST_SH="$BIN/apply-and-test.sh" \
-    "${envv[@]}" bash "$SCRIPT" "$@" 2>/dev/null) || EC=$?
+    "${envv[@]+"${envv[@]}"}" bash "$SCRIPT" "$@" 2>/dev/null) || EC=$?
 }
 
 BIN=$(mktemp -d); make_mock_delegate "$BIN"; make_mock_apply "$BIN"
@@ -116,6 +118,11 @@ run SEEDMAP="$MAP" -- --n 3 --escalate-m 0 "$SRC"
 assert_eq 1 "$EC" "rank: exit 1 (no pass)"
 assert_contains "selected=s2" "$out" "rank: FAIL (s2) chosen as closest over APPLY"
 rm -rf "$SRC"; rm -f "$MAP"
+
+# 10. run() with NO env args exercises the empty-array expansion path under set -u
+#     (the bash 3.2 hazard the +-expansion guard fixes).
+run -- /nonexistent/dir
+assert_eq 3 "$EC" "empty-env run(): bad source-dir -> exit 3 (no unbound-var abort)"
 
 rm -rf "$BIN"
 echo ""; echo "fanout-patch tests: $pass passed, $fail failed"
