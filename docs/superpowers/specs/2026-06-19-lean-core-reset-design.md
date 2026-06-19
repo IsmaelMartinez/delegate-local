@@ -4,6 +4,13 @@ Date: 2026-06-19
 Status: Approved (pending maintainer review of this document)
 Author: brainstormed with Claude Code
 
+> Amendment (2026-06-19, during execution): the OTEL → Loki/Grafana
+> observability pipeline listed under "Archive" below was **kept**, not
+> archived, on maintainer direction — it is the live visibility into delegation
+> traffic. `otel.sh` emission, the `sync-metrics-to-loki.sh` / `backfill-otel.sh`
+> exporters, `dashboards/`, `observability/`, and `docs/observability/` all stay
+> in the core. Everything else in the archive boundary stands.
+
 ## Why this exists
 
 delegate-local started as a deliberately tiny thing: route "gather context once,
