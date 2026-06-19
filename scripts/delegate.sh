@@ -137,38 +137,6 @@
 #                                           #   in issue #110.
 #   DELEGATE_NO_PREFLIGHT=1                 # alternate disable for the canary
 #                                           #   (equivalent to TIMEOUT=0).
-#   DELEGATE_ESCALATE_MODEL=<model>         # Verify-and-escalate gate (ADR
-#                                           #   0020). Off when unset. When a
-#                                           #   recipe CAPABILITY check fails on
-#                                           #   the primary (tier-resolved)
-#                                           #   output, re-issue the identical
-#                                           #   request to this exact model and
-#                                           #   keep its output only if it
-#                                           #   clears strictly more capability
-#                                           #   checks. Capability checks are
-#                                           #   subject_max / subject_type /
-#                                           #   body_required; the style check
-#                                           #   no_padding_tail never triggers
-#                                           #   escalation (the auto-strip owns
-#                                           #   it and a stronger model is no
-#                                           #   better at it). Cost is
-#                                           #   asymmetric — the strong model is
-#                                           #   loaded only on a capability
-#                                           #   failure. The gate inherits the
-#                                           #   checks' gating: it cannot fire
-#                                           #   when DELEGATE_LOCAL_NO_META=1
-#                                           #   disables the checks, or on a
-#                                           #   non-recipe / no-checks call.
-#   DELEGATE_ESCALATE_TIER=<tier>           # Same gate, but resolve the
-#                                           #   escalation target through
-#                                           #   pick-model.sh for the named tier
-#                                           #   instead of pinning an exact
-#                                           #   model. DELEGATE_ESCALATE_MODEL
-#                                           #   wins if both are set. A tier
-#                                           #   that doesn't resolve, or that
-#                                           #   resolves to the model the
-#                                           #   primary already used, leaves the
-#                                           #   gate inert.
 #   DELEGATE_FORCE_FLAKY=1                  # override the recipe-level flaky-
 #                                           #   on-model gate (Phase 16 Track
 #                                           #   A). When a recipe declares
@@ -438,8 +406,7 @@ log_metric() {
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
     s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}" \
-    checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}" \
-    esc_to="${22:-}" esc_adopted="${23:-}" pmodel="${24:-}"
+    checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}"
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$ochars")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -484,7 +451,6 @@ log_metric() {
     --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
     --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
     --arg crun "$checks_run" --arg cfail "$checks_failed" --arg cfix "$checks_autofixed" \
-    --arg esc_to "$esc_to" --arg esc_adopted "$esc_adopted" --arg pmodel "$pmodel" \
     '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
      + (if $recipe != "" then {recipe:$recipe} else {} end)
      + (if $project != "" then {project:$project} else {} end)
@@ -494,9 +460,7 @@ log_metric() {
      + (if $s_top_p != "" then {sampling_top_p:($s_top_p|tonumber)} else {} end)
      + (if $s_top_k != "" then {sampling_top_k:($s_top_k|tonumber)} else {} end)
      + (if $s_pp != "" then {sampling_presence_penalty:($s_pp|tonumber)} else {} end)
-     + (if ($crun != "" and ($crun|tonumber) > 0) then {checks_run:($crun|tonumber), checks_failed:($cfail|tonumber), checks_autofixed:($cfix|tonumber)} else {} end)
-     + (if $esc_to != "" then {escalated_to:$esc_to, escalation_adopted:($esc_adopted == "true")} else {} end)
-     + (if ($pmodel != "" and $pmodel != $model) then {primary_model:$pmodel} else {} end)' \
+     + (if ($crun != "" and ($crun|tonumber) > 0) then {checks_run:($crun|tonumber), checks_failed:($cfail|tonumber), checks_autofixed:($cfix|tonumber)} else {} end)' \
     >> "$metrics_file" 2>/dev/null || true
 }
 
@@ -1245,7 +1209,6 @@ if (( _strip == 1 )) && [[ "$output" == *"</think>"* ]]; then
 fi
 }
 
-primary_model="$model"
 dispatch_to_model "$model"
 
 # Dispatch-failure guidance. curl -sS already printed its own error line
@@ -1433,79 +1396,6 @@ fi
 # Run the checks on the primary (tier-resolved) output.
 run_output_checks
 
-# Verify-and-escalate gate (ADR 0020). Off by default. When the primary output
-# fails a CAPABILITY check (not the style-only no_padding_tail, which the auto-
-# strip owns and a stronger model is no better at), re-issue the identical
-# request to a stronger model and keep that output only if it clears strictly
-# more capability checks. Cost is asymmetric: the stronger model is loaded only
-# on a capability failure, never on the happy path. The escalation target is
-# named explicitly by the caller — DELEGATE_ESCALATE_MODEL (an exact model
-# name) takes precedence over DELEGATE_ESCALATE_TIER (a tier resolved through
-# pick-model.sh) — so no model name is hardcoded here. The gate inherits the
-# checks' gating: it cannot fire when DELEGATE_LOCAL_NO_META=1 disables the
-# checks, on a non-recipe call, or when the recipe declares no checks: block.
-escalated_to=""
-escalation_adopted=""
-escalate_target=""
-if [[ -n "${DELEGATE_ESCALATE_MODEL:-}" ]]; then
-  escalate_target="$DELEGATE_ESCALATE_MODEL"
-elif [[ -n "${DELEGATE_ESCALATE_TIER:-}" ]]; then
-  # Resolve the escalation tier through the same router. A failure to resolve
-  # (no installed model for that tier) leaves the target empty -> no escalation.
-  escalate_target=$(bash "$pick" "$DELEGATE_ESCALATE_TIER" 2>/dev/null || true)
-fi
-if [[ -n "$escalate_target" ]] \
-   && (( status == 0 )) \
-   && (( capability_failed > 0 )) \
-   && [[ "$escalate_target" != "$model" ]]; then
-  # Preserve the primary result so we can fall back if escalation doesn't help
-  # (no capability improvement) or its dispatch fails.
-  primary_output="$output"
-  primary_capfail="$capability_failed"
-  primary_crun="$checks_run"
-  primary_cfail="$checks_failed"
-  primary_cfix="$checks_autofixed"
-  primary_ttfb="${ttfb_s:-}"
-  escalated_to="$escalate_target"
-  dispatch_to_model "$escalate_target"
-  if (( status == 0 )) && [[ -n "$output" ]]; then
-    run_output_checks
-    if (( capability_failed < primary_capfail )); then
-      escalation_adopted="true"
-      model="$escalate_target"
-      # Keep queue_wait_ms anchored to the primary dispatch's first-byte time
-      # (the invocation's initial latency) rather than the escalation call's, so
-      # the metric keeps its "invoke -> first byte" meaning. duration_ms still
-      # spans both dispatches, so generation_ms absorbs the escalation
-      # generation. Mirrors the ttfb_s restore on the REJECT / dispatch-fail
-      # paths below.
-      ttfb_s="$primary_ttfb"
-      echo "delegate: verify-and-escalate ADOPTED $escalate_target ($primary_capfail -> $capability_failed capability check(s) failed)" >&2
-    else
-      escalation_adopted="false"
-      output="$primary_output"
-      capability_failed="$primary_capfail"
-      checks_run="$primary_crun"
-      checks_failed="$primary_cfail"
-      checks_autofixed="$primary_cfix"
-      ttfb_s="$primary_ttfb"
-      echo "delegate: verify-and-escalate REJECTED $escalate_target (no capability improvement; kept primary)" >&2
-    fi
-  else
-    # The escalation dispatch failed (timeout, bad model name, daemon down).
-    # The primary succeeded, so keep its output and restore its success status.
-    escalation_adopted="false"
-    output="$primary_output"
-    status=0
-    capability_failed="$primary_capfail"
-    checks_run="$primary_crun"
-    checks_failed="$primary_cfail"
-    checks_autofixed="$primary_cfix"
-    ttfb_s="$primary_ttfb"
-    echo "delegate: verify-and-escalate dispatch to $escalate_target failed; kept primary output" >&2
-  fi
-fi
-
 end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 duration_ms=$((end_epoch_ms - start_epoch_ms))
 
@@ -1539,7 +1429,7 @@ context_chars=${#context}
 output_chars=${#output}
 tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$output_chars")
 
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$escalated_to" "$escalation_adopted" "$primary_model"
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed"
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to
@@ -1572,9 +1462,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] \
   fi
   if (( checks_autofixed > 0 )); then
     meta="$meta checks_autofixed=$checks_autofixed"
-  fi
-  if [[ -n "$escalated_to" ]]; then
-    meta="$meta escalated_to=\"$escalated_to\" escalation_adopted=$escalation_adopted"
   fi
   echo "delegate-meta: $meta" >&2
 fi
