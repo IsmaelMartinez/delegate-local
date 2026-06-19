@@ -89,13 +89,16 @@ new_count=$((total_lines - watermark))
 #   * The JSONL `ts` is only second-granularity, and delegate calls cluster
 #     (canary preflight, parallel runs, tests) so many rows share a second.
 #     Loki drops entries that collide on (stream, timestamp), so a naive
-#     "...000000000" sub-second part silently loses all-but-one row per second
-#     (observed: 49 of 713 delegate rows survived). We disambiguate by using
-#     the row's global line number as the 9-digit sub-second part: unique per
-#     row and monotonic with file order (≈ chronological). The 9-digit slice
-#     assumes fewer than 1e9 rows in the file (any real metrics JSONL); beyond
-#     that the slice would truncate and could re-collide, but a billion-line
-#     workstation metrics file is not reachable.
+#     "...000000000" sub-second part silently loses all-but-one row per second.
+#     We disambiguate with a CONTENT hash of the row (base-31 mod 1e9) as the
+#     9-digit sub-second part. Content-derived (not line-number-derived) is the
+#     load-bearing property: a row re-pushed at a different file POSITION after
+#     a rewrite/reorder gets the SAME ns and dedups, instead of duplicating —
+#     the earlier line-number scheme this replaces caused a ~2x feedback-row
+#     blow-up in the local Loki (2026-06-19) when the metrics file was rewritten.
+#     Distinct same-second rows get distinct offsets; two byte-identical rows in
+#     the same second collapse to one (rare, and equivalent for metrics). Base-31
+#     mod 1e9 keeps every intermediate under 2^53 so jq's float64 math stays exact.
 # Feedback rows record only the verdict + parent ref_ts, not the parent's
 # recipe/tier — but per-recipe and per-tier HIT-rate are the load-bearing
 # calibration signals. Build a (delegate ts -> {recipe, tier}) map from the
@@ -115,23 +118,26 @@ parent_map=$(jq -sc '
 # racing an in-progress delegate.sh append) would otherwise blank the payload,
 # get pushed as empty, and silently skip every row in the batch.
 payload=$(tail -n "+$start_line" "$metrics_file" \
-  | jq -sc --argjson base "$start_line" --argjson parents "$parent_map" '
-      [ to_entries[]
-        | (.key + $base) as $gln
-        | .value
+  | jq -sc --argjson parents "$parent_map" '
+      # nshash: a deterministic content hash of the row JSON, mod 1e9, for the
+      # 9-digit sub-second part. Base 31 keeps every intermediate (< 1e9 * 31)
+      # under 2^53 so jq float64 math is exact. Same content -> same offset
+      # (idempotent re-push); the enrichment below runs BEFORE hashing so a
+      # feedback row hashes the same bytes that get pushed.
+      def nshash: tojson | explode | reduce .[] as $c (0; ((. * 31) + $c) % 1000000000);
+      [ .[]
         | select(.ts != null and (.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")))
         # enrich feedback rows with the parent recipe/tier (no-op for other
         # sources, and never overwrites a field the row already has)
         | ( if (.source // "delegate") == "feedback" and .ref_ts != null and ($parents[.ref_ts] != null)
-            then ($parents[.ref_ts] | with_entries(select(.value != ""))) + . else . end )
-        | {row: ., gln: $gln} ]
-      | group_by(.row.source // "delegate")
+            then ($parents[.ref_ts] | with_entries(select(.value != ""))) + . else . end ) ]
+      | group_by(.source // "delegate")
       | map({
-          stream: {service: "delegate-local", source: (.[0].row.source // "delegate")},
+          stream: {service: "delegate-local", source: (.[0].source // "delegate")},
           values: map([
-            ((.row.ts | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime | tostring)
-              + (("000000000" + (.gln | tostring))[-9:])),
-            (.row | tojson)
+            ((.ts | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime | tostring)
+              + (("000000000" + (nshash | tostring))[-9:])),
+            tojson
           ])
         })
       | {streams: .}
