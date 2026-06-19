@@ -6,11 +6,11 @@
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APPLY="$REPO/scripts/apply-and-test.sh"
-FIX="$REPO/experiments/fixtures/fanout"
+# Both the canonical (easy, baseline) and the -hard (headroom) fixture dirs.
 pass=0; fail=0
 assert_eq() { local e="$1" a="$2" n="$3"; if [[ "$e" == "$a" ]]; then echo "  PASS  $n"; pass=$((pass+1)); else echo "  FAIL  $n (want $e got $a)"; fail=$((fail+1)); fi; }
 
-for d in "$FIX"/*/; do
+for d in "$REPO"/experiments/fixtures/fanout/*/ "$REPO"/experiments/fixtures/fanout-hard/*/; do
   name=$(basename "$d")
   # Buggy source fails its own test: a no-op patch (identity SEARCH/REPLACE)
   # leaves the bug in place, so apply-and-test must return FAIL (exit 1).

@@ -1,0 +1,8 @@
+<<<<<<< SEARCH
+def merge(intervals):
+    out = []
+=======
+def merge(intervals):
+    intervals = sorted(intervals)
+    out = []
+>>>>>>> REPLACE
