@@ -9,7 +9,11 @@ Author: brainstormed with Claude Code
 > archived, on maintainer direction — it is the live visibility into delegation
 > traffic. `otel.sh` emission, the `sync-metrics-to-loki.sh` / `backfill-otel.sh`
 > exporters, `dashboards/`, `observability/`, and `docs/observability/` all stay
-> in the core. Everything else in the archive boundary stands.
+> in the core. The embeddings/semantic-search path (`embed.sh`,
+> `semantic-search.sh`, and the `semantic-search` recipe) was likewise restored
+> — it was complete and genuinely used (122 embedding calls), not half-done.
+> Three orphaned experiment learnings surfaced by a retrospective audit were
+> written up as ADRs 0022–0024. Everything else in the archive boundary stands.
 
 ## Why this exists
 
