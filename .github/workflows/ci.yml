@@ -50,6 +50,12 @@ jobs:
       - name: Project-name resolution tests
         run: bash tests/test-project-name.sh
 
+      - name: Embed.sh tests
+        run: bash tests/test-embed.sh
+
+      - name: Semantic-search.sh tests
+        run: bash tests/test-semantic-search.sh
+
       - name: Metrics-summary tests
         run: bash tests/test-metrics-summary.sh
 

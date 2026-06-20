@@ -31,9 +31,9 @@ frontmatter + content + trigger-eval CI pipeline plus the bash test suite.
 
 The 2026-06-19 lean-core reset returned the repo to that core after a period of
 heavy accretion. It archived the maintainer-facing research machinery out of the
-installed tree (the `experiments/` accuracy framework, the
-embeddings/semantic-search path, the Python MCP server, the verdict-automation
-hooks, the maintainer analysis tools, and the faithfulness-grounding prototype),
+installed tree (the `experiments/` accuracy framework, the Python MCP server,
+the verdict-automation hooks, the maintainer analysis tools, and the
+faithfulness-grounding prototype),
 trimmed the accreted verify-and-
 escalate gate out of `delegate.sh`, cut the `commit-message` recipe from 62KB to
 ~14KB by removing inline calibration history, and pruned the dead recipe tail.

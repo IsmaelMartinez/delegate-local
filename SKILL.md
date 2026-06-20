@@ -167,7 +167,18 @@ curl -s -H "Content-Type: application/json" http://localhost:11434/api/generate 
   | jq -r '.response'
 ```
 
-The `embedding` tier resolves a model via `pick-model.sh` but has no `delegate.sh` call shape — embedding output is a vector, not text, so it falls outside the text-in / text-out contract the wrapper assumes. Wiring an embedding call shape (and folding the `vision` / `reasoning-vision` `curl` shapes shown above) into the wrapper is future work.
+`embedding` has a wired-up primitive — `scripts/embed.sh` — that takes text on stdin (or via `--text "..."`) and prints the embedding vector to stdout as a compact JSON array of floats. It writes a `source:"embed"` row to the same metrics JSONL `delegate.sh` uses, so embedding traffic surfaces in `metrics-summary.sh` rollups alongside delegation traffic. The recipe `prompts/semantic-search.md` wraps `scripts/semantic-search.sh` (a thin cosine-similarity ranker built on `embed.sh`) and gives the agent a "find the doc that mentions X" surface that avoids reading every file:
+
+```bash
+# Primitive — embed a single string.
+echo "the text to embed" | bash ~/.claude/skills/delegate-local/scripts/embed.sh
+
+# Recipe — rank N files by cosine similarity to a query.
+bash ~/.claude/skills/delegate-local/scripts/semantic-search.sh \
+  "how do I run the test suite" prompts/*.md README.md
+```
+
+`embed.sh` bypasses `delegate.sh` because the wrapper assumes text-in / text-out — embedding output is a vector and the metrics fields differ (`embedding_dim` rather than `output_chars`). Image (`vision`, `reasoning-vision`) tiers still need the bespoke `curl` shape above — folding their call shapes into a wrapper is future work.
 
 ## Failure modes — concrete examples
 
