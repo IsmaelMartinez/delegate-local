@@ -6,6 +6,10 @@ Date: 2026-06-18
 
 Accepted. Records a positive prototype result and recommends a gated production implementation. Complements ADR 0018 (fan-out, negative).
 
+> Superseded — the implementation was archived in the 2026-06-19 lean-core reset (recoverable from tag pre-cleanup-2026-06-19). See ROADMAP.md.
+
+
+
 ## Context
 
 The 2026-06-18 quality investigation tested two levers for lifting local-model output quality. Fan-out (ADR 0018) failed: the MLX backend is deterministic and the benchmark failures are systematic, so drawing N samples gives no lift. This ADR covers the complementary lever the same investigation pointed at — verify-and-escalate — which the data suggested would work where fan-out does not, because the baseline matrix showed different models succeed on different tasks (a capability gap, not a sampling gap).

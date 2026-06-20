@@ -1,7 +1,0 @@
-model	rep	duration_ms	output_bytes
-deepseek-r1	1	7947	199
-deepseek-r1	2	2985	199
-deepseek-r1	3	3030	199
-coder-next	1	9273	161
-coder-next	2	1913	161
-coder-next	3	1905	161

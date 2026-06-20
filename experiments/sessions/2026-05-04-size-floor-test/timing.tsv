@@ -1,4 +1,0 @@
-model	size_gb	rep	duration_ms	output_bytes
-deepseek-r1-14b	9.0	1	5480	186
-deepseek-r1-14b	9.0	2	1512	186
-deepseek-r1-14b	9.0	3	1499	186
