@@ -73,7 +73,7 @@ After the call, verify (see Expected output shape) and record the verdict:
 bash scripts/delegate-feedback.sh hit   # or: miss "<reason>"
 ```
 
-The `subject_max: 72` check is a capability check, so pairing this recipe with `DELEGATE_ESCALATE_MODEL` / `DELEGATE_ESCALATE_TIER` lets a rambling over-72-char title from a cheap primary escalate to a stronger model automatically (ADR 0020).
+The `subject_max: 72` check is a capability check: it deterministically flags a rambling over-72-char title after generation so the caller can shorten it or re-run on a stronger tier.
 
 ## Anti-hallucination guards (each line addresses a recurring miss-mode)
 
@@ -86,13 +86,13 @@ The `subject_max: 72` check is a capability check, so pairing this recipe with `
 ## Expected output shape
 
 ```
-feat: verify-and-escalate gate in delegate.sh (off by default)
+feat: restore semantic-search and embed scripts with tests
 ```
 
 Verify before recording the verdict: exactly one line; `type:` or `type(scope):` prefix using one of the listed types; ≤72 characters; no trailing period; no `(#NN)` / issue / branch suffix; the title describes the whole branch rather than a single commit.
 
 ## Calibration notes
 
-Graduated 2026-06-18 from the session-transcript corpus rather than a single recorded HIT. A mining pass over the session history found "draft PR title (conventional-commit, ≤72 chars)" recurring verbatim across multiple projects, folded into `pr-description.md` each time even when only the title was wanted. Splitting it out gives the agent a small, reliable title-only delegation that is not subject to the body recipe's 35B/80B `flaky_on_models` stall, and a `subject_max: 72` capability check that the ADR 0020 escalation gate can act on. The prompt skeleton reuses the proven guards from `commit-message.md` (no `(#NN)` suffix, single conventional-commit type via the shared `{{flavor_commit_types}}` vocabulary, output-only discipline) narrowed to a single line, plus the whole-branch-synthesis directive specific to titles spanning multiple commits.
+Graduated 2026-06-18 from the session-transcript corpus rather than a single recorded HIT. A mining pass over the session history found "draft PR title (conventional-commit, ≤72 chars)" recurring verbatim across multiple projects, folded into `pr-description.md` each time even when only the title was wanted. Splitting it out gives the agent a small, reliable title-only delegation that is not subject to the body recipe's 35B/80B `flaky_on_models` stall, and a `subject_max: 72` capability check that deterministically flags an over-length title. The prompt skeleton reuses the proven guards from `commit-message.md` (no `(#NN)` suffix, single conventional-commit type via the shared `{{flavor_commit_types}}` vocabulary, output-only discipline) narrowed to a single line, plus the whole-branch-synthesis directive specific to titles spanning multiple commits.
 
-First dogfood (2026-06-18, 3-commit branch): the 0.6B produced a clean 55-char title (`feat: productionise verify-and-escalate gate in delegate.sh`) — a HIT — while the Coder-30B on the same input produced a faithful but 73-char title that the `subject_max: 72` check correctly flagged. The check does its job, and this is exactly the case the ADR 0020 escalation gate exists for when the primary is a smaller model; the directive's "Shorter is better" line plus the deterministic check are the two levers, not a longer prompt.
+First dogfood (2026-06-18, 3-commit branch): the 0.6B produced a clean 55-char title — a HIT — while the Coder-30B on the same input produced a faithful but 73-char title that the `subject_max: 72` check correctly flagged. The check does its job: the directive's "Shorter is better" line plus the deterministic check are the two levers, not a longer prompt.

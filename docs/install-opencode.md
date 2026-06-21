@@ -19,10 +19,6 @@ ln -s "$PWD/delegate-local" ~/.config/opencode/skills/delegate-local
 
 Use `cp -r` instead of `ln -s` on filesystems without symlink support. The directory must end at the skill name (`delegate-local`), not at `skills/` — OpenCode expects each skill in its own subdirectory.
 
-## Use the optional MCP server instead
-
-OpenCode supports MCP servers natively. If you would rather expose the routing scripts as MCP tools (`pick_model`, `audit_models`, `list_tiers`) than have OpenCode read the SKILL.md directly, install the optional Python server in `mcp/` — see [`mcp/README.md`](../mcp/README.md) for the install snippet and the OpenCode configuration block. The bash routing logic stays the source of truth; the MCP server is a thin wrapper.
-
 ## Verify
 
 Ask OpenCode for something the skill should fire on (a log summary, a commit-message draft, a triage pass) and confirm it announces "Delegated to <model> (<tier> tier)" before producing the output. The audit script confirms both that the skill is reachable and that `ollama list` shows installed models in the resolved tiers:

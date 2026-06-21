@@ -2,7 +2,7 @@
 
 The skill defaults to `DELEGATE_BACKEND=auto` (since 2026-05-13): on every invocation it probes `${MLX_HOST:-http://localhost:8080}/v1/models` with a 1-second timeout, picks MLX if reachable, and falls back to Ollama otherwise. Non-Apple-Silicon hosts and Apple Silicon hosts without `mlx_lm.server` running both fall through to Ollama transparently — the auto default is strictly an opt-in upgrade, not a behaviour change. To force one backend regardless of probe state, set `DELEGATE_BACKEND=ollama` or `DELEGATE_BACKEND=mlx` explicitly.
 
-On Apple Silicon, `mlx-lm` is an alternative inference runtime that uses Apple's native Metal kernels and unified-memory-aware KV cache. For the same Q8 model, MLX is typically 10–30% lighter on memory and faster on prefill than Ollama's llama.cpp backend (measured: 2× faster wall-clock, 25% lighter peak memory on `Qwen3.6-35B-A3B-8bit` — see `experiments/results/2026-05-12-mlx-vs-ollama-v2.md`). This guide covers the install steps plus the lifecycle differences vs Ollama.
+On Apple Silicon, `mlx-lm` is an alternative inference runtime that uses Apple's native Metal kernels and unified-memory-aware KV cache. For the same Q8 model, MLX is typically 10–30% lighter on memory and faster on prefill than Ollama's llama.cpp backend (measured: 2× faster wall-clock, 25% lighter peak memory on `Qwen3.6-35B-A3B-8bit` — the rationale for preferring MLX when available is recorded in [`adr/0022-mlx-primary-backend-rationale.md`](adr/0022-mlx-primary-backend-rationale.md)). This guide covers the install steps plus the lifecycle differences vs Ollama.
 
 ## Requirements
 
