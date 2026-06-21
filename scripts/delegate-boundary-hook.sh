@@ -144,7 +144,7 @@ fi
 mode="${DELEGATE_BOUNDARY_MODE:-warn}"
 [[ "$mode" == "off" ]] && exit 0
 
-reminder="delegate-local: about to author a ${boundary} message inline with no local delegation recorded in the last ${window_min}m for project '${project}'. Draft it on-device first — bash ~/.claude/skills/delegate-local/scripts/delegate.sh --recipe ${recipe} <tier> \"...\" — then record the verdict with scripts/delegate-feedback.sh. Set DELEGATE_BOUNDARY_MODE=off to silence."
+reminder="delegate-local: about to author a ${boundary} message inline with no local delegation recorded in the last ${window_min}m for project '${project}'. Draft it on-device first — bash ~/.claude/skills/delegate-local/scripts/delegate.sh --recipe ${recipe} <tier> \"...\" — then record the verdict with ~/.claude/skills/delegate-local/scripts/delegate-feedback.sh --source agent. Set DELEGATE_BOUNDARY_MODE=off to silence."
 
 if [[ "$mode" == "enforce" ]]; then
   jq -nc --arg r "$reminder" \

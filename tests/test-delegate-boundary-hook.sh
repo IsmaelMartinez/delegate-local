@@ -263,10 +263,13 @@ assert_contains 'additionalContext' "$out" "no-metrics: still nudges"
 assert_eq 0 "$(nrows)" "no-metrics: no row written"
 
 # 13. Custom window honoured (1-minute window, 5-minute-old delegation -> missed).
+# The row matches on project AND recipe so the out-of-window timestamp is the
+# sole reason it is not counted — otherwise the recipe filter would exclude it
+# regardless of the window and the test would pass for the wrong reason.
 : > "$METRICS"
 oldish=$(jq -rn --argjson now "$(date -u +%s)" '($now - 300) | todateiso8601')
 jq -nc --arg ts "$oldish" --arg p "$proj" \
-  '{ts:$ts, source:"delegate", project:$p, tier:"prose"}' >> "$METRICS"
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message"}' >> "$METRICS"
 payload 'git commit -m x' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_BOUNDARY_WINDOW_MIN=1 bash "$HOOK" >/dev/null
 assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "custom window: 5m-old delegation outside 1m window"
 
