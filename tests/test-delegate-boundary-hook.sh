@@ -27,6 +27,7 @@ assert_contains() {
 tmpcwd=$(mktemp -d)
 proj=$(basename "$tmpcwd")
 METRICS=$(mktemp)
+trap 'rm -rf "$tmpcwd" "$METRICS"' EXIT
 nowts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 payload() { # cmd  cwd
@@ -266,7 +267,6 @@ ec=0
 out=$(echo 'not json' | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK") || ec=$?
 assert_eq 0 "$ec" "malformed stdin: exit 0 (fail-open)"
 
-rm -rf "$tmpcwd" "$METRICS"
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

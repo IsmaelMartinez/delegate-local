@@ -41,6 +41,9 @@
 set -uo pipefail
 
 # --- read the harness payload ---------------------------------------------
+# Exit cleanly if stdin is a TTY (the hook run by hand in a terminal) so `cat`
+# can't block waiting for input that will never arrive.
+[[ -t 0 ]] && exit 0
 input=$(cat 2>/dev/null) || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
@@ -108,13 +111,15 @@ window_min="${DELEGATE_BOUNDARY_WINDOW_MIN:-10}"
 now_epoch=$(date -u +%s)
 delegated=false
 if [[ -f "$metrics_file" ]]; then
-  recent=$(jq -rs --argjson win "$((window_min * 60))" --arg proj "$project" --arg recipe "$recipe" --argjson now "$now_epoch" '
+  # Only the recent tail can fall inside the look-back window, so cap the read
+  # instead of slurping the whole (ever-growing) metrics file on each boundary.
+  recent=$(tail -n 500 "$metrics_file" 2>/dev/null | jq -s --argjson win "$((window_min * 60))" --arg proj "$project" --arg recipe "$recipe" --argjson now "$now_epoch" '
     [ .[]
       | select((.source // "delegate") == "delegate")
       | select((.project // "") == $proj)
       | select((.recipe // "") == $recipe)
       | ((.ts | fromdateiso8601?) // 0)
-      | select(. > ($now - $win)) ] | length' "$metrics_file" 2>/dev/null) || recent=0
+      | select(. > ($now - $win)) ] | length' 2>/dev/null) || recent=0
   [[ "${recent:-0}" -gt 0 ]] && delegated=true
 fi
 
