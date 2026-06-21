@@ -86,7 +86,7 @@ The `subject_max: 72` check is a capability check: it deterministically flags a 
 ## Expected output shape
 
 ```
-feat: verify-and-escalate gate in delegate.sh (off by default)
+feat: restore semantic-search and embed scripts with tests
 ```
 
 Verify before recording the verdict: exactly one line; `type:` or `type(scope):` prefix using one of the listed types; ≤72 characters; no trailing period; no `(#NN)` / issue / branch suffix; the title describes the whole branch rather than a single commit.
@@ -95,4 +95,4 @@ Verify before recording the verdict: exactly one line; `type:` or `type(scope):`
 
 Graduated 2026-06-18 from the session-transcript corpus rather than a single recorded HIT. A mining pass over the session history found "draft PR title (conventional-commit, ≤72 chars)" recurring verbatim across multiple projects, folded into `pr-description.md` each time even when only the title was wanted. Splitting it out gives the agent a small, reliable title-only delegation that is not subject to the body recipe's 35B/80B `flaky_on_models` stall, and a `subject_max: 72` capability check that deterministically flags an over-length title. The prompt skeleton reuses the proven guards from `commit-message.md` (no `(#NN)` suffix, single conventional-commit type via the shared `{{flavor_commit_types}}` vocabulary, output-only discipline) narrowed to a single line, plus the whole-branch-synthesis directive specific to titles spanning multiple commits.
 
-First dogfood (2026-06-18, 3-commit branch): the 0.6B produced a clean 55-char title (`feat: productionise verify-and-escalate gate in delegate.sh`) — a HIT — while the Coder-30B on the same input produced a faithful but 73-char title that the `subject_max: 72` check correctly flagged. The check does its job: the directive's "Shorter is better" line plus the deterministic check are the two levers, not a longer prompt.
+First dogfood (2026-06-18, 3-commit branch): the 0.6B produced a clean 55-char title — a HIT — while the Coder-30B on the same input produced a faithful but 73-char title that the `subject_max: 72` check correctly flagged. The check does its job: the directive's "Shorter is better" line plus the deterministic check are the two levers, not a longer prompt.

@@ -69,7 +69,7 @@ Run the trigger eval against a local Ollama model (free, on-device; recommended 
 
 ```bash
 bash scripts/eval-skill-triggers.sh --ollama                          # default: pick-model.sh code
-bash scripts/eval-skill-triggers.sh --ollama qwen3.6:35b-a3b-q8_0     # known-good batched scorer
+bash scripts/eval-skill-triggers.sh --ollama deepseek-r1:32b          # known-good batched scorer (qwen3-coder:30b-a3b-q8_0 also 1.000)
 ```
 
 Run the trigger eval against GitHub Models (free up to per-model rate-limit tier; this is what runs in CI on every PR):
