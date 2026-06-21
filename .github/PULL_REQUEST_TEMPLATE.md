@@ -4,7 +4,7 @@ A short description of the change. Reference any roadmap item or issue this clos
 
 ## Why
 
-The motivation. If this is a routing change, link to the experiment or evidence (`experiments/sessions/...` or `experiments/results/...`) that supports the new preference order.
+The motivation. If this is a routing change, link to the ADR or evidence that supports the new preference order.
 
 ## Validation
 
@@ -15,7 +15,6 @@ Confirm the gates that apply:
 - [ ] `bash scripts/validate-skill-content.sh SKILL.md` passes
 - [ ] `bash scripts/eval-skill-triggers.sh` passes (shape mode)
 - [ ] If `SKILL.md` frontmatter `description` changed: `bash scripts/eval-skill-triggers.sh --ollama` passes recall ≥ 0.9 and negative-precision ≥ 0.9
-- [ ] If `mcp/` changed: `cd mcp && pytest -q` passes
 - [ ] If `pick-model.sh` preferences changed: corresponding test in `tests/run-tests.sh` updated
 
 ## Notes for the reviewer

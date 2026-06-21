@@ -19,10 +19,6 @@ ln -s "$PWD/delegate-local" ~/.codex/skills/delegate-local
 
 For project-scoped install replace `~/.codex/skills/` with `<project>/.codex/skills/`. Use `cp -r` instead of `ln -s` on filesystems without symlink support.
 
-## Use the optional MCP server instead
-
-If your Codex setup is configured to use MCP servers but not skill files directly, install the optional Python MCP server in `mcp/` instead — it exposes `pick_model`, `audit_models`, and `list_tiers` as MCP tools that Codex can call programmatically. The bash routing logic stays the source of truth; the server is a thin wrapper. See [`mcp/README.md`](../mcp/README.md) for the install snippet and the Codex-side configuration block.
-
 ## Verify
 
 Ask Codex something the skill should fire on (a log summary, a commit-message draft, a triage of N items) and confirm it announces "Delegated to <model> (<tier> tier)" before producing the output. The audit script confirms both that the skill is reachable and that `ollama list` shows installed models in the resolved tiers:
