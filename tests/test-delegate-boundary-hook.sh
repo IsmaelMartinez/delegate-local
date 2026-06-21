@@ -215,6 +215,14 @@ assert_eq pr-review-comment "$(jq -r .boundary <<<"$(last_row)")" "gh api --meth
 payload 'gh api repos/o/r/pulls/12/comments -X=POST -f body="x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq pr-review-comment "$(jq -r .boundary <<<"$(last_row)")" "gh api -X=POST: boundary"
 
+# 8f-ter. An issue-comment POST via the API (.../issues/<n>/comments) is scoped
+# out of the pr-review-comment boundary, so it is not misread as pr-review-reply.
+: > "$METRICS"
+ec=0
+out=$(payload 'gh api repos/o/r/issues/12/comments -X POST -f body="x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK") || ec=$?
+assert_eq 0 "$ec" "gh api issues-comment POST: exit 0 (not a boundary)"
+assert_eq 0 "$(nrows)" "gh api issues-comment POST: no row (not misread as pr-review-comment)"
+
 # 8g. The read-only fetch step (gh api .../comments --jq, no -X POST) is NOT a boundary.
 : > "$METRICS"
 ec=0

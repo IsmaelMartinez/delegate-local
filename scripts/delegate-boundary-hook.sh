@@ -71,11 +71,13 @@ elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+issue[[:space:]]+create' <<<"$cmd"
   boundary="issue-create"; recipe="github-issue-body"
 elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+release[[:space:]]+create' <<<"$cmd"; then
   boundary="release-create"; recipe="release-note"
-# Inline PR review-comment reply: `gh api .../comments -X POST -f body=...` (the
-# /address-pr-comments inline path). Require an explicit POST so the read-only
-# fetch step (`gh api .../comments --jq ...`, no -X POST) is NOT a boundary.
+# Inline PR review-comment reply: `gh api .../pulls/<n>/comments -X POST -f body=...`
+# (the /address-pr-comments inline path). Scope to the pulls endpoint so an
+# issue-comment POST (`.../issues/<n>/comments`) is not misread as a PR review
+# reply, and require an explicit POST so the read-only fetch step
+# (`gh api .../comments --jq ...`, no -X POST) is NOT a boundary.
 elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api([[:space:]]|$)' <<<"$cmd" \
-   && grep -Eq '/comments' <<<"$cmd" \
+   && grep -Eq '/pulls/[0-9]+/comments' <<<"$cmd" \
    && grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$cmd"; then
   boundary="pr-review-comment"; recipe="pr-review-reply"
 # General PR / issue / MR comment reply authored inline.
