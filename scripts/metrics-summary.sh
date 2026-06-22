@@ -213,7 +213,14 @@ if (( n_feedback > 0 )); then
     | @tsv' "$metrics_file")
   (( n_agent > 0 )) && show_agent=true
   (( n_scaffold > 0 )) && show_scaffold=true
-  echo "Delegation feedback (hit/miss):"
+  # The header self-describes the scaffold column when one is present; with no
+  # scaffold rows it stays the legacy "hit/miss" form so existing output is
+  # byte-identical.
+  if [[ "$show_scaffold" == true ]]; then
+    echo "Delegation feedback (hit/miss/scaffold):"
+  else
+    echo "Delegation feedback (hit/miss):"
+  fi
   jq -rs --argjson show_agent "$show_agent" \
          --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";

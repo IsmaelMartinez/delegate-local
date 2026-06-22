@@ -488,7 +488,7 @@ rm -f "$vfix"
 # distinct from hit and miss: a discarded-but-useful draft. It must report as
 # its own count in the calibration sections, must NOT be folded into hits or
 # misses, and a scaffold-covered delegation counts toward coverage. Fixture:
-# 4 commit-message recipe delegations — D1 human HIT, D2 human MISS, D3 human
+# 4 code-draft recipe delegations — D1 human HIT, D2 human MISS, D3 human
 # SCAFFOLD, D4 untracked. Expected: hits=1 misses=1 scaffold=1 untracked=1,
 # coverage=75% (3 of 4 covered).
 scaf=$(mktemp)
@@ -504,6 +504,7 @@ EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$scaf" 2>&1) || EC=$?
 assert_eq 0 "$EC" "scaffold: exits 0"
+assert_contains "Delegation feedback (hit/miss/scaffold):" "$out" "scaffold: section header is self-describing when scaffold rows present"
 assert_contains "Recipe delegations (calibration signal): n=4  hits=1  misses=1  scaffold=1  untracked=1  coverage=75%" "$out" "scaffold: headline reports scaffold as its own count, not folded into hits/misses"
 # Per-tier row carries the scaffold column.
 code_tier_line=$(printf '%s\n' "$out" | grep -E "^    code" | tail -1)
@@ -525,6 +526,11 @@ EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$noscaf" 2>&1) || EC=$?
 assert_eq 0 "$EC" "no-scaffold: exits 0"
+assert_contains "Delegation feedback (hit/miss):" "$out" "no-scaffold: section header stays the legacy 'hit/miss' form"
+case "$out" in
+  *"hit/miss/scaffold"*) echo "  FAIL  no-scaffold: header must not advertise scaffold without scaffold rows"; fail=$((fail+1));;
+  *) echo "  PASS  no-scaffold: header omits scaffold without scaffold rows"; pass=$((pass+1));;
+esac
 case "$out" in
   *"scaffold="*) echo "  FAIL  no-scaffold: scaffold= column must be absent without scaffold rows"; fail=$((fail+1));;
   *) echo "  PASS  no-scaffold: scaffold= column absent without scaffold rows"; pass=$((pass+1));;
