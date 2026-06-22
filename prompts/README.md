@@ -163,6 +163,7 @@ The taste-calibrated recipes are the ones a new install should recalibrate; the 
 - `pr-description.md` (taste-calibrated) — drafting a GitHub PR description from a diff stat and a recent merged-PR body.
 - `pr-title.md` (taste-calibrated) — drafting one conventional-commit PR title (≤72 chars) synthesised across a branch's commit subjects. Title-only sibling of `pr-description.md` (which drafts the body); not subject to that recipe's 35B/80B `flaky_on_models` stall, and its `subject_max: 72` capability check pairs with the ADR 0020 escalation gate.
 - `summarise-diff.md` (universal) — short bullet summary of a git diff focused on user-visible changes.
+- `code-draft.md` (universal) — a focused full-snippet code draft for one bounded task (single file/function) routed to the `code` tier, for a divergent, executable second opinion under a verify loop. Unlike the prose recipes this ships with no verbatim-HIT history yet — it is the recipe arm of the supervised-draft-delegation experiment (ADR 0025); its `hit`/`miss`/`scaffold` verdicts feed the evidence gate that decides whether it stays.
 - `pr-review-reply.md` (taste-calibrated) — one-sentence reply under a PR/MR inline comment after applying or declining the fix.
 - `release-note.md` (taste-calibrated) — drafting one CHANGELOG / release-body bullet for a merged PR.
 - `summarise-issue.md` (universal) — timeline-style summary of a long GitHub issue, MR thread, or CI log.
