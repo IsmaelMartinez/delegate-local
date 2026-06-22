@@ -83,6 +83,9 @@ jobs:
       - name: Onboard tests
         run: bash tests/test-onboard.sh
 
+      - name: Boundary-hook tests
+        run: bash tests/test-delegate-boundary-hook.sh
+
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh
 
