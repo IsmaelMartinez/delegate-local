@@ -157,12 +157,11 @@ esac
 # discriminator the reporting partition reads. It is NOT a miss, so it does not
 # fire the MISS-recurrence nudge below.
 case "$1" in
-  hit)      kept=true;  verdict=hit ;;
-  miss)     kept=false; verdict=miss ;;
-  scaffold) kept=false; verdict=scaffold ;;
+  hit)      kept=true;  verdict=hit;      is_scaffold=false ;;
+  miss)     kept=false; verdict=miss;     is_scaffold=false ;;
+  scaffold) kept=false; verdict=scaffold; is_scaffold=true ;;
   *) echo "first arg must be 'hit', 'miss', or 'scaffold' (got '$1')" >&2; usage ;;
 esac
-is_scaffold=$([[ "$verdict" == "scaffold" ]] && echo true || echo false)
 shift
 reason="$*"
 
@@ -267,21 +266,16 @@ ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # to the same repo as the delegation it scores.
 feedback_project=$(delegate_project_name)
 
-# Build the feedback row. `reason` is omitted when the caller didn't supply
-# one so empty-string entries don't pollute future filters. `verdict_source`
-# is written only for the "agent" tier — a human verdict (default) omits the
-# field, so it is indistinguishable from the legacy rows written before this
-# tier existed, and the reporting partition maps both to human. Only the
-# agent tier carries the marker.
-if [[ -n "$reason" ]]; then
-  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --argjson scaffold "$is_scaffold" --arg reason "$reason" --arg project "$feedback_project" --arg vsource "$verdict_source" \
-    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + {reason:$reason} + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end)' \
-    >> "$metrics_file"
-else
-  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --argjson scaffold "$is_scaffold" --arg project "$feedback_project" --arg vsource "$verdict_source" \
-    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end)' \
-    >> "$metrics_file"
-fi
+# Build the feedback row in one jq call. Each optional field is appended only
+# when present, so an empty `reason` is omitted (no empty-string entries to
+# pollute future filters), `scaffold` rides only on the scaffold verdict, and
+# `verdict_source` is written only for the "agent" tier — a human verdict
+# (default) omits the field, so it is indistinguishable from the legacy rows
+# written before this tier existed, and the reporting partition maps both to
+# human. Only the agent tier carries the marker.
+jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --argjson scaffold "$is_scaffold" --arg reason "${reason:-}" --arg project "$feedback_project" --arg vsource "$verdict_source" \
+  '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + (if $reason != "" then {reason:$reason} else {} end) + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end)' \
+  >> "$metrics_file"
 
 case "$verdict" in
   hit)      verdict_word="HIT" ;;

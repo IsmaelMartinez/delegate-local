@@ -197,17 +197,25 @@ fi
 # n_scaffold mirrors n_agent: a feedback row carries scaffold:true when the
 # verdict is the third "discarded but useful" outcome (G1). The scaffold column
 # is shown only when at least one scaffold verdict exists, so files without any
-# (every legacy file, and the common case today) print exactly as before. Both
-# counters are 0-initialised unconditionally because the per-project / per-recipe
-# blocks below read them outside the n_feedback>0 guard.
+# (every legacy file, and the common case today) print exactly as before. The
+# counters AND the show_* gates are initialised unconditionally because the
+# per-project / per-recipe blocks below read them outside the n_feedback>0 guard
+# (set -u safety). Both counts come from a single jq pass over the feedback rows.
 n_agent=0
 n_scaffold=0
+show_agent=false
+show_scaffold=false
 if (( n_feedback > 0 )); then
-  n_agent=$(jq -rs 'map(select((.source // "") == "feedback" and (.verdict_source // "human") == "agent")) | length' "$metrics_file")
-  n_scaffold=$(jq -rs 'map(select((.source // "") == "feedback" and (.scaffold // false) == true)) | length' "$metrics_file")
+  IFS=$'\t' read -r n_agent n_scaffold < <(jq -rs '
+    map(select((.source // "") == "feedback"))
+    | [ (map(select((.verdict_source // "human") == "agent")) | length),
+        (map(select((.scaffold // false) == true)) | length) ]
+    | @tsv' "$metrics_file")
+  (( n_agent > 0 )) && show_agent=true
+  (( n_scaffold > 0 )) && show_scaffold=true
   echo "Delegation feedback (hit/miss):"
-  jq -rs --argjson show_agent "$([[ "$n_agent" -gt 0 ]] && echo true || echo false)" \
-         --argjson show_scaffold "$([[ "$n_scaffold" -gt 0 ]] && echo true || echo false)" '
+  jq -rs --argjson show_agent "$show_agent" \
+         --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
     # fbv maps a feedback row to its verdict string. scaffold (the discarded-
     # but-useful third outcome, G1) is checked first because it also carries
@@ -250,8 +258,8 @@ n_projects=$(jq -rs '
 ' "$metrics_file")
 if (( n_projects > 1 )); then
   echo "Per-project (delegate):"
-  jq -rs --argjson show_agent "$([[ "$n_agent" -gt 0 ]] && echo true || echo false)" \
-         --argjson show_scaffold "$([[ "$n_scaffold" -gt 0 ]] && echo true || echo false)" '
+  jq -rs --argjson show_agent "$show_agent" \
+         --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
     def fbv: if (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
     (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "human")) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $hmap
@@ -285,8 +293,8 @@ n_recipe=$(jq -rs '
 ' "$metrics_file")
 if (( n_recipe > 0 )); then
   echo "Per-recipe (delegate):"
-  jq -rs --argjson show_agent "$([[ "$n_agent" -gt 0 ]] && echo true || echo false)" \
-         --argjson show_scaffold "$([[ "$n_scaffold" -gt 0 ]] && echo true || echo false)" '
+  jq -rs --argjson show_agent "$show_agent" \
+         --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
     def fbv: if (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
     (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "human")) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $hmap
