@@ -41,6 +41,16 @@ Density threshold — per-edit AND session-level: if you would otherwise type mo
 
 If `ollama` is not on PATH or `ollama list` is empty, do the work yourself and mention why.
 
+### Supervised code drafts — a divergent, executable second opinion
+
+The discriminator is sharper than "weak agent, so don't." Local models are weak *unsupervised* agents but usable as a *supervised* draft generator under a verify loop. This is scoped to delegation as a sub-step of *your own* implementation work — the skill still does not own feature implementation, you do — and within that work you may delegate one bounded code draft. The reason it earns its keep is something a self-generated draft cannot give you: a differently-trained model proposes an approach, or makes a mistake, you would not have generated yourself, and running the draft answers "does it compile, pass the test, behave as I assumed" empirically rather than by static reasoning.
+
+Fire a code draft only when BOTH hold:
+- Value trigger (at least one): the approach is genuinely forked and you are unsure which way to go; OR executing the draft would teach more than reasoning about it (a compile result, a test result, real API behaviour).
+- Bounded guard (always): a single file or function, small output, with a concrete verification — a test to run or an explicit acceptance check — named up front.
+
+The draft is always disposable. Verify before keeping anything: apply it and run the named verification; a draft that applies but fails the verification is treated as a REFUSE, never kept on the strength of its prose. Use `--recipe code-draft` — it routes to the `code` tier and emits a focused full snippet, not a diff. Record the honest verdict afterwards via `delegate-feedback.sh --source agent`: `hit` if you kept it, `miss` if it was useless, or `scaffold "<what it taught>"` if you discarded the code but the divergence or the executable feedback genuinely improved your result. This is **not** "delegate all coding" — generic, low-divergence, easily-self-drafted code does not qualify, because for those the local round-trip only adds latency. The amendment is an experiment under an evidence gate; see ADR 0025.
+
 ## Pattern
 
 Three steps, in order, every time: **gather → delegate → verify**.
