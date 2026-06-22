@@ -194,27 +194,56 @@ fi
 # n_agent is guaranteed 0 when there are no feedback rows, so the scan only runs
 # inside the n_feedback>0 guard; the per-project / per-recipe blocks below read
 # n_agent too, hence the unconditional 0 initialiser.
+# n_scaffold mirrors n_agent: a feedback row carries scaffold:true when the
+# verdict is the third "discarded but useful" outcome (G1). The scaffold column
+# is shown only when at least one scaffold verdict exists, so files without any
+# (every legacy file, and the common case today) print exactly as before. The
+# counters AND the show_* gates are initialised unconditionally because the
+# per-project / per-recipe blocks below read them outside the n_feedback>0 guard
+# (set -u safety). Both counts come from a single jq pass over the feedback rows.
 n_agent=0
+n_scaffold=0
+show_agent=false
+show_scaffold=false
 if (( n_feedback > 0 )); then
-  n_agent=$(jq -rs 'map(select((.source // "") == "feedback" and (.verdict_source // "human") == "agent")) | length' "$metrics_file")
-  echo "Delegation feedback (hit/miss):"
-  jq -rs --argjson show_agent "$([[ "$n_agent" -gt 0 ]] && echo true || echo false)" '
+  IFS=$'\t' read -r n_agent n_scaffold < <(jq -rs '
+    map(select((.source // "") == "feedback"))
+    | [ (map(select((.verdict_source // "human") == "agent")) | length),
+        (map(select((.scaffold // false) == true)) | length) ]
+    | @tsv' "$metrics_file")
+  (( n_agent > 0 )) && show_agent=true
+  (( n_scaffold > 0 )) && show_scaffold=true
+  # The header self-describes the scaffold column when one is present; with no
+  # scaffold rows it stays the legacy "hit/miss" form so existing output is
+  # byte-identical.
+  if [[ "$show_scaffold" == true ]]; then
+    echo "Delegation feedback (hit/miss/scaffold):"
+  else
+    echo "Delegation feedback (hit/miss):"
+  fi
+  jq -rs --argjson show_agent "$show_agent" \
+         --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
+    # fbv maps a feedback row to its verdict string. scaffold (the discarded-
+    # but-useful third outcome, G1) is checked first because it also carries
+    # kept:false; a legacy row with no scaffold field falls through to the
+    # hit/miss read of kept, so historical rows derive exactly as before.
+    def fbv: if (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
     # Two maps: human (verdict_source absent/human) and agent. Latest verdict in
     # each tier wins independently (verdict revision). A delegation can carry
     # both a human and an agent verdict — they count in separate columns, never
     # merged, so the human hit-rate cannot be inflated by the agent tier.
-    (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "human")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $hmap
-    | (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "agent")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $amap
+    (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "human")) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $hmap
+    | (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "agent")) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $amap
     | (map(select(src == "delegate" and (.exit_status // 0) == 0) | {recipe, tier, h: $hmap[.ts], a: $amap[.ts]})) as $d
     | ($d | map(select(.recipe != null))) as $rx
     | ($d | map(select(.recipe == null))) as $raw
     | ($rx | length) as $rn
     | ($raw | length) as $wn
     | ($rx | map(select(.a != null)) | length) as $an
-    | "  Recipe delegations (calibration signal): n=\($rn)  hits=\($rx|map(select(.h==true))|length)  misses=\($rx|map(select(.h==false))|length)" + (if $show_agent then "  agent=\($an)" else "" end) + "  untracked=\($rx|map(select(.h==null and .a==null))|length)" + (if $rn > 0 then "  coverage=\((($rx|map(select(.h!=null or .a!=null))|length) * 100 / $rn) | floor)%" else "" end),
-      ($rx | group_by(.tier) | map({tier:.[0].tier, n:length, hits:(map(select(.h==true))|length), misses:(map(select(.h==false))|length), agent:(map(select(.a!=null))|length), untracked:(map(select(.h==null and .a==null))|length)}) | sort_by(-.n) | .[] | "    \(.tier | . + (" " * (14 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_agent then "  agent=\(.agent)" else "" end) + "  untracked=\(.untracked)"),
-      (if $show_agent then "  Agent-observed (usage, not quality): n=\($an)  used=\($rx|map(select(.a==true))|length)  rewrote=\($rx|map(select(.a==false))|length)" + (if $an > 0 then "  usage_rate=\((($rx|map(select(.a==true))|length) * 100 / $an) | floor)%" else "" end) else empty end),
+    | "  Recipe delegations (calibration signal): n=\($rn)  hits=\($rx|map(select(.h=="hit"))|length)  misses=\($rx|map(select(.h=="miss"))|length)" + (if $show_scaffold then "  scaffold=\($rx|map(select(.h=="scaffold"))|length)" else "" end) + (if $show_agent then "  agent=\($an)" else "" end) + "  untracked=\($rx|map(select(.h==null and .a==null))|length)" + (if $rn > 0 then "  coverage=\((($rx|map(select(.h!=null or .a!=null))|length) * 100 / $rn) | floor)%" else "" end),
+      ($rx | group_by(.tier) | map({tier:.[0].tier, n:length, hits:(map(select(.h=="hit"))|length), misses:(map(select(.h=="miss"))|length), scaffold:(map(select(.h=="scaffold"))|length), agent:(map(select(.a!=null))|length), untracked:(map(select(.h==null and .a==null))|length)}) | sort_by(-.n) | .[] | "    \(.tier | . + (" " * (14 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + (if $show_agent then "  agent=\(.agent)" else "" end) + "  untracked=\(.untracked)"),
+      (if $show_agent then "  Agent-observed (usage, not quality): n=\($an)  used=\($rx|map(select(.a=="hit"))|length)  rewrote=\($rx|map(select(.a=="miss"))|length)" + (if $show_scaffold then "  scaffold=\($rx|map(select(.a=="scaffold"))|length)" else "" end) + (if $an > 0 then "  usage_rate=\((($rx|map(select(.a=="hit"))|length) * 100 / $an) | floor)%" else "" end) else empty end),
       (if $wn > 0 then "  Raw / no-recipe (verdicts optional — experiments, audits, ad-hoc): n=\($wn)  tracked=\($raw|map(select(.h!=null or .a!=null))|length)  untracked=\($raw|map(select(.h==null and .a==null))|length)" else empty end)
   ' "$metrics_file"
   echo
@@ -236,24 +265,27 @@ n_projects=$(jq -rs '
 ' "$metrics_file")
 if (( n_projects > 1 )); then
   echo "Per-project (delegate):"
-  jq -rs --argjson show_agent "$([[ "$n_agent" -gt 0 ]] && echo true || echo false)" '
+  jq -rs --argjson show_agent "$show_agent" \
+         --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
-    (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "human")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $hmap
-    | (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "agent")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $amap
+    def fbv: if (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
+    (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "human")) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $hmap
+    | (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "agent")) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $amap
     | map(select(src == "delegate" and (.exit_status // 0) == 0) | {ts, project: (.project // "(none)"), duration_ms, h: $hmap[.ts], a: $amap[.ts]})
     | group_by(.project)
     | map({
         project: .[0].project,
         n: length,
-        hits: (map(select(.h == true)) | length),
-        misses: (map(select(.h == false)) | length),
+        hits: (map(select(.h == "hit")) | length),
+        misses: (map(select(.h == "miss")) | length),
+        scaffold: (map(select(.h == "scaffold")) | length),
         agent: (map(select(.a != null)) | length),
         untracked: (map(select(.h == null and .a == null)) | length),
         p50: ((sort_by(.duration_ms) | .[(length / 2 | floor)] | .duration_ms // 0))
       })
     | sort_by(-.n)
     | .[]
-    | "  \(.project | . + (" " * (20 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_agent then "  agent=\(.agent)" else "" end) + "  untracked=\(.untracked)  p50=\(.p50)ms"
+    | "  \(.project | . + (" " * (20 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + (if $show_agent then "  agent=\(.agent)" else "" end) + "  untracked=\(.untracked)  p50=\(.p50)ms"
   ' "$metrics_file"
   echo
 fi
@@ -268,23 +300,26 @@ n_recipe=$(jq -rs '
 ' "$metrics_file")
 if (( n_recipe > 0 )); then
   echo "Per-recipe (delegate):"
-  jq -rs --argjson show_agent "$([[ "$n_agent" -gt 0 ]] && echo true || echo false)" '
+  jq -rs --argjson show_agent "$show_agent" \
+         --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
-    (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "human")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $hmap
-    | (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "agent")) as $i ({}; .[$i.ref_ts] = $i.kept)) as $amap
+    def fbv: if (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
+    (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "human")) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $hmap
+    | (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "agent")) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $amap
     | map(select(src == "delegate" and .recipe != null and (.exit_status // 0) == 0) | {ts, recipe, h: $hmap[.ts], a: $amap[.ts]})
     | group_by(.recipe)
     | map({
         recipe: .[0].recipe,
         n: length,
-        hits: (map(select(.h == true)) | length),
-        misses: (map(select(.h == false)) | length),
+        hits: (map(select(.h == "hit")) | length),
+        misses: (map(select(.h == "miss")) | length),
+        scaffold: (map(select(.h == "scaffold")) | length),
         agent: (map(select(.a != null)) | length),
         untracked: (map(select(.h == null and .a == null)) | length)
       })
     | sort_by(-.n)
     | .[]
-    | "  \(.recipe | . + (" " * (20 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_agent then "  agent=\(.agent)" else "" end) + "  untracked=\(.untracked)"
+    | "  \(.recipe | . + (" " * (20 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + (if $show_agent then "  agent=\(.agent)" else "" end) + "  untracked=\(.untracked)"
   ' "$metrics_file"
   echo
 fi

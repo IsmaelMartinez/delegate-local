@@ -484,6 +484,78 @@ for flag in --file --since --days; do
 done
 rm -f "$vfix"
 
+# 20. Scaffold verdict (supervised-draft-delegation G1). A third outcome
+# distinct from hit and miss: a discarded-but-useful draft. It must report as
+# its own count in the calibration sections, must NOT be folded into hits or
+# misses, and a scaffold-covered delegation counts toward coverage. Fixture:
+# 4 code-draft recipe delegations — D1 human HIT, D2 human MISS, D3 human
+# SCAFFOLD, D4 untracked. Expected: hits=1 misses=1 scaffold=1 untracked=1,
+# coverage=75% (3 of 4 covered).
+scaf=$(mktemp)
+cat > "$scaf" <<'EOF'
+{"ts":"2026-06-22T10:00:00Z","source":"delegate","recipe":"code-draft","tier":"code","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-06-22T10:05:00Z","source":"delegate","recipe":"code-draft","tier":"code","model":"q","duration_ms":4100,"exit_status":0,"estimated_tokens_avoided":110}
+{"ts":"2026-06-22T10:10:00Z","source":"delegate","recipe":"code-draft","tier":"code","model":"q","duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":120}
+{"ts":"2026-06-22T10:15:00Z","source":"delegate","recipe":"code-draft","tier":"code","model":"q","duration_ms":4300,"exit_status":0,"estimated_tokens_avoided":130}
+{"ts":"2026-06-22T20:00:00Z","source":"feedback","ref_ts":"2026-06-22T10:00:00Z","kept":true}
+{"ts":"2026-06-22T20:01:00Z","source":"feedback","ref_ts":"2026-06-22T10:05:00Z","kept":false,"reason":"rewrote entirely"}
+{"ts":"2026-06-22T20:02:00Z","source":"feedback","ref_ts":"2026-06-22T10:10:00Z","kept":false,"scaffold":true,"reason":"approach was right, code discarded"}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$scaf" 2>&1) || EC=$?
+assert_eq 0 "$EC" "scaffold: exits 0"
+assert_contains "Delegation feedback (hit/miss/scaffold):" "$out" "scaffold: section header is self-describing when scaffold rows present"
+assert_contains "Recipe delegations (calibration signal): n=4  hits=1  misses=1  scaffold=1  untracked=1  coverage=75%" "$out" "scaffold: headline reports scaffold as its own count, not folded into hits/misses"
+# Per-tier row carries the scaffold column.
+code_tier_line=$(printf '%s\n' "$out" | grep -E "^    code" | tail -1)
+assert_contains "scaffold=1" "$code_tier_line" "scaffold: per-tier row carries scaffold column"
+assert_contains "hits=1" "$code_tier_line" "scaffold: per-tier hits unchanged by scaffold"
+assert_contains "misses=1" "$code_tier_line" "scaffold: per-tier misses excludes the scaffold"
+# Per-recipe row carries the scaffold column.
+recipe_line=$(printf '%s\n' "$out" | grep -E "^  code-draft" | tail -1)
+assert_contains "scaffold=1" "$recipe_line" "scaffold: per-recipe row carries scaffold column"
+rm -f "$scaf"
+
+# 20b. Negative gate: a fixture with hit/miss but NO scaffold row must NOT
+# print any `scaffold=` column — legacy output stays byte-for-byte as before.
+noscaf=$(mktemp)
+cat > "$noscaf" <<'EOF'
+{"ts":"2026-06-22T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-06-22T20:00:00Z","source":"feedback","ref_ts":"2026-06-22T10:00:00Z","kept":true}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$noscaf" 2>&1) || EC=$?
+assert_eq 0 "$EC" "no-scaffold: exits 0"
+assert_contains "Delegation feedback (hit/miss):" "$out" "no-scaffold: section header stays the legacy 'hit/miss' form"
+case "$out" in
+  *"hit/miss/scaffold"*) echo "  FAIL  no-scaffold: header must not advertise scaffold without scaffold rows"; fail=$((fail+1));;
+  *) echo "  PASS  no-scaffold: header omits scaffold without scaffold rows"; pass=$((pass+1));;
+esac
+case "$out" in
+  *"scaffold="*) echo "  FAIL  no-scaffold: scaffold= column must be absent without scaffold rows"; fail=$((fail+1));;
+  *) echo "  PASS  no-scaffold: scaffold= column absent without scaffold rows"; pass=$((pass+1));;
+esac
+assert_contains "Recipe delegations (calibration signal): n=1  hits=1  misses=0  untracked=0  coverage=100%" "$out" "no-scaffold: legacy line shape unchanged"
+rm -f "$noscaf"
+
+# 20c. Agent-tier scaffold coexists with human verdicts. Fixture: D1 human HIT,
+# D2 agent SCAFFOLD. The agent column counts the agent verdict (coverage), the
+# Agent-observed line reports a scaffold count alongside used/rewrote, and the
+# human hit-rate is unaffected by the agent scaffold.
+agentscaf=$(mktemp)
+cat > "$agentscaf" <<'EOF'
+{"ts":"2026-06-22T11:00:00Z","source":"delegate","recipe":"code-draft","tier":"code","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-06-22T11:05:00Z","source":"delegate","recipe":"code-draft","tier":"code","model":"q","duration_ms":4100,"exit_status":0,"estimated_tokens_avoided":110}
+{"ts":"2026-06-22T21:00:00Z","source":"feedback","ref_ts":"2026-06-22T11:00:00Z","kept":true}
+{"ts":"2026-06-22T21:01:00Z","source":"feedback","ref_ts":"2026-06-22T11:05:00Z","kept":false,"scaffold":true,"verdict_source":"agent","reason":"divergent draft, kept the idea"}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$agentscaf" 2>&1) || EC=$?
+assert_eq 0 "$EC" "agent-scaffold: exits 0"
+assert_contains "Recipe delegations (calibration signal): n=2  hits=1  misses=0  scaffold=0  agent=1  untracked=0  coverage=100%" "$out" "agent-scaffold: human hits unaffected; agent scaffold counts in agent+coverage, not human scaffold"
+assert_contains "Agent-observed (usage, not quality): n=1  used=0  rewrote=0  scaffold=1  usage_rate=0%" "$out" "agent-scaffold: Agent-observed line reports scaffold count"
+rm -f "$agentscaf"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
