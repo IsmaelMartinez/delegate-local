@@ -88,7 +88,11 @@ github_repo="${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}"
 
 usage() {
   cat >&2 <<'EOF'
-usage: delegate-feedback.sh [--ts <iso8601>] [--source human|agent] hit|miss [reason words...]
+usage: delegate-feedback.sh [--ts <iso8601>] [--source human|agent] hit|miss|scaffold [reason words...]
+  hit = output kept as-is; miss = rewritten/discarded as useless; scaffold =
+  discarded but genuinely useful (a divergent or executable draft that improved
+  the final result). scaffold is recorded distinct from both and never fires the
+  MISS-recurrence nudge.
   Without --ts, the verdict attaches to the most recent delegate row in
   the metrics JSONL — but only if that row is fresh (default 300 s).
   Pass --ts to pin the verdict to a specific delegate row when metrics
@@ -146,11 +150,19 @@ esac
 
 [[ $# -ge 1 ]] || usage
 
+# A third outcome alongside hit/miss: `scaffold` records a draft that was
+# discarded but genuinely useful (divergence or executable feedback improved
+# the final result). It writes kept:false (so any kept-only reader treats it as
+# "not used verbatim", never inflating hit-rate) plus a scaffold:true
+# discriminator the reporting partition reads. It is NOT a miss, so it does not
+# fire the MISS-recurrence nudge below.
 case "$1" in
-  hit)  kept=true ;;
-  miss) kept=false ;;
-  *) echo "first arg must be 'hit' or 'miss' (got '$1')" >&2; usage ;;
+  hit)      kept=true;  verdict=hit ;;
+  miss)     kept=false; verdict=miss ;;
+  scaffold) kept=false; verdict=scaffold ;;
+  *) echo "first arg must be 'hit', 'miss', or 'scaffold' (got '$1')" >&2; usage ;;
 esac
+is_scaffold=$([[ "$verdict" == "scaffold" ]] && echo true || echo false)
 shift
 reason="$*"
 
@@ -262,16 +274,20 @@ feedback_project=$(delegate_project_name)
 # tier existed, and the reporting partition maps both to human. Only the
 # agent tier carries the marker.
 if [[ -n "$reason" ]]; then
-  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --arg reason "$reason" --arg project "$feedback_project" --arg vsource "$verdict_source" \
-    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept, reason:$reason} + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end)' \
+  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --argjson scaffold "$is_scaffold" --arg reason "$reason" --arg project "$feedback_project" --arg vsource "$verdict_source" \
+    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + {reason:$reason} + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end)' \
     >> "$metrics_file"
 else
-  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --arg project "$feedback_project" --arg vsource "$verdict_source" \
-    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end)' \
+  jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --argjson scaffold "$is_scaffold" --arg project "$feedback_project" --arg vsource "$verdict_source" \
+    '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end)' \
     >> "$metrics_file"
 fi
 
-verdict_word=$([[ "$kept" == "true" ]] && echo "HIT" || echo "MISS")
+case "$verdict" in
+  hit)      verdict_word="HIT" ;;
+  miss)     verdict_word="MISS" ;;
+  scaffold) verdict_word="SCAFFOLD" ;;
+esac
 
 # Emit OTel feedback-as-linked-span (Phase 11 Track A #134). The split
 # variables come from the parent_meta TSV captured during the ref_ts lookup
@@ -288,8 +304,9 @@ parent_recipe=""
 if [[ -n "${parent_meta:-}" ]]; then
   IFS=$'\t' read -r parent_trace_id parent_span_id parent_model parent_recipe <<< "$parent_meta"
 fi
-verdict_lower=$([[ "$kept" == "true" ]] && echo "hit" || echo "miss")
-emit_otel_feedback_span "$ts" "$verdict_lower" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model" "$parent_recipe" "$feedback_project" "$verdict_source"
+# $verdict is already the lowercase wire form (hit|miss|scaffold); the OTel
+# span carries it verbatim as the delegate.feedback.verdict attribute.
+emit_otel_feedback_span "$ts" "$verdict" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model" "$parent_recipe" "$feedback_project" "$verdict_source"
 
 echo "$verdict_word recorded against delegate ts=$ref_ts${reason:+ ($reason)}"
 
@@ -301,7 +318,7 @@ echo "$verdict_word recorded against delegate ts=$ref_ts${reason:+ ($reason)}"
 # stripped, length ≥ 3) and only runs on MISS so HIT recording stays quiet.
 # The just-appended row is excluded from the count by ts so the matcher
 # does not see itself.
-if [[ "$kept" == "false" && "${DELEGATE_FEEDBACK_NO_NUDGE:-0}" != "1" && -n "$reason" ]]; then
+if [[ "$verdict" == "miss" && "${DELEGATE_FEEDBACK_NO_NUDGE:-0}" != "1" && -n "$reason" ]]; then
   nudge_at="${DELEGATE_FEEDBACK_NUDGE_AT:-3}"
   window_days="${DELEGATE_FEEDBACK_NUDGE_WINDOW_DAYS:-30}"
   similar_threshold="${DELEGATE_FEEDBACK_SIMILAR_THRESHOLD:-0.4}"
@@ -344,6 +361,7 @@ if [[ "$kept" == "false" && "${DELEGATE_FEEDBACK_NO_NUDGE:-0}" != "1" && -n "$re
       next unless ref $j eq "HASH";
       next unless ($j->{source} // "") eq "feedback";
       next if  $j->{kept};                      # only MISS rows
+      next if  $j->{scaffold};                  # scaffold is useful, not a miss
       next unless $j->{ts};
       next if $j->{ts} eq $self_ts;             # skip the just-appended row
       if ($window_secs > 0 && $j->{ts} =~ /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/) {

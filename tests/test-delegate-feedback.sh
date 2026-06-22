@@ -1332,6 +1332,99 @@ src_attr=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].a
 assert_eq "human" "$src_attr" "FB-SRC9: default source attribute value is human"
 rm -rf "$tmp"
 
+# ---------------------------------------------------------------------------
+# Scaffold verdict (supervised-draft-delegation G1)
+# A third outcome distinct from hit and miss: the draft was discarded but
+# genuinely useful (divergence/execution improved the final result). Recorded
+# backward-compatibly — the row carries kept:false (so any kept-only reader
+# treats it as "not used verbatim", never inflating hit-rate) plus the new
+# scaffold:true discriminator. It is NOT a miss, so it must not fire the
+# MISS-recurrence nudge, and historical scaffold rows must not be counted as
+# similar misses for a later real miss's nudge.
+# ---------------------------------------------------------------------------
+
+# SC1: scaffold with reason → exit 0, one row carrying scaffold:true + kept:false,
+# stdout reports SCAFFOLD.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" scaffold "draft compiled, kept the approach not the code" 2>&1) || EC=$?
+assert_eq 0 "$EC" "scaffold: exit 0"
+after=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
+assert_one_row_added "$before" "$after" "scaffold: exactly one row appended"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains '"source":"feedback"' "$last" "scaffold: source field"
+assert_contains '"scaffold":true' "$last" "scaffold: scaffold:true discriminator present"
+assert_contains '"kept":false' "$last" "scaffold: kept:false for back-compat readers"
+assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "scaffold: ref_ts is latest delegate"
+assert_contains '"reason":"draft compiled, kept the approach not the code"' "$last" "scaffold: reason captured"
+assert_contains "SCAFFOLD recorded" "$out" "scaffold: stdout reports SCAFFOLD"
+EC=0; echo "$last" | jq -e . >/dev/null 2>&1 || EC=$?
+assert_eq 0 "$EC" "scaffold: row is valid JSON"
+rm -rf "$tmp"
+
+# SC2: --source agent scaffold → row carries verdict_source:"agent" AND scaffold:true.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --source agent scaffold "executable feedback only" 2>&1) || EC=$?
+assert_eq 0 "$EC" "scaffold --source agent: exit 0"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains '"scaffold":true' "$last" "scaffold --source agent: scaffold:true present"
+assert_contains '"verdict_source":"agent"' "$last" "scaffold --source agent: verdict_source agent"
+assert_contains '"kept":false' "$last" "scaffold --source agent: kept:false"
+rm -rf "$tmp"
+
+# SC3: scaffold with no reason → one row, scaffold:true, no reason field.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" scaffold 2>&1) || EC=$?
+assert_eq 0 "$EC" "scaffold no-reason: exit 0"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_contains '"scaffold":true' "$last" "scaffold no-reason: scaffold:true present"
+[[ "$last" == *'"reason"'* ]] && { fail=$((fail+1)); echo "  FAIL  scaffold no-reason: reason field absent"; } || { pass=$((pass+1)); echo "  PASS  scaffold no-reason: reason field absent"; }
+rm -rf "$tmp"
+
+# SC4: scaffold does NOT fire the MISS-recurrence nudge even with 5 prior
+# similar MISSes (scaffold is not a miss). seed_history creates 5 miss rows
+# whose reason matches; a real miss here would fire the nudge — a scaffold
+# must stay silent.
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 5
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" scaffold "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
+assert_eq 0 "$EC" "scaffold with similar MISSes: exit 0"
+if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  scaffold with similar MISSes: nudge silent (scaffold is not a miss)"; pass=$((pass+1))
+else echo "  FAIL  scaffold with similar MISSes: nudge fired (scaffold must not nudge)"; fail=$((fail+1)); fi
+rm -rf "$tmp"
+
+# SC5: historical scaffold rows are NOT counted as similar misses by the nudge
+# matcher. Seed 4 scaffold rows (kept:false, scaffold:true) with a matching
+# reason plus a fresh delegate; recording a real MISS must NOT see those 4 as
+# similar misses — so with no genuine prior misses the nudge stays silent.
+# Without the matcher's scaffold skip, the 4 kept:false rows would count as 4
+# similar misses (4 + 1 ≥ 3 default) and the nudge would fire.
+tmp=$(mktemp -d)
+: > "$tmp/m.jsonl"
+for i in 1 2 3 4; do
+  hist_ts=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-1800+'"$i"'*60))')
+  echo "{\"ts\":\"$hist_ts\",\"source\":\"feedback\",\"ref_ts\":\"$hist_ts\",\"kept\":false,\"scaffold\":true,\"reason\":\"pr-description recipe stalled past 30s on prose tier body ($i)\"}" >> "$tmp/m.jsonl"
+done
+fresh_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+echo "{\"ts\":\"$fresh_ts\",\"source\":\"delegate\",\"tier\":\"prose\",\"model\":\"q\",\"duration_ms\":1000,\"exit_status\":0,\"estimated_tokens_avoided\":40}" >> "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
+assert_eq 0 "$EC" "historical-scaffold-not-miss: exit 0"
+if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  historical scaffold rows not counted as similar misses (matcher skips scaffold)"; pass=$((pass+1))
+else echo "  FAIL  historical scaffold rows counted as similar misses (matcher must skip scaffold)"; fail=$((fail+1)); fi
+rm -rf "$tmp"
+
+# SC6: a near-miss verdict word is still rejected (adding 'scaffold' to the
+# case must not weaken the catch-all).
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" scaffolding 2>&1) || EC=$?
+assert_eq 2 "$EC" "near-miss verdict 'scaffolding' -> exit 2 (not silently accepted)"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
