@@ -1,0 +1,8 @@
+max_sentences: 4
+topic: what the recipe pre-flight canary does and when it fires
+facts:
+- a 1-token probe hits the resolved model before the full templated request on every recipe call
+- it uses curl with a deadline of DELEGATE_PREFLIGHT_TIMEOUT, default 10 seconds
+- if the probe does not return in time the wrapper exits 3 with an actionable stderr message
+- the canary is skipped on bare non-recipe calls where input investment is low
+- opt out with DELEGATE_NO_PREFLIGHT=1

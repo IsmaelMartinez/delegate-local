@@ -1,0 +1,7 @@
+max_sentences: 3
+topic: how to record a hit or miss verdict after a delegation
+facts:
+- delegate-feedback.sh hit, or miss with a short reason, appends a feedback row to metrics.jsonl
+- the verdict is keyed by ref_ts to the delegate event
+- the --source agent flag tags it as the agent's own usage judgment, kept out of the human taste-judgment tier
+- the script refuses if the most recent delegate row is older than five minutes unless you pass --ts

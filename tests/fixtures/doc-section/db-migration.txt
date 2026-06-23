@@ -1,0 +1,7 @@
+max_sentences: 4
+topic: the safe order of steps for an online database migration
+facts:
+- the new service version requires an additive schema change before deploy
+- run the migration against staging first to confirm the column additions succeed
+- the rollback reverses only the schema additions and never touches existing data
+- coordinate the deploy window with the on-call rotation
