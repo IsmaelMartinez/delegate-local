@@ -18,10 +18,14 @@ DELEGATE="$SKILL_DIR/scripts/delegate.sh"; PICK="$SKILL_DIR/scripts/pick-model.s
 FIX_DIR="$SKILL_DIR/tests/fixtures/doc-section"
 BACKENDS="${BENCH_BACKENDS:-mlx ollama}"
 fail=0
+# One temp file for the whole run, cleaned up on any exit (incl. interrupt) via
+# the EXIT trap, instead of a mktemp/rm pair per fixture.
+err_log=$(mktemp "${TMPDIR:-/tmp}/bench-docsec.XXXXXX") || { echo "bench: failed to create temp file" >&2; exit 2; }
+trap 'rm -f "$err_log"' EXIT
 
 # Single source of truth: pull the production padding regex straight out of
 # delegate.sh so this bench detects exactly what no_padding_tail detects.
-eval "$(grep -E "^[[:space:]]*padding_re=" "$DELEGATE" | head -1)"
+eval "$(grep -E '^[[:space:]]*padding_re=' "$DELEGATE" | head -1)"
 [[ -n "${padding_re:-}" ]] || { echo "bench: could not extract padding_re from $DELEGATE" >&2; exit 2; }
 
 # A trailing recap / participial-padding clause (production anchors the This-X /
@@ -42,7 +46,6 @@ for backend in $BACKENDS; do
     maxs=$(awk '/^max_sentences:/{sub(/^max_sentences:[[:space:]]*/,""); print; exit}' "$f")
     topic=$(awk '/^topic:/{sub(/^topic:[[:space:]]*/,""); print; exit}' "$f")
     facts=$(awk 'show{print} /^facts:[[:space:]]*$/{show=1}' "$f")
-    err_log=$(mktemp "${TMPDIR:-/tmp}/bench-docsec.XXXXXX")
     out="$(DELEGATE_BACKEND="$backend" DELEGATE_LOCAL_NO_METRICS=1 \
            DELEGATE_PREFLIGHT_TIMEOUT="${DELEGATE_PREFLIGHT_TIMEOUT:-90}" \
            bash "$DELEGATE" --recipe doc-section \
@@ -55,7 +58,6 @@ for backend in $BACKENDS; do
     elif has_padding "$out"; then res=PAD; pads=$((pads+1))
     elif [[ "$(count_sentences "$out")" -gt "$maxs" ]]; then res=CAP; caps=$((caps+1))
     else res=OK; fi
-    rm -f "$err_log"
     printf '%s\t%s\t%s\tresult=%s\n' "$backend" "$model" "$base" "$res"
     [[ "${BENCH_GATE:-0}" == 1 && "$res" != OK ]] && fail=1
   done

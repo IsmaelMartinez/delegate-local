@@ -666,27 +666,34 @@ fi
 
 # Unit-test the bench's OWN scorers without running the bench: extract padding_re
 # from delegate.sh (the same source the bench reads) and the two scorer functions
-# from the bench, then exercise them on a known recap vs a clean paragraph.
-eval "$(grep -E "^[[:space:]]*padding_re=" "$SKILL_DIR/scripts/delegate.sh" | head -1)"
+# from the bench, then exercise them on a known recap vs a clean paragraph. Guard
+# the extraction: if any grep finds nothing (bench renamed / pattern drift), fail
+# this check cleanly instead of erroring on an undefined function below.
+eval "$(grep -E '^[[:space:]]*padding_re=' "$SKILL_DIR/scripts/delegate.sh" | head -1)"
 eval "$(grep -E '^has_padding\(\) ' "$DSBENCH")"
 eval "$(grep -E '^count_sentences\(\) ' "$DSBENCH")"
-ds_recap="One sentence of guidance. Consequently, this is strictly opt-in and should be avoided."
-ds_clean="One sentence of guidance. The four knobs are enforced via CI env vars that override the TOML."
-if has_padding "$ds_recap"; then
-  echo "  PASS  has_padding flags a closing-recap sentence"
-  pass=$((pass+1))
+if [[ -n "${padding_re:-}" ]] && command -v has_padding >/dev/null 2>&1 && command -v count_sentences >/dev/null 2>&1; then
+  ds_recap="One sentence of guidance. Consequently, this is strictly opt-in and should be avoided."
+  ds_clean="One sentence of guidance. The four knobs are enforced via CI env vars that override the TOML."
+  if has_padding "$ds_recap"; then
+    echo "  PASS  has_padding flags a closing-recap sentence"
+    pass=$((pass+1))
+  else
+    echo "  FAIL  has_padding missed a closing-recap sentence"
+    fail=$((fail+1))
+  fi
+  if has_padding "$ds_clean"; then
+    echo "  FAIL  has_padding false-positived a clean paragraph"
+    fail=$((fail+1))
+  else
+    echo "  PASS  has_padding passes a clean paragraph"
+    pass=$((pass+1))
+  fi
+  assert_eq "3" "$(count_sentences 'a. b! c?')" "count_sentences counts terminal punctuation"
 else
-  echo "  FAIL  has_padding missed a closing-recap sentence"
+  echo "  FAIL  could not extract padding_re / has_padding / count_sentences (bench drifted?)"
   fail=$((fail+1))
 fi
-if has_padding "$ds_clean"; then
-  echo "  FAIL  has_padding false-positived a clean paragraph"
-  fail=$((fail+1))
-else
-  echo "  PASS  has_padding passes a clean paragraph"
-  pass=$((pass+1))
-fi
-assert_eq "3" "$(count_sentences 'a. b! c?')" "count_sentences counts terminal punctuation"
 
 echo
 echo "=== Results ==="
