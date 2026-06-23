@@ -178,7 +178,7 @@ fi
 #     Same step-sum inflation class as the bargauge/pie fix (#249), different
 #     surface (a timeseries legend calc instead of a panel-level reduce).
 if [[ -f "$CALIBRATION" ]]; then
-  recipe_sum_calc=$(jq -r '[.panels[] | select((.targets // []) | map(.expr // "") | join(" ") | (contains("by (recipe)") and contains("kept="))) | .options.legend.calcs // [] | index("sum")] | map(select(. != null)) | length' "$CALIBRATION" 2>/dev/null)
+  recipe_sum_calc=$(jq -r '[.. | objects | select((.targets // []) | map(.expr // "") | join(" ") | (contains("by (recipe)") and contains("kept="))) | .options.legend.calcs // [] | index("sum")] | map(select(. != null)) | length' "$CALIBRATION" 2>/dev/null)
   if [[ "$recipe_sum_calc" == "0" ]]; then
     echo "  PASS  delegate-calibration.json: per-recipe HIT-rate legend reduce is not sum (no step-sum inflation)"; pass=$((pass+1))
   else
@@ -193,7 +193,7 @@ fi
 #     and never reaches metrics.jsonl, so a panel keyed to 2 always reads 0.
 ERRORS="$DASHBOARDS/grafana/delegate-errors.json"
 if [[ -f "$ERRORS" ]]; then
-  canary_expr=$(jq -r '[.panels[] | select((.title // "") | test("[Cc]anary")) | .targets[0].expr // ""] | join(" ")' "$ERRORS" 2>/dev/null)
+  canary_expr=$(jq -r '[.. | objects | select((.title // "") | test("[Cc]anary")) | .targets?.[0].expr // ""] | join(" ")' "$ERRORS" 2>/dev/null)
   if printf '%s' "$canary_expr" | grep -q 'exit_status="3"' \
      && ! printf '%s' "$canary_expr" | grep -q 'exit_status="2"'; then
     echo "  PASS  delegate-errors.json: canary panel keys exit_status=3 (the real canary code)"; pass=$((pass+1))
