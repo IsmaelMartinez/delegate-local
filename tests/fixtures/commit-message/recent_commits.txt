@@ -1,0 +1,3 @@
+a1b2c3d feat: add per-recipe hit-rate section to metrics-summary
+d4e5f6a fix: guard empty diff in --recipe auto inference
+b7c8d9e docs: note DELEGATE_BACKEND auto probe in CLAUDE.md

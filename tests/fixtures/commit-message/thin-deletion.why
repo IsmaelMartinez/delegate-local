@@ -1,0 +1,1 @@
+Delete the deprecated legacy-audit.sh; its functionality was fully replaced by audit-models.sh and the stub only printed a deprecation notice.

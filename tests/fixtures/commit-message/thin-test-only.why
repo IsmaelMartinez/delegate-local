@@ -1,0 +1,1 @@
+Add a regression test asserting the prose tier falls back to gemma3 when no qwen model is installed, covering the new preference-list entry.

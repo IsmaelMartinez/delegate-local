@@ -1,0 +1,55 @@
+diff --git a/scripts/metrics-summary.sh b/scripts/metrics-summary.sh
+index 2a2a2a2..3b3b3b3 100755
+--- a/scripts/metrics-summary.sh
++++ b/scripts/metrics-summary.sh
+@@ -12,6 +12,15 @@ since=""
+ days=""
++json_mode=0
+ while [[ $# -gt 0 ]]; do
+   case "$1" in
+     --since) since="$2"; shift 2 ;;
+     --days)  days="$2"; shift 2 ;;
++    --json)  json_mode=1; shift ;;
+     *) echo "unknown arg: $1" >&2; exit 2 ;;
+   esac
+ done
+@@ -88,7 +97,20 @@ print_rollup() {
+   printf 'total delegations: %d\n' "$total"
+   printf 'estimated tokens avoided: %d\n' "$tokens"
++}
++
++print_rollup_json() {
++  jq -n \
++    --argjson total "$total" \
++    --argjson tokens "$tokens" \
++    --argjson hit_rate "$hit_rate" \
++    '{total: $total, estimated_tokens_avoided: $tokens, hit_rate: $hit_rate}'
++}
++
++if [[ "$json_mode" == 1 ]]; then
++  print_rollup_json
++else
++  print_rollup
+ fi
+diff --git a/tests/test-metrics-summary.sh b/tests/test-metrics-summary.sh
+index 4c4c4c4..5d5d5d5 100755
+--- a/tests/test-metrics-summary.sh
++++ b/tests/test-metrics-summary.sh
+@@ -120,3 +120,18 @@ test_days_window_filters_old_rows() {
+   assert_contains "$out" "total delegations: 2"
+ }
++
++test_json_mode_emits_valid_object() {
++  seed_metrics_fixture
++  out="$(bash "$SCRIPT" --json)"
++  echo "$out" | jq -e '.total and .estimated_tokens_avoided and .hit_rate' >/dev/null \
++    || fail "expected a JSON object with total, estimated_tokens_avoided, hit_rate"
++}
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 6e6e6e6..7f7f7f7 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -40,3 +40,5 @@ bash scripts/metrics-summary.sh --days 7        # just the last week
+ bash scripts/metrics-summary.sh --since 2026-06-15
++# machine-readable rollup for dashboards
++bash scripts/metrics-summary.sh --json

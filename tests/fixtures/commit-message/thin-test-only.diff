@@ -1,0 +1,16 @@
+diff --git a/tests/test-pick-model.sh b/tests/test-pick-model.sh
+index abc1234..def5678 100755
+--- a/tests/test-pick-model.sh
++++ b/tests/test-pick-model.sh
+@@ -54,6 +54,12 @@ assert_tier prose "qwen3.6:35b-a3b-q8_0"
+   assert_tier prose "qwen3-next:latest"
+ }
+
++test_prose_falls_back_to_gemma3() {
++  setup_models "gemma3:12b"
++  assert_tier prose "gemma3:12b"
++}
++
+ test_code_prefers_qwen_coder() {
+   setup_models "qwen3-coder-next:latest"
+   assert_tier code "qwen3-coder-next:latest"

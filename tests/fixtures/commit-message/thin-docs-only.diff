@@ -1,0 +1,10 @@
+diff --git a/ROADMAP.md b/ROADMAP.md
+index 0a0a0a0..1b1b1b1 100644
+--- a/ROADMAP.md
++++ b/ROADMAP.md
+@@ -48,7 +48,9 @@ Out of scope:
+
+-Multi-step reasoning and tool-calling stay with the main agent.
++Multi-step reasoning and tool-calling stay with the main agent. Local models
++are strong summarisers and weak agents; anything needing repo-wide context or
++planning does not belong in this skill even when the surface looks textual.
