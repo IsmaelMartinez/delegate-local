@@ -13,7 +13,7 @@ The user is drafting a technical document (usage guide, runbook, ADR, README sec
 Distinct from adjacent recipes:
 
 - `file-summary.md` is one sentence about a whole document.
-- `summarise-diff.md` / `summarise-issue.md` summarise existing content.
+- `summarise-issue.md` summarises existing content.
 - This recipe *generates* prose for a section that does not yet exist, given a topic line and a fact list.
 
 Typical inputs are 4–8 bulleted facts and a one-line topic; typical output is 2–4 sentences of flowing prose.
