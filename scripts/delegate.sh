@@ -1342,7 +1342,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         # caller's --var type=X echoed here; an omitted (optional) type collapses
         # to empty and the check is skipped — it only fires when the caller
         # asserted a type and the model ignored it (a recurring MISS the recipe
-        # itself named as the wrapper-enforcement escalation). Compared with pure
+        # was built to catch). Compared with pure
         # string ops, not a regex built from cval, so a regex metacharacter in
         # the caller's --var type can't break the match. Strips the optional
         # `!` and `(scope)` from the subject's pre-colon segment so the full
