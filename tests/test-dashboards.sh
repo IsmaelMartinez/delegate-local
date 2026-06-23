@@ -170,6 +170,40 @@ else
   echo "  FAIL  delegate-calibration.json missing"; fail=$((fail+1))
 fi
 
+# 5c. The per-recipe HIT-rate panel is a percentunit ratio time series. Its
+#     legend reduce MUST NOT be `sum`: summing a fractional per-step ratio over
+#     every step in the range adds the steps together and the percentunit unit
+#     then multiplies by 100, surfacing impossible values like 5955%. A ratio
+#     legend reduces with mean/lastNotNull (each bounded in [0,1]), never sum.
+#     Same step-sum inflation class as the bargauge/pie fix (#249), different
+#     surface (a timeseries legend calc instead of a panel-level reduce).
+if [[ -f "$CALIBRATION" ]]; then
+  recipe_sum_calc=$(jq -r '[.panels[] | select((.targets // []) | map(.expr // "") | join(" ") | (contains("by (recipe)") and contains("kept="))) | .options.legend.calcs // [] | index("sum")] | map(select(. != null)) | length' "$CALIBRATION" 2>/dev/null)
+  if [[ "$recipe_sum_calc" == "0" ]]; then
+    echo "  PASS  delegate-calibration.json: per-recipe HIT-rate legend reduce is not sum (no step-sum inflation)"; pass=$((pass+1))
+  else
+    echo "  FAIL  delegate-calibration.json: per-recipe HIT-rate panel legend uses sum (5955%-style step-sum inflation on a ratio)"; fail=$((fail+1))
+  fi
+fi
+
+# 5d. The canary-failure stat panel MUST key on the exit code delegate.sh
+#     actually writes for a pre-flight canary/preflight-timeout stall. That is
+#     exit_status=3 (scripts/delegate.sh `emit_failure 3` then `exit 3` on the
+#     DELEGATE_PREFLIGHT_TIMEOUT path); exit_status=2 is validation/usage only
+#     and never reaches metrics.jsonl, so a panel keyed to 2 always reads 0.
+ERRORS="$DASHBOARDS/grafana/delegate-errors.json"
+if [[ -f "$ERRORS" ]]; then
+  canary_expr=$(jq -r '[.panels[] | select((.title // "") | test("[Cc]anary")) | .targets[0].expr // ""] | join(" ")' "$ERRORS" 2>/dev/null)
+  if printf '%s' "$canary_expr" | grep -q 'exit_status="3"' \
+     && ! printf '%s' "$canary_expr" | grep -q 'exit_status="2"'; then
+    echo "  PASS  delegate-errors.json: canary panel keys exit_status=3 (the real canary code)"; pass=$((pass+1))
+  else
+    echo "  FAIL  delegate-errors.json: canary panel does not key exit_status=3 (delegate.sh writes 3 on the preflight stall)"; fail=$((fail+1))
+  fi
+else
+  echo "  FAIL  delegate-errors.json missing"; fail=$((fail+1))
+fi
+
 # 6. Langfuse README (no portable JSON format, so the file-as-code counterpart
 #    is the README).
 if [[ -f "$DASHBOARDS/langfuse/README.md" ]]; then

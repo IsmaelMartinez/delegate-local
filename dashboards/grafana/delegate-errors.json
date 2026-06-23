@@ -1,6 +1,6 @@
 {
   "uid": "delegate-errors",
-  "title": "delegate-local \u2014 Errors & Performance",
+  "title": "delegate-local — Errors & Performance",
   "tags": [
     "delegate-local",
     "genai",
@@ -176,8 +176,8 @@
     {
       "id": 16,
       "type": "stat",
-      "title": "Canary failures (exit 2)",
-      "description": "exit_status=2 \u2014 backend canary/preflight failures.",
+      "title": "Canary failures (exit 3)",
+      "description": "exit_status=3 — pre-flight canary/preflight-timeout failures.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -229,7 +229,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status=\"2\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status=\"3\" [$__range]))",
           "queryType": "instant"
         }
       ]
@@ -237,8 +237,8 @@
     {
       "id": 17,
       "type": "stat",
-      "title": "Backend errors (exit 3)",
-      "description": "exit_status=3 \u2014 backend/generation failures.",
+      "title": "Backend/generation errors",
+      "description": "Non-zero exit_status from the dispatch call (curl exit code), excluding the early-exit sentinels: 1 (no model resolved), 3 (canary), 4 (flaky-gate).",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -290,7 +290,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status=\"3\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status!=\"0\" | exit_status!=\"1\" | exit_status!=\"3\" | exit_status!=\"4\" [$__range]))",
           "queryType": "instant"
         }
       ]
