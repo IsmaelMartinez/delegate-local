@@ -638,6 +638,57 @@ else
 fi
 
 echo
+echo "=== doc-section padding bench (wiring smoke — no model contact) ==="
+
+# Offline smoke for tests/bench-doc-section-padding.sh: never runs the bench
+# (which would contact a model). The live gate is opt-in:
+#   BENCH_GATE=1 BENCH_BACKENDS="mlx ollama" bash tests/bench-doc-section-padding.sh
+DSBENCH="$SKILL_DIR/tests/bench-doc-section-padding.sh"
+DS_FIX="$SKILL_DIR/tests/fixtures/doc-section"
+
+if bash -n "$DSBENCH" 2>/dev/null; then
+  echo "  PASS  doc-section bench is syntactically valid"
+  pass=$((pass+1))
+else
+  echo "  FAIL  doc-section bench has a syntax error"
+  fail=$((fail+1))
+fi
+
+ds_count=0
+for f in "$DS_FIX"/*.txt; do [[ -f "$f" ]] && ds_count=$((ds_count+1)); done
+if [[ "$ds_count" -ge 6 ]]; then
+  echo "  PASS  doc-section fixtures present ($ds_count topic files)"
+  pass=$((pass+1))
+else
+  echo "  FAIL  doc-section fixtures missing (found $ds_count, want >=6)"
+  fail=$((fail+1))
+fi
+
+# Unit-test the bench's OWN scorers without running the bench: extract padding_re
+# from delegate.sh (the same source the bench reads) and the two scorer functions
+# from the bench, then exercise them on a known recap vs a clean paragraph.
+eval "$(grep -E "^[[:space:]]*padding_re=" "$SKILL_DIR/scripts/delegate.sh" | head -1)"
+eval "$(grep -E '^has_padding\(\) ' "$DSBENCH")"
+eval "$(grep -E '^count_sentences\(\) ' "$DSBENCH")"
+ds_recap="One sentence of guidance. Consequently, this is strictly opt-in and should be avoided."
+ds_clean="One sentence of guidance. The four knobs are enforced via CI env vars that override the TOML."
+if has_padding "$ds_recap"; then
+  echo "  PASS  has_padding flags a closing-recap sentence"
+  pass=$((pass+1))
+else
+  echo "  FAIL  has_padding missed a closing-recap sentence"
+  fail=$((fail+1))
+fi
+if has_padding "$ds_clean"; then
+  echo "  FAIL  has_padding false-positived a clean paragraph"
+  fail=$((fail+1))
+else
+  echo "  PASS  has_padding passes a clean paragraph"
+  pass=$((pass+1))
+fi
+assert_eq "3" "$(count_sentences 'a. b! c?')" "count_sentences counts terminal punctuation"
+
+echo
 echo "=== Results ==="
 total=$((pass+fail))
 echo "$pass/$total passed"

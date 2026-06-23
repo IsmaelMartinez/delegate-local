@@ -1,0 +1,7 @@
+max_sentences: 3
+topic: how to window the metrics roll-up to recent rows
+facts:
+- metrics-summary.sh accepts --since YYYY-MM-DD and --days N
+- the cutoff is resolved in jq via now and fromdateiso8601, so there is no cross-platform date math
+- every section is filtered to rows at or after the cutoff
+- the script is read-only with respect to the rest of the system

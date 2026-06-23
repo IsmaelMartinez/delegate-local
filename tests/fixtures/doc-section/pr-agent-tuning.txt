@@ -1,0 +1,7 @@
+max_sentences: 3
+topic: when and how to tune the four PR-agent knobs
+facts:
+- PR_CODE_SUGGESTIONS__SUGGESTIONS_SCORE_THRESHOLD=8 is set in .pr-agent-base.variables in the central CI include
+- Env vars take precedence over .pr_agent.toml in Dynaconf, so repos cannot lower these defaults via TOML
+- Other knobs (model swap, extra_instructions, docs_style) are unaffected and freely configurable
+- AI-61 tracks the threshold tuning saga and is the reason env vars override

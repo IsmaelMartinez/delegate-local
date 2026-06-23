@@ -1,0 +1,7 @@
+max_sentences: 3
+topic: how the DELEGATE_BACKEND auto mode chooses between MLX and Ollama
+facts:
+- DELEGATE_BACKEND defaults to auto since 2026-05-13
+- auto probes MLX_HOST /v1/models with a 1-second timeout, overridable via DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT
+- a 200 response resolves to mlx, anything else falls through to ollama
+- explicit DELEGATE_BACKEND=ollama or =mlx skips the probe entirely
