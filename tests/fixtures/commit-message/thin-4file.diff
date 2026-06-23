@@ -1,0 +1,29 @@
+diff --git a/scripts/delegate.sh b/scripts/delegate.sh
+index 1111aaa..2222bbb 100755
+--- a/scripts/delegate.sh
++++ b/scripts/delegate.sh
+@@ -210,3 +210,3 @@ resolve_backend() {
+-  local probe_timeout="${DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT:-1}"
++  local probe_timeout="${DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT:-2}"
+   curl -s --max-time "$probe_timeout" "$MLX_HOST/v1/models" >/dev/null 2>&1
+diff --git a/scripts/pick-model.sh b/scripts/pick-model.sh
+index 3333ccc..4444ddd 100755
+--- a/scripts/pick-model.sh
++++ b/scripts/pick-model.sh
+@@ -8,3 +8,3 @@
+-DELEGATE_BACKEND="${DELEGATE_BACKEND:-ollama}"
++DELEGATE_BACKEND="${DELEGATE_BACKEND:-auto}"
+diff --git a/README.md b/README.md
+index 5555eee..6666fff 100644
+--- a/README.md
++++ b/README.md
+@@ -5,3 +5,3 @@
+-Default backend: ollama.
++Default backend: auto (probes MLX, falls back to ollama).
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 7777aaa..8888bbb 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -30,3 +30,3 @@
+-The auto probe timeout defaults to 1 second.
++The auto probe timeout defaults to 2 seconds.

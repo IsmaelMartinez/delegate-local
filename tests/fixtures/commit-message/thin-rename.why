@@ -1,0 +1,1 @@
+Rename old-helper.sh to helper.sh so internal resolver scripts drop the legacy old- prefix and match the naming convention used by the rest of scripts/.

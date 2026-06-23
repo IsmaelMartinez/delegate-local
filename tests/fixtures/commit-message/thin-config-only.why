@@ -1,0 +1,1 @@
+Document the environment variables the local deploy expects by adding example entries to config/example.env, including a placeholder credential and the backend and preflight-timeout knobs.

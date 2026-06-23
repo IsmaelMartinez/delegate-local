@@ -1,0 +1,14 @@
+diff --git a/scripts/old-helper.sh b/scripts/helper.sh
+similarity index 96%
+rename from scripts/old-helper.sh
+rename to scripts/helper.sh
+index 1a2b3c4..5d6e7f8 100755
+--- a/scripts/old-helper.sh
++++ b/scripts/helper.sh
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env bash
+-# old-helper.sh — resolves the active tier
++# helper.sh — resolves the active tier
+ set -euo pipefail
+
+ tier="${1:?tier required}"

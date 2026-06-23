@@ -586,6 +586,58 @@ else
 fi
 
 echo
+echo "=== commit-message body-drop bench (wiring smoke — no model contact) ==="
+
+# This is a deliberately OFFLINE smoke: it never runs the bench (which would
+# contact a model). It only proves the bench stays wired to its fixtures and
+# its scorer matches production. The live, model-driven gate is opt-in:
+#   BENCH_GATE=1 BENCH_BACKENDS="mlx ollama" bash tests/bench-commit-message-body.sh
+# run by a human / CI with a model — see docs/adr/0026-*.md.
+BENCH="$SKILL_DIR/tests/bench-commit-message-body.sh"
+CM_FIX="$SKILL_DIR/tests/fixtures/commit-message"
+
+if bash -n "$BENCH" 2>/dev/null; then
+  echo "  PASS  bench script is syntactically valid"
+  pass=$((pass+1))
+else
+  echo "  FAIL  bench script has a syntax error"
+  fail=$((fail+1))
+fi
+
+# Shared anchors + >=6 thin diffs + a rich control, each with a paired .why.
+diff_count=0
+for d in "$CM_FIX"/*.diff; do [[ -f "$d" ]] && diff_count=$((diff_count+1)); done
+if [[ -f "$CM_FIX/recent_commits.txt" && "$diff_count" -ge 7 ]]; then
+  echo "  PASS  bench fixtures present ($diff_count diffs + recent_commits.txt)"
+  pass=$((pass+1))
+else
+  echo "  FAIL  bench fixtures missing (found $diff_count diffs, want >=7 + recent_commits.txt)"
+  fail=$((fail+1))
+fi
+
+missing_why=0
+for d in "$CM_FIX"/*.diff; do [[ -f "${d%.diff}.why" ]] || missing_why=$((missing_why+1)); done
+assert_eq "0" "$missing_why" "every bench .diff has a paired .why"
+
+# Unit-test the ACTUAL score_body from the bench (single source of truth) without
+# running the bench: grab its one-line definition and eval it here.
+eval "$(grep -E '^score_body\(\) ' "$BENCH")"
+if score_body "$(printf 'subject line\n\nbody paragraph')"; then
+  echo "  PASS  score_body accepts a subject+body (>=2 non-empty lines)"
+  pass=$((pass+1))
+else
+  echo "  FAIL  score_body rejected a valid subject+body"
+  fail=$((fail+1))
+fi
+if score_body "only-a-subject"; then
+  echo "  FAIL  score_body accepted a subject-only message"
+  fail=$((fail+1))
+else
+  echo "  PASS  score_body rejects a subject-only message (the body-drop shape)"
+  pass=$((pass+1))
+fi
+
+echo
 echo "=== Results ==="
 total=$((pass+fail))
 echo "$pass/$total passed"

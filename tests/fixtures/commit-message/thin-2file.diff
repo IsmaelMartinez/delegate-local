@@ -1,0 +1,18 @@
+diff --git a/scripts/pick-model.sh b/scripts/pick-model.sh
+index aaaa111..bbbb222 100755
+--- a/scripts/pick-model.sh
++++ b/scripts/pick-model.sh
+@@ -40,6 +40,7 @@ prefs_for_prose() {
+     "qwen3.6"
+     "qwen3-next"
++    "gemma3"
+   )
+ }
+diff --git a/README.md b/README.md
+index cccc333..dddd444 100644
+--- a/README.md
++++ b/README.md
+@@ -22,3 +22,3 @@ The prose tier resolves to the first installed match.
+
+-Order: qwen3.6, qwen3-next.
++Order: qwen3.6, qwen3-next, gemma3.

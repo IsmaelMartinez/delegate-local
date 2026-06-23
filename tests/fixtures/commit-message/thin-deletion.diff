@@ -1,0 +1,12 @@
+diff --git a/scripts/legacy-audit.sh b/scripts/legacy-audit.sh
+deleted file mode 100755
+index 9876543..0000000
+--- a/scripts/legacy-audit.sh
++++ /dev/null
+@@ -1,6 +0,0 @@
+-#!/usr/bin/env bash
+-# legacy-audit.sh — superseded by audit-models.sh
+-set -euo pipefail
+-echo "this script is deprecated; use audit-models.sh" >&2
+-exit 1
+-# end

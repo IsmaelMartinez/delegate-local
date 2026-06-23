@@ -1,0 +1,1 @@
+Add a --json output mode to metrics-summary so downstream dashboards can consume the rollup as a structured object instead of scraping the text table. Includes a test asserting the JSON shape and a CLAUDE.md usage note.

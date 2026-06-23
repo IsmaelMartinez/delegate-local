@@ -35,7 +35,25 @@ Draft a git commit message from the staged diff and recent-commit anchors below.
 
 Draft a git commit message in EXACTLY the same shape as these recent examples.
 Subject ≤ {{flavor_commit_subject_max}} chars starting with '<TYPE>:' ({{flavor_commit_types}}).
-Then a blank line, then 1-2 short flowing-prose paragraphs (NO bullet lists, NO indentation). A body is MANDATORY even if the examples below are subject-only; never copy a subject-only shape. A subject with no body is REJECTED.
+Then a blank line, then 1-2 short flowing-prose paragraphs (NO bullet lists, NO indentation).
+
+BODY — mandatory, non-negotiable:
+Every message MUST have a body, not just a subject. After the subject and a blank
+line, write 1-2 short flowing-prose paragraphs saying WHY the change was made.
+This holds even when the diff is tiny — a rename, a one-line config edit, a
+test-only or docs-only change — and even when every recent-commit example below
+is subject-only. Those examples are squash-merge subjects with their bodies
+stripped; do NOT copy their bodyless shape. When the change looks too small to
+explain, state what it does and draw the motivation from the WHY context below —
+never fall back to a subject-only message. A subject with no body is REJECTED.
+Wrong:
+fix: bump the model-resolution cache TTL to 60s
+Correct:
+fix: bump the model-resolution cache TTL to 60s
+
+The 10s TTL re-shelled out to the model list on nearly every delegation, adding
+latency on hosts with many installed models. Sixty seconds keeps resolution
+fresh while collapsing the repeated process spawns.
 
 Subject length — first match wins, non-negotiable:
 Count the characters in your subject line including the '<TYPE>:' prefix.
@@ -120,7 +138,7 @@ The trailing prompt arg is the reinforcement instruction; the recipe template ca
 - "EXACTLY the same shape" — generic "match the style" produces bullets.
 - "Subject ≤ 72 chars starting with '<TYPE>:'" — without this, the model inflates subjects past 100 chars or invents non-conventional prefixes.
 - "NO bullet lists, NO indentation" — required because `git log --pretty=fuller` outputs bodies indented 4 spaces; the model copies the indentation literally if not told otherwise.
-- "A body is MANDATORY even if the examples below are subject-only … never copy a subject-only shape" — addresses a body-drop cluster observed 2026-06-12 / 06-13 (5 of 17 `commit-message` calls returned a subject-only message) where bodyless `{{recent_commits}}` anchors (from `git log --oneline` or squash-merged history) led the model to copy the missing-body shape. Paired with the warn-only `body_required` check (ADR 0014) as the deterministic backstop.
+- "BODY — mandatory, non-negotiable" block with a contrastive Wrong/Correct one-shot — addresses a body-drop cluster observed 2026-06-12 / 06-13 (5 of 17 `commit-message` calls returned a subject-only message) where bodyless `{{recent_commits}}` anchors (from `git log --oneline` or squash-merged history) led the model to copy the missing-body shape. The bare directive ("A body is MANDATORY … never copy a subject-only shape") held most of the time but still dropped the body on the thinnest diffs; on 2026-06-23 `tests/bench-commit-message-body.sh` reproduced it on the lowest-context fixtures (a test-only add, a config-only add) on both Qwen3.6-35B backends (MLX 8bit and Ollama q8_0), confirming a model-bound, recipe-side starvation rather than a backend-specific bug. The fix mirrors what flipped the subject-length, `(#NN)`, scope, and padding guards from MISS to HIT — converting the bare rule into a prominent non-negotiable block with a contrastive one-shot (using a cache-TTL example unrelated to any bench fixture so it cannot leak an answer). Paired with the warn-only `body_required` check (ADR 0014) as the deterministic backstop.
 - "Subjects ending in (#NN) are REJECTED ... non-negotiable" with a Wrong/Correct contrastive
   example — the bare negation `Do NOT append any (#NN)` did not hold across sessions: the
   model pattern-matched on the `(#NN)` suffix in every recent-commits anchor and inferred

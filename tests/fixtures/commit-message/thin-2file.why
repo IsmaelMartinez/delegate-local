@@ -1,0 +1,1 @@
+Add gemma3 to the prose-tier preference list so hosts with gemma3 installed but no qwen model still resolve a prose model, and document the new fallback order in the README.

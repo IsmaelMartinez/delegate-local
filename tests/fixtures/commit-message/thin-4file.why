@@ -1,0 +1,1 @@
+Raise the MLX auto-probe timeout default from 1s to 2s because slow-to-wake MLX servers were being missed on the first probe, and flip the documented default backend to auto across the README and CLAUDE.md to match the code.
