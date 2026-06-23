@@ -605,7 +605,8 @@ else
 fi
 
 # Shared anchors + >=6 thin diffs + a rich control, each with a paired .why.
-diff_count=$(ls "$CM_FIX"/*.diff 2>/dev/null | wc -l | tr -d ' ')
+diff_count=0
+for d in "$CM_FIX"/*.diff; do [[ -f "$d" ]] && diff_count=$((diff_count+1)); done
 if [[ -f "$CM_FIX/recent_commits.txt" && "$diff_count" -ge 7 ]]; then
   echo "  PASS  bench fixtures present ($diff_count diffs + recent_commits.txt)"
   pass=$((pass+1))

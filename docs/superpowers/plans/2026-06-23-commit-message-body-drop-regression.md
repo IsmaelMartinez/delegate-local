@@ -41,7 +41,7 @@ Evidence: `checks_run` is absent on commit-message rows until 18 June, then 31 r
 **Files:** Create under `tests/fixtures/commit-message/`: `recent_commits.txt`; and for each fixture `<name>.diff` (a real unified diff) + `<name>.why`. Fixtures (≥6 thin + 1 rich):
 `thin-rename`, `thin-2file`, `thin-4file`, `thin-config-only`, `thin-test-only`, `thin-docs-only`, `thin-deletion`, and `rich-multifile` (control).
 
-**Interfaces:** Produces `<name>.diff` files containing genuine `diff --git`/`@@`/`+`/`-` hunks (so the auto path has real content to derive from), a paired `<name>.why`, and a shared `recent_commits.txt`. Fixtures are **synthetic and secret-free** (this is also the privacy-test corpus).
+**Interfaces:** Produces `<name>.diff` files containing genuine `diff --git`/`@@`/`+`/`-` hunks (so the auto path has real content to derive from), a paired `<name>.why`, and a shared `recent_commits.txt`. Fixtures are **synthetic** and contain only obviously-fake placeholders that must not match secret-scanning patterns (this is also the privacy-test corpus).
 
 - [x] **Step 1:** Create `recent_commits.txt` (3 real-shaped `<sha> <type>: <subject>` lines).
 - [x] **Step 2:** Create each `thin-*.diff` as a small but **real** unified diff (1–4 files, few hunks) with a paired `.why` stating intent. Include shape variety: a pure rename, a config-only change, a test-only change, a docs-only change, and a pure deletion — these are the real thin-diff surface that starves the body.
@@ -53,7 +53,7 @@ Evidence: `checks_run` is absent on commit-message rows until 18 June, then 31 r
 
 **Files:** Create `tests/bench-commit-message-body.sh`.
 
-**Interfaces:** Consumes G0.1 fixtures. Produces stdout `<backend>\t<model>\t<fixture>\tresult=BODY|DROP|ERROR` per run and a summary `<backend> drops=D/F errors=E`; exits non-zero under `BENCH_GATE=1` only when a **thin or control** fixture yields `DROP` (an `ERROR` makes the run inconclusive, printed loudly, and also fails the gate so a poisoned run can't pass green). `score_body()` is byte-identical to production `body_required`.
+**Interfaces:** Consumes G0.1 fixtures. Produces stdout `<backend>\t<model>\t<fixture>\tresult=BODY|DROP|ERROR` per run and a summary `<backend> drops=D/F errors=E`; exits non-zero under `BENCH_GATE=1` only when a **thin or control** fixture yields `DROP` (an `ERROR` makes the run inconclusive, printed loudly, and also fails the gate so a poisoned run can't pass green). `score_body()` is logic-equivalent to production `body_required` (same `tr -d '\r' | awk 'NF { n++ } END { print n + 0 }'` count and `< 2` threshold).
 
 - [x] **Step 1: Write the bench (note: pipes the REAL diff on stdin via `--recipe auto` — the path any fix touches)**
 ```bash
@@ -171,7 +171,7 @@ exit "$fail"
 ## Self-review (post external review)
 
 - **Reachability:** the bench now drives `--recipe auto` with a real diff on stdin — the exact path G2.2's excerpt backfill lives in — so the gate can actually transition. (Fixed blocker.)
-- **Scorer parity:** `score_body` is byte-identical to `delegate.sh:1373` (`tr -d '\r' | awk 'NF{n++} END{exit (n>=2)?0:1}'`). (Fixed major.)
+- **Scorer parity:** `score_body` is logic-equivalent to `delegate.sh:1373` — the same production pipeline `tr -d '\r' | awk 'NF { n++ } END { print n + 0 }'` with the `< 2` -> fail threshold. (Fixed major.)
 - **Determinism:** signal comes from ≥6 diverse fixtures, not reps (ADR 0018). (Fixed blocker.)
 - **Infra vs defect:** non-zero exit / empty output is `ERROR`, surfaced separately and failing the gate as inconclusive — never silently counted as a body-drop. (Fixed blocker.)
 - **Privacy:** diff content is opt-in, redacted, capped, kept off the OTel content field. (Fixed blocker.) Fixtures are synthetic and double as the redaction test.
