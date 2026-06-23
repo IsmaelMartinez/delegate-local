@@ -8,7 +8,13 @@ set -uo pipefail
 SKILL_DIR="${SKILL_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 DELEGATE="$SKILL_DIR/scripts/delegate.sh"; PICK="$SKILL_DIR/scripts/pick-model.sh"
 FIX_DIR="$SKILL_DIR/tests/fixtures/commit-message"
-BACKENDS="${BENCH_BACKENDS:-mlx ollama}"; RC="$(cat "$FIX_DIR/recent_commits.txt")"
+BACKENDS="${BENCH_BACKENDS:-mlx ollama}"
+# Fail fast on the recent-commit anchors: without `set -e`, a missing or empty
+# file would silently run with empty anchors and give misleading PASS/DROP.
+RC_FILE="$FIX_DIR/recent_commits.txt"
+[[ -r "$RC_FILE" ]] || { echo "bench: missing or unreadable $RC_FILE" >&2; exit 2; }
+RC="$(cat "$RC_FILE")"
+[[ -n "$RC" ]] || { echo "bench: $RC_FILE is empty — recent-commit anchors are required" >&2; exit 2; }
 fail=0
 
 # Exact mirror of delegate.sh body_required (delegate.sh:1373): the same
@@ -25,7 +31,7 @@ for backend in $BACKENDS; do
   drops=0; errors=0; total=0
   for d in "$FIX_DIR"/*.diff; do
     base="$(basename "$d" .diff)"; why="$(cat "${d%.diff}.why")"; total=$((total+1))
-    err_log=$(mktemp)
+    err_log=$(mktemp "${TMPDIR:-/tmp}/bench-cmbd.XXXXXX")
     out="$(DELEGATE_BACKEND="$backend" DELEGATE_LOCAL_NO_METRICS=1 \
            DELEGATE_PREFLIGHT_TIMEOUT="${DELEGATE_PREFLIGHT_TIMEOUT:-90}" \
            bash "$DELEGATE" --recipe auto --var why="$why" --var recent_commits="$RC" \
