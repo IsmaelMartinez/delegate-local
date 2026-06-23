@@ -468,7 +468,8 @@
           "displayMode": "table",
           "placement": "right",
           "calcs": [
-            "sum"
+            "mean",
+            "lastNotNull"
           ]
         },
         "tooltip": {
