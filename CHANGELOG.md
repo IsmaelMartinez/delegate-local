@@ -1,5 +1,90 @@
 # Changelog
 
+## [0.21.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.20.0...v0.21.0) (2026-06-23)
+
+
+### Features
+
+* add BODY_PRESENT check to T4 scorer to catch dropped bodies ([#311](https://github.com/IsmaelMartinez/delegate-local/issues/311)) ([be6a3db](https://github.com/IsmaelMartinez/delegate-local/commit/be6a3db981d1dc51810a8474b9a2acf08bd29075))
+* add code-draft recipe for supervised-draft-delegation experiment ([1f70a1e](https://github.com/IsmaelMartinez/delegate-local/commit/1f70a1e4d2c939c11c12f231de6ec722e3f95845))
+* add four recipes for top uncovered bare-delegation shapes ([#309](https://github.com/IsmaelMartinez/delegate-local/issues/309)) ([b488e7e](https://github.com/IsmaelMartinez/delegate-local/commit/b488e7ee0d49a992ac085124fe356593e2c6dc27))
+* add pr-title recipe — conventional-commit PR title (≤72 chars) ([#320](https://github.com/IsmaelMartinez/delegate-local/issues/320)) ([7a3f273](https://github.com/IsmaelMartinez/delegate-local/commit/7a3f2735533accd9b6d7735a0b750c52b2dc0e62))
+* add scaffold verdict to delegate-feedback and metrics-summary ([ebe2809](https://github.com/IsmaelMartinez/delegate-local/commit/ebe2809338c0c117db6222c73f9a015590f42cab))
+* auto-strip safe padding tails and persist check results ([#316](https://github.com/IsmaelMartinez/delegate-local/issues/316)) ([8010551](https://github.com/IsmaelMartinez/delegate-local/commit/8010551f5ca51e3f4c9ebed1c1d350d1b8aeeb53))
+* faithfulness grounding check (measured prototype) — catches gross drift ([#321](https://github.com/IsmaelMartinez/delegate-local/issues/321)) ([a127799](https://github.com/IsmaelMartinez/delegate-local/commit/a127799505167b13c38c04bca89aaa442eebace4))
+* fan-out ensemble prototype + negative-result ADR (Phase 20) ([#317](https://github.com/IsmaelMartinez/delegate-local/issues/317)) ([e08c5ec](https://github.com/IsmaelMartinez/delegate-local/commit/e08c5ecfbd897a9b1ad48473f40eae907e6aff03))
+* Phase E agent-observed verdict tier (recorder + reporting + Stop hook) ([#308](https://github.com/IsmaelMartinez/delegate-local/issues/308)) ([9d64fb7](https://github.com/IsmaelMartinez/delegate-local/commit/9d64fb738d6b7218fc0914eb1d841ec9762e7d25))
+* quality-report.sh — re-review verdicts for an honest quality number ([#315](https://github.com/IsmaelMartinez/delegate-local/issues/315)) ([4389c40](https://github.com/IsmaelMartinez/delegate-local/commit/4389c40b9788623605494e4e549c3cb9997438b3))
+* restore delegate-boundary hook, tests, and docs ([753a33d](https://github.com/IsmaelMartinez/delegate-local/commit/753a33d087a1d94e5afa869e9120eb0e3c34f006))
+* restore observability pipeline and scripts ([9117828](https://github.com/IsmaelMartinez/delegate-local/commit/9117828ce1d16d76673550f67712bf5a183b0afc))
+* restore semantic-search and embed scripts with tests ([736d8fe](https://github.com/IsmaelMartinez/delegate-local/commit/736d8fed6176ee0d6690572531c3eed076368c31))
+* restore the delegate-boundary hook (over-archived in the lean-core reset) ([e825416](https://github.com/IsmaelMartinez/delegate-local/commit/e825416f5b9a8ff138d40d8fb15bb8deafc75a5a))
+* supervised draft delegation for code (gated experiment) ([9aec202](https://github.com/IsmaelMartinez/delegate-local/commit/9aec202113197a4c38751410053c367b7a40bbb3))
+* update SKILL.md with supervised draft and verify patterns ([3ca86ec](https://github.com/IsmaelMartinez/delegate-local/commit/3ca86ec35089c127c6e946243f8bd3562c6c9b8e))
+* verify-and-escalate gate in delegate.sh (productionised) ([#319](https://github.com/IsmaelMartinez/delegate-local/issues/319)) ([74950a5](https://github.com/IsmaelMartinez/delegate-local/commit/74950a57b0f27ea854fb8b9aabbea5d46de5c874))
+* verify-and-escalate prototype + ADR 0019 (positive result) ([#318](https://github.com/IsmaelMartinez/delegate-local/issues/318)) ([a4bcac0](https://github.com/IsmaelMartinez/delegate-local/commit/a4bcac0d66f3c6bc3a424108bddd3b1da4124c4c))
+
+
+### Bug Fixes
+
+* absolute feedback path in reminder + isolate the window test ([67c2781](https://github.com/IsmaelMartinez/delegate-local/commit/67c278167d8428674c9534a532a81975d8bcf414))
+* commit-message body-drop on thin diffs ([#330](https://github.com/IsmaelMartinez/delegate-local/issues/330)) ([e0e3755](https://github.com/IsmaelMartinez/delegate-local/commit/e0e3755d2e5bd988960faaf74510966e3b38f8c8))
+* correct HIT-rate-by-recipe and canary dashboard panels ([#332](https://github.com/IsmaelMartinez/delegate-local/issues/332)) ([d0eb234](https://github.com/IsmaelMartinez/delegate-local/commit/d0eb23477a78fd266a102fbbe636a84ee6d24512))
+* dedup feedback rows by hashing row content instead of line offset ([#325](https://github.com/IsmaelMartinez/delegate-local/issues/325)) ([0cdd2a1](https://github.com/IsmaelMartinez/delegate-local/commit/0cdd2a14fb1b556c5ad48251652da79d245741c3))
+* enforce mandatory commit body via recipe directive and check ([#310](https://github.com/IsmaelMartinez/delegate-local/issues/310)) ([619ddcb](https://github.com/IsmaelMartinez/delegate-local/commit/619ddcb3e856149503c4bddcaad1ad80e74a34fb))
+* exclude failed delegations from verdict-coverage denominator (Phase E) ([#306](https://github.com/IsmaelMartinez/delegate-local/issues/306)) ([773b016](https://github.com/IsmaelMartinez/delegate-local/commit/773b016638b50a27270a5d325ab86891c7a58b12))
+* recipe-aware boundary capture + metrics --since/--days window ([#312](https://github.com/IsmaelMartinez/delegate-local/issues/312)) ([7225646](https://github.com/IsmaelMartinez/delegate-local/commit/72256465a626b0fc128c92c6cf215948cf136275))
+* scope the pr-review-comment boundary to /pulls/ and fix the doc ([37ae001](https://github.com/IsmaelMartinez/delegate-local/commit/37ae001ce7287e008bc3c323a35ad13269bad848))
+* tag inline verdicts as agent-sourced + backfill historical data ([#314](https://github.com/IsmaelMartinez/delegate-local/issues/314)) ([4416666](https://github.com/IsmaelMartinez/delegate-local/commit/4416666942bc9e190d54f628460d02442902a8eb))
+
+
+### Code Improvements
+
+* lean-core reset — archive research machinery, shrink core, reset docs ([5b74feb](https://github.com/IsmaelMartinez/delegate-local/commit/5b74febd3892fad23b6acf3cad73b4bd18540840))
+* shrink the core artifacts (delegate.sh + commit-message.md) ([cecb928](https://github.com/IsmaelMartinez/delegate-local/commit/cecb9284e6c63c542c029b84e26ac1505cd8ca62))
+
+
+### Documentation
+
+* add supervised-draft-delegation design spec ([7569d83](https://github.com/IsmaelMartinez/delegate-local/commit/7569d834dd9acea5df1d36336d49c60b45bc59e6))
+* add supervised-draft-delegation implementation plan ([3b0d105](https://github.com/IsmaelMartinez/delegate-local/commit/3b0d105f74baacc4cdc1c5ecda14da510a1e147f))
+* address Copilot review on PR [#327](https://github.com/IsmaelMartinez/delegate-local/issues/327) ([ad77008](https://github.com/IsmaelMartinez/delegate-local/commit/ad77008bbc1edd05a2af408b85ae51c76773de00))
+* align docs, ADRs, and in-code comments to the post-reset lean state ([e8133e9](https://github.com/IsmaelMartinez/delegate-local/commit/e8133e9d93a252bfcf539afa52f8435d966dbaec))
+* audit gpt-oss-120b on the prose tier (keep incumbent) ([#305](https://github.com/IsmaelMartinez/delegate-local/issues/305)) ([98998b3](https://github.com/IsmaelMartinez/delegate-local/commit/98998b3df3b6d7762654be6c81d2f45724d349bf))
+* capture three orphaned experiment learnings as ADRs 0022-0024 ([a18f2ce](https://github.com/IsmaelMartinez/delegate-local/commit/a18f2ce034e2408358ad239c8e5acf29b479e53a))
+* clean up stale references and drift in install docs and recipes ([64a8769](https://github.com/IsmaelMartinez/delegate-local/commit/64a876972ecfcb451b30b6566a7e975e5d074efa))
+* clean up stale references left by the lean-core reset ([4948436](https://github.com/IsmaelMartinez/delegate-local/commit/494843621dec9f1015443d73f00bb7f9ae322e88))
+* correct qwen3-coder-next eval figure on PR [#327](https://github.com/IsmaelMartinez/delegate-local/issues/327) ([2059510](https://github.com/IsmaelMartinez/delegate-local/commit/2059510d622ad7d1e8fe9eaf9d74722ea023c24f))
+* lean-core reset design spec ([c8e29a5](https://github.com/IsmaelMartinez/delegate-local/commit/c8e29a5567bdd0f9ee4b204ea9b98d2e0e9fb6cf))
+* measure whether the 0.6B earns its keep as a cheap primary (it doesn't) ([#322](https://github.com/IsmaelMartinez/delegate-local/issues/322)) ([b34ca8d](https://github.com/IsmaelMartinez/delegate-local/commit/b34ca8d019dafd6ba57de4cb72649a3dff08e2e1))
+* note observability kept (not archived) in the design spec ([651b916](https://github.com/IsmaelMartinez/delegate-local/commit/651b916b2004e6543b95dc650359174060f82afb))
+* Phase E verdict-automation design (separate-tier) ([#307](https://github.com/IsmaelMartinez/delegate-local/issues/307)) ([32ae64b](https://github.com/IsmaelMartinez/delegate-local/commit/32ae64b7a68ac39e2d2d0de0325f107116940cf2))
+* record ADR 0025 on supervised draft delegation ([cf82e08](https://github.com/IsmaelMartinez/delegate-local/commit/cf82e08f1d5a98c19a43a9ad6aab70599b4992f2))
+* record PRs [#309](https://github.com/IsmaelMartinez/delegate-local/issues/309)-[#312](https://github.com/IsmaelMartinez/delegate-local/issues/312) in ROADMAP.md ([#313](https://github.com/IsmaelMartinez/delegate-local/issues/313)) ([053f285](https://github.com/IsmaelMartinez/delegate-local/commit/053f2856851026d8d33eaf1b0fac4c28223834a3))
+* record WS6 lean-install re-verification ([b90bb91](https://github.com/IsmaelMartinez/delegate-local/commit/b90bb91c0fc2444a54ee4d11c9e6ddebb5b45986))
+* WS1 install-verification findings ([cdad50d](https://github.com/IsmaelMartinez/delegate-local/commit/cdad50d2763a7b5197cca0061e841d4d9be965c6))
+
+
+### CI/CD
+
+* remove CodeQL workflow orphaned by the mcp/ archival ([280596b](https://github.com/IsmaelMartinez/delegate-local/commit/280596bb3e4bb45e5548bd96bf36c8bc9e29ebb0))
+
+
+### Testing
+
+* add doc-section padding-tail regression bench ([#333](https://github.com/IsmaelMartinez/delegate-local/issues/333)) ([786d5e2](https://github.com/IsmaelMartinez/delegate-local/commit/786d5e2497a92e6d5bd4aa4d1685961f85cb9890))
+
+
+### Maintenance
+
+* address gemini review on PR [#328](https://github.com/IsmaelMartinez/delegate-local/issues/328) ([2411f27](https://github.com/IsmaelMartinez/delegate-local/commit/2411f2750009a0aa7e51e84c29dacf1a52770002))
+* apply gemini-code-assist review suggestions on PR [#329](https://github.com/IsmaelMartinez/delegate-local/issues/329) ([45d70f0](https://github.com/IsmaelMartinez/delegate-local/commit/45d70f0069adfca003e2c74f2a4a5d2e6bcd2968))
+* archive research/observability machinery out of main ([22395b2](https://github.com/IsmaelMartinez/delegate-local/commit/22395b28882cb3e842a3b54021ddc593626574cd))
+* metrics-summary self-describing header and test fixture comment ([cbfe938](https://github.com/IsmaelMartinez/delegate-local/commit/cbfe938a5ab6571a3d399e7e51da6709ea18ac81))
+* prune three niche zero-use recipes ([7a64d46](https://github.com/IsmaelMartinez/delegate-local/commit/7a64d46cc4aeb30b81393838c09434553db10811))
+* prune unused recipes pr-title and summarise-diff ([#334](https://github.com/IsmaelMartinez/delegate-local/issues/334)) ([848165e](https://github.com/IsmaelMartinez/delegate-local/commit/848165e53cf6a578bd459a8ab20760f70a23118f))
+* sweep stale escalate-gate comment in delegate.sh ([#331](https://github.com/IsmaelMartinez/delegate-local/issues/331)) ([af45897](https://github.com/IsmaelMartinez/delegate-local/commit/af45897da322c43e7b58493adaa0b428bf346b89))
+
 ## [0.20.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.19.0...v0.20.0) (2026-06-14)
 
 
