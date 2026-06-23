@@ -154,17 +154,17 @@ exit "$fail"
 
 - [x] **Step 1:** `BENCH_BACKENDS="mlx ollama" BENCH_GATE=1` → `drops=0 errors=0` on every fixture incl. the rich control, on both backends.
 - [x] **Step 2 (optional eyeball):** one live `git diff --cached | bash scripts/delegate.sh --recipe auto --var why="…" prose "…"` to sanity-read a real body; if you record a verdict use `--source agent`, and do **not** count a single cherry-picked HIT as "hit-rate recovered."
-- [ ] **Step 3:** Note in the PR: production hit-rate recovery is tracked over ≥2 weeks of feedback rows post-merge via `metrics-summary.sh`, not gated here.
+- [x] **Step 3:** Note in the PR: production hit-rate recovery is tracked over ≥2 weeks of feedback rows post-merge via `metrics-summary.sh`, not gated here.
 
 ## Task G4.1: Durable + lean
 
 **Files:** Modify `tests/run-tests.sh` (mocked wiring-smoke only); create `docs/adr/0026-commit-message-body-drop-and-bench.md`.
 
-- [ ] **Step 1:** In `tests/run-tests.sh`, add a **mocked** smoke that never contacts a model: assert `bash -n tests/bench-commit-message-body.sh`, that the fixtures exist, and unit-test `score_body` (feed `"a\nb"`→pass, `"only-subject"`→fail) so the offline-hermetic contract is preserved.
-- [ ] **Step 2:** Document the **opt-in live** run (`BENCH_GATE=1 … bench`) in the ADR / README as the pre-merge gate for commit-message changes — run by a human/CI with a model, not by `run-tests.sh`.
-- [ ] **Step 3:** `bash tests/run-tests.sh` → PASS (offline).
-- [ ] **Step 4:** Write one lean ADR 0026: the regression, the two-part cause, the bench as the standing gate, and the lesson — the regression harness must not be archived out of core. Fold the baseline/after tables into the PR description, not a new `docs/research/` tree.
-- [ ] **Step 5:** Commit and open ONE PR. **Stop for review — no autonomous merge.**
+- [x] **Step 1:** In `tests/run-tests.sh`, add a **mocked** smoke that never contacts a model: assert `bash -n tests/bench-commit-message-body.sh`, that the fixtures exist, and unit-test `score_body` (feed `"a\nb"`→pass, `"only-subject"`→fail) so the offline-hermetic contract is preserved.
+- [x] **Step 2:** Document the **opt-in live** run (`BENCH_GATE=1 … bench`) in the ADR / README as the pre-merge gate for commit-message changes — run by a human/CI with a model, not by `run-tests.sh`.
+- [x] **Step 3:** `bash tests/run-tests.sh` → PASS (offline), 78/78.
+- [x] **Step 4:** Write one lean ADR 0026: the regression, the two-part cause, the bench as the standing gate, and the lesson — the regression harness must not be archived out of core. Fold the baseline/after tables into the PR description, not a new `docs/research/` tree.
+- [x] **Step 5:** Committed; opened PR #330. **Stopped for review — no autonomous merge.**
 
 ---
 
