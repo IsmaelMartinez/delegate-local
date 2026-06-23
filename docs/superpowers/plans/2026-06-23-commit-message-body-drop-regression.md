@@ -43,11 +43,11 @@ Evidence: `checks_run` is absent on commit-message rows until 18 June, then 31 r
 
 **Interfaces:** Produces `<name>.diff` files containing genuine `diff --git`/`@@`/`+`/`-` hunks (so the auto path has real content to derive from), a paired `<name>.why`, and a shared `recent_commits.txt`. Fixtures are **synthetic and secret-free** (this is also the privacy-test corpus).
 
-- [ ] **Step 1:** Create `recent_commits.txt` (3 real-shaped `<sha> <type>: <subject>` lines).
-- [ ] **Step 2:** Create each `thin-*.diff` as a small but **real** unified diff (1–4 files, few hunks) with a paired `.why` stating intent. Include shape variety: a pure rename, a config-only change, a test-only change, a docs-only change, and a pure deletion — these are the real thin-diff surface that starves the body.
-- [ ] **Step 3:** Create `rich-multifile.diff` (a multi-hunk substantive change) + `.why` — the control where a body is unambiguously warranted.
-- [ ] **Step 4:** Add one fixture line that *looks* secret-bearing for the redaction test (G2.2): e.g. a `+AWS_SECRET_ACCESS_KEY=AKIA...` line inside `thin-config-only.diff`. This fixture must remain secret-shaped-but-fake.
-- [ ] **Step 5:** Commit: `git commit -m "test: add diverse real-diff commit-message fixtures (thin shapes + rich control)"`
+- [x] **Step 1:** Create `recent_commits.txt` (3 real-shaped `<sha> <type>: <subject>` lines).
+- [x] **Step 2:** Create each `thin-*.diff` as a small but **real** unified diff (1–4 files, few hunks) with a paired `.why` stating intent. Include shape variety: a pure rename, a config-only change, a test-only change, a docs-only change, and a pure deletion — these are the real thin-diff surface that starves the body.
+- [x] **Step 3:** Create `rich-multifile.diff` (a multi-hunk substantive change) + `.why` — the control where a body is unambiguously warranted.
+- [x] **Step 4:** Add one fixture line that *looks* secret-bearing for the redaction test (G2.2): e.g. a `+AWS_SECRET_ACCESS_KEY=AKIA...` line inside `thin-config-only.diff`. This fixture must remain secret-shaped-but-fake.
+- [x] **Step 5:** Commit: `git commit -m "test: add diverse real-diff commit-message fixtures (thin shapes + rich control)"`
 
 ## Task G0.2: The benchmark harness (real path, real scorer, error-aware)
 
@@ -55,7 +55,7 @@ Evidence: `checks_run` is absent on commit-message rows until 18 June, then 31 r
 
 **Interfaces:** Consumes G0.1 fixtures. Produces stdout `<backend>\t<model>\t<fixture>\tresult=BODY|DROP|ERROR` per run and a summary `<backend> drops=D/F errors=E`; exits non-zero under `BENCH_GATE=1` only when a **thin or control** fixture yields `DROP` (an `ERROR` makes the run inconclusive, printed loudly, and also fails the gate so a poisoned run can't pass green). `score_body()` is byte-identical to production `body_required`.
 
-- [ ] **Step 1: Write the bench (note: pipes the REAL diff on stdin via `--recipe auto` — the path any fix touches)**
+- [x] **Step 1: Write the bench (note: pipes the REAL diff on stdin via `--recipe auto` — the path any fix touches)**
 ```bash
 #!/usr/bin/env bash
 # Commit-message body-drop regression benchmark. Drives delegate.sh --recipe auto
@@ -97,18 +97,18 @@ for backend in $BACKENDS; do
 done
 exit "$fail"
 ```
-- [ ] **Step 2:** `chmod +x tests/bench-commit-message-body.sh && bash -n tests/bench-commit-message-body.sh` → no output.
-- [ ] **Step 3: Smoke one backend** (no gate): `BENCH_BACKENDS=mlx bash tests/bench-commit-message-body.sh` → per-fixture lines + a `# mlx (<model>): drops=… errors=… total=…` summary; exit 0. If every line is `ERROR`, the auto-path `--var` keys drifted — re-check `prompts/commit-message.md` `inputs:`.
-- [ ] **Step 4:** Commit: `git commit -m "test: add error-aware commit-message body-drop benchmark"`
+- [x] **Step 2:** `chmod +x tests/bench-commit-message-body.sh && bash -n tests/bench-commit-message-body.sh` → no output.
+- [x] **Step 3: Smoke one backend** (no gate): `BENCH_BACKENDS=mlx bash tests/bench-commit-message-body.sh` → per-fixture lines + a `# mlx (<model>): drops=… errors=… total=…` summary; exit 0. If every line is `ERROR`, the auto-path `--var` keys drifted — re-check `prompts/commit-message.md` `inputs:`.
+- [x] **Step 4:** Commit: `git commit -m "test: add error-aware commit-message body-drop benchmark"`
 
 ## Task G1.1: Baseline, reproduce the defect, A/B by model, decide the lever
 
 **Files:** none yet — capture output for the PR description (no `docs/research/` tree, per lean-core).
 
-- [ ] **Step 1:** Record resolved models: `for b in mlx ollama; do echo "$b -> $(DELEGATE_BACKEND=$b bash scripts/pick-model.sh prose)"; done`. This makes the A/B a **model** comparison (DELEGATE_BACKEND changes runtime AND model), per ADR 0018's finding that body-class failures are model-bound.
-- [ ] **Step 2:** Baseline both: `BENCH_BACKENDS="mlx ollama" bash tests/bench-commit-message-body.sh | tee /tmp/bodydrop-baseline.txt`.
-- [ ] **Step 3: Validity gate** — the baseline is only usable if `errors=0`. If `errors>0`, raise `DELEGATE_PREFLIGHT_TIMEOUT`, re-warm, and re-run until errors clear; an error-poisoned baseline does not count as "reproduced."
-- [ ] **Step 4: Diagnose the lever.** With a clean baseline, decide the cheapest fix the evidence supports, in this order:
+- [x] **Step 1:** Record resolved models: `for b in mlx ollama; do echo "$b -> $(DELEGATE_BACKEND=$b bash scripts/pick-model.sh prose)"; done`. This makes the A/B a **model** comparison (DELEGATE_BACKEND changes runtime AND model), per ADR 0018's finding that body-class failures are model-bound.
+- [x] **Step 2:** Baseline both: `BENCH_BACKENDS="mlx ollama" bash tests/bench-commit-message-body.sh | tee /tmp/bodydrop-baseline.txt`.
+- [x] **Step 3: Validity gate** — the baseline is only usable if `errors=0`. If `errors>0`, raise `DELEGATE_PREFLIGHT_TIMEOUT`, re-warm, and re-run until errors clear; an error-poisoned baseline does not count as "reproduced."
+- [x] **Step 4: Diagnose the lever.** With a clean baseline, decide the cheapest fix the evidence supports, in this order:
   - If reinforcing the *existing* mandatory-body directive or fixing the `recent_commits` squash-anchor starvation plausibly addresses it → try G2.1 (no new diff content, no leak, lean).
   - Only if the model still drops bodies with adequate `recent_commits` + a sharpened directive → escalate to G2.2 (redacted diff excerpt).
   - If the MLX model drops but the Ollama model does not → G2.3 routing is on the table (user decision required).
@@ -120,12 +120,14 @@ exit "$fail"
 
 **Interfaces:** No new inputs, no diff content surfaced — stays within the lean/privacy floor. The guard tightening must cite the dated body-drop MISS cluster (2026-06-12/13) per the recipe-calibration contract (CLAUDE.md: every guard ties to a real MISS).
 
-- [ ] **Step 1 (red):** `BENCH_BACKENDS=mlx BENCH_GATE=1 bash tests/bench-commit-message-body.sh; echo exit=$?` → `exit=1`.
-- [ ] **Step 2:** Sharpen the recipe: strengthen the existing "A body is MANDATORY; never return a subject-only message" directive with a contrastive one-shot (Wrong: subject-only / Correct: subject+body), and ensure `recent_commits` gives the model body material on thin diffs. Tie the change to the 06-12/13 MISS cluster in the recipe's calibration notes.
-- [ ] **Step 3 (green?):** re-run Step 1's command. If `exit=0` on all thin fixtures + control, the leakless fix is sufficient — skip G2.2. If still red, proceed to G2.2.
-- [ ] **Step 4:** Commit: `git commit -m "fix: sharpen commit-message mandatory-body directive (#NN, 06-12/13 MISS cluster)"`
+- [x] **Step 1 (red):** red established by the G1 baseline (MLX dropped `thin-test-only`, Ollama dropped `thin-config-only`, errors=0 both).
+- [x] **Step 2:** Sharpen the recipe: strengthen the existing "A body is MANDATORY; never return a subject-only message" directive with a contrastive one-shot (Wrong: subject-only / Correct: subject+body), and ensure `recent_commits` gives the model body material on thin diffs. Tie the change to the 06-12/13 MISS cluster in the recipe's calibration notes.
+- [x] **Step 3 (green?):** green — `drops=0 errors=0` on all 8 fixtures on BOTH backends; G2.2 skipped. If `exit=0` on all thin fixtures + control, the leakless fix is sufficient — skip G2.2. If still red, proceed to G2.2.
+- [x] **Step 4:** Committed as `bfe4c46 fix: add contrastive one-shot to prevent body-drop on thin diffs` (message itself dogfooded through the fixed recipe, recorded HIT).
 
 ## Task G2.2 (only if G2.1 insufficient): Redacted, capped, opt-out diff excerpt
+
+> SKIPPED 2026-06-23 — G2.1 cleared the bench (`drops=0 errors=0`) on both backends, so the heavier diff-excerpt lever (which would surface raw diff content) was not needed. The privacy floor stays at the `diff_stat` summary.
 
 **Files:** Modify `prompts/commit-message.md` (`inputs: diff_excerpt: string?` + a scoped template block) and `scripts/delegate.sh` (the auto block, ~540-569, where `diff_stat` is derived at 552-558 — add the excerpt **in the same block the bench exercises**); Test: `tests/test-delegate.sh`.
 
@@ -141,6 +143,8 @@ exit "$fail"
 
 ## Task G2.3 (contingent on G1 A/B + USER approval): commit-message-only routing
 
+> SKIPPED 2026-06-23 — ruled out by the G1 A/B: both the MLX and Ollama prose tiers resolve to the same Qwen3.6-35B model and both dropped a body, so there is no body-safe alternative to route to. No `pick-model.sh` change.
+
 - [ ] **Step 1:** Only if G1 showed the Ollama model is body-safe AND the user approved commit-message-only routing. Otherwise mark skipped.
 - [ ] **Step 2:** Confirm the candidate is body-safe: `BENCH_BACKENDS=ollama BENCH_GATE=1 bash tests/bench-commit-message-body.sh` → exit 0.
 - [ ] **Step 3:** Apply routing in `scripts/pick-model.sh` (never SKILL.md). If the **prose tier order** changes, re-run the Phase 7 baseline (CLAUDE.md: the qwen3.6-ahead-of-qwen3-next ordering test encodes that baseline — do not just flip the assertion) and update `tests/run-tests.sh`.
@@ -148,8 +152,8 @@ exit "$fail"
 
 ## Task G3.1: Re-validate (bench is the binding DoD; hit-rate is post-merge)
 
-- [ ] **Step 1:** `BENCH_BACKENDS="mlx ollama" BENCH_GATE=1 bash tests/bench-commit-message-body.sh; echo exit=$?` → `exit=0`, `drops=0 errors=0` on every fixture incl. the rich control.
-- [ ] **Step 2 (optional eyeball):** one live `git diff --cached | bash scripts/delegate.sh --recipe auto --var why="…" prose "…"` to sanity-read a real body; if you record a verdict use `--source agent`, and do **not** count a single cherry-picked HIT as "hit-rate recovered."
+- [x] **Step 1:** `BENCH_BACKENDS="mlx ollama" BENCH_GATE=1` → `drops=0 errors=0` on every fixture incl. the rich control, on both backends.
+- [x] **Step 2 (optional eyeball):** one live `git diff --cached | bash scripts/delegate.sh --recipe auto --var why="…" prose "…"` to sanity-read a real body; if you record a verdict use `--source agent`, and do **not** count a single cherry-picked HIT as "hit-rate recovered."
 - [ ] **Step 3:** Note in the PR: production hit-rate recovery is tracked over ≥2 weeks of feedback rows post-merge via `metrics-summary.sh`, not gated here.
 
 ## Task G4.1: Durable + lean
