@@ -69,15 +69,25 @@ subject prefix — a value of `chore` means the subject MUST start with `chore:`
 and SKIP the priority list below entirely. If no value appears after the colon,
 ignore it and select the type from the priority list.
 
-TYPE selection — first match wins, non-negotiable:
+TYPE selection — first match wins, non-negotiable. Check the rules top to
+bottom; the specific path-scope and keyword rules all take priority over the
+generic feat/default at the bottom, so a new .md or workflow file resolves to
+docs/ci, NOT feat.
 1. If the diff body or WHY paragraph mentions "fix", "bug", "regression", "broken", "hang", "crash", or "leak" → `fix:`
-2. If the diff adds a NEW file, function, recipe, command-line flag, or env var that did not exist on main → `feat:`
-3. If the diff is only documentation (.md edits, comments, ADRs, README, ROADMAP) → `docs:`
-4. If the diff only adds or changes tests (tests/, *_test.sh) → `test:`
-5. If the diff only touches `.github/workflows/`, release config, or build/CI scaffolding → `chore:`
-6. Default: `feat:`
+2. If the diff touches ONLY documentation (.md edits, comments, ADRs, README, ROADMAP) → `docs:`
+3. If the diff touches ONLY tests (tests/, *_test.sh) → `test:`
+4. If the diff touches ONLY CI config (.github/workflows/, .gitlab-ci.yml, other pipeline files) → `ci:`
+5. If the diff touches ONLY the build system or dependencies (Makefile, Dockerfile, package manifests, lockfiles) → `build:`
+6. If the WHY or diff mentions "performance", "faster", "optimise", "optimize", "latency", "throughput", or "speed up" → `perf:`
+7. If the WHY or diff describes restructuring existing code with no behaviour change — "refactor", "restructure", "extract", "rename", "move", "simplify", "deduplicate", "consolidate", or "inline" → `refactor:`
+8. If the diff adds a NEW file, function, recipe, command-line flag, or env var that did not exist on main → `feat:`
+9. Default: `feat:`
 Wrong: feat: handle stale lock file when daemon crashes (this is a bug fix — should be fix:)
 Correct: fix: handle stale lock file when daemon crashes
+Wrong: chore: add CI job to run the trigger eval (CI-only change — should be ci:)
+Correct: ci: add CI job to run the trigger eval
+Wrong: feat: extract the model lookup into a helper (no new behaviour — should be refactor:)
+Correct: refactor: extract the model lookup into a helper
 
 SCOPE: if the recent examples use `<type>(<scope>):`, your subject must too, naming the diff's main area; else bare `<type>:`.
 Wrong: fix: refresh token before handshake
@@ -131,7 +141,7 @@ bash scripts/delegate.sh --recipe commit-message \
   prose "Match the example commit messages exactly in shape and tone. Keep subject ≤ 72 chars. Use the feat: prefix."
 ```
 
-The trailing prompt arg is the reinforcement instruction; the recipe template carries the structural directives. When you already know the type, pass it as `--var type=<type>` — the template substitutes it as a highest-priority override that short-circuits the priority-list reasoning entirely, which is the most reliable lever because the model copies a literal token rather than inferring a rule (see the 2026-06-04 calibration entry). Leave `--var type` off to let the priority list choose. The `Use the <type>: prefix.` suffix is the call-site reinforcement for the no-explicit-type case — pick the type from the priority list in the template body (rule #1 → `fix:`, #2 → `feat:`, #3 → `docs:`, #4 → `test:`, #5 → `chore:`, default → `feat:`) and substitute it literally into the trailing prompt. The 2026-05-23 calibration entry below documents why this hint is part of the recipe rather than a workaround.
+The trailing prompt arg is the reinforcement instruction; the recipe template carries the structural directives. When you already know the type, pass it as `--var type=<type>` — the template substitutes it as a highest-priority override that short-circuits the priority-list reasoning entirely, which is the most reliable lever because the model copies a literal token rather than inferring a rule (see the 2026-06-04 calibration entry). Leave `--var type` off to let the priority list choose. The `Use the <type>: prefix.` suffix is the call-site reinforcement for the no-explicit-type case — pick the type from the priority list in the template body (rule #1 → `fix:`, #2 → `docs:`, #3 → `test:`, #4 → `ci:`, #5 → `build:`, #6 → `perf:`, #7 → `refactor:`, #8 → `feat:`, default → `feat:`) and substitute it literally into the trailing prompt. The 2026-05-23 calibration entry below documents why this hint is part of the recipe rather than a workaround.
 
 ## Anti-hallucination guards (each line addresses a real past MISS)
 
@@ -152,6 +162,18 @@ The trailing prompt arg is the reinforcement instruction; the recipe template ca
   scope, so the model copied shape and tone yet flattened `type(scope):` to bare
   `type:`. The wrapper's `subject_type` check already strips an optional `(scope)`
   (ADR 0014), so the gap was purely the prompt never asking for one.
+- "TYPE selection" list extended from 5 types to cover `ci`, `build`, `perf`,
+  and `refactor` with path-scope and keyword triggers, reordered so the
+  specific rules precede the generic `feat:`-adds-new fallback — addresses a
+  2026-06-25 cluster (issue #337) of three `commit-message` MISSes in one day
+  where the model emitted `chore:` for a CI-only change (the old rule 5 mapped
+  CI to `chore:` despite the dedicated `ci:` type) and `chore:` for a pure
+  refactor (no `refactor:` rule existed, so it fell through). The old list
+  resolved to only 5 of the 11 types in `{{flavor_commit_types}}` and put the
+  `feat:`-adds-new rule ahead of the path-only rules, so a new `.md` or
+  `.yml` file mislabelled as `feat:`. Two Wrong/Correct one-shots (CI→`ci:`,
+  extract→`refactor:`) anchor the two recipe-fixable cases; the third
+  (`fix:` vs `feat:` on intent) stays a caller `--var type` decision.
 - "Output ONLY the commit message" — without this, the model wraps in prose like "Here's the commit message:" which has to be stripped.
 - "Stop each paragraph after the substantive sentences. Do NOT add a trailing
   sentence that restates the point …" — addresses the prose-tier padding
