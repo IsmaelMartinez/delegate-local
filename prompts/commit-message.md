@@ -65,9 +65,10 @@ Correct: feat: prompts/summarise-issue — OMIT-EMPTY + Comment-N guard (60 char
 
 TYPE override (highest priority): {{type}}
 If a value appears after the colon immediately above, use it verbatim as the
-subject prefix — a value of `chore` means the subject MUST start with `chore:` —
-and SKIP the priority list below entirely. If no value appears after the colon,
-ignore it and select the type from the priority list.
+subject prefix — for example a value of `chore` means the subject MUST start with
+`chore:`, a value of `ci` means it MUST start with `ci:`, and so on for any type
+in the vocabulary — and SKIP the priority list below entirely. If no value
+appears after the colon, ignore it and select the type from the priority list.
 
 TYPE selection — first match wins, non-negotiable. Stop at the first rule
 that matches. `feat:` means a NEW user-facing capability, so it is checked ahead of the
