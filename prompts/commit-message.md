@@ -75,7 +75,7 @@ that matches. `feat:` means a NEW user-facing capability, so it is checked ahead
 path-scope and keyword rules: a new recipe is a feat, but a new ADR, an
 extracted internal helper, or a docs/CI-only edit is not. `chore:` is the
 catch-all for housekeeping that matches nothing more specific.
-1. If the diff body or WHY paragraph mentions "fix", "bug", "regression", "broken", "hang", "crash", or "leak" → `fix:` (for a fix confined to docs/CI/tests, prefer the scoped form, e.g. `fix(ci):`)
+1. If the diff body or WHY paragraph mentions "fix", "bug", "regression", "broken", "hang", "crash", or "leak" → `fix:` (a fix confined to docs/CI/tests is still `fix:`, not `docs:`/`ci:`/`test:`; whether to add an area scope like `fix(ci):` follows the SCOPE rule below)
 2. If the diff adds a NEW user-facing capability — a command-line flag, env var, recipe, subcommand, or standalone CLI script that did not exist on main → `feat:`. Extracting an internal helper from existing code is NOT a feat (see rule 4).
 3. If the WHY or diff is about performance — "performance", "faster", "optimise", "optimize", "latency", "throughput", or "speed up" → `perf:`
 4. If the WHY or diff describes restructuring existing code with no new capability and no behaviour change — "refactor", "restructure", "extract", "rename", "move", "simplify", "deduplicate", "consolidate", or "inline" → `refactor:`
