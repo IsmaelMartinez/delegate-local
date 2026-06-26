@@ -65,19 +65,34 @@ Correct: feat: prompts/summarise-issue — OMIT-EMPTY + Comment-N guard (60 char
 
 TYPE override (highest priority): {{type}}
 If a value appears after the colon immediately above, use it verbatim as the
-subject prefix — a value of `chore` means the subject MUST start with `chore:` —
-and SKIP the priority list below entirely. If no value appears after the colon,
-ignore it and select the type from the priority list.
+subject prefix — for example a value of `chore` means the subject MUST start with
+`chore:`, a value of `ci` means it MUST start with `ci:`, and so on for any type
+in the vocabulary — and SKIP the priority list below entirely. If no value
+appears after the colon, ignore it and select the type from the priority list.
 
-TYPE selection — first match wins, non-negotiable:
-1. If the diff body or WHY paragraph mentions "fix", "bug", "regression", "broken", "hang", "crash", or "leak" → `fix:`
-2. If the diff adds a NEW file, function, recipe, command-line flag, or env var that did not exist on main → `feat:`
-3. If the diff is only documentation (.md edits, comments, ADRs, README, ROADMAP) → `docs:`
-4. If the diff only adds or changes tests (tests/, *_test.sh) → `test:`
-5. If the diff only touches `.github/workflows/`, release config, or build/CI scaffolding → `chore:`
-6. Default: `feat:`
+TYPE selection — first match wins, non-negotiable. Stop at the first rule
+that matches. `feat:` means a NEW user-facing capability, so it is checked ahead of the
+path-scope and keyword rules: a new recipe is a feat, but a new ADR, an
+extracted internal helper, or a docs/CI-only edit is not. `chore:` is the
+catch-all for housekeeping that matches nothing more specific.
+1. If the diff body or WHY paragraph mentions "fix", "bug", "regression", "broken", "hang", "crash", or "leak" → `fix:` (a fix confined to docs/CI/tests is still `fix:`, not `docs:`/`ci:`/`test:`; whether to add an area scope like `fix(ci):` follows the SCOPE rule below)
+2. If the diff adds a NEW user-facing capability — a command-line flag, env var, recipe, subcommand, or standalone CLI script that did not exist on main → `feat:`. Extracting an internal helper from existing code is NOT a feat (see rule 4).
+3. If the WHY or diff is about performance — "performance", "faster", "optimise", "optimize", "latency", "throughput", or "speed up" → `perf:`
+4. If the WHY or diff describes restructuring existing code with no new capability and no behaviour change — "refactor", "restructure", "extract", "rename", "move", "simplify", "deduplicate", "consolidate", or "inline" → `refactor:`
+5. If the diff touches ONLY tests (tests/, *_test.sh, fixtures under tests/) → `test:`
+6. If the diff touches ONLY documentation (.md edits, comments, ADRs, README, ROADMAP) → `docs:`
+7. If the diff touches ONLY CI config (.github/workflows/, .gitlab-ci.yml, other pipeline files) → `ci:`
+8. If the diff touches ONLY the build system or dependencies (Makefile, Dockerfile, package manifests, lockfiles) → `build:`
+9. If the diff is other maintenance — housekeeping config (.gitignore, editor/lint config), release scaffolding, or a version bump → `chore:`
+10. Default: `feat:`
 Wrong: feat: handle stale lock file when daemon crashes (this is a bug fix — should be fix:)
 Correct: fix: handle stale lock file when daemon crashes
+Wrong: docs: add the code-draft recipe (a new recipe is a new capability — should be feat:)
+Correct: feat: add the code-draft recipe
+Wrong: chore: add a CI job to run the trigger eval (CI-only change — should be ci:)
+Correct: ci: add a CI job to run the trigger eval
+Wrong: feat: extract the model lookup into a helper (no new capability — should be refactor:)
+Correct: refactor: extract the model lookup into a helper
 
 SCOPE: if the recent examples use `<type>(<scope>):`, your subject must too, naming the diff's main area; else bare `<type>:`.
 Wrong: fix: refresh token before handshake
@@ -131,7 +146,7 @@ bash scripts/delegate.sh --recipe commit-message \
   prose "Match the example commit messages exactly in shape and tone. Keep subject ≤ 72 chars. Use the feat: prefix."
 ```
 
-The trailing prompt arg is the reinforcement instruction; the recipe template carries the structural directives. When you already know the type, pass it as `--var type=<type>` — the template substitutes it as a highest-priority override that short-circuits the priority-list reasoning entirely, which is the most reliable lever because the model copies a literal token rather than inferring a rule (see the 2026-06-04 calibration entry). Leave `--var type` off to let the priority list choose. The `Use the <type>: prefix.` suffix is the call-site reinforcement for the no-explicit-type case — pick the type from the priority list in the template body (rule #1 → `fix:`, #2 → `feat:`, #3 → `docs:`, #4 → `test:`, #5 → `chore:`, default → `feat:`) and substitute it literally into the trailing prompt. The 2026-05-23 calibration entry below documents why this hint is part of the recipe rather than a workaround.
+The trailing prompt arg is the reinforcement instruction; the recipe template carries the structural directives. When you already know the type, pass it as `--var type=<type>` — the template substitutes it as a highest-priority override that short-circuits the priority-list reasoning entirely, which is the most reliable lever because the model copies a literal token rather than inferring a rule (see the 2026-06-04 calibration entry). Leave `--var type` off to let the priority list choose. The `Use the <type>: prefix.` suffix is the call-site reinforcement for the no-explicit-type case — walk the TYPE-selection priority list in the template body top to bottom, take the first matching rule's type, and substitute it literally into the trailing prompt. (The mapping is intentionally not re-enumerated here so it cannot drift out of sync with the list above.) The 2026-05-23 calibration entry below documents why this hint is part of the recipe rather than a workaround.
 
 ## Anti-hallucination guards (each line addresses a real past MISS)
 
@@ -152,6 +167,25 @@ The trailing prompt arg is the reinforcement instruction; the recipe template ca
   scope, so the model copied shape and tone yet flattened `type(scope):` to bare
   `type:`. The wrapper's `subject_type` check already strips an optional `(scope)`
   (ADR 0014), so the gap was purely the prompt never asking for one.
+- "TYPE selection" list extended from 5 types to cover `ci`, `build`, `perf`,
+  and `refactor` — addresses a 2026-06-25 cluster (issue #337) of three
+  `commit-message` MISSes in one day where the model emitted `chore:` for a
+  CI-only change (the old rule mapped CI to `chore:` despite the dedicated
+  `ci:` type) and `chore:` for a pure refactor (no `refactor:` rule existed).
+  The first cut at the fix demoted `feat:` below the new `docs`/`perf`/
+  `refactor` rules and dropped `chore:` from the reachable set; a pre-merge
+  review (PR #338) caught the three regressions that introduced: a new recipe
+  `.md` mislabelled `docs:` instead of `feat:` (the repo's most common
+  change), a real feature whose WHY mentioned "simplify"/"faster" stolen by
+  the greedy keyword rules, and housekeeping diffs defaulting to `feat:`
+  (an unwanted semantic-release minor bump) because `chore:` was unreachable.
+  The shipped ordering keeps `feat:` high but narrows it to a NEW user-facing
+  capability (so an extracted internal helper still falls to `refactor:`),
+  puts `test:` ahead of `docs:` so a `.md` fixture under `tests/` is `test:`
+  not `docs:`, and restores `chore:` as the housekeeping catch-all. Four
+  Wrong/Correct one-shots (bug→`fix:`, new-recipe→`feat:`, CI→`ci:`,
+  extract→`refactor:`) anchor the confirmed cases; the intent-only
+  `fix:`-vs-`feat:` call stays a caller `--var type` decision.
 - "Output ONLY the commit message" — without this, the model wraps in prose like "Here's the commit message:" which has to be stripped.
 - "Stop each paragraph after the substantive sentences. Do NOT add a trailing
   sentence that restates the point …" — addresses the prose-tier padding
