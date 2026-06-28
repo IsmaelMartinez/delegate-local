@@ -101,6 +101,8 @@ Verify before recording verdict: no `PR #NN` prefix in any heading, no fabricate
 
 ## Calibration notes
 
+> **Chronological log — read top to bottom; not all of it is current.** Any entry dated before 2026-06-28 that recommends hand-writing as the active mitigation, or frames the failure as a parameter-count *generation* stall, is SUPERSEDED by the 2026-06-28 entry at the end of this section: the gate was retired and the blocker reclassified as a one-time cold-load. The live operating guidance is the status banner at the top of this file plus that final note; the dated entries below are retained as the record of how the conclusion was reached.
+
 Distilled from session 2026-05-09 across two attempts:
 
 - **MISS** (ts=2026-05-09T20:18:59Z) — prompt asked for the standard shape and motivation but did not forbid invented output; model fabricated a metrics-summary example block with hallucinated `hit: 12 miss: 3` numbers in the wrong format. Structure was right; one section had to be rewritten by hand.
