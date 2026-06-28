@@ -44,6 +44,8 @@ Deferred, not retired: making the tier-routing policy configurable, and the full
 
 ## Topic E — pr-description stays hand-written (2026-06-11)
 
+> **Superseded 2026-06-28 by ADR 0027.** Topic E rested on the premise (shared with ADR 0012) that the 35B prose-tier model *generation*-stalls on this recipe — "hangs six to ten minutes producing the 2–3 KB of structured markdown." A controlled re-measurement falsified that: the MLX 35B emits a grade-A PR body in ~6 s once warm, and the same model serves `commit-message` 294× with no gate. The blocker is a one-time ~77 s cold-LOAD (the canary's exit-3 domain), so this Topic's own reopening condition (next-to-last paragraph) was met. The flaky entry is retired and the recipe's cold-load is absorbed with `DELEGATE_PREFLIGHT_TIMEOUT`. The reasoning below is preserved as the historical record. The unrelated points — no structural scorer for `pr-description`, flavor-split is the wrong lever — still stand.
+
 This section resolves a question the ROADMAP raised as "ADR 0013 Topic E": whether `pr-description`, the weakest recipe in production, should get a sharper flavor-profile split or be formally accepted as hand-written. The decision is to accept it as hand-written and scope it out of the eventual flavor rollout. This is a scoping consequence of the three-layer split above, not a change to this ADR's overall Status, which remains Proposed.
 
 The data is unambiguous. The first production quality analysis (`experiments/results/2026-06-10-quality-trend.md`, reproducible via `python3 experiments/quality-trend.py`) put `pr-description` at 45% HIT — 5 HIT against 6 MISS across 11 verdicts — the single worst recipe in the library, well below the input-digestion recipes that cluster near 90–100%.
