@@ -32,6 +32,8 @@ Any new model introduction should follow the existing due-diligence protocol fro
 
 The flaky-on-models gate (Phase 16) now refuses this recipe on 35B-class models, which is the right operational fix. The recipe needs either a model class that handles it reliably or a fundamental redesign of the prompt shape.
 
+> Superseded 2026-06-28 by ADR 0027: the gate's premise was falsified — the 35B produces grade-A output in ~6 s warm and the blocker is a one-time cold-load, so the gate was retired for this recipe and the cold-load is absorbed with `DELEGATE_PREFLIGHT_TIMEOUT`. No prompt redesign was needed.
+
 ### 4. commit-message recipe (73% hit rate)
 
 The main failure mode is type-selection (choosing `docs:` when `feat:` is correct). The Phase 15 contrastive-anchor work and Phase 17 Track E clusters already address this, but the 73% rate is below the 80% project average.

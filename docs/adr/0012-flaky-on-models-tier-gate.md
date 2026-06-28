@@ -4,7 +4,7 @@ Date: 2026-05-24
 
 ## Status
 
-Accepted.
+Accepted. The gate mechanism stands. Its `pr-description` worked example was later superseded by **ADR 0027 (2026-06-28)**: a controlled re-measurement falsified the "35B-class models generation-stall on this recipe" premise (the model produces grade-A output in ~6 s once warm; the blocker is a one-time cold-load, which is the canary's exit-3 domain, not the gate's exit-4 domain), so that recipe's `flaky_on_models` entry was retired. The convention itself — and the `release-note` / `long-thread-distillation` entries — are unaffected.
 
 ## Context
 

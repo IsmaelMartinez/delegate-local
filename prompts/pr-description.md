@@ -3,18 +3,10 @@ inputs:
   recent_prs: string
   diff_stat: string
   context: string
-flaky_on_models:
-  - qwen3.6:35b
-  - qwen3.6-35b
-  - qwen3_6-35b
-  - qwen3.6_35b
-  - qwen3-next:80b
-  - qwen3-next-80b
-  - qwen3_next-80b
 ---
 # pr-description
 
-> **Status (2026-06-11): accepted as hand-written on 35B+/80B prose-tier hosts.** This recipe is production-measured at 45% HIT (the worst in the library); the failure mode is model parameter-count stall, not taste, so the ADR 0013 flavor-profile split was considered and declined. This is a terminal decision, not an open tuning task — see ADR 0013 "Topic E" and ADR 0012 (the `flaky_on_models` gate that already enforces it). The recipe stays available where the prose tier resolves to a smaller model.
+> **Status (2026-06-28): live — the `flaky_on_models` gate was RETIRED after its premise was falsified.** The 2026-05-24 gate refused this recipe on 35B/80B prose hosts believing those models *generation*-stall on recipe-shaped prompts. A 2026-06-28 probe (see the calibration note at the end) showed the opposite: the MLX 35B emits a grade-A PR description in ~6 s once warm — the only slow part is a one-time ~77 s cold-LOAD, which is the pre-flight canary's job (exit 3), not the structural gate's (exit 4). The same 35B serves `commit-message` 294× with no gate. On a 35B MLX host set `DELEGATE_PREFLIGHT_TIMEOUT=90` for the first (cold) call; warm calls need nothing. The recipe also passes where the prose tier resolves to a smaller model (gemma4:31b-it, qwen3.5:27b, qwen3-coder:30b all graded A). See ADR 0027, which supersedes the ADR 0012/0013 premise for this recipe. The historical 45%-HIT signal predates the fix and is on probation — re-measure via `delegate-feedback.sh` before trusting at volume.
 
 ## When to use
 
@@ -32,7 +24,7 @@ git log <base-branch>..HEAD --pretty=oneline    # commit-by-commit shape
 
 The recent merged-PR body is the load-bearing context. The model learns the project's bullet-vs-prose shape, the standard subsection headings, and the test-plan-checkbox convention from the literal, not from descriptors.
 
-**The failure axis is model parameter count at recipe-sized prompts, not body bytes.** The 2026-05-10 timeout was triggered at `--limit 2` (~5 KB of combined PR bodies); the 2026-05-11 follow-up at `--limit 1` against a single ~1.5 KB body still stalled past 30 s on the same 35B prose-tier host; issue #110's 2026-05-13 follow-up further measured the 35B stalling on ~3-4 KB recipe-shaped prompts on both Ollama and MLX while a 0.6B-class model returned in 1 second on the same shape. On hosts where the prose tier resolves to a 35B-class model, treat this recipe as known-flaky regardless of body size and hand-write the PR description; the recipe stays useful on hosts where prose resolves to a smaller model. Routing to the `long-context` tier (Qwen3-Next 80B-A3B on the reference host) does not rescue the 35B case either — the 2026-05-11 calibration note records an 8-minute hang on the same shape via that tier too. The pre-flight canary in `delegate.sh --recipe` (2026-05-18) catches the stall-at-load case loudly with `exit 3` before any input is sunk; it does *not* catch the warm-model-stalls-on-recipe-shape case, so the hand-write fallback remains the active mitigation on this host class — see the 2026-05-18 calibration note.
+**Superseded 2026-06-28: the blocker is cold-LOAD latency, not generation (see the 2026-06-28 calibration note).** The earlier 2026-05-10/11/13 measurements timed wall-clock from a cold (or memory-evicted) state on the 35B/80B prose and long-context tiers and attributed the disk-load latency to generation — concluding, wrongly, that the failure axis was model parameter count at recipe-sized prompts. The 2026-06-28 probe showed the MLX 35B generates a grade-A PR body in ~6 s once warm; the only slow part is the ~77 s cold-load. The active mitigation is therefore NOT hand-writing: on a host where the prose tier resolves to a 35B-class MLX model, set `DELEGATE_PREFLIGHT_TIMEOUT=90` on the first (cold) call so the pre-flight canary tolerates the load window — warm calls return in seconds and need nothing. Keep the model resident (Ollama `keep_alive`, or `mlx_lm.server` holding the last model) to avoid paying cold-load repeatedly. The recipe also passes where the prose tier resolves to a smaller model.
 
 The `<<<EXAMPLE_BEGIN ... EXAMPLE_END>>>` envelope around each example is intentional — without explicit delimiters the model bleeds content from one example into the next or treats the whole block as one example with confused shape.
 
@@ -109,6 +101,8 @@ Verify before recording verdict: no `PR #NN` prefix in any heading, no fabricate
 
 ## Calibration notes
 
+> **Chronological log — read top to bottom; not all of it is current.** Any entry dated before 2026-06-28 that recommends hand-writing as the active mitigation, or frames the failure as a parameter-count *generation* stall, is SUPERSEDED by the 2026-06-28 entry — the last dated entry below: the gate was retired and the blocker reclassified as a one-time cold-load. The live operating guidance is the status banner at the top of this file plus that final note; the dated entries below run in date order and are retained as the record of how the conclusion was reached.
+
 Distilled from session 2026-05-09 across two attempts:
 
 - **MISS** (ts=2026-05-09T20:18:59Z) — prompt asked for the standard shape and motivation but did not forbid invented output; model fabricated a metrics-summary example block with hallucinated `hit: 12 miss: 3` numbers in the wrong format. Structure was right; one section had to be rewritten by hand.
@@ -142,6 +136,8 @@ The "Context to gather first" section is updated to make the size framing explic
 
 ### 2026-05-13 — issue #110: discriminator is model parameter count, not body bytes
 
+> **Superseded 2026-06-28 (see the note below): the discriminator is cold-LOAD, not parameter count.** The measurements in this section are real but were timed from a cold/evicted model state; the 2026-06-28 re-measurement showed warm generation completes in seconds. Retained as historical record.
+
 The 2026-05-11 framing above ("if the body alone is > 1 KB, expect a stall") was empirically refined by issue [#110](https://github.com/IsmaelMartinez/delegate-local/issues/110). Two follow-up reports sharpened the conclusion:
 
 - 2026-05-12: full recipe with a **612-byte** PR body (well under the 1 KB heuristic) hung past 6 minutes on `qwen3.6:35b-a3b-q8_0` (Ollama prose tier). Body-size alone is not the discriminator.
@@ -150,6 +146,14 @@ The 2026-05-11 framing above ("if the body alone is > 1 KB, expect a stall") was
 The discriminator is **model parameter count at recipe-sized prompts**, not the backend and not the body-size threshold. Both backends hang the 35B-class prose-tier model on the recipe's combined input + structured output budget; a 0.6B-class model handles the same prompt shape in seconds with quality good enough for the "summarise this PR" task. The 1 KB body framing in the 2026-05-11 note is retracted as not the right axis.
 
 Active mitigation on hosts where the 35B is the prose-tier leader: treat the recipe as known-flaky regardless of body size and hand-write the PR description. The `~6 paragraphs` heuristic from issue #110's closing comment covers the small-PR end of the range where the setup-vs-payoff ratio is unfavourable; the recipe also stalls on larger inputs because of the combined input + structured output budget, so the same conclusion (hand-write) holds at both ends of the size range.
+
+### 2026-05-18 — pre-flight canary ships
+
+The pre-flight canary suggestion deferred in the 2026-05-13 issue #110 thread is now in `scripts/delegate.sh`. On every `--recipe` call, the wrapper sends a 1-token probe (`num_predict:1` on Ollama, `max_tokens:1` on MLX) to the resolved model with `curl --max-time ${DELEGATE_PREFLIGHT_TIMEOUT:-10}` before the full templated request leaves the agent. If the probe does not return within the timeout the wrapper exits 3 with a stderr message naming the model, the backend, and recovery options (raise `DELEGATE_PREFLIGHT_TIMEOUT`, route to a smaller-parameter model, hand-write the output, or opt out with `DELEGATE_NO_PREFLIGHT=1`). A metrics row tagged `exit_status:3` is written so `audit-metrics.sh` can pivot on stalls later.
+
+What the canary catches: the cold-load / unreachable-backend / model-stuck-at-load cases from issue #110's original report — the user no longer sinks 6–10 minutes into a recipe before learning the model isn't going to respond. What the canary does *not* catch: the case where the model returns one token cleanly but then stalls on the full recipe-shaped prompt (the 2026-05-12 report's `delegate.sh prose "Write HELLO."` canary succeeded in 2 minutes while the same model hung indefinitely on the full recipe). Hand-writing remains the active mitigation on hosts where the 35B is the prose-tier leader; the canary is a faster failure mode, not an elimination of the failure.
+
+The other deferred suggestion in issue #110 (scaffold a `small` tier into `pick-model.sh` preferring 0.6B-class models, with recipe metadata to opt in) is still open as future work — it would let hosts with a small MLX-quantised model trade quality for reliability on this recipe shape rather than falling through to hand-writing.
 
 ### 2026-05-24 — Phase 16 Track A: flaky-on-models tier-gate ships
 
@@ -161,13 +165,29 @@ Why this lands now: the recipe's 45% hit rate (5 HIT / 6 MISS over 11 verdicts i
 
 The new convention (recipe-level `flaky_on_models:` frontmatter, the `delegate.sh` parser + gate + opt-out env var) is documented in `prompts/README.md` "Convention 4 — flaky_on_models gate" so future recipes can adopt it when a model-class flakiness pattern emerges.
 
-### 2026-05-18 — pre-flight canary ships
+### 2026-06-28 — the gate premise is falsified: the blocker is cold-load, not generation (gate RETIRED)
 
-The pre-flight canary suggestion deferred in the 2026-05-13 issue #110 thread is now in `scripts/delegate.sh`. On every `--recipe` call, the wrapper sends a 1-token probe (`num_predict:1` on Ollama, `max_tokens:1` on MLX) to the resolved model with `curl --max-time ${DELEGATE_PREFLIGHT_TIMEOUT:-10}` before the full templated request leaves the agent. If the probe does not return within the timeout the wrapper exits 3 with a stderr message naming the model, the backend, and recovery options (raise `DELEGATE_PREFLIGHT_TIMEOUT`, route to a smaller-parameter model, hand-write the output, or opt out with `DELEGATE_NO_PREFLIGHT=1`). A metrics row tagged `exit_status:3` is written so `audit-metrics.sh` can pivot on stalls later.
+A controlled re-measurement (the `DELEGATE_FORCE_FLAKY=1` "override once and measure" step that both ADR 0012 and ADR 0013 Topic E prescribe) overturned the premise behind the 2026-05-24 gate. Seven models were probed with a faithful 3.2 KB recipe-shaped prompt (`think:false`, `temperature:0`), warming each with a 1-token call before timing the full generation. All seven are shown — including the two worst performers — because the gate covered every host whose prose tier resolves to a 35B substring, on either backend:
 
-What the canary catches: the cold-load / unreachable-backend / model-stuck-at-load cases from issue #110's original report — the user no longer sinks 6–10 minutes into a recipe before learning the model isn't going to respond. What the canary does *not* catch: the case where the model returns one token cleanly but then stalls on the full recipe-shaped prompt (the 2026-05-12 report's `delegate.sh prose "Write HELLO."` canary succeeded in 2 minutes while the same model hung indefinitely on the full recipe). Hand-writing remains the active mitigation on hosts where the 35B is the prose-tier leader; the canary is a faster failure mode, not an elimination of the failure.
+| Model | Backend | Cold-load | Warm gen | Shape grade |
+|---|---|---|---|---|
+| Qwen3.6-35B-A3B-8bit | MLX (prod path) | 77.2 s | 5.7 s | A |
+| qwen3-coder:30b-a3b | Ollama | 7.5 s | 4.1 s | A |
+| qwen3.5:27b | Ollama | 6.2 s | 17.4 s | A |
+| gemma4:31b-it | Ollama | 9.0 s | 15.7 s | A |
+| gemma4:latest | Ollama | 3.9 s | 2.4 s | C (drops Test plan) |
+| Qwen3.6-35B (q8_0) | Ollama | 18.4 s | 3.4 s | D (drops Summary) |
+| Qwen3-Coder-30B | MLX | >120 s (warmup cap hit) | ~51 s incl. load\* | B (padding tail) |
 
-The other deferred suggestion in issue #110 (scaffold a `small` tier into `pick-model.sh` preferring 0.6B-class models, with recipe metadata to opt in) is still open as future work — it would let hosts with a small MLX-quantised model trade quality for reliability on this recipe shape rather than falling through to hand-writing.
+\* The MLX Coder-30B never got a clean warm timing — its 1-token warmup hit the 120 s cap — but the full recipe probe still completed in ~51 s (load-dominated) and produced gradeable (B) output, so this row reflects an impractical cold-load, not a generation failure.
+
+Every model that got a clean warm timing returned in single-digit-to-teens seconds; the spread is in *shape*, not latency. The premise was that 35B-class prose-tier models *generation*-stall on this shape ("hangs 6–10 min regardless of input size"). They do not: the MLX 35B — the production-path model the gate refused — emits a grade-A, correctly-shaped PR body in **5.7 s once warm**. The only slow part is a one-time ~77 s cold-LOAD. The same 35B weights on the Ollama backend dropped the `## Summary` on this single sample (grade D), and gemma4:latest dropped the `## Test plan` (grade C) — a shape-quality spread the gate and canary never measured. Because the gate is now removed for all `qwen3.6:35b` substrings (both backends), that shape variance is what the re-measurement probation (end of this note) exists to catch; it is a taste signal, not the structural generation failure the gate assumed. The earlier 2026-05-10/11/13 timeouts measured wall-clock from a cold or memory-evicted state (a 35B prose model and an 80B long-context model thrashing each other out of VRAM) and mis-attributed disk-load latency to generation.
+
+Decisive corroboration: `commit-message` shares the **identical** 35B/prose/MLX dispatch path with no `flaky_on_models` block and has logged 294 exit-0 successes (alongside 15 transient exit-3 canary cold-load stalls). If the 35B truly could not generate recipe-shaped prompts, those 294 successes could not exist. So pr-description's failure belongs in the canary's dynamic domain (exit 3, "didn't respond in time → raise the timeout"), not the gate's structural domain (exit 4, "this model class can't do this recipe"). Under ADR 0012's own evidence convention the entry was a misclassification.
+
+Faithfulness was checked on a genuinely novel diff (shape anchor = an unrelated dependabot PR, described subject = a dashboard-panel fix): the warm 35B produced a shape-perfect body that accurately named the real files and the real bug, with **zero** bleed from the anchor — recorded as a HIT (ts 2026-06-28T20:46:14Z). This addresses the prior single-sample caveat.
+
+Resolution: the `flaky_on_models` block is removed (this recipe only — the gate mechanism and the `release-note` / `long-thread-distillation` entries are untouched and remain valid). The cold-load is absorbed with `DELEGATE_PREFLIGHT_TIMEOUT=90` on a cold MLX 35B host (warm calls need nothing) and/or by keeping the model resident. The reclassification is recorded in ADR 0027, which supersedes the premise of ADR 0012's pr-description entry and ADR 0013 Topic E without retracting the gate mechanism. Warm output *quality* (the historical 45% HIT) is still on probation: re-measure across ~10 real PRs via `delegate-feedback.sh`, and revisit removal if it does not clear the library floor.
 
 **Caveat (shell-var expansion):** the `--var context="<sentences>"` argument is double-quoted in the invocation example, so any literal `$VARNAME` token in the context paragraph (e.g. a sentence mentioning `$CI_COMMIT_REF_NAME`, `$PR_AGENT_GITLAB_TOKEN`, or `$AWS_*` by name) will be silently substituted by the surrounding shell before `delegate.sh` sees it — unset variables expand to empty and the token vanishes from the prompt, while set variables expand to their literal value and leak the secret into both the model prompt and the metrics JSONL row. Switch the affected `--var` arg to single quotes, escape the dollar as `\$VARNAME` inside the double quotes, or pass the value via a `<<'EOF'` heredoc. See SKILL.md's Pattern-section pitfall callout.
 
