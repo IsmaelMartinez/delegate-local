@@ -11,7 +11,7 @@ checks:
 
 You are drafting the body of a *new* GitHub issue from facts you already have in hand — a bug report write-up, a `prompt-pattern` filing, a feature proposal, a coverage-gap note — where the caller can supply both the ordered set of markdown section headings the body should use and the source facts to fill them. The output is the issue body markdown only (no title), ready to pass to `gh issue create --body-file`.
 
-Distinct from the two adjacent recipes: `pr-description.md` drafts a PR body from a *diff* (it has code changes as input and is flaky-gated on 35B-class models), and `maintainer-reply.md` drafts a short *comment* under an existing issue or PR. This recipe drafts a structured multi-section issue body from facts, with no diff and no length cap beyond the per-section content.
+Distinct from the two adjacent recipes: `pr-description.md` drafts a PR body from a *diff* (it has code changes as input; on a cold 35B MLX host its first call needs `DELEGATE_PREFLIGHT_TIMEOUT=90` to absorb cold-load — see ADR 0027), and `maintainer-reply.md` drafts a short *comment* under an existing issue or PR. This recipe drafts a structured multi-section issue body from facts, with no diff and no length cap beyond the per-section content.
 
 Not for: issues whose body is one or two sentences (open them by hand or with `maintainer-reply`'s shape), or issues that require multi-file reasoning to write (a model handed only the facts cannot reconstruct repo context it was not given — gather the facts yourself first, then delegate the prose).
 
