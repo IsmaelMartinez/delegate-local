@@ -170,9 +170,14 @@ fi
 # shared /tmp). The EXIT trap covers both the success and the failed-push path.
 resp_file=$(mktemp)
 trap 'rm -f "$resp_file"' EXIT
-http_code=$(curl -s -o "$resp_file" -w '%{http_code}' \
+# The payload is piped in on stdin (`--data-binary @-`) rather than passed as an
+# argv element: a full-history push is ~2 MB once `tojson` escaping is applied,
+# which exceeds the ~1 MB ARG_MAX on macOS and fails with "Argument list too
+# long" before curl ever runs. Incremental syncs are small enough to have hidden
+# this, but --full (and any long-deferred catch-up batch) hits the ceiling.
+http_code=$(printf '%s' "$payload" | curl -s -o "$resp_file" -w '%{http_code}' \
   -X POST "${loki_url%/}/loki/api/v1/push" \
-  -H 'Content-Type: application/json' --data-binary "$payload")
+  -H 'Content-Type: application/json' --data-binary @-)
 resp=$(cat "$resp_file" 2>/dev/null)
 
 if [[ "$http_code" == "204" || "$http_code" == "200" ]]; then

@@ -16,14 +16,18 @@ assert_eq() { if [[ "$1" == "$2" ]]; then echo "  PASS  $3"; pass=$((pass+1)); e
 assert_contains() { case "$2" in *"$1"*) echo "  PASS  $3"; pass=$((pass+1));; *) echo "  FAIL  $3 (missing '$1')"; fail=$((fail+1));; esac; }
 
 # Mock curl: capture the --data-binary push body to $BODY, respond 204 to the
-# push and flush; everything else 204.
+# push and flush; everything else 204. The real caller streams the body on
+# stdin as `--data-binary @-` (a full-history payload exceeds ARG_MAX as an
+# argv element), so `@-` means "read the body from stdin" here too.
 make_mock_curl() {
   local dir="$1" body="$2"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
 prev=""
 for a in "\$@"; do
-  if [[ "\$prev" == "--data-binary" ]]; then printf '%s' "\$a" > "$body"; fi
+  if [[ "\$prev" == "--data-binary" ]]; then
+    if [[ "\$a" == "@-" ]]; then cat > "$body"; else printf '%s' "\$a" > "$body"; fi
+  fi
   prev="\$a"
 done
 # emulate -w '%{http_code}' -o FILE: write nothing to the -o file, echo code
@@ -152,6 +156,26 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" bash "$SCRIPT" --full --metrics-file 
 ns9a=$(jq -r '.streams[].values[] | select((.[1]|fromjson).project=="repo-z") | .[0]' "$body9a")
 ns9b=$(jq -r '.streams[].values[] | select((.[1]|fromjson).project=="repo-z") | .[0]' "$body9b")
 assert_eq "$ns9a" "$ns9b" "T9: same row -> same ns regardless of file position (re-sync idempotent)"
+
+# --- T10: a payload larger than ARG_MAX still pushes -------------------------
+# Regression guard for the 2026-07-27 failure: the push body used to be passed
+# to curl as an argv element, so a full-history sync (~2 MB once tojson
+# escaping is applied) died with "Argument list too long" before curl ran.
+# Incremental syncs were small enough to hide it. A REAL /usr/bin/curl is used
+# here — the mock is a bash script and would hit the same exec limit for the
+# wrong reason — pointed at a closed port, so the run fails at connect (exit 1)
+# rather than at exec. The assertion is on the stderr signature: an ARG_MAX
+# regression says "Argument list too long"; a correctly-streamed body does not.
+row10='{"ts":"2026-05-11T09:00:00Z","source":"delegate","tier":"prose","exit_status":0,"project":"argmax","note":"'"$(printf 'x%.0s' $(seq 1 900))"'"}'
+met10="$tmp/m10.jsonl"; state10="$tmp/s10"
+: > "$met10"
+for _ in $(seq 1 3000); do printf '%s\n' "$row10" >> "$met10"; done
+err10=$(PATH="/usr/bin:/bin" bash "$SCRIPT" --full --metrics-file "$met10" \
+  --state-file "$state10" --loki-url http://127.0.0.1:1 2>&1 >/dev/null)
+case "$err10" in
+  *"Argument list too long"*) echo "  FAIL  T10: >ARG_MAX payload still passed via argv"; fail=$((fail+1));;
+  *) echo "  PASS  T10: >ARG_MAX payload is streamed to curl, not passed via argv"; pass=$((pass+1));;
+esac
 
 rm -rf "$tmp"
 echo
