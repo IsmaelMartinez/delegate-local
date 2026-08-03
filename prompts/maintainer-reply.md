@@ -124,7 +124,18 @@ Thanks again!
 Nice catch on the off-by-one in the pagination cursor, the fix in `b3f2a91` is exactly right. Would you be up for adding a regression test that pages past the last item before we merge?
 ```
 
-Verify before recording verdict: opens with the specific praise or the confirmed cause (not generic filler), the body is at most two sentences, the ask is a question addressed to the reader (no echoed imperative), the sign-off (if any) is preserved verbatim, no em dashes, no closing-paraphrase sentence, no preamble or markdown fence.
+Multi-ask shape (MULTI-ASK-SPLIT), when the ask topic carries more than one distinct ask:
+
+```
+@nneul, the blank-window regression is in the Electron 39 upgrade, specifically the GPU sandbox flag flip, which also silently disabled cross-run dedup in PR #2424.
+1. Does it reproduce on 2.9?
+2. Could you paste the launch flags you use?
+3. Does a downgrade to 2.9 clear it?
+
+Thanks again!
+```
+
+Verify before recording verdict: opens with the specific praise or the confirmed cause (not generic filler), the ask is a question addressed to the reader (no echoed imperative), the sign-off (if any) is preserved verbatim, no em dashes, no closing-paraphrase sentence, no preamble or markdown fence. On length: a single-ask reply is at most two sentences; a multi-ask reply is one cause sentence plus one numbered question per ask, and every ask supplied must appear — do NOT record a MISS on a multi-ask reply merely for exceeding two sentences, that is the MULTI-ASK-SPLIT shape working. Do record a MISS if distinct asks were merged into one question, or if a fact supplied on stdin is missing.
 
 ## Calibration notes
 

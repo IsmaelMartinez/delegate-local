@@ -111,7 +111,13 @@ bash scripts/delegate.sh --recipe pr-description \
 - [ ] <concrete verifiable check>
 ```
 
-Verify before recording verdict: no `PR #NN` prefix in any heading, no fabricated tool output (any code block claiming to show CLI / metrics output should be cross-checked against the actual format), test-plan items are concrete and verifiable rather than aspirational.
+The block above is the shape to expect **only when the anchor examples themselves carry those sections**. Where the recent merged PRs are short prose, the correct output is short prose with no headings at all:
+
+```
+Adds X so that Y no longer needs Z. The behaviour is unchanged for existing callers, and the suite covers the new path.
+```
+
+Verify before recording verdict: the output's shape matches the anchor examples' shape (headings only if the examples used headings — a multi-section body against terse examples is a MISS, not a bonus), no `PR #NN` prefix in any heading, no fabricated tool output (any code block claiming to show CLI / metrics output should be cross-checked against the actual format), and — where a test plan is present at all — every item traces to something stated in the Context and no box is pre-checked. A single `- [x]` is an automatic MISS: it asserts a verification that did not happen.
 
 ## Calibration notes
 
