@@ -51,10 +51,10 @@ CODE_PREFS="qwen3-coder-next qwen3-coder deepseek-r1 qwen3.5"
 PROSE_PREFS="qwen3.6 qwen3-next gemma4:latest gemma4 llama4 qwen3.5"
 REASONING_PREFS="deepseek-r1:32b deepseek-r1-distill-qwen-32b phi4-reasoning qwq glm-4"
 LONG_CONTEXT_PREFS="qwen3.6 qwen3-next llama4:scout qwen3-coder-next llama4 glm-4"
-VISION_PREFS="qwen3-vl:30b-a3b-thinking qwen3-vl"
+VISION_PREFS="qwen3-vl:30b-a3b-thinking qwen3-vl-30b-a3b-thinking qwen3-vl"
 EMBEDDING_PREFS="nomic-embed-text bge-large"
-PREMIUM_GENERAL_PREFS="qwen3.5:122b"
-REASONING_VISION_PREFS="phi4-reasoning-vision qwen3-vl:30b-a3b-thinking"
+PREMIUM_GENERAL_PREFS="qwen3.5:122b qwen3.5-122b"
+REASONING_VISION_PREFS="phi4-reasoning-vision qwen3-vl:30b-a3b-thinking qwen3-vl-30b-a3b-thinking"
 
 dry_run=0
 print_prefs=0

@@ -477,6 +477,37 @@ OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" b
 assert_contains "backend=mlx" "$OUT" "MLX --dry-run trace surfaces backend"
 rm -rf "$tmp"
 
+# The scaffolded tiers must resolve under MLX too. Ollama tags separate the
+# parameter count with a colon (qwen3.5:122b) but HuggingFace names hyphenate
+# it (Qwen3.5-122B-A10B-4bit), so a colon-only pref can never substring-match
+# an MLX name. Both spellings have to be in the prefs list.
+tmp=$(mktemp -d)
+make_fake_hub "$tmp" "mlx-community" "Qwen3.5-122B-A10B-4bit"
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" premium-general 2>&1) || EC=$?
+assert_eq "0" "$EC" "MLX premium-general with Qwen3.5-122B installed -> exit 0"
+assert_eq "mlx-community/Qwen3.5-122B-A10B-4bit" "$OUT" "MLX premium-general -> hyphenated Qwen3.5-122B"
+rm -rf "$tmp"
+
+tmp=$(mktemp -d)
+make_fake_hub "$tmp" "mlx-community" "Qwen3-VL-30B-A3B-Thinking-8bit"
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" reasoning-vision 2>&1) || EC=$?
+assert_eq "0" "$EC" "MLX reasoning-vision with Qwen3-VL-Thinking installed -> exit 0"
+assert_eq "mlx-community/Qwen3-VL-30B-A3B-Thinking-8bit" "$OUT" "MLX reasoning-vision -> hyphenated Qwen3-VL-Thinking"
+rm -rf "$tmp"
+
+# The vision tier prefers the thinking variant — the colon-form pref already
+# encodes that for Ollama. Without the hyphenated spelling the bare 'qwen3-vl'
+# fallback matches either sibling arbitrarily, so install both and assert the
+# thinking one still wins under MLX.
+tmp=$(mktemp -d)
+make_fake_hub "$tmp" "mlx-community" "Qwen3-VL-30B-A3B-Instruct-8bit" "Qwen3-VL-30B-A3B-Thinking-8bit"
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" vision 2>&1) || EC=$?
+assert_eq "mlx-community/Qwen3-VL-30B-A3B-Thinking-8bit" "$OUT" "MLX vision prefers thinking over instruct sibling"
+rm -rf "$tmp"
+
 echo
 echo "=== pick-model.sh: DELEGATE_BACKEND=auto (probe) ==="
 
