@@ -497,6 +497,17 @@ assert_eq "0" "$EC" "MLX reasoning-vision with Qwen3-VL-Thinking installed -> ex
 assert_eq "mlx-community/Qwen3-VL-30B-A3B-Thinking-8bit" "$OUT" "MLX reasoning-vision -> hyphenated Qwen3-VL-Thinking"
 rm -rf "$tmp"
 
+# The vision tier prefers the thinking variant — the colon-form pref already
+# encodes that for Ollama. Without the hyphenated spelling the bare 'qwen3-vl'
+# fallback matches either sibling arbitrarily, so install both and assert the
+# thinking one still wins under MLX.
+tmp=$(mktemp -d)
+make_fake_hub "$tmp" "mlx-community" "Qwen3-VL-30B-A3B-Instruct-8bit" "Qwen3-VL-30B-A3B-Thinking-8bit"
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" vision 2>&1) || EC=$?
+assert_eq "mlx-community/Qwen3-VL-30B-A3B-Thinking-8bit" "$OUT" "MLX vision prefers thinking over instruct sibling"
+rm -rf "$tmp"
+
 echo
 echo "=== pick-model.sh: DELEGATE_BACKEND=auto (probe) ==="
 
