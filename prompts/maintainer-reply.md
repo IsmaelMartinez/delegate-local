@@ -15,7 +15,9 @@ You are a project maintainer drafting a short outbound reply to a contributor or
 
 Distinct from the two adjacent reply recipes: `pr-review-reply.md` is the PR *author* posting a one-line "Applied in `<hash>`" under a reviewer's inline comment, and `polish-reply.md` *tightens an existing multi-paragraph draft*. This recipe *drafts the maintainer's reply from scratch* in the maintainer's outbound voice.
 
-Not for: replies that push back on the reporter's premise or argue a contentious design decision (write those by hand — a model dilutes the maintainer's voice on contention), multi-paragraph technical explanations (the recipe deliberately caps the body at two sentences), or any reply where the "ask" is really several asks (call the recipe once per distinct reply, one ask each).
+Multi-ask replies are in scope as of 2026-08-03: pass the several asks in one `--var ask=...` and the MULTI-ASK-SPLIT rule keeps each as its own numbered question instead of merging them. This replaced the earlier "call the recipe once per distinct reply" guidance, which callers did not follow — 13 consecutive multi-ask teams-for-linux replies were rewritten because the two-sentence cap compressed several asks into one run-on sentence.
+
+Not for: replies that push back on the reporter's premise or argue a contentious design decision (write those by hand — a model dilutes the maintainer's voice on contention), or multi-paragraph technical explanations (the recipe caps the prose body at two sentences even when the ask list is long).
 
 ## Context to gather first
 
@@ -41,8 +43,22 @@ Write exactly this structure, in order:
 2. Exactly one question or ask, addressed to the reader in the second person. Derive it from the ask topic below and phrase it as a direct question. Never write it as an instruction about the reader ("ask them to ...", "they should ...", "the reporter needs to ...").
 3. If a sign-off is given below, end with it verbatim on its own line. If none is given, stop after the question.
 
+MULTI-ASK-SPLIT — first match wins, non-negotiable:
+Count the distinct asks in the ask topic below. Two asks are distinct when answering one does not answer the other.
+1. If there is exactly ONE ask, write the closed two-sentence shape described above.
+2. If there are TWO OR MORE, do NOT merge them into one sentence and do NOT drop any of them. Keep the cause-or-praise sentence, then write each ask as its own numbered item, each a direct question to the reader. The two-sentence cap in the rules below is lifted for the ask list only; everything else still applies.
+3. Never join distinct asks with "and" into a single run-on question. Mutually exclusive asks in particular must stay separate, because merging them produces a question the reader cannot answer.
+Wrong: The regression is in the GPU sandbox flag. Could you confirm whether it happens on 2.10 and also send the config you are using and say whether a downgrade fixes it?
+Correct: The regression is in the GPU sandbox flag.
+1. Does it happen on 2.10?
+2. Could you paste the config you are running?
+3. Does a downgrade clear it?
+
+NO-FACT-DROP — non-negotiable:
+Every fact supplied on stdin that bears on the diagnosis must survive into the reply. The sentence cap is a ceiling on padding, never a licence to discard a supplied fact. If the facts do not fit the shape, add an item — do not delete a fact. If a fact is supplied that you cannot place, keep it in the cause sentence rather than dropping it.
+
 Rules:
-- Two body sentences maximum: the praise-or-cause sentence, then the question. No third sentence, no preamble sentence.
+- Two body sentences maximum: the praise-or-cause sentence, then the question. No third sentence, no preamble sentence. (Superseded by MULTI-ASK-SPLIT rule 2 when the ask topic carries more than one distinct ask.)
 - Do NOT repeat any instruction verbatim. If the ask topic is written as an imperative, rephrase it as a question to the reader.
 - No filler flattery ("Great work!", "Awesome!", "Thanks for this!", "Nice job!"). Specific praise that names the actual contribution is allowed and is the point; generic praise is not.
 - If a recipient handle is given, open with it ("@{{recipient}}, ..."); otherwise address the reader as "you".
@@ -89,7 +105,9 @@ echo "The token drop is on Teams' side, in its MSAL cache, not in teams-for-linu
 ## Anti-hallucination guards (each line addresses a recurring miss-mode)
 
 - "Do not copy any instruction or imperative from this prompt into the reply; phrase the ask as a question" — this is the live #283 instruction-echo failure: a freeform prompt that embedded the action as an imperative ("…and ask the reporter to check whether X") was echoed verbatim into prose-tier output (`qwen3.6:35b-a3b-q8_0` via MLX) as *"the drop is in Teams' MSAL, and ask the reporter to check whether…"*. Passing the ask as a topic (not an imperative) plus this guard is the fix that closed it on first retry in the original session.
-- "Two body sentences maximum … No third sentence" — prose tier loves a closing-paraphrase sentence (see SKILL.md's anti-padding directive). The closed two-sentence shape (cause/praise, then the question) is the whole point of the recipe.
+- "Two body sentences maximum … No third sentence" — prose tier loves a closing-paraphrase sentence (see SKILL.md's anti-padding directive). The closed two-sentence shape (cause/praise, then the question) is the whole point of the recipe for the single-ask case.
+- "MULTI-ASK-SPLIT" — measured 2026-08-03: keep-rate on `teams-for-linux` was 0 of 13 over the preceding 30 days against 92% on single-ask work, with the same model, backend and an unedited template. The rewrite reasons were one pattern: "merged two mutually exclusive asks into one sentence", "compressed four items into one run-on ask", "dropped all substance from the three asks", "fixed wrong conditional chaining of asks". The old scope note told callers to invoke once per ask; they did not, so the cap silently ate the asks. The rule makes multi-ask a first-class shape instead of an unenforced instruction.
+- "NO-FACT-DROP" — same measurement window: "two-sentence cap squeezed out the PR #2424 cross-run dedup fact from stdin; kept only the commitable_code_suggestions fact, losing the strategic link". The cap was being read as licence to discard supplied facts rather than to suppress padding; this states which of the two it is.
 - "No filler flattery … Specific praise that names the actual contribution is allowed" — generic praise ("Great work!") doubles the reply length for no information and reads as boilerplate; the praise that earns its place names the specific thing the contributor did.
 - "If the ask topic is written as an imperative, rephrase it as a question" — the topic var is the most likely place a caller accidentally hands the model a copyable imperative; the guard makes the model transform it rather than echo it.
 - "Output only the reply text. No preamble" — without it the model prefaces with "Here's the reply:" or wraps in a markdown fence.
@@ -106,7 +124,18 @@ Thanks again!
 Nice catch on the off-by-one in the pagination cursor, the fix in `b3f2a91` is exactly right. Would you be up for adding a regression test that pages past the last item before we merge?
 ```
 
-Verify before recording verdict: opens with the specific praise or the confirmed cause (not generic filler), the body is at most two sentences, the ask is a question addressed to the reader (no echoed imperative), the sign-off (if any) is preserved verbatim, no em dashes, no closing-paraphrase sentence, no preamble or markdown fence.
+Multi-ask shape (MULTI-ASK-SPLIT), when the ask topic carries more than one distinct ask:
+
+```
+@nneul, the blank-window regression is in the Electron 39 upgrade, specifically the GPU sandbox flag flip, which also silently disabled cross-run dedup in PR #2424.
+1. Does it reproduce on 2.9?
+2. Could you paste the launch flags you use?
+3. Does a downgrade to 2.9 clear it?
+
+Thanks again!
+```
+
+Verify before recording verdict: opens with the specific praise or the confirmed cause (not generic filler), the ask is a question addressed to the reader (no echoed imperative), the sign-off (if any) is preserved verbatim, no em dashes, no closing-paraphrase sentence, no preamble or markdown fence. On length: a single-ask reply is at most two sentences; a multi-ask reply is one cause sentence plus one numbered question per ask, and every ask supplied must appear — do NOT record a MISS on a multi-ask reply merely for exceeding two sentences, that is the MULTI-ASK-SPLIT shape working. Do record a MISS if distinct asks were merged into one question, or if a fact supplied on stdin is missing.
 
 ## Calibration notes
 
@@ -122,6 +151,12 @@ Thanks again!
 ```
 
 The model rephrased the imperative into a question (`Could you check whether…?`) instead of echoing `…and ask the reporter to check whether…` verbatim — the exact failure #283 reported, fixed on first attempt. Handle preserved, one cause sentence, one question, verbatim sign-off, no flattery, no padding tail, no preamble or fence. HIT, no edits needed (recorded via `delegate-feedback.sh`). This promotes the recipe from structural-starting-point to validated on the prose tier.
+
+### 2026-08-03 — multi-ask compression measured, MULTI-ASK-SPLIT and NO-FACT-DROP added
+
+A metrics sweep over the rolling 30-day window put the recipe at 23% keep across 21 calls, against 93% across 16 calls before 2026-07-04. Splitting by project isolated it: `delegate-local` moved 92% → 71% (a dip), while `teams-for-linux` moved 3/3 → 0/13. The model (`mlx-community/Qwen3.6-35B-A3B-8bit`), the backend (MLX) and the template were all unchanged across the two eras, so the regression is task shape, not drift — the recipe met a wave of multi-ask reporter replies it was never scoped for, and the two-sentence cap merged or dropped the asks every time.
+
+Rather than re-assert the "one ask per call" scope note that callers had already ignored 13 times, multi-ask became a supported shape via MULTI-ASK-SPLIT, with NO-FACT-DROP added because one MISS showed the cap discarding a supplied fact outright rather than merely compressing. Both are pinned in `tests/test-prompts-library.sh` so a later simplification pass cannot quietly drop them. Re-measure over the next ~10 `teams-for-linux` replies before trusting the fix.
 
 ### Tier choice
 
