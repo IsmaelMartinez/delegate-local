@@ -4849,6 +4849,52 @@ else
   echo "  SKIP  --recipe auto (backfill): git not on PATH"
 fi
 
+# N. Tier-resolution failures must be distinguishable. pick-model.sh exits 2
+# for "that tier does not exist" and 1 for "the tier is real but nothing
+# installed matches it"; those need opposite remedies. delegate.sh used to
+# discard pick-model's stderr and report both as the latter, telling callers to
+# install a model for a tier that cannot exist — 23 such calls across four
+# projects, several concluding the skill was broken. Pin both paths.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" small "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "unknown tier -> exit 2 (usage error, not exit 1)"
+assert_contains "unknown tier: small" "$out" "unknown tier: names the bad tier"
+assert_contains "code|prose|reasoning|long-context" "$out" "unknown tier: lists the valid tiers"
+assert_contains "nothing needs installing" "$out" "unknown tier: does not send the caller to install a model"
+case "$out" in
+  *"no installed model matches this tier"*)
+    echo "  FAIL  unknown tier: still emits the misleading no-installed-model advice"; fail=$((fail+1));;
+  *) echo "  PASS  unknown tier: suppresses the misleading no-installed-model advice"; pass=$((pass+1));;
+esac
+# The metrics row must record exit_status 2 so a bad tier is separable from a
+# genuinely unresolvable one in the rollup.
+assert_contains '"exit_status":2' "$(cat "$metrics")" "unknown tier: metrics row tagged exit_status 2"
+rm -rf "$tmp" "$metrics"
+
+# A tier that IS valid but resolves to nothing keeps the original exit 1 and
+# the install-a-model advice, which is correct for that case.
+tmp=$(mktemp -d)
+cat > "$tmp/ollama" <<'EOF'
+#!/usr/bin/env bash
+# Mock: no models installed at all, so every valid tier is unresolvable.
+echo "NAME  ID  SIZE  MODIFIED"
+EOF
+chmod +x "$tmp/ollama"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_BACKEND=ollama \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 1 "$EC" "valid but unresolvable tier -> exit 1"
+assert_contains "no installed model matches this tier" "$out" "unresolvable tier: keeps install-a-model advice"
+assert_contains '"exit_status":1' "$(cat "$metrics")" "unresolvable tier: metrics row tagged exit_status 1"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
