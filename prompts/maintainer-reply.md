@@ -48,10 +48,11 @@ Count the distinct asks in the ask topic below. Two asks are distinct when answe
 1. If there is exactly ONE ask, write the closed two-sentence shape described above.
 2. If there are TWO OR MORE, do NOT merge them into one sentence and do NOT drop any of them. Keep the cause-or-praise sentence, then write each ask as its own numbered item, each a direct question to the reader. The two-sentence cap in the rules below is lifted for the ask list only; everything else still applies.
 3. Never join distinct asks with "and" into a single run-on question. Mutually exclusive asks in particular must stay separate, because merging them produces a question the reader cannot answer.
-Wrong: Could you confirm whether it happens on 2.10 and also send the config you are using and say whether a downgrade fixes it?
-Correct: Could you confirm whether it happens on 2.10?
-1. Does it also reproduce on 2.9?
+Wrong: The regression is in the GPU sandbox flag. Could you confirm whether it happens on 2.10 and also send the config you are using and say whether a downgrade fixes it?
+Correct: The regression is in the GPU sandbox flag.
+1. Does it happen on 2.10?
 2. Could you paste the config you are running?
+3. Does a downgrade clear it?
 
 NO-FACT-DROP — non-negotiable:
 Every fact supplied on stdin that bears on the diagnosis must survive into the reply. The sentence cap is a ceiling on padding, never a licence to discard a supplied fact. If the facts do not fit the shape, add an item — do not delete a fact. If a fact is supplied that you cannot place, keep it in the cause sentence rather than dropping it.
