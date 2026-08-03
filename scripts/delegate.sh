@@ -872,10 +872,36 @@ if [[ -n "$recipe" ]]; then
   fi
 fi
 
-if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
+# pick-model.sh separates two failures that need opposite remedies: exit 2 is
+# "that tier does not exist" (the caller mistyped or invented a name) and exit
+# 1 is "the tier is real but no installed model matches it". Swallowing its
+# stderr and reporting both as the latter sent callers off to install a model
+# for a tier that cannot exist — 23 such calls across four projects before this
+# was fixed, several of which concluded the skill itself was broken. The
+# valid-tier list is echoed from pick-model's own message rather than restated
+# here, so there is exactly one source of truth for it.
+pick_err=$(mktemp)
+model=$(bash "$pick" "$tier" 2>"$pick_err")
+pick_rc=$?
+pick_msg=$(cat "$pick_err" 2>/dev/null)
+rm -f "$pick_err"
+if [[ $pick_rc -ne 0 ]]; then
+  if [[ $pick_rc -eq 2 ]]; then
+    emit_failure 2 "(none)"
+    {
+      echo "delegate: ${pick_msg:-unknown tier: $tier}"
+      echo "         '$tier' is not a tier — pick one from the valid list above."
+      echo "         tiers name the TASK, not the model size: there is no small/fast/medium/light/standard tier."
+      echo "         prose = commit messages, PR descriptions, replies, summaries; code = code drafts;"
+      echo "         long-context = big logs and many-file diffs; reasoning = genuine multi-step reasoning."
+      echo "         nothing needs installing — re-run with a valid tier."
+    } >&2
+    exit 2
+  fi
   emit_failure 1 "(none)"
   {
     echo "delegate: pick-model failed for tier '$tier'"
+    [[ -n "$pick_msg" ]] && echo "         $pick_msg"
     echo "         no installed model matches this tier — run scripts/audit-models.sh to see routing, or pull a model from the tier's preference list in scripts/pick-model.sh"
     echo "         still broken? file a bug: https://github.com/${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}/issues/new?template=bug_report.md"
   } >&2
