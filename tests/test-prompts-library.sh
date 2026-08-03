@@ -255,6 +255,64 @@ assert_contains "Phase 13 — Cross-machine calibration aggregation" "$plan_temp
 assert_contains "The aggregator is opt-in, single-user" "$plan_template_section" \
   "plan-section-intro.md prompt template anchors FACTS-echo Wrong shape to observed dogfood failure"
 
+# maintainer-reply.md — MULTI-ASK-SPLIT and NO-FACT-DROP. Pinned after the
+# 2026-08-03 metrics sweep measured 0 keeps out of 13 on multi-ask
+# teams-for-linux replies (against 92% on single-ask work, same model, same
+# backend, unedited template). The two-sentence cap was merging distinct asks
+# into one run-on question and, in one row, discarding a supplied fact
+# outright. Both directives must stay inside the prompt template — the old
+# scope note asked callers to split multi-ask replies themselves and was
+# ignored 13 consecutive times, so an advisory line is demonstrably not enough.
+maintainer_reply_template=$(awk '
+  /^## Prompt template[[:space:]]*$/ { in_section=1; next }
+  in_section && /^```/ { in_block = !in_block; print; next }
+  in_section && !in_block && /^## / { exit }
+  in_section { print }
+' "$PROMPTS_DIR/maintainer-reply.md")
+assert_contains "MULTI-ASK-SPLIT — first match wins, non-negotiable" "$maintainer_reply_template" \
+  "maintainer-reply.md prompt template names MULTI-ASK-SPLIT first-match-wins directive"
+assert_contains "NO-FACT-DROP" "$maintainer_reply_template" \
+  "maintainer-reply.md prompt template carries NO-FACT-DROP directive"
+maintainer_reply_guards=$(awk '
+  /^## Anti-hallucination guards/ { in_section=1; next }
+  /^## / && in_section { in_section=0 }
+  in_section { print }
+' "$PROMPTS_DIR/maintainer-reply.md")
+assert_contains "MULTI-ASK-SPLIT" "$maintainer_reply_guards" \
+  "maintainer-reply.md '## Anti-hallucination guards' names MULTI-ASK-SPLIT"
+assert_contains "NO-FACT-DROP" "$maintainer_reply_guards" \
+  "maintainer-reply.md '## Anti-hallucination guards' names NO-FACT-DROP"
+
+# pr-description.md — SHAPE deference and TEST-PLAN-EVIDENCE. Pinned after the
+# 2026-08-03 sweep put the recipe at 0 keeps out of 10 in the window and 7% on
+# MLX (the default backend) against 45% on Ollama. Two distinct causes: the old
+# "Required sections in this order" line mandated a multi-section body
+# unconditionally and overrode the "match the SHAPE of the examples"
+# instruction directly above it, and the test plan fabricated pre-checked
+# `- [x]` items asserting runs that never happened. The checked-box ban is the
+# load-bearing half — a checked box asserts a verification to a human reviewer.
+pr_description_template=$(awk '
+  /^## Prompt template[[:space:]]*$/ { in_section=1; next }
+  in_section && /^```/ { in_block = !in_block; print; next }
+  in_section && !in_block && /^## / { exit }
+  in_section { print }
+' "$PROMPTS_DIR/pr-description.md")
+assert_contains "SHAPE — the examples govern, non-negotiable" "$pr_description_template" \
+  "pr-description.md prompt template names SHAPE-defers-to-examples directive"
+assert_contains "TEST-PLAN-EVIDENCE — first match wins, non-negotiable" "$pr_description_template" \
+  "pr-description.md prompt template names TEST-PLAN-EVIDENCE first-match-wins directive"
+assert_contains "NEVER emit a pre-checked box" "$pr_description_template" \
+  "pr-description.md prompt template bans the pre-checked test-plan box"
+pr_description_guards=$(awk '
+  /^## Anti-hallucination guards/ { in_section=1; next }
+  /^## / && in_section { in_section=0 }
+  in_section { print }
+' "$PROMPTS_DIR/pr-description.md")
+assert_contains "SHAPE — the examples govern" "$pr_description_guards" \
+  "pr-description.md '## Anti-hallucination guards' names SHAPE directive"
+assert_contains "TEST-PLAN-EVIDENCE" "$pr_description_guards" \
+  "pr-description.md '## Anti-hallucination guards' names TEST-PLAN-EVIDENCE"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

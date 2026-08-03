@@ -32,7 +32,20 @@ The `<<<EXAMPLE_BEGIN ... EXAMPLE_END>>>` envelope around each example is intent
 
 ```
 Draft a GitHub PR description matching the SHAPE of the recent merged-PR examples below.
-Required sections in this order: '## Summary' (3-bullet list of what the PR does), then ANY narrative sections you want (use ### subheaders, flowing prose paragraphs), then '## Test plan' as a checkbox list at the end.
+
+SHAPE — the examples govern, non-negotiable:
+The recent merged-PR examples are the shape authority. Match their length, their section structure, and their register. If those examples are short — a sentence or two of plain prose with no headings — then produce a sentence or two of plain prose with no headings. Do NOT add '## Summary', '## Test plan', or any heading that the examples themselves do not use. Only when the examples DO carry sections should you use them, and then in this order: '## Summary' (3-bullet list of what the PR does), then ANY narrative sections you want (use ### subheaders, flowing prose paragraphs), then '## Test plan' as a checkbox list at the end.
+Wrong (examples were two sentences of prose): ## Summary\n- Adds X\n- Refactors Y\n\n### Rationale\n...\n\n## Test plan\n- [ ] Run the suite
+Correct (examples were two sentences of prose): Adds X so that Y no longer needs Z. The behaviour is unchanged for existing callers.
+
+TEST-PLAN-EVIDENCE — first match wins, non-negotiable:
+This rule applies only when the examples use a test plan at all.
+1. Every test-plan item MUST correspond to something stated in the Context below. If the Context does not mention it, do NOT write it.
+2. NEVER emit a pre-checked box. Write '- [ ]', never '- [x]'. You did not run anything; a checked box asserts a verification that did not happen.
+3. If the Context names no verifiable checks, omit the test-plan section entirely rather than inventing items to fill it.
+Wrong: - [x] Verified incremental sync still works (nothing in the Context says this was run)
+Correct: - [ ] Run `bash tests/run-tests.sh` (the Context states the suite covers this)
+
 Do NOT invent example output for any tool — only describe what's in the diff.
 Do NOT prefix the title with 'PR #NN —' or any PR number reference.
 Output ONLY the markdown body, nothing else.
@@ -68,8 +81,9 @@ bash scripts/delegate.sh --recipe pr-description \
 
 ## Anti-hallucination guards (each line addresses a real past MISS)
 
-- "Required sections in this order" — without explicit ordering the model puts the test plan first or skips the summary.
-- "3-bullet list" — caps summary length; without it, summary expands into 8 bullets that duplicate the narrative section.
+- "SHAPE — the examples govern" — observed 2026-07/08 across three MISS rows: the recipe emitted a multi-section `Summary` / `Rationale` / `Test plan` body into projects whose house style (and whose own recent merged PRs) is a one-or-two-sentence summary. The old wording mandated those sections unconditionally, which silently overrode the "match the SHAPE of the examples" instruction directly above it — the model was obeying the recipe, so the recipe was the bug. Ordering is now conditional on the examples actually using sections.
+- "3-bullet list" — caps summary length; without it, summary expands into 8 bullets that duplicate the narrative section. Applies only when the examples use a Summary section.
+- "TEST-PLAN-EVIDENCE" — observed 2026-07: prose sections graded A and accurate, but the test plan fabricated *pre-checked* `- [x]` items for runs that never happened (a bare "incremental sync still works" check, and a ">2 MB payload" claim phrased as separately executed). The model anchors on the example PR's test-plan shape and fills it with plausible checks rather than restricting itself to the Context var. This is the recipe's most serious failure mode because a checked box asserts a verification to a human reviewer; the three numbered rules bind items to supplied facts, ban the checked box outright, and permit omitting the section rather than padding it.
 - "Do NOT invent example output for any tool" — observed: the model fabricated metrics-summary output blocks (`hit: 12 miss: 3` — wrong shape, wrong numbers, wrong format) when asked for "implementation details". Bullets and prose are fine to invent in narrative; concrete tool output is not.
 - "Do NOT prefix the title with 'PR #NN —'" — observed: the model copies the `<<<EXAMPLE_BEGIN PR #N>>>` delimiter into the actual title.
 - "Output ONLY the markdown body" — without this the model adds "Here's the PR description:" preamble.
@@ -190,5 +204,15 @@ Faithfulness was checked on a genuinely novel diff (shape anchor = an unrelated 
 Resolution: the `flaky_on_models` block is removed (this recipe only — the gate mechanism and the `release-note` / `long-thread-distillation` entries are untouched and remain valid). The cold-load is absorbed with `DELEGATE_PREFLIGHT_TIMEOUT=90` on a cold MLX 35B host (warm calls need nothing) and/or by keeping the model resident. The reclassification is recorded in ADR 0027, which supersedes the premise of ADR 0012's pr-description entry and ADR 0013 Topic E without retracting the gate mechanism. Warm output *quality* (the historical 45% HIT) is still on probation: re-measure across ~10 real PRs via `delegate-feedback.sh`, and revisit removal if it does not clear the library floor.
 
 **Caveat (shell-var expansion):** the `--var context="<sentences>"` argument is double-quoted in the invocation example, so any literal `$VARNAME` token in the context paragraph (e.g. a sentence mentioning `$CI_COMMIT_REF_NAME`, `$PR_AGENT_GITLAB_TOKEN`, or `$AWS_*` by name) will be silently substituted by the surrounding shell before `delegate.sh` sees it — unset variables expand to empty and the token vanishes from the prompt, while set variables expand to their literal value and leak the secret into both the model prompt and the metrics JSONL row. Switch the affected `--var` arg to single quotes, escape the dollar as `\$VARNAME` inside the double quotes, or pass the value via a `<<'EOF'` heredoc. See SKILL.md's Pattern-section pitfall callout.
+
+### 2026-08-03 — the quality probation closed: SHAPE and TEST-PLAN-EVIDENCE added
+
+The "on probation, re-measure across ~10 real PRs" condition set by the 2026-06-28 entry above has now been met, and the recipe failed it. Over the rolling 30-day window the recipe was kept 0 times out of 10. Split by backend across all history it keeps 45% on Ollama against 7% on MLX (n=11 and n=14) — and MLX is now the default backend, so 7% is the live number. `commit-message` over the same split is 70% Ollama / 71% MLX, so this is recipe-specific rather than a backend regression.
+
+Two causes, both addressed here rather than by retiring the recipe. First, three MISS rows were house-style violations — a multi-section `Summary` / `Rationale` / `Test plan` body where the project wanted one or two sentences. That was the recipe's own fault: `Required sections in this order` mandated the sections unconditionally and overrode the `match the SHAPE of the examples` line above it. Shape is now delegated to the anchor examples, which is what the recipe claimed to do all along. Second, and more serious, one row recorded fabricated *pre-checked* `- [x]` test-plan items asserting runs that never happened; TEST-PLAN-EVIDENCE binds items to the Context var, bans the checked box, and allows omitting the section rather than padding it.
+
+Separately, three of the ten rewrites in the window were not quality failures at all but exit-4 refusals from the `flaky_on_models` gate. The gate's status banner claimed retirement on 2026-06-28, but the frontmatter block survived until `6a5c913` on 2026-07-20; refusals continued to 2026-07-26 and have stopped since. No action needed there — recorded so the 0/10 is not read as entirely quality-driven.
+
+Both new directives are pinned in `tests/test-prompts-library.sh`. Re-measure across ~10 real PRs before trusting; if the keep rate does not clear the library floor on MLX, retiring the recipe is the reasonable next step, since the shape it produces is cheap to hand-write.
 
 Provenance also lives in the `feedback_delegate_prose_prompt_anchoring.md` memory file.
