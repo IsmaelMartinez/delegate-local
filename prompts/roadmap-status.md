@@ -25,16 +25,18 @@ Run both of these before invoking the recipe:
 #    regex to your plan file's convention before running.
 awk '/^### / { if (flag) exit; if ($0 ~ /Next Up|Up Next/) { flag=1; next } } flag' ROADMAP.md
 
-# 2. Structured fact list — the unshipped / blocked / deferred items with their
-#    gating, ordered by the agent who did the prioritising. Author this in a
-#    scratch file. The ordering is the agent's call, not the model's:
-cat <<'EOF' > /tmp/facts.md
+```
+
+Then author the structured fact list yourself — the unshipped, blocked and
+deferred items with their gating — and pass it straight to `--var facts=...`.
+There is no scratch file to write. The ordering is your call, not the model's:
+
+```
 MOST ACTIONABLE: <item> — <why it is ready / continuous with recent work>
 GATED: <item> — <what gates it, and when it becomes due>
 BLOCKED: <item> — <the blocker>
 UNSTARTED: <item> — <the next concrete sub-step>
 LATER (not commitments): <items>
-EOF
 ```
 
 The style anchor is load-bearing — abstract descriptors like "match the plan's voice" reliably yield bullet lists or American-English drift when the file uses prose and British English. The ordering in the facts list is the agent's prioritisation: the model converts facts to prose in that order, it does not re-rank.

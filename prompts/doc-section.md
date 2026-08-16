@@ -88,7 +88,7 @@ bash scripts/delegate.sh --recipe doc-section \
 
 The trailing prompt arg is the voice + reinforcement reminder; the recipe template carries the structural directives.
 
-Single-quote `{{facts}}` rather than double-quoting it. Facts for this recipe routinely name env vars (`$PR_CODE_SUGGESTIONS__...`) and file paths, and double quotes would let the shell expand or mangle them before `delegate.sh` ever sees the value.
+Single-quote `{{facts}}` rather than double-quoting it, as above. Facts for this recipe often name env vars and file paths, and inside double quotes the shell would expand a `$NAME` or eat a backslash before `delegate.sh` ever saw the value. The cost of single quotes is that the facts cannot contain an apostrophe — write "cannot" rather than "can't" — which is why the example above avoids one.
 
 ## Anti-hallucination guards (each line addresses a real past MISS)
 
