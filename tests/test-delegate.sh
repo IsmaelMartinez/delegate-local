@@ -4944,6 +4944,15 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --project </dev/null 2>&1) || EC=$?
 assert_eq 2 "$EC" "--project without a value -> exit 2"
 assert_contains "--project requires a value" "$out" "--project without a value: informative stderr"
+
+# A following flag is the next option, not the value: accepting it would set
+# the project to "--recipe" and silently swallow the recipe.
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" --project --recipe commit-message prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "--project followed by a flag -> exit 2"
+assert_contains "--project requires a value" "$out" "--project followed by a flag: informative stderr"
 rm -rf "$tmp" "$metrics"
 
 echo

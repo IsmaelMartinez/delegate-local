@@ -90,6 +90,11 @@ scan=$(awk 'BEGIN{RS="\1"} {
   n = length($0); q = ""; out = "";
   for (i = 1; i <= n; i++) {
     c = substr($0, i, 1);
+    # A backslash escapes the next character everywhere except inside single
+    # quotes, where the shell treats it literally. Without this an odd number
+    # of \" inside a quoted string flips quote parity, and the tail of the
+    # prose gets scanned as live shell — the #342 false positive again.
+    if (q != "\047" && c == "\\") { i++; continue }
     if (q != "") { if (c == q) { q = ""; } continue }
     if (c == "\047" || c == "\"") { q = c; out = out " "; continue }
     if (c == "<" && substr($0, i + 1, 1) == "<") break;

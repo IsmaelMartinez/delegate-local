@@ -322,7 +322,10 @@ while (($# > 0)); do
     --var=*)
       recipe_vars+=("${1#--var=}"); shift;;
     --project)
-      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+      # A next token starting with '-' is the next flag, not the value:
+      # `--project --recipe foo` would otherwise set the project to "--recipe"
+      # and silently swallow the recipe flag.
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
         echo 'delegate: --project requires a value' >&2; exit 2
       fi
       project_override="$2"; shift 2;;

@@ -300,6 +300,30 @@ out=$(payload 'echo "next step: gh issue create --body something"' "$tmpcwd" \
 assert_eq "" "$out" "quoted prose: no nudge"
 assert_eq 0 "$(nrows)" "quoted prose: no row"
 
+# 14c-i. An ODD number of backslash-escaped quotes inside the prose must not
+# flip quote parity. Before the escape handling this closed quote-mode early,
+# so the ';' started a fresh segment and 'gh pr create' was scanned as live
+# shell — the #342 false positive, reintroduced through a different door.
+: > "$METRICS"
+out=$(payload 'echo "the flag is \" ; gh pr create --title x --body y"' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq "" "$out" "escaped quote in prose: no nudge"
+assert_eq 0 "$(nrows)" "escaped quote in prose: no row"
+
+# 14c-ii. Even parity was already safe; keep it covered so a future rewrite of
+# the scanner cannot fix one case by breaking the other.
+: > "$METRICS"
+out=$(payload 'echo "the flag is \" and \" ; gh pr create --title x --body y"' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq "" "$out" "paired escaped quotes in prose: no nudge"
+assert_eq 0 "$(nrows)" "paired escaped quotes in prose: no row"
+
+# 14c-iii. Escaping must not swallow a real boundary: a commit message with an
+# escaped quote is still a git-commit opportunity.
+: > "$METRICS"
+payload 'git commit -m "fix: handle a \" in input"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq git-commit "$(jq -r .boundary <<<"$(last_row)")" "escaped quote in commit message: still git-commit"
+
 # 14d. A commit message that TALKS about another boundary still classifies as the
 # commit it is — quoted content never contributes to classification.
 : > "$METRICS"
