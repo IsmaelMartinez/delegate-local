@@ -7,6 +7,10 @@
 # With --dry-run, also prints the resolution trace (tier, backend, preference
 # list, installed models, matched preference) to stderr so it can be inspected
 # without affecting downstream pipes that consume stdout.
+# --print-backend prints the resolved backend and exits; --print-installed
+# prints that backend's installed models, one per line, and exits. Both take
+# no tier and exist so callers (scripts/audit-models.sh) never re-derive
+# routing state locally.
 #
 # Preference order per tier is a substring-matched list, highest capability first.
 # Edit the arrays below when your installed set changes. Run `ollama list` (or
@@ -58,10 +62,14 @@ REASONING_VISION_PREFS="phi4-reasoning-vision qwen3-vl:30b-a3b-thinking qwen3-vl
 
 dry_run=0
 print_prefs=0
+print_backend=0
+print_installed=0
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --dry-run) dry_run=1 ;;
     --print-prefs) print_prefs=1 ;;
+    --print-backend) print_backend=1 ;;
+    --print-installed) print_installed=1 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -88,24 +96,6 @@ trace() {
   return 0
 }
 
-tier="${1:-}"
-if [[ -z "$tier" ]]; then
-  echo "usage: pick-model.sh [--dry-run] <$TIERS>" >&2
-  exit 2
-fi
-
-case "$tier" in
-  code)             prefs=($CODE_PREFS) ;;
-  prose)            prefs=($PROSE_PREFS) ;;
-  reasoning)        prefs=($REASONING_PREFS) ;;
-  long-context)     prefs=($LONG_CONTEXT_PREFS) ;;
-  vision)           prefs=($VISION_PREFS) ;;
-  embedding)        prefs=($EMBEDDING_PREFS) ;;
-  premium-general)  prefs=($PREMIUM_GENERAL_PREFS) ;;
-  reasoning-vision) prefs=($REASONING_VISION_PREFS) ;;
-  *) echo "unknown tier: $tier (valid: $TIERS)" >&2; exit 2 ;;
-esac
-
 # Resolve auto backend by probing the MLX server. The probe is cheap
 # (sub-second timeout, single HEAD-equivalent GET) and runs once per
 # invocation. Explicit ollama|mlx skip the probe.
@@ -129,6 +119,76 @@ case "$backend_requested" in
     backend="$backend_requested"
     ;;
   *) echo "unknown backend: $backend_requested (valid: auto|ollama|mlx)" >&2; exit 2 ;;
+esac
+
+# Enumerate the installed models the resolved backend can see, one per line.
+# Shared by the resolution path below and by the --print-installed surface
+# (scripts/audit-models.sh reports the inventory through it, so the audit can
+# never show a different model set than routing actually consults).
+list_installed() {
+  if [[ "$backend" == "ollama" ]]; then
+    if ! command -v ollama >/dev/null 2>&1; then
+      echo "ollama not on PATH" >&2
+      exit 1
+    fi
+    ollama list 2>/dev/null | awk 'NR>1 {print $1}'
+    return 0
+  fi
+  # MLX: list models in the HuggingFace hub cache. Each downloaded model
+  # lives at <hub>/models--<org>--<name>/snapshots/<hash>/. A directory with
+  # an empty snapshots/ (interrupted download) doesn't count as installed.
+  local hub_dir="${HF_HOME:-$HOME/.cache/huggingface}/hub"
+  if [[ ! -d "$hub_dir" ]]; then
+    echo "MLX hub cache not found at $hub_dir" >&2
+    exit 1
+  fi
+  local d snap stem name has_snap
+  for d in "$hub_dir"/models--*; do
+    [[ -d "$d" ]] || continue
+    [[ -d "$d/snapshots" ]] || continue
+    # Skip if every snapshot dir is empty (no weights actually present).
+    has_snap=0
+    for snap in "$d/snapshots"/*; do
+      [[ -d "$snap" ]] || continue
+      if [[ -n "$(ls -A "$snap" 2>/dev/null)" ]]; then has_snap=1; break; fi
+    done
+    (( has_snap )) || continue
+    stem="${d##*/models--}"
+    # models--mlx-community--Qwen3-0.6B-4bit -> mlx-community/Qwen3-0.6B-4bit
+    name="${stem//--//}"
+    printf '%s\n' "$name"
+  done
+}
+
+# Backend-only surfaces. Both are tier-independent, so they answer before the
+# tier argument is read — a caller asking "which backend is in effect?" has no
+# tier to name. scripts/audit-models.sh uses both.
+if (( print_backend )); then
+  echo "$backend"
+  exit 0
+fi
+
+if (( print_installed )); then
+  list_installed
+  exit 0
+fi
+
+tier="${1:-}"
+if [[ -z "$tier" ]]; then
+  echo "usage: pick-model.sh [--dry-run] <$TIERS>" >&2
+  exit 2
+fi
+
+case "$tier" in
+  code)             prefs=($CODE_PREFS) ;;
+  prose)            prefs=($PROSE_PREFS) ;;
+  reasoning)        prefs=($REASONING_PREFS) ;;
+  long-context)     prefs=($LONG_CONTEXT_PREFS) ;;
+  vision)           prefs=($VISION_PREFS) ;;
+  embedding)        prefs=($EMBEDDING_PREFS) ;;
+  premium-general)  prefs=($PREMIUM_GENERAL_PREFS) ;;
+  reasoning-vision) prefs=($REASONING_VISION_PREFS) ;;
+  *) echo "unknown tier: $tier (valid: $TIERS)" >&2; exit 2 ;;
 esac
 
 trace "tier=$tier"
@@ -173,39 +233,7 @@ if [[ -f "$config" ]]; then
   fi
 fi
 
-if [[ "$backend" == "ollama" ]]; then
-  if ! command -v ollama >/dev/null 2>&1; then
-    echo "ollama not on PATH" >&2
-    exit 1
-  fi
-  installed=$(ollama list 2>/dev/null | awk 'NR>1 {print $1}')
-else
-  # MLX: list models in the HuggingFace hub cache. Each downloaded model
-  # lives at <hub>/models--<org>--<name>/snapshots/<hash>/. A directory with
-  # an empty snapshots/ (interrupted download) doesn't count as installed.
-  hub_dir="${HF_HOME:-$HOME/.cache/huggingface}/hub"
-  if [[ ! -d "$hub_dir" ]]; then
-    echo "MLX hub cache not found at $hub_dir" >&2
-    exit 1
-  fi
-  installed=""
-  for d in "$hub_dir"/models--*; do
-    [[ -d "$d" ]] || continue
-    [[ -d "$d/snapshots" ]] || continue
-    # Skip if every snapshot dir is empty (no weights actually present).
-    has_snap=0
-    for snap in "$d/snapshots"/*; do
-      [[ -d "$snap" ]] || continue
-      if [[ -n "$(ls -A "$snap" 2>/dev/null)" ]]; then has_snap=1; break; fi
-    done
-    (( has_snap )) || continue
-    stem="${d##*/models--}"
-    # models--mlx-community--Qwen3-0.6B-4bit -> mlx-community/Qwen3-0.6B-4bit
-    name="${stem//--//}"
-    installed+="${name}"$'\n'
-  done
-  installed="${installed%$'\n'}"
-fi
+installed=$(list_installed)
 
 if [[ -z "$installed" ]]; then
   echo "no models installed (backend=$backend)" >&2

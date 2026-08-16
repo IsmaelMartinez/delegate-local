@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# Audit installed Ollama models against llmfit recommendations for this hardware.
-# Shows tier routing, flags uninstalled models that outscore installed ones,
-# and prints pull suggestions. Does not install or remove anything.
+# Audit the installed models of the active backend against llmfit
+# recommendations for this hardware. Shows tier routing, flags uninstalled
+# models that outscore installed ones, and prints pull suggestions. Does not
+# install or remove anything.
+#
+# The backend is resolved through pick-model.sh rather than assumed, because
+# DELEGATE_BACKEND defaults to `auto`: on a host running mlx_lm.server the
+# routing every delegation uses is the HuggingFace hub cache, and an audit
+# that printed `ollama list` regardless sent debugging at the wrong inventory.
 #
 # llmfit's own `installed` flag tracks HuggingFace GGUF cache, not Ollama's
 # model store, so we cross-check each candidate against `ollama list` using
@@ -9,26 +15,59 @@
 
 set -euo pipefail
 
-if ! command -v ollama >/dev/null 2>&1; then
-  echo "ollama not on PATH"; exit 1
-fi
-
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 
-echo "=== Installed models ==="
-ollama list
+backend_requested="${DELEGATE_BACKEND:-auto}"
+backend=$(bash "$pick" --print-backend)
+# Pin every downstream pick-model call to the already-resolved backend: one
+# MLX probe per audit instead of one per tier, and no chance of a mid-run flip.
+export DELEGATE_BACKEND="$backend"
+
+if [[ "$backend" == "ollama" ]] && ! command -v ollama >/dev/null 2>&1; then
+  echo "ollama not on PATH"; exit 1
+fi
+
+echo "=== Backend ==="
+printf "  DELEGATE_BACKEND=%s -> in effect: %s\n" "$backend_requested" "$backend"
+if [[ "$backend" == "mlx" ]]; then
+  echo "  Inventory below is the HuggingFace hub cache, not 'ollama list'."
+fi
+echo "  The embedding tier is Ollama-only by design (scripts/embed.sh posts to"
+echo "  /api/embed); MLX is out of scope for it regardless of the backend above."
 echo
 
-echo "=== Tier routing (which installed model wins per tier) ==="
-for tier in code prose reasoning long-context; do
-  if model=$(bash "$pick" "$tier" 2>/dev/null); then
-    printf "  %-14s -> %s\n" "$tier" "$model"
-  else
-    printf "  %-14s -> (none)\n" "$tier"
-  fi
-done
+echo "=== Installed models (backend=$backend) ==="
+if [[ "$backend" == "ollama" ]]; then
+  ollama list
+else
+  bash "$pick" --print-installed
+fi
 echo
+
+# Every tier, not just the four active ones: the scaffolded tiers resolving to
+# (none) is exactly the state that needs surfacing when a recipe routed to one
+# of them silently produced nothing. Tier names come from --print-prefs so the
+# list stays single-sourced in pick-model.sh.
+echo "=== Tier routing (which installed model wins per tier, backend=$backend) ==="
+while IFS= read -r tier; do
+  [[ -n "$tier" ]] || continue
+  if model=$(bash "$pick" "$tier" 2>/dev/null); then
+    printf "  %-17s -> %s\n" "$tier" "$model"
+  else
+    printf "  %-17s -> (none)\n" "$tier"
+  fi
+done < <(bash "$pick" --print-prefs | cut -d: -f1)
+echo
+
+if ! command -v ollama >/dev/null 2>&1; then
+  cat <<EOF
+=== Upgrade check skipped ===
+The llmfit cross-check compares candidates against 'ollama list', and ollama
+is not on PATH. Tier routing above is unaffected.
+EOF
+  exit 0
+fi
 
 if ! command -v llmfit >/dev/null 2>&1; then
   cat <<EOF
@@ -94,6 +133,10 @@ echo "=== Top llmfit recommendations per tier (for this hardware) ==="
 echo "Scores are llmfit composite (quality+speed+fit+context). Installed status"
 echo "checked against 'ollama list' (not llmfit's HF cache). Filtered to"
 echo "first-party providers (Alibaba/Google/Meta/Microsoft/DeepSeek/Mistral/Zhipu)."
+if [[ "$backend" == "mlx" ]]; then
+  echo "Backend is mlx, so [installed] below is advisory only — it reflects the"
+  echo "Ollama store, not the hub cache this host actually routes through."
+fi
 echo
 
 for tier in code prose reasoning long-context; do

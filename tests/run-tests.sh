@@ -592,6 +592,85 @@ assert_contains "valid: auto|ollama|mlx" "$OUT" "bogus error names auto in valid
 rm -rf "$tmp"
 
 echo
+echo "=== pick-model.sh: --print-backend / --print-installed ==="
+
+# Both surfaces answer without a tier argument — a caller asking "which
+# backend is in effect?" has no tier to name.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME                  ID  SIZE   MODIFIED
+qwen3.6:35b-a3b-q8_0  aa  30 GB  1 day ago
+gemma4:latest         bb  9 GB   1 day ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" --print-backend || true
+assert_eq "0" "$EC" "--print-backend exits 0 without a tier"
+assert_eq "ollama" "$OUT" "--print-backend prints the pinned backend"
+
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" --print-installed || true
+assert_eq "0" "$EC" "--print-installed exits 0 without a tier"
+assert_eq "qwen3.6:35b-a3b-q8_0
+gemma4:latest" "$OUT" "--print-installed lists the ollama tags"
+rm -rf "$tmp"
+
+# auto resolves through the same probe the routing path uses, so an audit can
+# never report a different backend than the one delegate.sh will pick.
+tmp=$(mktemp -d)
+make_mock_curl "$tmp" 0
+EC=0
+OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=auto HF_HOME="$tmp" \
+  bash "$PICK" --print-backend 2>/dev/null) || EC=$?
+assert_eq "mlx" "$OUT" "--print-backend resolves auto through the MLX probe"
+rm -rf "$tmp"
+
+# MLX inventory comes from the hub cache and still skips half-downloaded models.
+tmp=$(mktemp -d)
+make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit"
+mkdir -p "$tmp/hub/models--mlx-community--Half-Downloaded-4bit/snapshots/abc"
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" \
+  bash "$PICK" --print-installed 2>/dev/null) || EC=$?
+assert_eq "0" "$EC" "--print-installed on MLX exits 0"
+assert_eq "mlx-community/Qwen3.6-35B-A3B-Instruct-4bit" "$OUT" \
+  "--print-installed lists MLX hub models and skips empty snapshots"
+rm -rf "$tmp"
+
+# Missing ollama is still a hard error on the ollama backend.
+tmp=$(mktemp -d)
+EC=0; run "$SAFE_PATH" bash "$PICK" --print-installed || true
+assert_eq "1" "$EC" "--print-installed without ollama -> exit 1"
+assert_contains "ollama not on PATH" "$ERR" "--print-installed without ollama -> informative stderr"
+rm -rf "$tmp"
+
+echo
+echo "=== audit-models.sh: backend awareness ==="
+
+# The audit has to name the backend it is reporting on: printing `ollama list`
+# on a host whose routing resolved to mlx sent debugging at the wrong
+# inventory (issue #344).
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME             ID SIZE  MODIFIED
+qwen3-coder:30b  xx 30 GB 1 day ago"
+EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
+assert_eq "0" "$EC" "audit: ollama backend -> exit 0"
+assert_contains "in effect: ollama" "$OUT" "audit: names the backend in effect"
+assert_contains "embedding tier is Ollama-only" "$OUT" "audit: states embedding is ollama-only by design"
+assert_contains "reasoning-vision" "$OUT" "audit: routing table covers the scaffolded tiers"
+rm -rf "$tmp"
+
+# MLX backend: inventory is the hub cache, and a host with no ollama at all
+# still gets a full routing report instead of an early exit 1.
+tmp=$(mktemp -d)
+make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit"
+EC=0
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" \
+  bash "$AUDIT" 2>&1) || EC=$?
+assert_eq "0" "$EC" "audit: mlx backend without ollama -> exit 0"
+assert_contains "in effect: mlx" "$OUT" "audit: names mlx as the backend in effect"
+assert_contains "HuggingFace hub cache" "$OUT" "audit: mlx run says where the inventory comes from"
+assert_contains "mlx-community/Qwen3.6-35B-A3B-Instruct-4bit" "$OUT" "audit: mlx inventory lists hub models"
+assert_contains "prose" "$OUT" "audit: mlx run still prints tier routing"
+assert_contains "Upgrade check skipped" "$OUT" "audit: no ollama -> llmfit cross-check skipped, not fatal"
+rm -rf "$tmp"
+
+echo
 echo "=== no installer-breaking AAIF self-symlink ==="
 
 # Regression guard for the `npx skills add` ENAMETOOLONG failure. A symlink under
