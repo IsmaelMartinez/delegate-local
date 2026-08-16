@@ -470,6 +470,56 @@ ec=0
 out=$(echo 'not json' | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK") || ec=$?
 assert_eq 0 "$ec" "malformed stdin: exit 0 (fail-open)"
 
+# 15. The nudge must name a command that actually RUNS. Every boundary recipe
+# declares required inputs and delegate.sh exits 2 when one is missing, so a
+# nudge that names only the recipe sent the agent into a hard error and the
+# delegation never happened. The keys come from the recipe's own frontmatter.
+: > "$METRICS"
+out=$(payload 'git commit -m "fix: thing"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_contains '--var recent_commits=' "$out" "nudge: names required var recent_commits"
+assert_contains '--var diff_stat=' "$out" "nudge: names required var diff_stat"
+assert_contains '--var why=' "$out" "nudge: names required var why"
+assert_contains 'commit-message --var' "$out" "nudge: vars follow the recipe name"
+# `type: string?` is optional — naming it would imply it is required.
+if [[ "$out" != *'--var type='* ]]; then
+  echo "  PASS  nudge: omits optional input 'type'"; pass=$((pass+1))
+else
+  echo "  FAIL  nudge: omits optional input 'type'"; fail=$((fail+1))
+fi
+# The tier is a real tier, not the old `<tier>` stand-in the agent had to guess.
+assert_contains ' prose' "$out" "nudge: names a concrete tier"
+if [[ "$out" != *'<tier>'* ]]; then
+  echo "  PASS  nudge: no unreplaced <tier> stand-in"; pass=$((pass+1))
+else
+  echo "  FAIL  nudge: no unreplaced <tier> stand-in"; fail=$((fail+1))
+fi
+
+# 16. A recipe declaring `stdin` gets an input redirection, not a --var, and
+# its optional inputs stay out.
+: > "$METRICS"
+out=$(payload 'gh pr comment 42 --body "thanks"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_contains '--var ask=' "$out" "stdin recipe: names required var ask"
+assert_contains '< context.txt' "$out" "stdin recipe: stdin becomes a redirection"
+if [[ "$out" != *'--var stdin='* ]]; then
+  echo "  PASS  stdin recipe: stdin is not passed as a --var"; pass=$((pass+1))
+else
+  echo "  FAIL  stdin recipe: stdin is not passed as a --var"; fail=$((fail+1))
+fi
+if [[ "$out" != *'--var recipient='* && "$out" != *'--var signoff='* ]]; then
+  echo "  PASS  stdin recipe: omits optional recipient/signoff"; pass=$((pass+1))
+else
+  echo "  FAIL  stdin recipe: omits optional recipient/signoff"; fail=$((fail+1))
+fi
+
+# 17. script_dir is resolved before the cd to the payload cwd. Invoked by a
+# RELATIVE path from an unrelated directory, the recipe lookup must still find
+# prompts/ — resolving it late produced <payload-cwd>/scripts/../prompts and
+# silently degraded the nudge back to the unrunnable form.
+: > "$METRICS"
+out=$(cd "$REPO" && payload 'git commit -m "fix: thing"' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash scripts/delegate-boundary-hook.sh)
+assert_contains '--var why=' "$out" "relative invocation: still resolves prompts/"
+
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
