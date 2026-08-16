@@ -60,7 +60,9 @@ while IFS= read -r tier; do
   suffix=""
   if [[ "$tier" == "embedding" ]]; then
     tier_backend="ollama"
-    [[ "$tier_backend" != "$backend" ]] && suffix="   [via ollama — embed.sh forces it]"
+    if [[ "$backend" != "ollama" ]]; then
+      suffix="   [via ollama — embed.sh forces it]"
+    fi
   fi
   if ! model=$(DELEGATE_BACKEND="$tier_backend" bash "$pick" "$tier" 2>/dev/null); then
     model="(none)"

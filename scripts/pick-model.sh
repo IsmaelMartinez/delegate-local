@@ -122,9 +122,11 @@ case "$backend_requested" in
 esac
 
 # Enumerate the installed models the resolved backend can see, one per line.
-# Shared by the resolution path below and by the --print-installed surface
-# (scripts/audit-models.sh reports the inventory through it, so the audit can
-# never show a different model set than routing actually consults).
+# Shared by the resolution path below and by the --print-installed surface.
+# scripts/audit-models.sh reports the MLX inventory through it, so on that
+# backend the audit cannot show a different model set than routing consults;
+# on Ollama the audit calls `ollama list` directly to keep the SIZE/MODIFIED
+# columns, and the two agree because both read the same source.
 list_installed() {
   if [[ "$backend" == "ollama" ]]; then
     if ! command -v ollama >/dev/null 2>&1; then
