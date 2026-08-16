@@ -137,10 +137,12 @@ Output ONLY the commit message itself, nothing else.
 
 ## Invocation
 
+Run the context commands above as their own step, then pass what they printed as literal `--var` values:
+
 ```bash
 bash scripts/delegate.sh --recipe commit-message \
-  --var recent_commits="$(git log main --pretty=fuller -3)" \
-  --var diff_stat="$(git diff --cached --stat)" \
+  --var recent_commits="<the git log --pretty=fuller output>" \
+  --var diff_stat="<the git diff --cached --stat output>" \
   --var why="<one or two sentences>" \
   --var type=feat \
   prose "Match the example commit messages exactly in shape and tone. Keep subject ≤ 72 chars. Use the feat: prefix."

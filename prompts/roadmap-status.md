@@ -74,12 +74,12 @@ Output ONLY the status itself, no preamble, no "Here's the status:".
 
 ## Invocation
 
+Run the anchor `awk` above as its own step and author the fact list yourself, then pass both as literal `--var` values:
+
 ```bash
-PLAN_FILE=ROADMAP.md
-ANCHOR=$(awk '/^### / { if (flag) exit; if ($0 ~ /Next Up|Up Next/) { flag=1; next } } flag' "$PLAN_FILE")
 bash scripts/delegate.sh --recipe roadmap-status \
-  --var style_anchor="$ANCHOR" \
-  --var facts="$(cat /tmp/facts.md)" \
+  --var style_anchor="<the existing Next Up paragraph, verbatim>" \
+  --var facts="<the structured fact list you authored, in your chosen order>" \
   prose "Match the STYLE ANCHOR exactly in spelling variant and prose-vs-bullets balance. Forward-looking only — no past-tense 'shipped' sentences. Preserve every item in order; do not merge two into one."
 ```
 

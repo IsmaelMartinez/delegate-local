@@ -81,7 +81,7 @@ Batch over a glob (recommended — each call stays independently small, fits the
 
 ```bash
 for f in prompts/*.md; do
-  printf '%s — ' "$(basename "$f")"
+  printf '%s — ' "$f"
   cat "$f" | bash scripts/delegate.sh --recipe bulk-file-summary \
     --var file_path="$f" \
     prose "One line only. Describe this file's primary purpose."

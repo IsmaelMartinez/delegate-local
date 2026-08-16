@@ -61,11 +61,13 @@ Correct: Applied in `8b3424a`. Switched the awk parser to perl so literal-newlin
 
 ## Invocation
 
+You already read the hash and the comment body in the earlier steps of the flow, so pass them as literal `--var` values:
+
 ```bash
 bash scripts/delegate.sh --recipe pr-review-reply \
-  --var hash="$(git rev-parse --short HEAD)" \
+  --var hash=8b3424a \
   --var verdict="applied" \
-  --var comment="$(gh api repos/owner/repo/pulls/N/comments/CID --jq '.body')" \
+  --var comment="This check false-positives when a substituted value happens to contain braces." \
   --var fix_summary="Switched the unsubstituted-placeholder check to compare against the original-template placeholder set so substituted values containing {{...}} no longer false-positive." \
   prose "Adhere to the opener rules exactly. One sentence only."
 ```

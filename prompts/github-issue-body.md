@@ -74,9 +74,16 @@ The migration removes the legacy adapter; the rollout steps are listed under ## 
 
 ## Invocation
 
+The section plan is short and you authored it yourself, so pass it as a literal `--var`; the facts file goes in on stdin via plain input redirection:
+
 ```bash
 bash scripts/delegate.sh --recipe github-issue-body \
-  --var sections="$(cat "$CLAUDE_JOB_DIR/tmp/issue-sections.md")" \
+  --var sections="## Summary
+(content: one paragraph framing the problem)
+## Why this matters
+(content: one paragraph on the impact)
+## Suggested fix
+(content: the proposed change, one paragraph per option)" \
   prose "Use exactly the listed headings in order. British spelling. Invent nothing beyond the facts. No title line, no closing summary." \
   < "$CLAUDE_JOB_DIR/tmp/issue-facts.md"
 ```

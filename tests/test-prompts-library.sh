@@ -128,6 +128,24 @@ for recipe in "$PROMPTS_DIR"/*.md; do
   else
     echo "  PASS  $base: no legacy '<paste ... here>' markers"; pass=$((pass+1))
   fi
+  # The '## Invocation' example must be free of shell command substitution
+  # (issue #350). Sandboxed agent harnesses — including a Claude Code session
+  # working inside a git worktree — refuse `$(...)`, and because the refusal
+  # arrives on the agent's first --recipe call it reads as "delegate-local is
+  # broken" rather than "this shell won't run that shape". Literal --var values
+  # work everywhere and the caller already holds them from its own earlier
+  # git/gh step, so the literal form is the documented one; the gathering
+  # commands live under '## Context to gather first' instead.
+  invocation_section=$(awk '
+    /^## Invocation[[:space:]]*$/ { in_section=1; next }
+    /^## / && in_section { in_section=0 }
+    in_section { print }
+  ' "$recipe")
+  if printf '%s' "$invocation_section" | grep -qF '$('; then
+    echo "  FAIL  $base: '## Invocation' uses command substitution (use literal --var values)"; fail=$((fail+1))
+  else
+    echo "  PASS  $base: '## Invocation' free of command substitution"; pass=$((pass+1))
+  fi
   # README must list this recipe in the "Current recipes" section so future
   # agents can discover it. Match by filename anywhere in the README.
   if [[ "$readme" == *"$base"* ]]; then

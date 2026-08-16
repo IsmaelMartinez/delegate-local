@@ -37,7 +37,10 @@ shape of agent-authored content the value should hold.
 
 ## Invocation
 A copy-pasteable `bash scripts/delegate.sh --recipe <name> --var k=v ... <tier>
-"<prompt>"` example showing how to wire the placeholders to real commands.
+"<prompt>"` example. Pass every `--var` as a literal value — the caller ran the
+gathering commands as its own earlier step and already holds the output, and
+sandboxed shells refuse command substitution (see SKILL.md). The gathering
+commands themselves belong under `## Context to gather first`.
 
 ## Expected output shape
 What HIT looks like. Lets the agent verify the output before recording

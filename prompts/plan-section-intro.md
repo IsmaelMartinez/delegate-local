@@ -148,17 +148,12 @@ no "Here's the intro:" prefix.
 
 ## Invocation
 
+Run the anchor `awk` above as its own step and author the fact list yourself, then pass both as literal `--var` values:
+
 ```bash
-PLAN_FILE=ROADMAP.md
-ANCHOR=$(awk '
-  /^## Phase / { if (in_phase) exit; in_phase=1; print; next }
-  in_phase && /^## / { exit }
-  in_phase && /^- / { exit }
-  in_phase { print }
-' "$PLAN_FILE")
 bash scripts/delegate.sh --recipe plan-section-intro \
-  --var style_anchor="$ANCHOR" \
-  --var phase_facts="$(cat /tmp/phase-facts.md)" \
+  --var style_anchor="<the existing phase intro, verbatim, heading and framing paragraphs>" \
+  --var phase_facts="<the structured fact list you authored>" \
   prose "Match the STYLE ANCHOR's voice and shape only. Do NOT echo its sentences. Produce a NEW intro for the phase named in FACTS."
 ```
 

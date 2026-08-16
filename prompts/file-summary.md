@@ -59,7 +59,7 @@ Batch over a directory:
 
 ```bash
 for f in docs/adr/*.md; do
-  printf '%s — ' "$(basename "$f")"
+  printf '%s — ' "$f"
   cat "$f" | bash scripts/delegate.sh --recipe file-summary \
     prose "One sentence only. Include the subject and the mechanism."
 done

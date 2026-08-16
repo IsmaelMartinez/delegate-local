@@ -78,12 +78,12 @@ Output ONLY the entry itself, no preamble, no "Here's the entry:".
 
 ## Invocation
 
+Run the anchor `awk` above as its own step and author the fact list yourself, then pass both as literal `--var` values:
+
 ```bash
-PLAN_FILE=docs/plans/current-plan.md
-ANCHOR=$(awk '/^### / { if (flag) exit; if ($0 ~ / — shipped/) flag=1 } flag' "$PLAN_FILE")
 bash scripts/delegate.sh --recipe roadmap-entry \
-  --var style_anchor="$ANCHOR" \
-  --var facts="$(cat /tmp/facts.md)" \
+  --var style_anchor="<the most recent shipped entry, verbatim, heading and prose>" \
+  --var facts="<the structured fact list you authored>" \
   prose "Match the STYLE ANCHOR exactly in spelling variant and prose-vs-bullets balance. Preserve every PR number, hash, and date verbatim."
 ```
 

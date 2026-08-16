@@ -91,13 +91,14 @@ BODY:
 
 ## Invocation
 
+Run the `gh pr view` and CHANGELOG `grep` above as their own step, then pass what they printed as literal `--var` values:
+
 ```bash
-PR=80
 bash scripts/delegate.sh --recipe release-note \
-  --var title="$(gh pr view $PR --json title --jq .title)" \
-  --var number="$PR" \
-  --var body="$(gh pr view $PR --json body --jq .body)" \
-  --var anchor="$(grep -B1 -A2 '^- ' CHANGELOG.md | head -3)" \
+  --var title="<the PR title>" \
+  --var number=80 \
+  --var body="<the PR body>" \
+  --var anchor="<one or two existing CHANGELOG bullets>" \
   prose "Adhere to the bullet shape exactly. One sentence, ≤ 200 chars."
 ```
 
