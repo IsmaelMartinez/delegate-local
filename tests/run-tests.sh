@@ -670,6 +670,22 @@ assert_contains "prose" "$OUT" "audit: mlx run still prints tier routing"
 assert_contains "Upgrade check skipped" "$OUT" "audit: no ollama -> llmfit cross-check skipped, not fatal"
 rm -rf "$tmp"
 
+# embed.sh forces DELEGATE_BACKEND=ollama for the embedding tier, so on an mlx
+# host the audit must resolve that one tier through Ollama too. Reporting
+# '(none)' there would send debugging after a model that is in fact installed
+# and reachable on the real call path.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp" "NAME                   ID SIZE   MODIFIED
+nomic-embed-text:v1.5  xx 274 MB 1 day ago"
+make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit"
+EC=0
+OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" \
+  bash "$AUDIT" 2>&1) || EC=$?
+assert_eq "0" "$EC" "audit: mlx backend with ollama present -> exit 0"
+assert_contains "nomic-embed-text" "$OUT" "audit: embedding tier resolves via ollama on an mlx host"
+assert_contains "embed.sh forces it" "$OUT" "audit: marks the embedding tier as resolved via ollama"
+rm -rf "$tmp"
+
 echo
 echo "=== no installer-breaking AAIF self-symlink ==="
 

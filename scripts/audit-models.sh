@@ -52,11 +52,20 @@ echo
 echo "=== Tier routing (which installed model wins per tier, backend=$backend) ==="
 while IFS= read -r tier; do
   [[ -n "$tier" ]] || continue
-  if model=$(bash "$pick" "$tier" 2>/dev/null); then
-    printf "  %-17s -> %s\n" "$tier" "$model"
-  else
-    printf "  %-17s -> (none)\n" "$tier"
+  # embed.sh resolves the embedding tier with DELEGATE_BACKEND=ollama forced
+  # (scripts/embed.sh:175 — MLX is out of scope there), so the audit mirrors
+  # that call path. Resolving it against the active backend would report a
+  # misleading '(none)' on an MLX host that has the embedding model installed.
+  tier_backend="$backend"
+  suffix=""
+  if [[ "$tier" == "embedding" ]]; then
+    tier_backend="ollama"
+    [[ "$tier_backend" != "$backend" ]] && suffix="   [via ollama — embed.sh forces it]"
   fi
+  if ! model=$(DELEGATE_BACKEND="$tier_backend" bash "$pick" "$tier" 2>/dev/null); then
+    model="(none)"
+  fi
+  printf "  %-17s -> %s%s\n" "$tier" "$model" "$suffix"
 done < <(bash "$pick" --print-prefs | cut -d: -f1)
 echo
 
