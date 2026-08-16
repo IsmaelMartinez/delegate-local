@@ -14,7 +14,10 @@
 #   1. If the command is NOT a delegatable boundary (commit, PR/MR-create,
 #      issue-create with an inline body, release-create, PR review-comment reply,
 #      or PR/issue/MR comment reply), exit 0 immediately — the cheap common path
-#      (no jq slurp, no metrics read).
+#      (no jq slurp, no metrics read). Classification runs over the *leading
+#      tokens of each shell segment*, never the raw string, so a command that
+#      merely writes ABOUT a boundary command (a heredoc body, a quoted message)
+#      does not fire (#342 defect 2).
 #   2. Otherwise derive the project (same rule as delegate.sh's metrics rows) and
 #      check metrics.jsonl for a delegate.sh row for THIS project within the last
 #      N minutes. Its presence means the artifact was drafted locally; its
@@ -26,6 +29,14 @@
 #      env-controlled: warn (default, non-blocking additionalContext the model
 #      sees), enforce (deny the call so the model re-routes), or off (measure
 #      only, no reminder).
+#
+# One boundary shape is neither delegated nor missed: a body read from a file
+# that already exists (`--body-file` / `-F` / `--notes-file` / `--file`). The
+# drafting moment was the earlier Write, several tool calls back, so re-drafting
+# now would throw away text that was often already human-approved. Those rows
+# carry state:"pre-drafted" and no nudge fires; metrics-summary.sh keeps them out
+# of the trigger-rate numerator AND denominator so human-approved posts stop
+# reading as missed delegations (#349).
 #
 # Fails OPEN: any error, missing jq, or unparseable input exits 0 so a commit is
 # never blocked by a hook bug. The only blocking path is the explicit
@@ -51,43 +62,97 @@ cmd=$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null) || exit 0
 [[ -z "$cmd" ]] && exit 0
 hook_cwd=$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null) || hook_cwd=""
 
-# --- is this a delegatable boundary? (cheap path exits here) --------------
-# git commit that authors a message inline (-m/-F), but not --amend (which
-# reuses an existing message — no fresh drafting moment).
+# --- cheap pre-filter (the common path exits here) ------------------------
+# One linear-time grep over the raw string. Everything below is gated on it, so
+# the overwhelming majority of Bash calls cost a single grep and nothing else.
+# It over-matches on purpose (a heredoc body mentioning `gh pr create` passes);
+# the segment-aware classifier below is what decides.
+grep -Eq 'git[[:space:]]+commit|gh[[:space:]]+(pr|issue|release|api)([[:space:]]|$)|glab[[:space:]]+(mr|issue)([[:space:]]|$)' <<<"$cmd" || exit 0
+
+# --- build the classification surface -------------------------------------
+# Only the leading tokens of a shell segment can BE a command. Matching the raw
+# string made merely writing ABOUT a boundary command enough to fire: a
+# `cat > notes.md <<'EOF' ... gh pr create ... EOF` write classified as
+# pr-create, because the heredoc body was part of the string the classifier saw
+# (#342 defect 2). Quoting the delimiter cannot help — the match happens before
+# the shell ever runs.
+#
+# One awk pass turns the command into one segment per line:
+#   * everything from the first `<<` (heredoc / here-string) is dropped — that
+#     is data being written, not a command being run. Real boundary uses of a
+#     heredoc (`gh pr create --body-file - <<'EOF'`) keep their flags, which all
+#     precede the redirect, so they still classify.
+#   * quoted spans are blanked, so prose inside -m/--body cannot classify.
+#   * `; & | ( ) { }` and newlines become line breaks, so `cd x && git commit`
+#     and `url=$(gh pr create ...)` both expose their command at a line start.
+# Patterns below are therefore anchored with ^, and each grep sees one segment.
+scan=$(awk 'BEGIN{RS="\1"} {
+  n = length($0); q = ""; out = "";
+  for (i = 1; i <= n; i++) {
+    c = substr($0, i, 1);
+    if (q != "") { if (c == q) { q = ""; } continue }
+    if (c == "\047" || c == "\"") { q = c; out = out " "; continue }
+    if (c == "<" && substr($0, i + 1, 1) == "<") break;
+    if (c == ";" || c == "\n" || c == "&" || c == "|" \
+        || c == "(" || c == ")" || c == "{" || c == "}") { out = out "\n"; continue }
+    out = out c;
+  }
+  print out;
+}' <<<"$cmd" 2>/dev/null) || exit 0
+[[ -z "$scan" ]] && exit 0
+
+# --- is this a delegatable boundary? --------------------------------------
+# Each segment is classified independently and the first match wins, so a flag
+# never binds to a command in a different segment.
 boundary="" recipe=""
-if grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+commit([[:space:]]|$)' <<<"$cmd" \
-   && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[mF]|--message|--file)' <<<"$cmd" \
-   && ! grep -Eq -- '--amend' <<<"$cmd"; then
-  boundary="git-commit"; recipe="commit-message"
-elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+pr[[:space:]]+create' <<<"$cmd" \
-   || grep -Eq '(^|[^[:alnum:]_])glab[[:space:]]+mr[[:space:]]+create' <<<"$cmd"; then
-  boundary="pr-create"; recipe="pr-description"
-# New issue authored with an inline body (--body / -b / --body-file / -F), but
-# not the interactive editor or the --web form — those have no inline drafting
-# moment, same reasoning as commit --amend.
-elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+issue[[:space:]]+create' <<<"$cmd" \
-   && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[bF]|--body)' <<<"$cmd" \
-   && ! grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*w|--web)([[:space:]]|$)' <<<"$cmd"; then
-  boundary="issue-create"; recipe="github-issue-body"
-elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+release[[:space:]]+create' <<<"$cmd"; then
-  boundary="release-create"; recipe="release-note"
-# Inline PR review-comment reply: `gh api .../pulls/<n>/comments -X POST -f body=...`
-# (the /address-pr-comments inline path). Scope to the pulls endpoint so an
-# issue-comment POST (`.../issues/<n>/comments`) is not misread as a PR review
-# reply, and require an explicit POST so the read-only fetch step
-# (`gh api .../comments --jq ...`, no -X POST) is NOT a boundary.
-elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api([[:space:]]|$)' <<<"$cmd" \
-   && grep -Eq '/pulls/[0-9]+/comments' <<<"$cmd" \
-   && grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$cmd"; then
-  boundary="pr-review-comment"; recipe="pr-review-reply"
-# General PR / issue / MR comment reply authored inline.
-elif grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+pr[[:space:]]+comment([[:space:]]|$)' <<<"$cmd" \
-   || grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+issue[[:space:]]+comment([[:space:]]|$)' <<<"$cmd" \
-   || grep -Eq '(^|[^[:alnum:]_])glab[[:space:]]+(mr|issue)[[:space:]]+(discussion[[:space:]]+)?note([[:space:]]|$)' <<<"$cmd"; then
-  boundary="comment-reply"; recipe="maintainer-reply"
-else
-  exit 0
-fi
+classify_segment() {
+  local seg="$1"
+  # git commit that authors a message inline (-m/-F), but not --amend (which
+  # reuses an existing message — no fresh drafting moment).
+  if grep -Eq '^[[:space:]]*git[[:space:]]+commit([[:space:]]|$)' <<<"$seg" \
+     && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[mF]|--message|--file)' <<<"$seg" \
+     && ! grep -Eq -- '--amend' <<<"$seg"; then
+    boundary="git-commit"; recipe="commit-message"; return 0
+  fi
+  if grep -Eq '^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' <<<"$seg" \
+     || grep -Eq '^[[:space:]]*glab[[:space:]]+mr[[:space:]]+create([[:space:]]|$)' <<<"$seg"; then
+    boundary="pr-create"; recipe="pr-description"; return 0
+  fi
+  # New issue authored with an inline body (--body / -b / --body-file / -F), but
+  # not the interactive editor or the --web form — those have no inline drafting
+  # moment, same reasoning as commit --amend.
+  if grep -Eq '^[[:space:]]*gh[[:space:]]+issue[[:space:]]+create([[:space:]]|$)' <<<"$seg" \
+     && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[bF]|--body)' <<<"$seg" \
+     && ! grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*w|--web)([[:space:]]|$)' <<<"$seg"; then
+    boundary="issue-create"; recipe="github-issue-body"; return 0
+  fi
+  if grep -Eq '^[[:space:]]*gh[[:space:]]+release[[:space:]]+create([[:space:]]|$)' <<<"$seg"; then
+    boundary="release-create"; recipe="release-note"; return 0
+  fi
+  # Inline PR review-comment reply: `gh api .../pulls/<n>/comments -X POST -f body=...`
+  # (the /address-pr-comments inline path). Scope to the pulls endpoint so an
+  # issue-comment POST (`.../issues/<n>/comments`) is not misread as a PR review
+  # reply, and require an explicit POST so the read-only fetch step
+  # (`gh api .../comments --jq ...`, no -X POST) is NOT a boundary.
+  if grep -Eq '^[[:space:]]*gh[[:space:]]+api([[:space:]]|$)' <<<"$seg" \
+     && grep -Eq '/pulls/[0-9]+/comments' <<<"$seg" \
+     && grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$seg"; then
+    boundary="pr-review-comment"; recipe="pr-review-reply"; return 0
+  fi
+  # General PR / issue / MR comment reply authored inline.
+  if grep -Eq '^[[:space:]]*gh[[:space:]]+pr[[:space:]]+comment([[:space:]]|$)' <<<"$seg" \
+     || grep -Eq '^[[:space:]]*gh[[:space:]]+issue[[:space:]]+comment([[:space:]]|$)' <<<"$seg" \
+     || grep -Eq '^[[:space:]]*glab[[:space:]]+(mr|issue)[[:space:]]+(discussion[[:space:]]+)?note([[:space:]]|$)' <<<"$seg"; then
+    boundary="comment-reply"; recipe="maintainer-reply"; return 0
+  fi
+  return 1
+}
+
+while IFS= read -r seg; do
+  [[ -z "$seg" ]] && continue
+  classify_segment "$seg" && break
+done <<<"$scan"
+[[ -z "$boundary" ]] && exit 0
 
 # --- derive the project name (mirror delegate.sh / lib/otel.sh) -----------
 [[ -n "$hook_cwd" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
@@ -100,6 +165,37 @@ else
   project=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
 fi
 
+# --- was the body drafted earlier, into a file? (#349) --------------------
+# `--body-file` / `-F` / `--notes-file` / `--file` pointing at a file that
+# already exists means the drafting moment has passed: the text was authored at
+# an earlier Write, and in practice was often shown to and approved by the human
+# before this call. Re-drafting on-device now would discard what they signed off
+# on, so the nudge is not actionable — and counting it as a missed delegation
+# deflates the per-project trigger rate. Recorded as its own state instead.
+# An inline `--body`/`-m` string keeps nudging: that IS the drafting moment.
+# A path that does not exist (`--body-file -`, a file about to be written) is
+# not pre-drafted either, so the boundary behaves exactly as before.
+metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
+state=""
+body_file_args=$(awk 'BEGIN{RS="\1"} {
+  s = $0;
+  p = index(s, "<<");
+  if (p > 0) s = substr(s, 1, p - 1);
+  gsub(/["\047]/, "", s);
+  n = split(s, t, /[[:space:]]+/);
+  for (i = 1; i <= n; i++) {
+    if (t[i] == "--body-file" || t[i] == "--notes-file" || t[i] == "--file" || t[i] == "-F") {
+      if (i < n) print t[i + 1];
+    } else if (t[i] ~ /^(--body-file|--notes-file|--file|-F)=/) {
+      sub(/^[^=]*=/, "", t[i]); print t[i];
+    }
+  }
+}' <<<"$cmd" 2>/dev/null) || body_file_args=""
+while IFS= read -r cand; do
+  [[ -z "$cand" ]] && continue
+  if [[ -f "$cand" ]]; then state="pre-drafted"; break; fi
+done <<<"$body_file_args"
+
 # --- was there a local delegation for THIS boundary's recipe, recently? ----
 # Recipe-aware: only a delegation whose recipe matches this boundary's recipe
 # counts as capturing it. Matching on project alone over-counted — a commit-message
@@ -108,11 +204,12 @@ fi
 # rate AND suppressed the nudge (delegated:true skips it below), so the artifact the
 # boundary is about was never delegated. A bare (no-recipe) delegation no longer
 # counts for any boundary — the calibrated recipe the nudge names is the path.
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
+# Skipped for pre-drafted bodies: that row is neither delegated nor missed, so
+# the lookup would only cost a jq slurp to produce a flag nothing reads.
 window_min="${DELEGATE_BOUNDARY_WINDOW_MIN:-10}"
 now_epoch=$(date -u +%s)
 delegated=false
-if [[ -f "$metrics_file" ]]; then
+if [[ -z "$state" && -f "$metrics_file" ]]; then
   # Only the recent tail can fall inside the look-back window, so cap the read
   # instead of slurping the whole (ever-growing) metrics file on each boundary.
   recent=$(tail -n 500 "$metrics_file" 2>/dev/null | jq -s --argjson win "$((window_min * 60))" --arg proj "$project" --arg recipe "$recipe" --argjson now "$now_epoch" '
@@ -127,18 +224,21 @@ fi
 
 # --- record the opportunity (the trigger-rate sensor) ---------------------
 # One row per boundary so trigger rate has a denominator. Stores no command or
-# message text — only boundary type, suggested recipe, project, and the flag.
+# message text — only boundary type, suggested recipe, project, the flag, and
+# (when the body came from a file that already existed) state:"pre-drafted".
 if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
   jq -nc --arg ts "$ts" --arg project "$project" --arg boundary "$boundary" \
-     --arg recipe "$recipe" --argjson delegated "$delegated" '
+     --arg recipe "$recipe" --argjson delegated "$delegated" --arg state "$state" '
      {ts:$ts, source:"opportunity", boundary:$boundary, suggested_recipe:$recipe, delegated:$delegated}
+     + (if $state != "" then {state:$state} else {} end)
      + (if $project != "" then {project:$project} else {} end)' \
      >> "$metrics_file" 2>/dev/null || true
 fi
 
 # --- nudge only when the artifact is about to be authored inline ----------
+[[ -n "$state" ]] && exit 0
 [[ "$delegated" == "true" ]] && exit 0
 
 mode="${DELEGATE_BOUNDARY_MODE:-warn}"

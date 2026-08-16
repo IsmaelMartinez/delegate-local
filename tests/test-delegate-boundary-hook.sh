@@ -273,6 +273,103 @@ jq -nc --arg ts "$oldish" --arg p "$proj" \
 payload 'git commit -m x' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_BOUNDARY_WINDOW_MIN=1 bash "$HOOK" >/dev/null
 assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "custom window: 5m-old delegation outside 1m window"
 
+# --- #342 defect 2: the classifier must only see leading tokens -----------
+
+# 14a. A heredoc write whose BODY mentions a boundary command is not a boundary.
+# This is the reported false positive: writing an issue about `gh pr create`
+# fired a pr-create nudge, because the classifier matched the whole string.
+: > "$METRICS"
+ec=0
+out=$(payload "$(printf 'cat > issue-facts.md <<%s\nThe fix is to run gh pr create --title t --body b\nEOF' "'EOF'")" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK") || ec=$?
+assert_eq 0 "$ec" "heredoc mentioning gh pr create: exit 0"
+assert_eq "" "$out" "heredoc mentioning gh pr create: no nudge"
+assert_eq 0 "$(nrows)" "heredoc mentioning gh pr create: no row (body is data, not a command)"
+
+# 14b. A heredoc body mentioning `git commit -m` likewise.
+: > "$METRICS"
+out=$(payload "$(printf 'cat >> notes.md <<%s\ngit commit -m "example"\nEOF' "'EOF'")" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq "" "$out" "heredoc mentioning git commit: no nudge"
+assert_eq 0 "$(nrows)" "heredoc mentioning git commit: no row"
+
+# 14c. Quoted prose mentioning a boundary command is not a boundary either.
+: > "$METRICS"
+out=$(payload 'echo "next step: gh issue create --body something"' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq "" "$out" "quoted prose: no nudge"
+assert_eq 0 "$(nrows)" "quoted prose: no row"
+
+# 14d. A commit message that TALKS about another boundary still classifies as the
+# commit it is — quoted content never contributes to classification.
+: > "$METRICS"
+payload 'git commit -m "docs: explain gh pr create usage"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq git-commit "$(jq -r .boundary <<<"$(last_row)")" "commit message mentioning gh pr create: still git-commit"
+assert_eq 1 "$(nrows)" "commit message mentioning gh pr create: exactly one row"
+
+# 14e. Real boundaries still classify when they are not the first token of the
+# command: after a `&&`, and inside a command substitution.
+: > "$METRICS"
+payload 'cd /tmp/repo && git commit -m "fix: thing"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq git-commit "$(jq -r .boundary <<<"$(last_row)")" "git commit after &&: still a boundary"
+: > "$METRICS"
+payload 'url=$(gh pr create --title t --body b)' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq pr-create "$(jq -r .boundary <<<"$(last_row)")" "gh pr create in a command substitution: still a boundary"
+
+# 14f. A real boundary that USES a heredoc keeps classifying — its flags all
+# precede the redirect, so cutting the body loses nothing.
+: > "$METRICS"
+payload "$(printf 'gh pr create --title t --body-file - <<%s\nbody text\nEOF' "'EOF'")" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq pr-create "$(jq -r .boundary <<<"$(last_row)")" "gh pr create with a heredoc body: still a boundary"
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "gh pr create with a heredoc body: delegated=false (- is not a file)"
+
+# --- #349: a body read from an existing file is pre-drafted, not missed ----
+mkdir -p "$tmpcwd/drafts"
+printf 'already drafted and approved\n' > "$tmpcwd/drafts/body.md"
+
+# 15a. gh issue create --body-file <existing file>: no nudge, state=pre-drafted.
+: > "$METRICS"
+ec=0
+out=$(payload 'gh issue create --title t --body-file drafts/body.md' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK") || ec=$?
+assert_eq 0 "$ec" "issue-create --body-file existing: exit 0"
+assert_eq "" "$out" "issue-create --body-file existing: no nudge (drafting moment already passed)"
+assert_eq issue-create "$(jq -r .boundary <<<"$(last_row)")" "issue-create --body-file existing: boundary still recorded"
+assert_eq pre-drafted "$(jq -r .state <<<"$(last_row)")" "issue-create --body-file existing: state=pre-drafted"
+
+# 15b. The -F shorthand behaves the same.
+: > "$METRICS"
+out=$(payload 'gh issue comment 7 -F drafts/body.md' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq "" "$out" "comment-reply -F existing: no nudge"
+assert_eq pre-drafted "$(jq -r .state <<<"$(last_row)")" "comment-reply -F existing: state=pre-drafted"
+
+# 15c. gh pr comment --body-file <existing file>: same.
+: > "$METRICS"
+out=$(payload "gh pr comment 12 --body-file $tmpcwd/drafts/body.md" "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq "" "$out" "pr comment --body-file (absolute) existing: no nudge"
+assert_eq pre-drafted "$(jq -r .state <<<"$(last_row)")" "pr comment --body-file (absolute) existing: state=pre-drafted"
+
+# 15d. An INLINE --body is still the drafting moment: nudge, no state.
+: > "$METRICS"
+out=$(payload 'gh issue comment 7 --body "thanks for the report"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_contains 'maintainer-reply' "$out" "inline --body: still nudges"
+assert_eq null "$(jq -r '.state // null' <<<"$(last_row)")" "inline --body: no state (ordinary missed opportunity)"
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "inline --body: delegated=false"
+
+# 15e. --body-file pointing at a file that does NOT exist is not pre-drafted.
+: > "$METRICS"
+out=$(payload 'gh issue create --title t --body-file drafts/nope.md' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_contains 'github-issue-body' "$out" "--body-file missing file: still nudges"
+assert_eq null "$(jq -r '.state // null' <<<"$(last_row)")" "--body-file missing file: no state"
+
+# 15f. gh api's -F is a field assignment, not a body file — must not pre-draft.
+: > "$METRICS"
+out=$(payload 'gh api repos/o/r/pulls/12/comments -X POST -f body="x" -F in_reply_to=99' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_contains 'pr-review-reply' "$out" "gh api -F field: still nudges"
+assert_eq null "$(jq -r '.state // null' <<<"$(last_row)")" "gh api -F field: no state"
+
 # 14. Fail-open on malformed stdin.
 ec=0
 out=$(echo 'not json' | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK") || ec=$?

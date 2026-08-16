@@ -349,6 +349,26 @@ case "$out" in
 esac
 rm -f "$opp"
 
+# 12b. state:"pre-drafted" opportunity rows (#349) are a --body-file post of text
+# authored at an earlier Write, so the drafting moment was never at that Bash
+# call. They must leave the trigger rate alone — out of the numerator AND the
+# denominator — and be surfaced as their own count. Fixture: alpha has the same
+# 1-delegated / 1-missed pair as above plus 2 pre-drafted posts, so a naive
+# denominator would read 25% instead of the true 50%.
+predraft=$(mktemp)
+cat > "$predraft" <<'EOF'
+{"ts":"2026-06-08T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true}
+{"ts":"2026-06-08T10:30:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false}
+{"ts":"2026-06-08T10:40:00Z","source":"opportunity","project":"alpha","boundary":"comment-reply","suggested_recipe":"maintainer-reply","delegated":false,"state":"pre-drafted"}
+{"ts":"2026-06-08T10:45:00Z","source":"opportunity","project":"alpha","boundary":"issue-create","suggested_recipe":"github-issue-body","delegated":false,"state":"pre-drafted"}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$predraft" 2>&1) || EC=$?
+assert_eq 0 "$EC" "pre-drafted: exits 0"
+assert_contains "opportunities=2  delegated=1  missed=1  rate=50%  pre-drafted=2" "$out" \
+  "pre-drafted: excluded from the trigger-rate numerator and denominator, reported separately"
+rm -f "$predraft"
+
 # 16. Phase E agent-observed verdict tier. Fixture: 4 commit-message recipe
 # delegations — D1 human HIT, D2 agent HIT (used), D3 agent MISS (rewrote),
 # D4 untracked. The honesty property: the human hit-rate counts D1 only (NOT
