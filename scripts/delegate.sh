@@ -308,14 +308,16 @@ positional=()
 while (($# > 0)); do
   case "$1" in
     --recipe)
-      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
         echo 'delegate: --recipe requires a value' >&2; exit 2
       fi
       recipe="$2"; shift 2;;
     --recipe=*)
       recipe="${1#--recipe=}"; shift;;
     --var)
-      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+      # As with --recipe/--project, a following flag is the next option rather
+      # than this one's value; accepting it would swallow the flag silently.
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
         echo 'delegate: --var requires key=value' >&2; exit 2
       fi
       recipe_vars+=("$2"); shift 2;;
@@ -501,9 +503,10 @@ log_metric() {
 # checkout recorded project=delegate-local, so the boundary hook (which derives
 # the project from the *hook's* cwd, i.e. the real repo) never matched the row
 # and nudged despite compliance (#342). Explicit flag beats env beats cwd.
-delegate_project="$project_override"
-[[ -z "$delegate_project" ]] && delegate_project="${DELEGATE_PROJECT:-}"
-[[ -z "$delegate_project" ]] && delegate_project=$(delegate_project_name)
+# The flag is exported rather than kept local so delegate_project_name resolves
+# it, and so a delegate-feedback.sh run in the same shell inherits it.
+[[ -n "$project_override" ]] && export DELEGATE_PROJECT="$project_override"
+delegate_project=$(delegate_project_name)
 
 ts_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 start_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')

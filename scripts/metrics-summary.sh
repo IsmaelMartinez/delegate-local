@@ -342,16 +342,19 @@ if (( n_opp > 0 )); then
   jq -rs '
     map(select((.source // "") == "opportunity"))
     | group_by(.project // "(none)")
-    | map({
-        project: (.[0].project // "(none)"),
-        n: (map(select((.state // "") != "pre-drafted")) | length),
-        delegated: (map(select(.delegated == true and (.state // "") != "pre-drafted")) | length),
-        missed: (map(select(.delegated == false and (.state // "") != "pre-drafted")) | length),
-        predrafted: (map(select((.state // "") == "pre-drafted")) | length)
+    | map(. as $rows | ($rows | map(select((.state // "") != "pre-drafted"))) as $counted | {
+        project: ($rows[0].project // "(none)"),
+        n: ($counted | length),
+        delegated: ($counted | map(select(.delegated == true)) | length),
+        missed: ($counted | map(select(.delegated == false)) | length),
+        predrafted: (($rows | length) - ($counted | length))
       })
     | sort_by(-.n)
     | .[]
-    | "  \(.project | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)  rate=\(if .n > 0 then (.delegated * 100 / .n | floor) else 0 end)%"
+    | "  \(.project | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
+      # No rate when every boundary was pre-drafted: 0/0 printed as rate=0%
+      # reads as total non-compliance, the exact misreading #349 is about.
+      + (if .n > 0 then "  rate=\(.delegated * 100 / .n | floor)%" else "" end)
       + (if .predrafted > 0 then "  pre-drafted=\(.predrafted)" else "" end)
   ' "$metrics_file"
   echo

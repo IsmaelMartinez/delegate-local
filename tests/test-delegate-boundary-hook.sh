@@ -384,6 +384,67 @@ out=$(payload "gh api repos/o/r/pulls/355/comments -X POST -F body=@$tmpcwd/draf
 assert_eq "" "$out" "gh api -F body=@existing: no nudge"
 assert_eq pre-drafted "$(jq -r .state <<<"$(last_row)")" "gh api -F body=@existing: state=pre-drafted"
 
+# 15c-ii. A delegation inside the window beats pre-drafted: delegate → save →
+# post is the workflow the nudge asks for, and recording it as delegated:false
+# removed the sensor's best outcome from both sides of the ratio.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", recipe:"pr-description", project:$p}' >> "$METRICS"
+out=$(payload "gh pr create --title t --body-file $tmpcwd/drafts/body.md" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq "" "$out" "delegated + body-file: no nudge"
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "delegated + body-file: delegated=true"
+assert_eq null "$(jq -r '.state // "null"' <<<"$(last_row)")" "delegated + body-file: delegated supersedes pre-drafted"
+
+# 15c-iii. A body-file post in a LATER segment must not mark an inline post in
+# an earlier one as pre-drafted — that suppressed a real nudge and deleted the
+# row from the metric, which is worse than the deflation #349 reports.
+: > "$METRICS"
+out=$(payload "gh issue comment 1 --body \"inline reply\" && gh issue comment 2 --body-file $tmpcwd/drafts/body.md" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_contains "delegate-local" "$out" "cross-segment body-file: inline post still nudges"
+assert_eq null "$(jq -r '.state // "null"' <<<"$(last_row)")" "cross-segment body-file: no pre-drafted state"
+
+# 15c-iv. Prose naming a body flag inside a quoted message is data, not a flag.
+: > "$METRICS"
+out=$(payload "git commit -m \"docs: see --body-file drafts/body.md for the template\"" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_contains "delegate-local" "$out" "prose naming --body-file: still nudges"
+assert_eq null "$(jq -r '.state // "null"' <<<"$(last_row)")" "prose naming --body-file: no pre-drafted state"
+
+# 15c-v. `git commit -F <file>` is NOT the #349 case: that is the standard way
+# an agent commits a message it composed itself moments earlier, which is
+# exactly the drafting moment the hook exists to catch.
+: > "$METRICS"
+out=$(payload "git commit -F $tmpcwd/drafts/body.md" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_contains "delegate-local" "$out" "git commit -F: still nudges"
+assert_eq null "$(jq -r '.state // "null"' <<<"$(last_row)")" "git commit -F: not pre-drafted"
+
+# 15c-vi. A heredoc write followed by a real boundary in the same call: the
+# body is data and must not classify, but the command AFTER the terminator is
+# a genuine opportunity. Breaking at the first `<<` dropped it entirely.
+: > "$METRICS"
+payload "cat > $tmpcwd/b.md <<'EOF'
+some body text
+EOF
+gh issue create --title t --body-file $tmpcwd/b.md" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq issue-create "$(jq -r .boundary <<<"$(last_row)")" "heredoc then post: the post still classifies"
+
+# 15c-vii. Wrapper and prefix tokens are still real boundaries. Anchoring each
+# pattern at segment start dropped all of these, and bought nothing once the
+# quoted spans and heredoc bodies were already stripped.
+for prefixed in \
+  "sudo gh pr create --title t --body b" \
+  "timeout 30 gh pr create --title t --body b" \
+  "GIT_AUTHOR_NAME=x git commit -m \"msg\"" \
+  "for f in a b; do git commit -m \"msg\"; done"; do
+  : > "$METRICS"
+  payload "$prefixed" "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+  assert_eq 1 "$(nrows)" "wrapped boundary classifies: ${prefixed:0:28}"
+done
+
 # 15d. An INLINE --body is still the drafting moment: nudge, no state.
 : > "$METRICS"
 out=$(payload 'gh issue comment 7 --body "thanks for the report"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
