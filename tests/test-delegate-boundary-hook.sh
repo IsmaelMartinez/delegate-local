@@ -520,6 +520,16 @@ out=$(cd "$REPO" && payload 'git commit -m "fix: thing"' "$tmpcwd" \
   | DELEGATE_METRICS_FILE="$METRICS" bash scripts/delegate-boundary-hook.sh)
 assert_contains '--var why=' "$out" "relative invocation: still resolves prompts/"
 
+# 18. The project value is quoted in the rendered command. A checkout directory
+# with a space in its name would otherwise split into two arguments and the
+# printed command would not run — the exact failure this change exists to end.
+spacedir="$tmpcwd/a project"
+mkdir -p "$spacedir"
+: > "$METRICS"
+out=$(payload 'git commit -m "fix: thing"' "$spacedir" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+ctx=$(jq -r '.hookSpecificOutput.additionalContext' <<<"$out")
+assert_contains '--project "a project"' "$ctx" "spaced project: quoted in the rendered command"
+
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

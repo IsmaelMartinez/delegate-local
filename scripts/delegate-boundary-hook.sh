@@ -350,7 +350,7 @@ fi
 # delegate.sh's own cwd, so an agent that cd's into the skill checkout to run
 # the command records project=delegate-local and never matches this lookup,
 # which is the nag loop #342 describes. The hook already knows the right value.
-reminder="delegate-local: about to author a ${boundary} message inline with no local delegation recorded in the last ${window_min}m for project '${project}'. Draft it on-device first — bash ~/.claude/skills/delegate-local/scripts/delegate.sh --project ${project} --recipe ${recipe}${var_hint} prose${stdin_hint} — then record the verdict with ~/.claude/skills/delegate-local/scripts/delegate-feedback.sh --source agent. Set DELEGATE_BOUNDARY_MODE=off to silence."
+reminder="delegate-local: about to author a ${boundary} message inline with no local delegation recorded in the last ${window_min}m for project '${project}'. Draft it on-device first — bash ~/.claude/skills/delegate-local/scripts/delegate.sh --project \"${project}\" --recipe ${recipe}${var_hint} prose${stdin_hint} — then record the verdict with ~/.claude/skills/delegate-local/scripts/delegate-feedback.sh --source agent. Set DELEGATE_BOUNDARY_MODE=off to silence."
 
 if [[ "$mode" == "enforce" ]]; then
   jq -nc --arg r "$reminder" \
