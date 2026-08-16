@@ -77,11 +77,11 @@ cat src/auth/middleware.ts | bash scripts/delegate.sh --recipe bulk-file-summary
   prose "One line only. Describe this file's primary purpose."
 ```
 
-Batch over a glob (recommended — each call stays independently small, fits the prose-tier ceiling per issue #110):
+Batch over a glob (recommended — each call stays independently small, fits the prose-tier ceiling per issue #110). This loop is for an interactive shell; a sandboxed agent harness refuses `for` loops for the same reason it refuses command substitution, so from an agent session issue one call per file instead:
 
 ```bash
 for f in prompts/*.md; do
-  printf '%s — ' "$(basename "$f")"
+  printf '%s — ' "$f"
   cat "$f" | bash scripts/delegate.sh --recipe bulk-file-summary \
     --var file_path="$f" \
     prose "One line only. Describe this file's primary purpose."

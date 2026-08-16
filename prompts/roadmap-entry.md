@@ -25,9 +25,13 @@ Run both of these before invoking the recipe:
 #    `### Sprint N — done`) before running.
 awk '/^### / { if (flag) exit; if ($0 ~ / — shipped/) flag=1 } flag' docs/plans/current-plan.md
 
-# 2. Structured fact list — one heading line plus per-PR shipped summary plus
-#    optional Up-Next pointer. Author this in a scratch file:
-cat <<'EOF' > /tmp/facts.md
+```
+
+Then author the structured fact list yourself — one heading line plus a per-PR
+shipped summary plus an optional Up-Next pointer — and pass it straight to
+`--var facts=...`. There is no scratch file to write; the value goes in literally:
+
+```
 HEADING: <date> — <one-line sprint summary> — shipped
 
 PRs:
@@ -35,7 +39,6 @@ PRs:
 - #NNN (squash <hash>, merged <YYYY-MM-DD>): <one sentence on what shipped>
 
 Up Next: <one short pointer to what comes after, or omit if the entry doesn't close with one>
-EOF
 ```
 
 The style anchor is load-bearing — abstract descriptors like "match the plan's voice" reliably yield bullet lists or American-English drift when the file uses prose and British English. The verbatim block lets the model copy the spelling variant, the prose-vs-bullets density, and the paragraph length without an abstract description doing that work.
@@ -78,12 +81,12 @@ Output ONLY the entry itself, no preamble, no "Here's the entry:".
 
 ## Invocation
 
+Run the anchor `awk` above as its own step and author the fact list yourself, then pass both as literal `--var` values:
+
 ```bash
-PLAN_FILE=docs/plans/current-plan.md
-ANCHOR=$(awk '/^### / { if (flag) exit; if ($0 ~ / — shipped/) flag=1 } flag' "$PLAN_FILE")
 bash scripts/delegate.sh --recipe roadmap-entry \
-  --var style_anchor="$ANCHOR" \
-  --var facts="$(cat /tmp/facts.md)" \
+  --var style_anchor="<the most recent shipped entry, verbatim, heading and prose>" \
+  --var facts="<the structured fact list you authored>" \
   prose "Match the STYLE ANCHOR exactly in spelling variant and prose-vs-bullets balance. Preserve every PR number, hash, and date verbatim."
 ```
 

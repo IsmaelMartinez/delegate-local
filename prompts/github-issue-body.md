@@ -25,18 +25,12 @@ cat > "$CLAUDE_JOB_DIR/tmp/issue-facts.md" <<'EOF'
 <the observation, with verbatim excerpts and identifiers — invent nothing here>
 EOF
 
-# 2. The section plan — the exact ordered markdown headings the body should use,
-#    each with a one-line note on what it should contain. This is the caller's
-#    structure decision, passed via --var sections=...
-cat > "$CLAUDE_JOB_DIR/tmp/issue-sections.md" <<'EOF'
-## Summary
-(content: one paragraph framing the problem)
-## Why this matters
-(content: one paragraph on the impact)
-## Suggested fix
-(content: the proposed change, one paragraph per option)
-EOF
 ```
+
+The section plan — the exact ordered markdown headings the body should use,
+each with a one-line note on what it should contain — is your structure
+decision, not the model's. Author it and pass it straight to `--var
+sections=...` as shown under Invocation; it needs no scratch file of its own.
 
 The section plan is load-bearing: without an explicit heading list the prose tier invents its own structure (often a generic Background/Steps/Expected/Actual bug template) regardless of what the issue actually is. Each `##` line is the literal heading to reproduce; the `(content: ...)` line below it is a note describing what goes under that heading and must never appear in the output (keep the heading and its note on separate lines, never on one line — a combined `## Summary — one paragraph ...` line gets echoed whole into the heading).
 
@@ -74,9 +68,16 @@ The migration removes the legacy adapter; the rollout steps are listed under ## 
 
 ## Invocation
 
+The section plan is short and you authored it yourself, so pass it as a literal `--var`; the facts file goes in on stdin via plain input redirection:
+
 ```bash
 bash scripts/delegate.sh --recipe github-issue-body \
-  --var sections="$(cat "$CLAUDE_JOB_DIR/tmp/issue-sections.md")" \
+  --var sections="## Summary
+(content: one paragraph framing the problem)
+## Why this matters
+(content: one paragraph on the impact)
+## Suggested fix
+(content: the proposed change, one paragraph per option)" \
   prose "Use exactly the listed headings in order. British spelling. Invent nothing beyond the facts. No title line, no closing summary." \
   < "$CLAUDE_JOB_DIR/tmp/issue-facts.md"
 ```

@@ -79,17 +79,16 @@ Correct (same first two sentences; the trigger phrase "Consequently," fires rule
 bash scripts/delegate.sh --recipe doc-section \
   --var topic="when and how to tune the four PR-agent knobs" \
   --var max_sentences=3 \
-  --var facts="$(cat <<'FACTS'
-- PR_CODE_SUGGESTIONS__SUGGESTIONS_SCORE_THRESHOLD=8 is set in .pr-agent-base.variables in the central CI include
-- Env vars take precedence over .pr_agent.toml in Dynaconf, so repos can't lower these defaults via TOML
+  --var facts='- PR_CODE_SUGGESTIONS__SUGGESTIONS_SCORE_THRESHOLD=8 is set in .pr-agent-base.variables in the central CI include
+- Env vars take precedence over .pr_agent.toml in Dynaconf, so repos cannot lower these defaults via TOML
 - Other knobs (model swap, extra_instructions, docs_style) are unaffected and freely configurable
-- AI-61 tracks the threshold tuning saga and is the reason env vars override
-FACTS
-)" \
+- AI-61 tracks the threshold tuning saga and is the reason env vars override' \
   prose "Match a calm reference-doc voice. Stop after the substantive sentences."
 ```
 
 The trailing prompt arg is the voice + reinforcement reminder; the recipe template carries the structural directives.
+
+Single-quote `{{facts}}` rather than double-quoting it, as above. Facts for this recipe often name env vars and file paths, and inside double quotes the shell would expand a `$NAME` or eat a backslash before `delegate.sh` ever saw the value. The cost of single quotes is that the facts cannot contain an apostrophe — write "cannot" rather than "can't" — which is why the example above avoids one.
 
 ## Anti-hallucination guards (each line addresses a real past MISS)
 

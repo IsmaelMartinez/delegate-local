@@ -36,8 +36,15 @@ One bullet per `{{name}}` placeholder, naming the source command or the
 shape of agent-authored content the value should hold.
 
 ## Invocation
-A copy-pasteable `bash scripts/delegate.sh --recipe <name> --var k=v ... <tier>
-"<prompt>"` example showing how to wire the placeholders to real commands.
+A `bash scripts/delegate.sh --recipe <name> --var k=v ... <tier> "<prompt>"`
+example. Pass every `--var` as a literal value — the caller ran the gathering
+commands as its own earlier step and already holds the output, and sandboxed
+shells refuse command substitution (see SKILL.md). The gathering commands
+themselves belong under `## Context to gather first`. Angle-bracket stand-ins
+such as `<the git diff --cached --stat output>` mark where the caller
+substitutes its own values; running the example without replacing them
+delegates the placeholder text itself, which `delegate.sh` cannot detect
+because its unsubstituted-placeholder guard only looks for `{{name}}`.
 
 ## Expected output shape
 What HIT looks like. Lets the agent verify the output before recording

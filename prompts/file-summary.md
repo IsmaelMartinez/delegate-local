@@ -55,11 +55,13 @@ cat docs/adr/0007-something.md | bash scripts/delegate.sh --recipe file-summary 
   prose "One sentence only. Include the subject and the mechanism."
 ```
 
-Batch over a directory:
+Batch over a directory. This loop is for an interactive shell — a sandboxed
+agent harness refuses `for` loops for the same reason it refuses command
+substitution, so from an agent session issue one call per file instead:
 
 ```bash
 for f in docs/adr/*.md; do
-  printf '%s — ' "$(basename "$f")"
+  printf '%s — ' "$f"
   cat "$f" | bash scripts/delegate.sh --recipe file-summary \
     prose "One sentence only. Include the subject and the mechanism."
 done

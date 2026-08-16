@@ -69,12 +69,16 @@ Stop after the substantive content. Do NOT add a trailing sentence that restates
 
 ## Invocation
 
+Run the `gh pr list` and `git diff` commands above as their own step, then pass what they printed as literal `--var` values. Keep the `<<<EXAMPLE_BEGIN ... EXAMPLE_END>>>` envelope the `--jq` filter produced — the delimiters are load-bearing:
+
 ```bash
 bash scripts/delegate.sh --recipe pr-description \
-  --var recent_prs="$(gh pr list --repo OWNER/REPO --state merged --limit 1 \
-    --json title,body,number \
-    --jq '.[] | "<<<EXAMPLE_BEGIN PR #\(.number)>>>\nTITLE: \(.title)\nBODY:\n\(.body)\n<<<EXAMPLE_END>>>\n"')" \
-  --var diff_stat="$(git diff main --stat)" \
+  --var recent_prs="<<<EXAMPLE_BEGIN PR #340>>>
+TITLE: <the merged PR's title>
+BODY:
+<the merged PR's body>
+<<<EXAMPLE_END>>>" \
+  --var diff_stat="<the git diff <base-branch> --stat output>" \
   --var context="<3-5 sentences>" \
   prose "Match the example PR description exactly in shape and tone. NO invented example output."
 ```

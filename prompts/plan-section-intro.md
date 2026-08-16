@@ -30,10 +30,14 @@ awk '
   in_phase { print }
 ' ROADMAP.md
 
-# 2. Structured fact list — the new phase's name and number, scope
-#    statement, research anchors or constraints (if any), and planned
-#    sub-tracks (if any). Author this in a scratch file:
-cat <<'EOF' > /tmp/phase-facts.md
+```
+
+Then author the structured fact list yourself — the new phase's name and
+number, scope statement, research anchors or constraints, and planned
+sub-tracks — and pass it straight to `--var facts=...`. There is no scratch
+file to write; the value goes in literally:
+
+```
 PHASE: Phase NN — <short title>
 
 SCOPE: <one or two sentences naming what this phase is about, what it ships,
@@ -44,7 +48,6 @@ ANCHORS: <one or two sentences naming the research, prior phase, or evidence
 
 SUB-TRACKS (optional): <if this phase splits into named sub-tracks, list each
   one as `Track X — <short label>: <one sentence>`. Omit if there are no sub-tracks.>
-EOF
 ```
 
 The style anchor is load-bearing. Forward-looking intros drift toward whichever shape the model defaults to (clipped declarative sentences with closing flourishes) regardless of the project's actual voice. The verbatim block lets the model copy the spelling variant, the prose-vs-bullets density, the technical density, and the paragraph rhythm without an abstract description doing that work. The structured fact list keeps the model from inventing scope — every phrase in the output should trace back to something in the facts.
@@ -148,17 +151,12 @@ no "Here's the intro:" prefix.
 
 ## Invocation
 
+Run the anchor `awk` above as its own step and author the fact list yourself, then pass both as literal `--var` values:
+
 ```bash
-PLAN_FILE=ROADMAP.md
-ANCHOR=$(awk '
-  /^## Phase / { if (in_phase) exit; in_phase=1; print; next }
-  in_phase && /^## / { exit }
-  in_phase && /^- / { exit }
-  in_phase { print }
-' "$PLAN_FILE")
 bash scripts/delegate.sh --recipe plan-section-intro \
-  --var style_anchor="$ANCHOR" \
-  --var phase_facts="$(cat /tmp/phase-facts.md)" \
+  --var style_anchor="<the existing phase intro, verbatim, heading and framing paragraphs>" \
+  --var phase_facts="<the structured fact list you authored>" \
   prose "Match the STYLE ANCHOR's voice and shape only. Do NOT echo its sentences. Produce a NEW intro for the phase named in FACTS."
 ```
 

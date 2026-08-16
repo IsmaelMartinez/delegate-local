@@ -20,6 +20,23 @@ assert_contains() {
   else echo "  FAIL  $name (missing '$needle')"; fail=$((fail+1)); fi
 }
 
+# Print every fenced code block under the given '## ' heading. Fence state is
+# tracked so a '## ' heading appearing *inside* an example does not end the
+# section early — github-issue-body.md passes literal '## Summary' lines as a
+# --var value, and without the gating everything past them goes unchecked.
+# This mirrors the fence-aware extraction scripts/delegate.sh performs when it
+# loads a recipe template, so the tests shadow the production reader.
+extract_fenced() {
+  local file="$1" heading="$2"
+  awk -v heading="$heading" '
+    { line=$0; sub(/[[:space:]]+$/, "", line) }
+    line == heading { in_section=1; next }
+    in_section && /^```/ { in_block = !in_block; next }
+    in_section && !in_block && line ~ /^## / { in_section=0 }
+    in_section && in_block { print }
+  ' "$file"
+}
+
 # 1. README.md exists.
 if [[ -f "$PROMPTS_DIR/README.md" ]]; then
   echo "  PASS  prompts/README.md exists"; pass=$((pass+1))
@@ -42,6 +59,7 @@ required_sections=(
   "## When to use"
   "## Context to gather first"
   "## Prompt template"
+  "## Invocation"
   "## Calibration notes"
 )
 
@@ -99,15 +117,7 @@ for recipe in "$PROMPTS_DIR"/*.md; do
   # Every {{placeholder}} in the prompt template must be documented in the
   # '## Variables' section so future agents know what each --var expects.
   # `{{stdin}}` is the implicit pipe slot and does not need explicit doc.
-  template=$(awk '
-    /^## Prompt template[[:space:]]*$/ { in_section=1; next }
-    /^## / && in_section { in_section=0 }
-    in_section && /^```/ {
-      if (in_block) { exit }
-      in_block=1; next
-    }
-    in_section && in_block { print }
-  ' "$recipe")
+  template=$(extract_fenced "$recipe" "## Prompt template")
   if [[ -z "$template" ]]; then
     echo "  FAIL  $base: '## Prompt template' has no fenced code block"; fail=$((fail+1))
   fi
@@ -127,6 +137,24 @@ for recipe in "$PROMPTS_DIR"/*.md; do
     echo "  FAIL  $base: legacy '<paste ... here>' marker found in template (use {{name}})"; fail=$((fail+1))
   else
     echo "  PASS  $base: no legacy '<paste ... here>' markers"; pass=$((pass+1))
+  fi
+  # The '## Invocation' example must be free of shell command substitution
+  # (issue #350). Sandboxed agent harnesses — including a Claude Code session
+  # working inside a git worktree — refuse `$(...)`, and because the refusal
+  # arrives on the agent's first --recipe call it reads as "delegate-local is
+  # broken" rather than "this shell won't run that shape". Literal --var values
+  # work everywhere and the caller already holds them from its own earlier
+  # git/gh step, so the literal form is the documented one; the gathering
+  # commands live under '## Context to gather first' instead.
+  # Only the fenced example is scanned: it is the copy-paste surface, and
+  # restricting to it keeps inline `code` in the surrounding prose out of scope.
+  invocation_example=$(extract_fenced "$recipe" "## Invocation")
+  if [[ -z "$invocation_example" ]]; then
+    echo "  FAIL  $base: '## Invocation' has no fenced example to check"; fail=$((fail+1))
+  elif [[ "$invocation_example" == *'$('* || "$invocation_example" == *'`'* ]]; then
+    echo "  FAIL  $base: '## Invocation' uses command substitution (pass literal --var values; quote inline code with '\"' not backticks)"; fail=$((fail+1))
+  else
+    echo "  PASS  $base: '## Invocation' free of command substitution"; pass=$((pass+1))
   fi
   # README must list this recipe in the "Current recipes" section so future
   # agents can discover it. Match by filename anywhere in the README.
