@@ -4895,6 +4895,66 @@ assert_contains "no installed model matches this tier" "$out" "unresolvable tier
 assert_contains '"exit_status":1' "$(cat "$metrics")" "unresolvable tier: metrics row tagged exit_status 1"
 rm -rf "$tmp" "$metrics"
 
+# --- #342 defect 1: the caller can state the project the delegation is FOR ---
+# The cwd derivation is only right when delegate.sh runs inside the repo the
+# work is for. Delegating on behalf of repo X from inside the skill checkout
+# recorded project=delegate-local, which never matched the boundary hook's own
+# (correct, hook-cwd) derivation — so the nudge fired despite compliance.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+EC=0
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROJECT=repo-butler \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1 || EC=$?
+assert_eq 0 "$EC" "DELEGATE_PROJECT: exits 0"
+assert_eq repo-butler "$(jq -r .project < "$metrics")" "DELEGATE_PROJECT overrides the cwd-derived project"
+: > "$metrics"
+
+# --project NAME does the same and wins over the env var.
+EC=0
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROJECT=from-env \
+  bash "$SCRIPT" --project from-flag prose "Summarise" </dev/null >/dev/null 2>&1 || EC=$?
+assert_eq 0 "$EC" "--project: exits 0"
+assert_eq from-flag "$(jq -r .project < "$metrics")" "--project wins over DELEGATE_PROJECT"
+: > "$metrics"
+
+# The --project=NAME form is accepted too.
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" --project=teams-for-linux prose "Summarise" </dev/null >/dev/null 2>&1
+assert_eq teams-for-linux "$(jq -r .project < "$metrics")" "--project=NAME form accepted"
+: > "$metrics"
+
+# Neither set: the cwd derivation is unchanged. Run from a throwaway directory
+# outside any git repo so the expected value is just its basename.
+(cd "$tmp" && env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1)
+assert_eq "$(basename "$tmp")" "$(jq -r .project < "$metrics")" "no override: falls back to the cwd derivation"
+
+# --project with no value is a usage error, not a silently empty project.
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" --project </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "--project without a value -> exit 2"
+assert_contains "--project requires a value" "$out" "--project without a value: informative stderr"
+
+# A following flag is the next option, not the value: accepting it would set
+# the project to "--recipe" and silently swallow the recipe.
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" --project --recipe commit-message prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "--project followed by a flag -> exit 2"
+assert_contains "--project requires a value" "$out" "--project followed by a flag: informative stderr"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

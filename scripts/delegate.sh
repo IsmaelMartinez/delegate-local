@@ -168,6 +168,16 @@
 #                                           #   by-default; opt out for clean
 #                                           #   stderr in batch runs.
 #   DELEGATE_METRICS_FILE=<path>            # override metrics destination
+#   DELEGATE_PROJECT=<name>                 # state the project the delegation
+#                                           #   is FOR, instead of deriving it
+#                                           #   from this process's cwd (#342).
+#                                           #   Delegating on behalf of repo X
+#                                           #   while cd'd into the skill
+#                                           #   checkout would otherwise record
+#                                           #   project=delegate-local, which
+#                                           #   never matches the boundary
+#                                           #   hook's own (correct) derivation.
+#                                           #   --project NAME wins over this.
 #   DELEGATE_PROMPTS_DIR=<path>             # override prompts/ directory
 #                                           #   (default: <script_dir>/../prompts)
 #   DELEGATE_THINK=true|false               # default false; set true if the
@@ -287,29 +297,42 @@
 set -uo pipefail
 
 usage() {
-  echo 'usage: delegate.sh [--recipe NAME [--var key=value ...]] <tier> ["<prompt>"]' >&2
+  echo 'usage: delegate.sh [--recipe NAME [--var key=value ...]] [--project NAME] <tier> ["<prompt>"]' >&2
   echo '       (context piped via stdin; prompt optional when --recipe is set)' >&2
 }
 
 recipe=""
+project_override=""
 recipe_vars=()
 positional=()
 while (($# > 0)); do
   case "$1" in
     --recipe)
-      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
         echo 'delegate: --recipe requires a value' >&2; exit 2
       fi
       recipe="$2"; shift 2;;
     --recipe=*)
       recipe="${1#--recipe=}"; shift;;
     --var)
-      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+      # As with --recipe/--project, a following flag is the next option rather
+      # than this one's value; accepting it would swallow the flag silently.
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
         echo 'delegate: --var requires key=value' >&2; exit 2
       fi
       recipe_vars+=("$2"); shift 2;;
     --var=*)
       recipe_vars+=("${1#--var=}"); shift;;
+    --project)
+      # A next token starting with '-' is the next flag, not the value:
+      # `--project --recipe foo` would otherwise set the project to "--recipe"
+      # and silently swallow the recipe flag.
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo 'delegate: --project requires a value' >&2; exit 2
+      fi
+      project_override="$2"; shift 2;;
+    --project=*)
+      project_override="${1#--project=}"; shift;;
     --)
       shift
       while (($# > 0)); do positional+=("$1"); shift; done
@@ -474,6 +497,15 @@ log_metric() {
 . "$script_dir/lib/otel.sh"
 
 # Resolve the project name (main repo basename, even inside a git worktree).
+# The caller can state it outright — `--project NAME`, or DELEGATE_PROJECT —
+# because the cwd derivation is only right when delegate.sh runs inside the repo
+# the delegation is FOR. Delegating on behalf of repo X from inside the skill
+# checkout recorded project=delegate-local, so the boundary hook (which derives
+# the project from the *hook's* cwd, i.e. the real repo) never matched the row
+# and nudged despite compliance (#342). Explicit flag beats env beats cwd.
+# The flag is exported rather than kept local so delegate_project_name resolves
+# it, and so a delegate-feedback.sh run in the same shell inherits it.
+[[ -n "$project_override" ]] && export DELEGATE_PROJECT="$project_override"
 delegate_project=$(delegate_project_name)
 
 ts_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)

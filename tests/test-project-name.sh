@@ -47,6 +47,19 @@ outside="$tmp/not-a-repo"
 mkdir -p "$outside"
 assert_eq "not-a-repo" "$(cd "$outside" && delegate_project_name)" "T4: outside a repo falls back to cwd basename"
 
+# T5: an explicit DELEGATE_PROJECT wins over every derivation. The cwd answer
+# is only right when the script runs inside the repo the delegation is FOR, so
+# delegating on behalf of repo X from the skill checkout has to be statable
+# (#342). Resolving it here rather than in delegate.sh alone is what keeps
+# delegate-feedback.sh's verdict row on the same project as the delegate row.
+assert_eq "teams-for-linux" "$(cd "$repo" && DELEGATE_PROJECT=teams-for-linux delegate_project_name)" \
+  "T5: DELEGATE_PROJECT overrides the repo derivation"
+assert_eq "teams-for-linux" "$(cd "$outside" && DELEGATE_PROJECT=teams-for-linux delegate_project_name)" \
+  "T5b: DELEGATE_PROJECT overrides the cwd fallback"
+# T6: an empty DELEGATE_PROJECT is not an override — it falls through.
+assert_eq "myrepo" "$(cd "$repo" && DELEGATE_PROJECT= delegate_project_name)" \
+  "T6: empty DELEGATE_PROJECT falls through to the derivation"
+
 git -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1 || true
 rm -rf "$tmp"
 

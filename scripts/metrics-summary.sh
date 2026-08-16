@@ -330,21 +330,32 @@ fi
 # look-back window. Rate = delegated / opportunities, per project — the
 # under-triggering number this signal exists to make visible. Only printed when
 # opportunity rows exist (i.e. the boundary hook is installed).
+#
+# state:"pre-drafted" rows (a --body-file/-F post of text authored at an earlier
+# Write, #349) are neither numerator nor denominator: the drafting moment was
+# never at that Bash call, so counting them as missed deflated the rate. They
+# are reported as their own trailing count, and only when some exist, so a
+# metrics file without them prints exactly the line it printed before.
 n_opp=$(jq -rs 'map(select((.source // "") == "opportunity")) | length' "$metrics_file")
 if (( n_opp > 0 )); then
   echo "Trigger rate (commit/PR/release/comment boundaries):"
   jq -rs '
     map(select((.source // "") == "opportunity"))
     | group_by(.project // "(none)")
-    | map({
-        project: (.[0].project // "(none)"),
-        n: length,
-        delegated: (map(select(.delegated == true)) | length),
-        missed: (map(select(.delegated == false)) | length)
+    | map(. as $rows | ($rows | map(select((.state // "") != "pre-drafted"))) as $counted | {
+        project: ($rows[0].project // "(none)"),
+        n: ($counted | length),
+        delegated: ($counted | map(select(.delegated == true)) | length),
+        missed: ($counted | map(select(.delegated == false)) | length),
+        predrafted: (($rows | length) - ($counted | length))
       })
     | sort_by(-.n)
     | .[]
-    | "  \(.project | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)  rate=\(if .n > 0 then (.delegated * 100 / .n | floor) else 0 end)%"
+    | "  \(.project | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
+      # No rate when every boundary was pre-drafted: 0/0 printed as rate=0%
+      # reads as total non-compliance, the exact misreading #349 is about.
+      + (if .n > 0 then "  rate=\(.delegated * 100 / .n | floor)%" else "" end)
+      + (if .predrafted > 0 then "  pre-drafted=\(.predrafted)" else "" end)
   ' "$metrics_file"
   echo
 fi

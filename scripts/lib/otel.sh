@@ -46,6 +46,16 @@ _DELEGATE_OTEL_LIB_LOADED=1
 #   bash 3.2-safe.
 delegate_project_name() {
   local common common_dir
+  # An explicit DELEGATE_PROJECT wins over any derivation: the cwd is only the
+  # right answer when the script runs inside the repo the delegation is FOR
+  # (#342). Honouring it here rather than in delegate.sh alone means
+  # delegate-feedback.sh attributes the verdict to the same project as the
+  # delegate row it references, which docs/otel-schema.md states as an
+  # invariant and the calibration dashboard's $project filter relies on.
+  if [[ -n "${DELEGATE_PROJECT:-}" ]]; then
+    printf '%s\n' "${DELEGATE_PROJECT}"
+    return 0
+  fi
   common=$(git rev-parse --git-common-dir 2>/dev/null)
   if [[ -n "$common" ]]; then
     common_dir=$(cd "$common" 2>/dev/null && pwd)
