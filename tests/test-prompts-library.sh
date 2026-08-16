@@ -42,6 +42,7 @@ required_sections=(
   "## When to use"
   "## Context to gather first"
   "## Prompt template"
+  "## Invocation"
   "## Calibration notes"
 )
 
@@ -136,13 +137,23 @@ for recipe in "$PROMPTS_DIR"/*.md; do
   # work everywhere and the caller already holds them from its own earlier
   # git/gh step, so the literal form is the documented one; the gathering
   # commands live under '## Context to gather first' instead.
-  invocation_section=$(awk '
+  # Only the fenced example is scanned: it is the copy-paste surface, and
+  # restricting to it keeps inline `code` in the surrounding prose from
+  # tripping the backtick check. Fence state is tracked so a heading that
+  # appears *inside* the example (github-issue-body passes '## Why this
+  # matters' as a literal --var value) does not end the section early.
+  invocation_example=$(awk '
     /^## Invocation[[:space:]]*$/ { in_section=1; next }
-    /^## / && in_section { in_section=0 }
-    in_section { print }
+    in_section && /^```/ { in_block = !in_block; next }
+    in_section && !in_block && /^## / { in_section=0 }
+    in_section && in_block { print }
   ' "$recipe")
-  if printf '%s' "$invocation_section" | grep -qF '$('; then
+  if [[ -z "$invocation_example" ]]; then
+    echo "  FAIL  $base: '## Invocation' has no fenced example to check"; fail=$((fail+1))
+  elif printf '%s' "$invocation_example" | grep -qF '$('; then
     echo "  FAIL  $base: '## Invocation' uses command substitution (use literal --var values)"; fail=$((fail+1))
+  elif printf '%s' "$invocation_example" | grep -qF '`'; then
+    echo "  FAIL  $base: '## Invocation' uses backtick substitution (use literal --var values)"; fail=$((fail+1))
   else
     echo "  PASS  $base: '## Invocation' free of command substitution"; pass=$((pass+1))
   fi

@@ -79,14 +79,16 @@ Correct (same first two sentences; the trigger phrase "Consequently," fires rule
 bash scripts/delegate.sh --recipe doc-section \
   --var topic="when and how to tune the four PR-agent knobs" \
   --var max_sentences=3 \
-  --var facts="- PR_CODE_SUGGESTIONS__SUGGESTIONS_SCORE_THRESHOLD=8 is set in .pr-agent-base.variables in the central CI include
-- Env vars take precedence over .pr_agent.toml in Dynaconf, so repos can't lower these defaults via TOML
+  --var facts='- PR_CODE_SUGGESTIONS__SUGGESTIONS_SCORE_THRESHOLD=8 is set in .pr-agent-base.variables in the central CI include
+- Env vars take precedence over .pr_agent.toml in Dynaconf, so repos cannot lower these defaults via TOML
 - Other knobs (model swap, extra_instructions, docs_style) are unaffected and freely configurable
-- AI-61 tracks the threshold tuning saga and is the reason env vars override" \
+- AI-61 tracks the threshold tuning saga and is the reason env vars override' \
   prose "Match a calm reference-doc voice. Stop after the substantive sentences."
 ```
 
 The trailing prompt arg is the voice + reinforcement reminder; the recipe template carries the structural directives.
+
+Single-quote `{{facts}}` rather than double-quoting it. Facts for this recipe routinely name env vars (`$PR_CODE_SUGGESTIONS__...`) and file paths, and double quotes would let the shell expand or mangle them before `delegate.sh` ever sees the value.
 
 ## Anti-hallucination guards (each line addresses a real past MISS)
 
