@@ -374,6 +374,16 @@ out=$(payload "gh pr comment 12 --body-file $tmpcwd/drafts/body.md" "$tmpcwd" | 
 assert_eq "" "$out" "pr comment --body-file (absolute) existing: no nudge"
 assert_eq pre-drafted "$(jq -r .state <<<"$(last_row)")" "pr comment --body-file (absolute) existing: state=pre-drafted"
 
+# 15c-i. `gh api -F body=@file` is the form used to post an inline PR review
+# reply, and it is the same already-drafted situation as --body-file. Observed
+# live: a maintainer session posting an approved reply this way still recorded
+# delegated:false, which is the metric noise #349 is about.
+: > "$METRICS"
+out=$(payload "gh api repos/o/r/pulls/355/comments -X POST -F body=@$tmpcwd/drafts/body.md -F in_reply_to=1" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq "" "$out" "gh api -F body=@existing: no nudge"
+assert_eq pre-drafted "$(jq -r .state <<<"$(last_row)")" "gh api -F body=@existing: state=pre-drafted"
+
 # 15d. An INLINE --body is still the drafting moment: nudge, no state.
 : > "$METRICS"
 out=$(payload 'gh issue comment 7 --body "thanks for the report"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")

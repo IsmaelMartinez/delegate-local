@@ -182,7 +182,16 @@ fi
 # not pre-drafted either, so the boundary behaves exactly as before.
 metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
 state=""
-body_file_args=$(awk 'BEGIN{RS="\1"} {
+body_file_args=$(awk 'BEGIN{RS="\1"}
+function emit(v) {
+  # `gh api -F body=@draft.md` reads the field from a file — the same
+  # already-drafted situation as --body-file, in the form used to post inline
+  # PR review replies. A plain `-F key=value` field assignment has no @ and is
+  # left alone, so it still counts as a live drafting moment.
+  if (v ~ /^[A-Za-z_][A-Za-z0-9_-]*=@/) sub(/^[^=]*=@/, "", v);
+  if (v != "") print v;
+}
+{
   s = $0;
   p = index(s, "<<");
   if (p > 0) s = substr(s, 1, p - 1);
@@ -190,9 +199,9 @@ body_file_args=$(awk 'BEGIN{RS="\1"} {
   n = split(s, t, /[[:space:]]+/);
   for (i = 1; i <= n; i++) {
     if (t[i] == "--body-file" || t[i] == "--notes-file" || t[i] == "--file" || t[i] == "-F") {
-      if (i < n) print t[i + 1];
+      if (i < n) emit(t[i + 1]);
     } else if (t[i] ~ /^(--body-file|--notes-file|--file|-F)=/) {
-      sub(/^[^=]*=/, "", t[i]); print t[i];
+      sub(/^[^=]*=/, "", t[i]); emit(t[i]);
     }
   }
 }' <<<"$cmd" 2>/dev/null) || body_file_args=""
