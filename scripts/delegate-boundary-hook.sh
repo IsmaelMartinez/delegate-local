@@ -51,6 +51,12 @@
 
 set -uo pipefail
 
+# Resolve our own directory BEFORE the cd to the payload's cwd below. Doing it
+# later resolved a relative $0 against the wrong tree — invoked as
+# `bash scripts/delegate-boundary-hook.sh` from a project checkout it produced
+# <that-project>/scripts/../prompts, so the recipe lookup silently found nothing.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || script_dir=""
+
 # --- read the harness payload ---------------------------------------------
 # Exit cleanly if stdin is a TTY (the hook run by hand in a terminal) so `cat`
 # can't block waiting for input that will never arrive.
@@ -315,11 +321,36 @@ fi
 mode="${DELEGATE_BOUNDARY_MODE:-warn}"
 [[ "$mode" == "off" ]] && exit 0
 
+# Every boundary recipe declares required inputs, and a --recipe call that
+# omits one exits 2 ("missing required inputs: ..."). Naming the recipe without
+# its --var keys therefore handed the agent a command that could not run: the
+# nudge fired, the agent tried it, delegate.sh refused, and the delegation never
+# happened. Read the keys from the recipe's own frontmatter rather than
+# hardcoding them here, so the nudge stays correct as recipes change their
+# inputs. `stdin` is not a --var — it means "pipe the context in" — and a
+# trailing `?` marks an optional input, which the nudge leaves out.
+prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
+var_hint="" stdin_hint=""
+if [[ -f "$prompts_dir/$recipe.md" ]]; then
+  while IFS= read -r key; do
+    if [[ "$key" == "stdin" ]]; then stdin_hint=" < context.txt"
+    else var_hint="${var_hint} --var ${key}=\"...\""; fi
+  done < <(awk '
+    /^---[[:space:]]*$/ { d++; if (d == 2) exit; next }
+    d == 1 && /^inputs:[[:space:]]*$/ { in_inputs = 1; next }
+    d == 1 && /^[^[:space:]]/ { in_inputs = 0 }
+    in_inputs && /^[[:space:]]+[A-Za-z_][A-Za-z0-9_]*:/ {
+      line = $1; sub(/:$/, "", line);
+      if ($2 !~ /\?$/) print line;
+    }
+  ' "$prompts_dir/$recipe.md" 2>/dev/null)
+fi
+
 # The nudge names --project explicitly: the metrics project is derived from
 # delegate.sh's own cwd, so an agent that cd's into the skill checkout to run
 # the command records project=delegate-local and never matches this lookup,
 # which is the nag loop #342 describes. The hook already knows the right value.
-reminder="delegate-local: about to author a ${boundary} message inline with no local delegation recorded in the last ${window_min}m for project '${project}'. Draft it on-device first — bash ~/.claude/skills/delegate-local/scripts/delegate.sh --project ${project} --recipe ${recipe} <tier> \"...\" — then record the verdict with ~/.claude/skills/delegate-local/scripts/delegate-feedback.sh --source agent. Set DELEGATE_BOUNDARY_MODE=off to silence."
+reminder="delegate-local: about to author a ${boundary} message inline with no local delegation recorded in the last ${window_min}m for project '${project}'. Draft it on-device first — bash ~/.claude/skills/delegate-local/scripts/delegate.sh --project \"${project}\" --recipe ${recipe}${var_hint} prose${stdin_hint} — then record the verdict with ~/.claude/skills/delegate-local/scripts/delegate-feedback.sh --source agent. Set DELEGATE_BOUNDARY_MODE=off to silence."
 
 if [[ "$mode" == "enforce" ]]; then
   jq -nc --arg r "$reminder" \
