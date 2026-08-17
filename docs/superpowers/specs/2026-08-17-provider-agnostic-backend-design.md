@@ -4,435 +4,387 @@ Date: 2026-08-17
 
 ## Status
 
-Approved in principle, revised after a four-reviewer pass on the first draft.
-The review invalidated three decisions in that draft; this version records the
-corrections and stages the work, because the blast radius turned out to be
-roughly ten times what the first draft assumed.
+Approved in principle. Revised twice: a four-reviewer pass on the first draft,
+then a three-reviewer critical pass on the second. The second pass reversed two
+decisions the first pass had introduced, so the history is recorded under
+"Reversals" below rather than quietly dropped.
 
-Supersedes the two-backend model in ADR 0022 (whose performance rationale for
-preferring MLX still stands; only the selection mechanism changes).
+Supersedes the two-backend model in ADR 0022, whose performance rationale for
+preferring MLX not only stands but is now load-bearing (see Decision 3).
 
 ## Context
 
-`delegate.sh` and `pick-model.sh` hardcode two backends. Ollama is called at
-`POST /api/generate` with a `think` field and a nested `options` object; MLX at
-`POST /v1/chat/completions` in the OpenAI shape. Discovery is equally forked:
+`delegate.sh` and `pick-model.sh` hardcode two backends: Ollama at
+`POST /api/generate` with a `think` field and nested `options`, MLX at
+`POST /v1/chat/completions` in the OpenAI shape. Discovery is equally forked —
 `ollama list` parsed with awk, versus a filesystem scan of `$HF_HOME/hub`.
-`DELEGATE_BACKEND` accepts `auto|ollama|mlx`.
 
-In August 2026 device policy on the primary workstation began blocking
-`huggingface.co` at the socket layer, so the MLX cache can no longer be
-populated, and Ollama is expected to be blocked by the same policy. Docker
-Model Runner is reachable, serves an OpenAI-compatible API at
-`http://localhost:12434/engines/v1`, and mirrors `mlx-community` weights as OCI
-artifacts. Adding it as a third hardcoded backend would mean three dispatch
-branches and three discovery branches.
+Device policy on the primary workstation blocked `huggingface.co` at the socket
+layer in August 2026, and Ollama is expected to be blocked by the same policy.
+Docker Model Runner is reachable, serves an OpenAI-compatible API at
+`http://localhost:12434/engines/v1`, mirrors `mlx-community` weights as OCI
+artifacts (the `ai/qwen3.6:35b-mlx` manifest carries
+`ai.model.repo=mlx-community/Qwen3.6-35B-A3B-nvfp4`), and benchmarked at
+92.1 tok/s wall-clock against Ollama's 83.8 on bit-identical
+`qwen3.6:35b-a3b-q8_0` weights. Adding it as a third hardcoded backend would
+mean three dispatch branches and three discovery branches.
 
 All three runtimes already expose `GET /v1/models` and
 `POST /v1/chat/completions`. The fork is unnecessary.
 
-### Measured during design
+## Reversals from the previous draft
 
-- Ollama's `GET /v1/models` returns the same set as `ollama list`.
-- Ollama's OpenAI endpoint ignores `chat_template_kwargs.enable_thinking=false`:
-  `deepseek-r1:14b` still produced a 1704-character trace. It does **not**
-  return an empty answer — with `max_tokens: 4096` the answer arrives in
-  `.content` and the trace is in `.reasoning`. An earlier reading that content
-  is always empty was an artifact of a 300-token cap truncating mid-trace.
-- With the budget exhausted, Ollama returns `"content": ""` (empty string, not
-  `null`) and `finish_reason: "length"`.
-- `mlx_lm` 0.31.3 `server.py` registers only `/v1/chat/completions`,
-  `/v1/completions`, `/v1/models`. No `/v1/embeddings`.
-- Docker Model Runner serves `GET /v1/models` and `POST /v1/chat/completions`
-  at `http://localhost:12434/engines/v1`.
-- Docker's `ai/qwen3.6:35b-mlx` manifest carries
-  `ai.model.repo=mlx-community/Qwen3.6-35B-A3B-nvfp4`, so Docker Hub is a
-  viable transport for the same weights HuggingFace would serve.
+**R1 — there is no pre-existing `//` bug.** The previous draft asserted a live
+defect at `delegate.sh:1243`. That line is
+`jq -r '.choices[0].message.content // ""'`, where the `//` does useful work:
+without it a `null` content renders as the literal string `null`. The dead-code
+critique applied only to the *draft's own proposed* `content // .reasoning`
+expression, never to shipped code. Verified directly. Issue #363 repeats this
+error and must be corrected.
 
-## Corrections forced by review
+**R2 — resolution must be provider-major, not preference-major.** The previous
+draft made preferences the outer loop, on the reasoning that provider order
+should not beat capability order. That premise is false. The preference lists
+are not capability rankings: four of the eight interleave per-provider spellings
+of one model — `deepseek-r1:32b` beside `deepseek-r1-distill-qwen-32b`,
+`qwen3.5:122b` beside `qwen3.5-122b`, and the same pattern in both vision lists.
+This is documented at `pick-model.sh:32-33` and restated in ADR 0022: the single
+list serves both backends because the matcher is case-insensitive, so "the
+choice is about *where* a model runs, not *which* capability you get."
 
-These three killed decisions in the first draft and are the reason for staging.
+Simulated independently by two reviewers against the three live daemons,
+preference-major diverges on three of eight tiers. Only `code` is a genuine
+capability change. `reasoning` and `premium-general` move to Ollama for the same
+logical model — `deepseek-r1:32b` is Q4_K_M against MLX's 8-bit, so the
+reasoning tier would be silently *down*-quantised, and premium-general moves at
+identical 4-bit quant for no gain. Since ADR 0022 measured MLX at roughly an
+order of magnitude lower latency on identical weights, preference-major would
+route two tiers to a far slower runtime for zero capability benefit, one of them
+the tier already flagged as the latency risk.
 
-**C1 — `//` does not fall through on an empty string.** The draft parsed
-`.choices[0].message.content // .choices[0].message.reasoning`. jq's alternative
-operator only triggers on `null` or `false`. Ollama returns `""`, so the
-fallback was dead code. This bug already exists at `delegate.sh:1243` and is
-inherited, not introduced. Corrected below.
-
-**C2 — a `.reasoning` fallback is unsafe even when reached.**
-`DELEGATE_STRIP_THINK` strips on a literal `</think>` substring
-(`delegate.sh:1261`). Ollama's `reasoning` field has the delimiters already
-removed, so the strip is a no-op and raw chain-of-thought would be returned as
-the answer, exit 0. Strip also defaults on only for the `reasoning` tier
-(`delegate.sh:1256-1260`), so a thinking model on `prose` would leak a trace.
-The fallback is removed entirely.
-
-**C3 — the resolution loop must be preference-major, not provider-major.** The
-draft looped providers outermost, which makes provider order dominate model
-quality and contradicts `pick-model.sh:15` ("highest capability first") and
-ADR 0003. Reproduced against the three live daemons: the code tier resolved to
-`lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-8bit` on MLX when the top
-preference `qwen3-coder-next:latest` was installed and reachable on Ollama.
+Provider-major with fallthrough is therefore restored. It is also strictly
+better than today, where `auto` picks MLX and then exits 1 rather than trying
+Ollama.
 
 ## Decisions
 
 1. **One driver.** The Ollama-native dispatch path is deleted; every provider is
    called at `POST {base}/chat/completions`.
-2. **Providers are base URLs.** No provider-name registry in the chat path.
-3. **Resolution is preference-major.** Every reachable provider's model list is
-   fetched once, then preferences are walked in order and, for each, providers
-   in order. Capability dominates; provider order is only the tiebreak.
-4. **Loopback only.** Base URLs must resolve to a loopback host. A non-loopback
-   URL is a usage error (exit 2), not a warning. Remote endpoints are a separate
-   decision requiring a `SECURITY.md` change, and are out of scope.
-5. **Scope is chat generation.** `embed.sh` and the embedding tier are untouched
-   beyond one line; issue #362 tracks the rest.
+2. **Providers are base URLs**, in one ordered list. No provider-name registry
+   in the chat path.
+3. **Resolution is provider-major with fallthrough.** The first provider that is
+   reachable *and* holds a model matching the tier wins; otherwise try the next.
+4. **`delegate.sh` owns resolution** and passes the chosen base URL down to
+   `pick-model.sh`, reusing the `DELEGATE_BASE_URL=… bash "$pick" <tier>` idiom
+   that already exists at `embed.sh:175`.
+5. **Scope is chat generation.** `embed.sh` gets a timeout and a one-line
+   provider pin; the rest is issue #362.
 6. **The HuggingFace cache scan is removed.** Discovery is only ever "what a
-   running provider reports".
+   running provider reports" — which is a correctness gain, not just a
+   simplification: the scan currently reports
+   `mlx-community/Qwen3.8-27B-8bit` as installed when only part of its shards
+   are present, because `has_snap` only tests that a snapshot directory is
+   non-empty. `mlx_lm.server`'s `/v1/models` correctly omits it.
 
-### Why loopback-only, given "provider agnostic"
+### What was cut, and why
 
-`SECURITY.md:11` states outbound calls go only to a local Ollama or MLX host,
-and the skill's headline value is keeping content on-device. Allowing arbitrary
-hosts silently voids that promise. Reviewers also showed that a URL-borne
-credential (`https://key@host/v1`) would land in `gen_ai.provider.name`, which
-sits outside the `DELEGATE_OTEL_INCLUDE_CONTENT` redaction gate
-(`lib/otel.sh:260`, gate at `:273-278`), and that any real-time warning would be
-swallowed because `delegate.sh:915-920` captures pick-model's stderr and prints
-it only on failure. `DELEGATE_API_KEY` is therefore **not** introduced. The
-design still supports any OpenAI-compatible endpoint; it is honest that the
-endpoints in scope are local ones.
+`DELEGATE_API_KEY`, the non-loopback restriction, the `base_url` metrics field,
+`--print-resolution`, the `--print-installed` grouping, the `config.sh` freeze,
+and two of the four phases.
+
+Loopback enforcement was cut because it is theatre: a reviewer bound a listener
+on `127.0.0.1:9999` forwarding to `example.com:80`, and the check passed while
+content left the machine. Any SSH `-L`, socat, or published container port
+defeats it identically. It was also an unacknowledged breaking change —
+`README.md:145` documents `OLLAMA_HOST`/`MLX_HOST` as endpoints with no locality
+constraint, so a user pointing at a LAN box would hard-fail where `embed.sh`
+works today. The real concern, credentials in a URL, is addressed directly by
+rejecting URLs containing userinfo, which is cheap and actually effective.
+
+The `config.sh` freeze became unnecessary under Decision 4: `delegate.sh`
+resolves the base URL and passes it in, so `pick-model.sh` never returns a
+destination and the override never gains one. Zero code, threat gone.
 
 ## Configuration surface
 
 ```sh
-DELEGATE_PROVIDERS   # space-separated ordered list of base URLs. Replaces the
-                     # defaults entirely when set (it does not extend them).
-                     # Default: "http://localhost:8080/v1
-                     #           http://localhost:12434/engines/v1
-                     #           http://localhost:11434/v1"
-                     # Split with `read -ra`; newlines and repeated spaces are
-                     # tolerated. Each entry has one trailing slash stripped.
+DELEGATE_BASE_URL          # space-separated ordered list of OpenAI-compatible
+                           # base URLs. First that yields a tier match wins.
+                           # Default: "http://localhost:8080/v1
+                           #           http://localhost:12434/engines/v1
+                           #           http://localhost:11434/v1"
+                           # One trailing slash stripped per entry. A URL
+                           # containing userinfo (user:pass@) is rejected,
+                           # exit 2 — it would otherwise reach the metrics
+                           # label and the --dry-run trace.
 
-DELEGATE_BASE_URL    # optional single URL, prepended to the list above.
-                     # Tier-fallthrough still applies after it.
+DELEGATE_REQUEST_TIMEOUT   # seconds for the dispatch POST. Default 600.
+                           # NEW; see the evidence below.
 
-DELEGATE_PROBE_TIMEOUT    # seconds per /models probe. Default 2.
-                          # Replaces DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT, which
-                          # is removed (asserted in test-delegate.sh:943).
-
-DELEGATE_REQUEST_TIMEOUT  # seconds for the dispatch POST. Default 300. NEW —
-                          # the dispatch curl has no --max-time today
-                          # (delegate.sh:1207, :1239), so a provider that
-                          # answers /models then stalls hangs indefinitely.
+DELEGATE_PROBE_TIMEOUT     # seconds per /models probe. Default 1, unchanged
+                           # from DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT, which it
+                           # renames (asserted at test-delegate.sh:943).
 ```
 
-`DELEGATE_BACKEND` is removed. Pinning to one provider is
-`DELEGATE_PROVIDERS="<single url>"`.
+`DELEGATE_BACKEND` is removed. Pinning is a single-entry `DELEGATE_BASE_URL`.
+
+### Why 600 seconds
+
+Measured over 1376 successful delegate rows: p50 3,726 ms, p95 40,095 ms,
+p99 80,180 ms, p99.9 232,503 ms, max 11,582,773 ms. The maximum is a 3.2-hour
+`long-context` runaway producing 961,344 output chars — exactly what a timeout
+should kill. The largest *genuine* call is 505,073 ms, of which 504,601 ms is
+cold model load and 472 ms is generation; the third largest, 232,503 ms, has the
+same shape. The binding constraint on this workstation is model load, not
+generation, and `--max-time` bounds the whole request including load. 600 s
+preserves every genuine call in recorded history with 19% margin while killing
+the runaway. 300 s would have severed two real calls.
+
+Paired with `--connect-timeout 5`, since connect failure and generation stall
+deserve different bounds.
 
 ## pick-model.sh
 
-Removed: `auto_resolve_backend()` (102-110), `backend_requested=` and its case
-(112-122), both branches of `list_installed()` (130-163).
+Removed: `auto_resolve_backend()` (102-110), `backend_requested` and its case
+(112-122), both branches of `list_installed()` (130-163), and the backend prose
+in the header (20-33).
 
-Added:
+Added: an eleven-line loop that, for each base URL, curls `{base}/models` with
+`--max-time $DELEGATE_PROBE_TIMEOUT`, pipes through
+`jq -r '.data[].id' | sort`, and continues on failure. The `sort` matters
+because `grep -im1` takes the first match and daemon ordering is not stable —
+`ollama list` is already recency-ordered today, so this fixes a latent
+non-determinism rather than introducing one.
 
-```sh
-provider_models <base_url>   # GET {base}/models with --max-time
-                             # $DELEGATE_PROBE_TIMEOUT; prints `.data[].id`
-                             # sorted; returns 1 on unreachable/non-2xx/malformed.
-```
+The file runs under `set -euo pipefail` (line 40), so the probe must be called
+with an explicit failure branch (`if ! models=$(…); then continue; fi`). As a
+bare assignment, a stopped first provider would abort resolution before the
+others were tried — the exact inverse of Decision 3.
 
-Output is **sorted**. The removed hub scan was glob-ordered and therefore
-stable; Ollama's `/v1/models` is recency-ordered and Docker's order is
-undocumented, so with a `grep -im1` matcher an unsorted list makes resolution
-non-deterministic when one preference matches two entries (Ollama holds both
-`deepseek-r1:14b` and `deepseek-r1:32b`).
-
-Resolution, after the prefs array and the `config.sh` override are applied
-exactly as today:
-
-```
-providers = split(DELEGATE_BASE_URL + DELEGATE_PROVIDERS)
-reachable = []
-for base in providers:
-    models = provider_models(base) || continue    # explicit || — see below
-    reachable += (base, models)
-for p in prefs:                  # preference-major: capability dominates
-    for (base, models) in reachable:
-        match = first case-insensitive fixed-string hit of p in models
-        if match: emit (base, match); exit 0
-exit 1
-```
-
-`pick-model.sh` runs under `set -euo pipefail` (line 40). A command substitution
-that fails aborts the script, so `provider_models` must be called with an
-explicit failure branch (`if ! models=$(provider_models "$base"); then continue; fi`).
-Written as a bare assignment, a stopped MLX server would abort resolution before
-Docker or Ollama were tried — the exact inverse of decision 3.
-
-### Command surfaces
-
-- `pick-model.sh <tier>` — unchanged contract: prints the model on stdout.
-  Implemented as a field-cut of the resolution below, so there is one loop.
-- `pick-model.sh --print-resolution <tier>...` — new, and the single entry
-  point. Accepts one or more tiers, emits `tier<TAB>base_url<TAB>model` per
-  line. Accepting several tiers bounds probe cost: `audit-models.sh` resolves
-  eight tiers in one invocation and therefore one probe round, replacing the
-  `export DELEGATE_BACKEND` pinning idiom it uses today for the same purpose
-  (`audit-models.sh:23-25`). It preserves the exit-1 versus exit-2 distinction
-  `delegate.sh:920-941` depends on.
-- `pick-model.sh --print-backend` — **removed**. Retaining the name with a new
-  meaning would leave `audit-models.sh` exiting 0 while reporting a header that
-  does not describe what its tier rows did: `:27` and `:41` compare against
-  `"ollama"`, `:33` and `:147` against `"mlx"`, and `:63` against `!= "ollama"`,
-  all of which silently take the wrong arm against a URL. A removal fails loudly.
-- `pick-model.sh --print-installed` — prints every reachable provider's models,
-  grouped by base URL. "First reachable provider" would misreport inventory in
-  the same way.
-- `--print-prefs` and `--dry-run` are retained; traces gain the base URL probed
-  and why each provider was skipped.
-
-### config.sh and the destination host
-
-Today `config.sh` can only reorder `prefs`, so its worst outcome is a different
-local model. Under this design it is sourced before resolution and could set
-`DELEGATE_PROVIDERS`, making it choose where prompts are sent. The default path
-`$HOME/.claude/skills/delegate-local/config.sh` (`pick-model.sh:209`) resolves
-through the install symlink to `<repo>/config.sh`, so a branch adding a *tracked*
-`config.sh` would place executable bash there; `.gitignore` does not prevent a
-tracked file materialising, and the ownership and mode guards (`:216-235`) both
-pass for a normal checkout.
-
-Mitigation, required: the provider list is resolved and frozen **before**
-`config.sh` is sourced, and any assignment to `DELEGATE_PROVIDERS` or
-`DELEGATE_BASE_URL` from within it is ignored with a warning. The override keeps
-its existing power over `prefs` and gains none over the destination. Combined
-with decision 4 (loopback-only), the pre-existing "single-user dev" threat model
-in the cited retrospective remains valid rather than being silently widened.
+Unchanged: the preference lists, the tier case, `--print-prefs`, the `config.sh`
+override hook and its ownership and permission checks, and the `grep -im1 -F`
+matcher. `--print-backend` keeps its name and prints the resolved base URL;
+`--print-installed` keeps its one-model-per-line shape. Both are repo-internal
+with a single consumer, so renaming buys nothing here.
 
 ## delegate.sh
 
-Removed: `backend_requested` and the probe case (385-403), `ollama_host` (404)
-and `mlx_host` (405), the dispatch branch (1194-1247) including the entire
-`/api/generate` payload, and the two-way canary block (1096-1104) with both
-payload shapes.
+Removed: the probe case (385-403), `ollama_host` and `mlx_host` (404-405), the
+Ollama arm of the canary (1096-1104), and the entire `/api/generate` dispatch
+branch (1194-1247).
 
-Dispatch keeps the request the MLX branch already builds — `model`, `messages`,
+Dispatch keeps the payload the MLX branch already builds — `model`, `messages`,
 `stream:false`, `temperature`, `max_tokens`,
 `chat_template_kwargs.enable_thinking`, plus optional `top_p` and
 `presence_penalty` — posted to `{base}/chat/completions` with
-`--max-time $DELEGATE_REQUEST_TIMEOUT`.
+`--max-time $DELEGATE_REQUEST_TIMEOUT --connect-timeout 5`.
 
-`top_k` is dropped from the payload. It is not an OpenAI chat-completions
-parameter; `delegate.sh:1229-1231` notes MLX accepts it as an extension, but
-whether Ollama's shim and Docker accept, ignore, or reject it is unverified, and
-a strict provider returning 400 would turn `DELEGATE_TOP_K` into a hard dispatch
-failure. Verify per provider before reinstating.
+`top_k` is dropped: it is not an OpenAI chat-completions parameter, MLX accepts
+it only as an extension (`delegate.sh:1229-1231`), and a strict provider
+returning 400 would make `DELEGATE_TOP_K` a hard dispatch failure. Verify per
+provider before reinstating.
 
-### Response parsing
+Recovery text at `:1118`, `:1127` and `:1276` is rewritten to name the base URL
+and the list tried, replacing references to `ollama serve` / `mlx_lm.server` and
+`OLLAMA_HOST` / `MLX_HOST`.
 
-```
-content      = .choices[0].message.content        # may be ""
-finish       = .choices[0].finish_reason
-```
+### The empty-output guard
 
-If `content` is non-empty, that is the output. There is no `.reasoning`
-fallback (C2). If `content` is empty:
+Today an empty response is treated as complete success. Reproduced end to end
+with a mock returning `{"choices":[{"message":{"content":""},"finish_reason":"length"}]}`:
+exit 0, a bare newline on stdout, a `delegate-meta` line claiming success, a
+metrics row with `output_chars: 0` and `exit_status: 0`, and the verdict nudge
+asking the operator to grade nothing. The same holds on the Ollama branch with
+`{"response":""}`.
 
-- `finish == "length"` → exit non-zero with a message naming
-  `DELEGATE_MAX_TOKENS` and explaining that a thinking model consumed the budget
-  before answering.
-- otherwise → exit non-zero as an empty-response error.
+This has never fired in recorded history — 99 rows have `output_chars: 0` and
+every one already carries a non-zero exit — so it is a reachable hole rather
+than an observed incident. It is still worth closing, because collapsing to one
+driver makes it *more* reachable: `DELEGATE_MAX_TOKENS` (4096) applies only to
+the MLX branch today (`:207`, `:1225`) and becomes universal, while Ollama
+currently sets no `num_predict` at all.
 
-Both replace today's silent success-with-empty-output, which writes a metrics
-row with `output_chars: 0` and fires the verdict nudge asking the operator to
-grade nothing. Emptiness must be tested with `== ""`, never jq `//` (C1).
+The guard sets `status` to a distinct non-zero code when `status == 0` and the
+output is empty, naming `DELEGATE_MAX_TOKENS` when `finish_reason == "length"`.
+Two implementation traps, both found by prototyping rather than reading:
+reassigning `$status` alone makes the block at `:1273-1279` fire with misleading
+"check the backend daemon" advice, so the guard needs its own flag or an `elif`;
+and emptiness must be tested with `[[ -z ]]`, never jq `//`, which does not
+treat `""` as absent.
 
-### DELEGATE_MAX_TOKENS becomes universal
+Keying the same guard on `finish_reason == "length"` regardless of emptiness
+also catches a second live defect: with `think:false`, `deepseek-r1:32b` on
+Ollama still emits its trace inline in `.response`, and when that trace is
+truncated before its closing tag the strip at `:1261` finds no `</think>` and
+returns raw chain-of-thought as the answer, exit 0.
 
-It is documented MLX-only (`delegate.sh:207`) and read only in the MLX branch
-(`:1225`); the Ollama branch sets no `num_predict`, so Ollama output is
-effectively uncapped today. Collapsing applies the 4096 default to every call.
-This is why the `finish_reason` check above is mandatory rather than nice to
-have: without it, long-context and reasoning outputs would truncate silently.
+### No `.reasoning` fallback
 
-### Canary
+`DELEGATE_STRIP_THINK` strips on a literal `</think>` (`:1261`) and defaults on
+only for the reasoning tier (`:1256-1260`). Ollama's `reasoning` field has the
+delimiters already removed, so any fallback to it would return chain-of-thought
+as the answer. Providers also disagree on the field name — Ollama uses
+`reasoning`, Docker uses `reasoning_content` — which independently confirms the
+rule. `.content` only.
 
-The preflight canary is retained and posts to `{base}/chat/completions`. A
-canary failure is treated the same as a dispatch failure: it does **not** fall
-through to the next provider. Resolution and dispatch stay separate; adding
-cross-provider dispatch retry is out of scope. Recovery text at `:1118`, `:1127`
-and `:1276` is rewritten to name the base URL and the probed list instead of
-`ollama serve` / `mlx_lm.server` and `OLLAMA_HOST` / `MLX_HOST`.
+## Metrics
 
-## Metrics and OTel
+The JSONL `backend` field keeps a short label; no `base_url` field is added.
+`scripts/lib/otel.sh:260` maps `backend` to `gen_ai.provider.name` and
+`dashboards/grafana/delegate-overview.json:777` does `sum by (backend)` with a
+`{{backend}}` legend, so emitting URLs would split every historical series.
 
-The JSONL `backend` field keeps a short provider **label**, and a new
-`base_url` field carries the URL. The label is derived by matching the base URL
-against the three known defaults (`mlx`, `docker`, `ollama`), falling back to
-`openai`. This four-line mapping is not optional decoration: `lib/otel.sh:260`
-maps `backend` to `gen_ai.provider.name`, which `docs/otel-schema.md:70` pins to
-registered SemConv provider strings, and
-`dashboards/grafana/delegate-overview.json:777` and `delegate-errors.json:809`
-aggregate `sum by (backend)` with `{{backend}}` legends. Emitting URLs there
-would break a documented wire contract, turn dashboard legends into URLs, and
-split the same daemon into two unrelated series across the cutover.
+The label is derived from the base URL: the three known defaults map to `mlx`,
+`docker` and `ollama`; anything else uses `host:port`. It must **not** fall back
+to `openai`, which is a registered SemConv provider string meaning OpenAI —
+labelling a local llama.cpp endpoint `openai` would be conformant-looking and
+false.
 
-`base_url` maps to the OTel `server.address` attribute. `docs/otel-schema.md`
-gains a row for it. `metrics-summary.sh` reads `.backend // "ollama"`
-(`:144,152,154`) and gates its section on more than one distinct value (`:148`);
-keeping labels means that behaviour is preserved and historical rows remain
-comparable.
+`docs/otel-schema.md:70` claims "Both `ollama` and `mlx` are already registered
+as provider strings in the SemConv registry". They are not; the registry enum is
+anthropic, aws.bedrock, azure.ai.inference, azure.ai.openai, cohere, deepseek,
+gcp.gemini, gcp.gen_ai, gcp.vertex_ai, groq, ibm.watsonx.ai, mistral_ai, openai,
+perplexity, x_ai. That documentation error is corrected as part of this work
+rather than preserved.
 
-`embed.sh` continues writing the literal `ollama` label (`:162,165`), which
-stays correct under this scheme rather than becoming a mixed enum-and-URL
-stream.
-
-## embed.sh
-
-One line. `:175` becomes
-`DELEGATE_PROVIDERS="${OLLAMA_HOST:-http://localhost:11434}/v1" bash "$pick" embedding`,
-with a scheme guard: Ollama's own convention for `OLLAMA_HOST` is a bare
-`host:port`, which would otherwise produce a schemeless string. Everything else
-in `embed.sh` is untouched; issue #362 tracks the rest.
+`embed.sh` keeps writing the literal `ollama` label, which stays consistent
+under this scheme.
 
 ## Staging
 
-The first draft treated this as one change. Review showed it spans roughly
-fifteen files of code and five test files, so it ships in four PRs:
+Two shipping PRs plus docs, split on a mechanical dependency rather than nerves.
 
-**Phase 1 — bug fixes, independent of any provider work.** Fix the `//`
-empty-string parse at `delegate.sh:1243` and add `--max-time` to the dispatch
-curl. Both are live defects today; both are small and independently testable.
+**PR 1 — unbounded curls.** Add `--max-time`/`--connect-timeout` to the dispatch
+curls at `delegate.sh:1207` and `:1239`, to `embed.sh:192`, and to
+`sync-metrics-to-loki.sh:178` and `:189`. Genuinely independent of everything
+else and shippable immediately. The 600 s default and its evidence go in the
+commit message.
 
-**Phase 2 — collapse dispatch.** Delete the `/api/generate` branch so every call
-uses the OpenAI shape, keeping discovery and `DELEGATE_BACKEND` exactly as they
-are. This is where the response-parsing, `max_tokens` and `finish_reason`
-decisions land, and where the reasoning-tier latency regression is measured.
+**PR 2 — the collapse.** Driver collapse, base-URL resolution, the empty-output
+guard, `audit-models.sh` rework, the test-mock migration, and
+`eval-skill-triggers.sh` moved onto the shared driver. That last item belongs
+here rather than later, because it posts to `${OLLAMA_HOST}/api/generate`
+(`:182,193`) and `.github/PULL_REQUEST_TEMPLATE.md:17` mandates it as the gate
+for `SKILL.md` changes — which PR 3 makes. Migrating it in PR 2 dissolves that
+self-blocking dependency.
 
-**Phase 3 — providers as base URLs.** Replace discovery, remove
-`DELEGATE_BACKEND`, add `--print-resolution`, implement preference-major
-resolution, rework `audit-models.sh` and the test harness.
+**PR 3 — docs, dashboards, ADRs.**
 
-**Phase 4 — documentation, dashboards, ADRs.**
-
-Phases 1 and 2 deliver most of the value and can land before the workstation
-loses Ollama. Phase 3 carries nearly all the risk and churn.
+The empty-output guard deliberately sits in PR 2, not PR 1: `finish_reason` has
+two spellings today (`.done_reason` on Ollama, `.choices[0].finish_reason` on
+MLX) and `DELEGATE_MAX_TOKENS` is MLX-only, so implementing it earlier means
+per-branch code and a fixture that PR 2 immediately deletes.
 
 ## Testing
 
-### Hermeticity is the load-bearing constraint
+The load-bearing constraint is hermeticity. `run-tests.sh:76` injects
+`DELEGATE_BACKEND=ollama` into all 48 `pick-model.sh` invocations through
+`run()`, and `run()` uses `env -i` with
+`SAFE_PATH="/usr/bin:/bin:/usr/sbin:/sbin"` (`:11`) containing the real
+`/usr/bin/curl`. Today the pin means zero HTTP. After the change those tests
+would issue real localhost requests, passing on a developer machine for the
+wrong reason and passing in CI by timing out. So `run()` swaps the pin for
+`DELEGATE_BASE_URL=<mock>` and `make_mock_ollama` becomes `make_mock_provider`,
+writing a mock `curl` that returns a canned `{"data":[{"id":…}]}` body. That is
+a like-for-like substitution of the existing mock-binary-on-restricted-PATH
+pattern; the 32 call sites change only their body literal.
 
-`run-tests.sh:76` injects `DELEGATE_BACKEND=ollama` into all 48 `$PICK`
-invocations via the `run()` helper, and `run()` uses `env -i` with
-`SAFE_PATH="/usr/bin:/bin:/usr/sbin:/sbin"` (`:11`), which contains the real
-`/usr/bin/curl`. Today the Ollama pin means those tests perform zero HTTP.
-Under this design every one of them would issue real requests to localhost,
-passing on a developer machine for the wrong reason and passing in CI by
-timing out.
+`test-delegate.sh` has 12 `/v1/models` mocks, six of which `exit 7` to force the
+auto-probe to fall back to Ollama. Under the new design `/v1/models` *is*
+discovery, so those need canned bodies. `test-embed.sh` has 14
+`make_mock_ollama` sites plus `make_mock_curl_ok` (`:48-70`), which answers
+every curl with an embeddings body and so would answer the `/models` probe with
+the wrong shape.
 
-So Phase 3 must land a per-URL curl mock injected by `run()` itself, not
-per-test. The existing `make_mock_curl` (`run-tests.sh:519-526`) is a two-line
-`exit N` stub with no routing and no `/v1/models` body. The argv-aware pattern
-to extend already exists at `test-delegate.sh:720` and handles `-o` and `-w`.
+Assertions that must survive unchanged: `run-tests.sh:136`, `:145`, `:162`
+(prose and long-context ordering, the Phase 7 baseline pin), `:174` (the
+dry-run pref string — `:172` asserts stdout, not the pref string), `:260`
+(reasoning ordering, v6 baseline), `:469`, `:508`. Fixtures change;
+expectations do not.
 
-`test-delegate.sh` carries twelve curl mocks doing `*"/v1/models"*) exit 7` to
-force the auto-probe to fall back to Ollama (`:69,121,733,910,1510,1714,1795,
-1865,2877,3149,3907,3976`). Under the new design `/v1/models` *is* discovery, so
-`exit 7` means "nothing reachable" and each fails before dispatch. All twelve
-need canned model-list bodies.
+Assertions that must change: `:591` (`valid: auto|ollama|mlx`), `:605`/`:620`,
+`:638-639` ("ollama not on PATH"), `:653`/`:666`, and the audit section
+`:643-687`.
 
-`test-embed.sh` has no pinning line to update; it has `make_mock_ollama()`
-(`:31-46`) used by 13 tests and `make_mock_curl_ok()` (`:48-70`) which returns an
-embeddings body for *every* curl call, so it would answer the `/models` probe
-with the wrong shape. Blocks at `:221-229`, `:232-240` and `:336-346` assert on
-`DELEGATE_BACKEND` directly.
+New coverage, seven cases: fallthrough when the first provider is unreachable;
+fallthrough when it is reachable but holds no matching model; all providers
+unreachable; probe failure not aborting under `set -e`; sorted output making a
+two-match preference deterministic; empty content with `finish_reason: length`
+exiting non-zero; empty content otherwise exiting non-zero. A userinfo URL
+exiting 2 makes eight.
 
-### Assertions that must survive unchanged
-
-`run-tests.sh:136`, `:145`, `:162` (prose/long-context ordering, the Phase 7
-baseline pin), `:174` (dry-run pref string — note `:172` asserts stdout, not the
-pref string, contrary to the first draft), `:260` (reasoning ordering, v6
-baseline), `:469`, `:508`. Their fixtures change; their expectations do not.
-
-Assertions that must change: `:591` (`valid: auto|ollama|mlx`), `:605`/`:620`
-(`--print-backend` prints `ollama`/`mlx`), `:638-639` ("ollama not on PATH"),
-`:653`/`:666` (`in effect:`), and the audit section `:643-687`.
-
-### New coverage
-
-Preference-major resolution across providers (the top preference on the *last*
-provider wins over a lower preference on the first — the C3 regression, which no
-existing single-provider fixture can catch); all providers unreachable; reachable
-but nothing matching; `provider_models` failure not aborting under `set -e`;
-sorted model output making a two-match preference deterministic;
-`--print-resolution` emitting `tier<TAB>base<TAB>model` for multiple tiers in one
-probe round; a non-loopback URL exiting 2; `config.sh` attempting to set
-`DELEGATE_PROVIDERS` being ignored with a warning; empty `content` with
-`finish_reason: length` exiting non-zero; empty `content` otherwise exiting
-non-zero; the resolution-to-dispatch handoff, that `delegate.sh` posts to the
-base URL `--print-resolution` returned rather than the first in the list.
+A prototype of the guard plus `--max-time` against the current tree passed every
+suite unchanged: `test-delegate.sh` 556/556, `run-tests.sh` 110/110,
+`test-embed.sh` 48/48, `test-delegate-feedback.sh` 226/226,
+`test-delegate-boundary-hook.sh` 134/134, `test-prompts-library.sh` 288/288,
+`test-metrics-summary.sh` 135/135.
 
 ## Documentation
 
-Behavioural first: **`SKILL.md:42`** reads "If `ollama` is not on PATH or
-`ollama list` is empty, do the work yourself and mention why." That is an
-instruction to the assistant. Left unchanged, an agent on a Docker-only host
-stops delegating entirely — the exact August 2026 scenario driving this work.
-`SKILL.md:62` states delegate.sh calls Ollama's `POST /api/generate`, and
-`:171-178` hardcodes `http://localhost:11434/api/generate` in the vision
-snippet. The frontmatter `description` must remain byte-identical
-(`git diff main -- SKILL.md` limited to the body), so the trigger-eval gate is
-provably unaffected.
+Behavioural first: `SKILL.md:42` reads "If `ollama` is not on PATH or
+`ollama list` is empty, do the work yourself and mention why." Left unchanged,
+an agent on a Docker-only host stops delegating entirely — the exact scenario
+driving this work. `SKILL.md:62` states delegate.sh calls `POST /api/generate`,
+and `:171-178` hardcodes `http://localhost:11434/api/generate`. The frontmatter
+`description` must stay byte-identical so the trigger-eval gate is provably
+unaffected.
 
-Then: `CLAUDE.md:93-105`; `CONTRIBUTING.md:11`; `SECURITY.md:11`;
-`docs/otel-schema.md:25,63,69,70,71`; `README.md:43,145,176-178,258`;
-`docs/install-mlx.md`, `install-claude-code.md:42`, `install-opencode.md:34`,
-`install-codex.md`; `dashboards/grafana/delegate-overview.json:727,777`,
-`delegate-errors.json:809`, `dashboards/langfuse/README.md:25`;
-`.github/PULL_REQUEST_TEMPLATE.md:17`, `ISSUE_TEMPLATE/bug_report.md:33-34`,
+Then: `CLAUDE.md:93-105`; `CONTRIBUTING.md:11`; `SECURITY.md:11` (one sentence
+noting a non-default `DELEGATE_BASE_URL` sends content off-device);
+`docs/otel-schema.md:25,63,69,70,71` including the registry correction above;
+`README.md:43,145,176-178,258`; `docs/install-mlx.md`,
+`install-claude-code.md:42`, `install-opencode.md:34`, `install-codex.md`;
+`dashboards/grafana/delegate-overview.json:727,777`, `delegate-errors.json:809`,
+`dashboards/langfuse/README.md:25`; `.github/PULL_REQUEST_TEMPLATE.md:17`,
+`ISSUE_TEMPLATE/bug_report.md:33-34`,
 `workflows/monthly-audit-reminder.yml:5,51,57`;
-`tests/fixtures/doc-section/backend-auto-probe.txt` (false wholesale). New ADR
-for the collapse; status notes on ADR 0022 and on ADRs 0002, 0006, 0018 which
-rest on the two-backend split. ADR 0020 is marked Accepted but describes a gate
-removed in the lean-core reset; note it as superseded while nearby.
+`tests/fixtures/doc-section/backend-auto-probe.txt`, false wholesale.
 
-### A self-blocking dependency
-
-`.github/PULL_REQUEST_TEMPLATE.md:17` mandates
-`bash scripts/eval-skill-triggers.sh --ollama` for SKILL.md changes, and that
-script posts to `${OLLAMA_HOST}/api/generate` (`:182,193`) with its own backend
-handling. On a workstation where Ollama is blocked, the gate this spec requires
-cannot run. Migrating it to the shared driver is therefore in scope for Phase 4,
-not optional.
+New ADR for the collapse. Status notes on ADR 0022, and on ADRs 0002, 0006 and
+0018 which rest on the two-backend split. ADR 0020 is marked Accepted but
+describes a gate removed in the lean-core reset; note it superseded while
+nearby.
 
 ## Risks
 
-**Reasoning-tier latency on Ollama.** Losing native `think:false` means the
-trace is generated then discarded rather than never produced. That tier already
-measures p50 40.8 s, p95 83 s. Measure in Phase 2 against a fixed fixture; if the
-regression is material, the escape hatch is per-provider native dispatch for that
-tier alone, added later.
+**Reasoning-tier latency.** Losing native `think:false` means the trace is
+generated then discarded. Measured live at temperature 0.2, Ollama's OpenAI
+endpoint took 133 s and 257 s on `deepseek-r1:32b` where the same tier records
+p50 9.9 s / p95 42.4 s on Ollama natively (n=57) — roughly 13-26x, consistent
+with ADR 0005's documented "50× wall-time cost from in-band `<think>` tokens
+that bypass `think:false`". Provider-major resolution keeps the reasoning tier
+on MLX where the kwarg is honoured, so this bites only when MLX is unavailable
+— which is precisely the scenario driving this work. Measure in PR 2 before
+merge; if material, the escape hatch is per-provider native dispatch for that
+tier alone.
 
-**Probe cost.** Three probes replace one. Refused loopback connections are
-instant, but a provider that accepts TCP and hangs costs the full timeout — a
-reviewer measured 2.14 s against such a listener. Worst case is 6 s of
-pre-dispatch latency at the 2 s default. `--print-resolution` taking multiple
-tiers bounds the `audit-models.sh` case to one round rather than up to 25.
+Note the previously quoted baseline of "p50 40.8 s, p95 83 s" was the MLX-only
+figure; the tier overall is p50 29.7 s / p95 85.6 s.
 
 **Discovery requires a running daemon.** `--print-installed` and
-`audit-models.sh` report nothing when everything is stopped, where the MLX
-inventory was previously readable from disk. Accepted.
+`audit-models.sh` report nothing when everything is stopped. Accepted, and
+partly offset by Decision 6's correctness gain.
 
-**Breaking change surface.** `DELEGATE_BACKEND` disappears across `embed.sh`,
-`audit-models.sh`, five test files, the README, `CLAUDE.md` and several ADRs.
-Churn rather than risk, and the reason for staging.
+**Multi-daemon memory pressure.** A reviewer observed Docker's `llama-server`
+at 53 GB driving free memory to roughly 62 MB, after which `mlx_lm.server`'s
+worker went defunct while the parent still accepted TCP on 8080 without
+answering — a hung first provider that burns the full probe timeout on every
+delegation. ADR 0006 decided against multiple resident servers partly on these
+grounds. Provider-major resolution keeps most tiers on one daemon and so
+largely avoids the tier-mixing that would warm several, but the hung-provider
+case is the reason `DELEGATE_PROBE_TIMEOUT` stays at 1 s rather than rising.
+
+**Cold provider versus canary.** Docker's `/v1/models` answers instantly while
+a cold 35B `/chat/completions` did not return within 25 s, and
+`DELEGATE_PREFLIGHT_TIMEOUT` defaults to 10 (`:1085`). Discovery does not imply
+readiness. A canary failure remains terminal rather than falling through —
+resolution and dispatch stay separate — so a listed-but-cold model is a hard
+exit 3. If that proves annoying in practice, raise the preflight timeout rather
+than adding cross-provider retry.
 
 ## Out of scope
 
-Embeddings (#362), remote/non-loopback endpoints and `DELEGATE_API_KEY`,
+Embeddings (#362), `DELEGATE_API_KEY` and remote-endpoint support,
 image/vision passthrough, cross-provider dispatch retry, streaming, per-tier
-provider pinning, `top_k` reinstatement, changes to the tier preference lists,
-and `init.sh`'s Ollama-only inventory bootstrap (`:17-25`), which degrades
-gracefully via `onboard.sh:50-59` and is tracked separately if it matters.
+provider pinning, `top_k` reinstatement, changes to the preference lists, and
+de-aliasing those lists (worth doing, but a separate calibration exercise).
