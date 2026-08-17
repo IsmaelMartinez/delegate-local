@@ -37,6 +37,28 @@ EOF
   chmod +x "$dir/curl"
 }
 
+# As make_mock_curl, but also appends each invocation's argv to $3 as a single
+# space-joined line. Appends rather than overwrites because the success path
+# calls curl twice (the push, then the best-effort flush) and the timeout
+# assertions need both lines; grep on the URL separates them.
+make_mock_curl_argv() {
+  local dir="$1" body="$2" argv_file="$3"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${argv_file}"
+prev=""
+for a in "\$@"; do
+  if [[ "\$prev" == "--data-binary" ]]; then
+    if [[ "\$a" == "@-" ]]; then cat > "$body"; else printf '%s' "\$a" > "$body"; fi
+  fi
+  prev="\$a"
+done
+echo -n "204"
+exit 0
+EOF
+  chmod +x "$dir/curl"
+}
+
 tmp=$(mktemp -d)
 body="$tmp/body.json"
 make_mock_curl "$tmp" "$body"
@@ -176,6 +198,41 @@ case "$err10" in
   *"Argument list too long"*) echo "  FAIL  T10: >ARG_MAX payload still passed via argv"; fail=$((fail+1));;
   *) echo "  PASS  T10: >ARG_MAX payload is streamed to curl, not passed via argv"; pass=$((pass+1));;
 esac
+
+# --- T11: push and flush are both bounded ------------------------------------
+# Own directory so the shared $tmp (and its mock curl) stays intact for the
+# cleanup below.
+tmpt=$(mktemp -d)
+argv11="$tmpt/argv.txt"
+make_mock_curl_argv "$tmpt" "$tmpt/body.json" "$argv11"
+met11="$tmpt/m.jsonl"; state11="$tmpt/s"
+cat > "$met11" <<'EOF'
+{"ts":"2026-05-10T10:00:00Z","source":"delegate","tier":"prose","estimated_tokens_avoided":42,"exit_status":0,"project":"repo-x"}
+EOF
+env -i PATH="$tmpt:$SAFE_PATH" HOME="$HOME" \
+  bash "$SCRIPT" --full --metrics-file "$met11" --state-file "$state11" --loki-url http://x >/dev/null 2>&1
+push11=$(grep -- '/loki/api/v1/push' "$argv11")
+flush11=$(grep -- '/flush' "$argv11")
+assert_contains "--max-time 30" "$push11" "T11: push defaults to 30s"
+assert_contains "--connect-timeout 5" "$push11" "T11: push sets --connect-timeout"
+assert_contains "--max-time 5" "$flush11" "T11: flush uses a fixed 5s"
+rm -rf "$tmpt"
+
+# --- T12: DELEGATE_LOKI_TIMEOUT moves the push bound only ---------------------
+tmpt=$(mktemp -d)
+argv12="$tmpt/argv.txt"
+make_mock_curl_argv "$tmpt" "$tmpt/body.json" "$argv12"
+met12="$tmpt/m.jsonl"; state12="$tmpt/s"
+cat > "$met12" <<'EOF'
+{"ts":"2026-05-10T10:00:00Z","source":"delegate","tier":"prose","estimated_tokens_avoided":42,"exit_status":0,"project":"repo-x"}
+EOF
+env -i PATH="$tmpt:$SAFE_PATH" HOME="$HOME" DELEGATE_LOKI_TIMEOUT=9 \
+  bash "$SCRIPT" --full --metrics-file "$met12" --state-file "$state12" --loki-url http://x >/dev/null 2>&1
+push12=$(grep -- '/loki/api/v1/push' "$argv12")
+flush12=$(grep -- '/flush' "$argv12")
+assert_contains "--max-time 9" "$push12" "T12: push honours DELEGATE_LOKI_TIMEOUT"
+assert_contains "--max-time 5" "$flush12" "T12: flush stays fixed at 5s"
+rm -rf "$tmpt"
 
 rm -rf "$tmp"
 echo

@@ -22,6 +22,8 @@
 #   DELEGATE_METRICS_FILE    metrics JSONL. Default
 #                            ~/.claude/skills/delegate-local/metrics.jsonl.
 #   DELEGATE_LOKI_STATE      watermark file. Default <metrics-file>.loki-sync.
+#   DELEGATE_LOKI_TIMEOUT    curl --max-time on the push. Default 30. The
+#                            best-effort flush uses a fixed 5s.
 #
 # Exit: 0 on success (including "nothing new to push"), 2 on usage error,
 #       1 on missing metrics file / jq / curl, or a failed push.
@@ -176,6 +178,7 @@ trap 'rm -f "$resp_file"' EXIT
 # long" before curl ever runs. Incremental syncs are small enough to have hidden
 # this, but --full (and any long-deferred catch-up batch) hits the ceiling.
 http_code=$(printf '%s' "$payload" | curl -s -o "$resp_file" -w '%{http_code}' \
+  --max-time "${DELEGATE_LOKI_TIMEOUT:-30}" --connect-timeout 5 \
   -X POST "${loki_url%/}/loki/api/v1/push" \
   -H 'Content-Type: application/json' --data-binary @-)
 resp=$(cat "$resp_file" 2>/dev/null)
@@ -185,8 +188,11 @@ if [[ "$http_code" == "204" || "$http_code" == "200" ]]; then
   # Historical rows (>3h old) are served from the store, not the ingester, so
   # they only become queryable once flushed to a chunk. Trigger a flush so the
   # data is visible immediately rather than after chunk_idle_period. Best-effort:
-  # a missing/!supported endpoint never fails the sync.
-  curl -s -o /dev/null -X POST "${loki_url%/}/flush" 2>/dev/null || true
+  # a missing/!supported endpoint never fails the sync. Fixed 5s rather than
+  # DELEGATE_LOKI_TIMEOUT: the result is discarded, so no workload justifies
+  # waiting longer.
+  curl -s -o /dev/null --max-time 5 --connect-timeout 5 \
+    -X POST "${loki_url%/}/flush" 2>/dev/null || true
   echo "sync-metrics-to-loki: pushed $pushed_rows rows (lines $start_line..$total_lines) to $loki_url; watermark -> $total_lines" >&2
   exit 0
 else
