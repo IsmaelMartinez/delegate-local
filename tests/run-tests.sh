@@ -821,6 +821,145 @@ else
   fail=$((fail+1))
 fi
 
+echo "=== pick-model.sh: DELEGATE_BASE_URL provider list ==="
+
+make_mock_provider() {
+  # Mock curl answering GET {base}/models with an OpenAI models list. $2 is a
+  # space-separated "port:id,id" spec; a port absent from the spec exits 7
+  # (connection refused) so a dead provider can be simulated without binding a
+  # socket. Discovery is the only thing pick-model.sh curls, so this mock needs
+  # no chat-completions arm.
+  local dir="$1" spec="$2"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+url=""
+for a in "\$@"; do case "\$a" in http*) url="\$a" ;; esac; done
+port=\$(printf '%s' "\$url" | sed -n 's|.*://[^:/]*:\([0-9]*\).*|\1|p')
+for entry in ${spec}; do
+  p="\${entry%%:*}"; ids="\${entry#*:}"
+  if [[ "\$p" == "\$port" ]]; then
+    printf '{"object":"list","data":['
+    first=1
+    IFS=, read -ra arr <<< "\$ids"
+    for id in "\${arr[@]}"; do
+      if (( first == 0 )); then printf ','; fi
+      printf '{"id":"%s","object":"model"}' "\$id"
+      first=0
+    done
+    printf ']}'
+    exit 0
+  fi
+done
+exit 7
+EOF
+  chmod +x "$dir/curl"
+}
+
+# The first reachable provider holding a tier match wins.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "8080:mlx-community/Qwen3.6-35B-A3B-8bit 11434:qwen3.6-ollama"
+got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BASE_URL="http://localhost:8080/v1 http://localhost:11434/v1" \
+  bash "$PICK" prose 2>/dev/null)
+assert_eq "mlx-community/Qwen3.6-35B-A3B-8bit" "$got" "provider list: first provider wins"
+rm -rf "$tmp"
+
+# An unreachable first provider is skipped, not fatal. This is the case that
+# regresses if the probe is written as a bare assignment under set -e.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "11434:qwen3.6-ollama"
+got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BASE_URL="http://localhost:9/v1 http://localhost:11434/v1" \
+  bash "$PICK" prose 2>/dev/null)
+assert_eq "qwen3.6-ollama" "$got" "provider list: falls through an unreachable provider"
+rm -rf "$tmp"
+
+# Reachable but holding no model for this tier is also a skip.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "8080:nomic-embed-text 11434:qwen3.6-ollama"
+got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BASE_URL="http://localhost:8080/v1 http://localhost:11434/v1" \
+  bash "$PICK" prose 2>/dev/null)
+assert_eq "qwen3.6-ollama" "$got" "provider list: falls through a provider with no tier match"
+rm -rf "$tmp"
+
+# Every provider unreachable -> exit 1.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" ""
+EC=0
+env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BASE_URL="http://localhost:9/v1 http://localhost:8/v1" \
+  bash "$PICK" prose >/dev/null 2>&1 || EC=$?
+assert_eq "1" "$EC" "provider list: all providers unreachable exits 1"
+rm -rf "$tmp"
+
+# The dry-run trace names the provider it skipped, so a misconfigured list is
+# diagnosable without a packet capture.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "11434:qwen3.6-ollama"
+trace=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BASE_URL="http://localhost:9/v1 http://localhost:11434/v1" \
+  bash "$PICK" --dry-run prose 2>&1)
+assert_contains "localhost:9" "$trace" "provider list: trace names the skipped provider"
+rm -rf "$tmp"
+
+# Sorting the reported ids makes a two-match preference deterministic; daemon
+# ordering is not stable (ollama list is recency-ordered).
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "8080:qwen3.6-b,qwen3.6-a"
+got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BASE_URL="http://localhost:8080/v1" \
+  bash "$PICK" prose 2>/dev/null)
+assert_eq "qwen3.6-a" "$got" "provider list: sorted ids make two matches deterministic"
+rm -rf "$tmp"
+
+# --print-resolution returns base and model in one call, so delegate.sh probes
+# a dead provider once rather than once per question.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "8080:mlx-community/Qwen3.6-35B-A3B-8bit"
+got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BASE_URL="http://localhost:8080/v1" \
+  bash "$PICK" --print-resolution prose 2>/dev/null)
+assert_eq "http://localhost:8080/v1	mlx-community/Qwen3.6-35B-A3B-8bit" "$got" \
+  "provider list: --print-resolution returns base and model"
+rm -rf "$tmp"
+
+# One trailing slash is stripped so the base never doubles up.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "8080:mlx-community/Qwen3.6-35B-A3B-8bit"
+got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BASE_URL="http://localhost:8080/v1/" \
+  bash "$PICK" --print-resolution prose 2>/dev/null)
+assert_eq "http://localhost:8080/v1	mlx-community/Qwen3.6-35B-A3B-8bit" "$got" \
+  "provider list: one trailing slash is stripped"
+rm -rf "$tmp"
+
+# A userinfo URL is rejected before any request leaves the process: it would
+# otherwise reach the metrics label and the dry-run trace.
+tmp=$(mktemp -d)
+cat > "$tmp/curl" <<'EOF'
+#!/usr/bin/env bash
+echo "MOCK CURL WAS CALLED" >&2
+exit 0
+EOF
+chmod +x "$tmp/curl"
+EC=0
+err=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BASE_URL="http://user:pass@localhost:8080/v1" \
+  bash "$PICK" prose 2>&1) || EC=$?
+assert_eq "2" "$EC" "provider list: userinfo URL exits 2"
+case "$err" in
+  *"MOCK CURL WAS CALLED"*) assert_eq "no request" "a request was made" "provider list: userinfo rejected before any request" ;;
+  *) assert_eq "no request" "no request" "provider list: userinfo rejected before any request" ;;
+esac
+rm -rf "$tmp"
+
+# --print-resolution without a provider list is a usage error, not a silent
+# empty line.
+EC=0
+env -i PATH="$SAFE_PATH" HOME="$HOME" bash "$PICK" --print-resolution prose >/dev/null 2>&1 || EC=$?
+assert_eq "2" "$EC" "provider list: --print-resolution without DELEGATE_BASE_URL exits 2"
+
 echo
 echo "=== Results ==="
 total=$((pass+fail))

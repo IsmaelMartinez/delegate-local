@@ -25,6 +25,17 @@
 #             transparently — same behaviour as before the auto default
 #             landed. Override the probe timeout via
 #             DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT.
+#
+#   DELEGATE_BASE_URL is a space-separated, ordered list of OpenAI-compatible
+#             base URLs. When set it supersedes backend probing entirely: each
+#             is tried in order, and the first that answers GET {base}/models
+#             AND holds a model this tier prefers wins. Unset (the default)
+#             leaves the DELEGATE_BACKEND path untouched. A URL containing
+#             userinfo (user:pass@) is rejected with exit 2 before anything is
+#             probed. One trailing slash is stripped per entry.
+#   DELEGATE_PROBE_TIMEOUT bounds each /models probe. Default 1 second, kept
+#             low deliberately: a dead provider must cost close to nothing,
+#             since cheap fallthrough is the point of the list.
 #   ollama  — query `ollama list` for installed models. Skips the probe.
 #   mlx     — scan the HuggingFace hub cache (~/.cache/huggingface/hub or
 #             $HF_HOME/hub) for MLX-converted models. Apple Silicon only;
@@ -64,12 +75,14 @@ dry_run=0
 print_prefs=0
 print_backend=0
 print_installed=0
+print_resolution=0
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --dry-run) dry_run=1 ;;
     --print-prefs) print_prefs=1 ;;
     --print-backend) print_backend=1 ;;
     --print-installed) print_installed=1 ;;
+    --print-resolution) print_resolution=1 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -96,6 +109,61 @@ trace() {
   return 0
 }
 
+# Reject userinfo before anything is probed. A user:pass@ URL would otherwise
+# reach the metrics label and the --dry-run trace, writing the credential to a
+# file and printing it to a terminal.
+if [[ -n "${DELEGATE_BASE_URL:-}" ]]; then
+  for _u in $DELEGATE_BASE_URL; do
+    case "$_u" in
+      *"://"*"@"*)
+        echo "pick-model: DELEGATE_BASE_URL entry '$_u' contains userinfo (user:pass@); refusing" >&2
+        exit 2
+        ;;
+    esac
+  done
+fi
+
+# Provider-list resolution. Prints "<base_url><TAB><model_id>" for the first
+# provider that is both reachable and holding a model this tier prefers, or
+# returns 1 if none is. Reads the `prefs` array from scope, as the matcher
+# below does.
+#
+# Provider-major rather than preference-major: the preference lists interleave
+# per-provider spellings of one model (see the note above), so they rank where
+# a model runs, not which capability you get. Letting them drive the outer loop
+# silently re-routes tiers across runtimes at different quantisations.
+resolve_via_providers() {
+  local base models pref hit
+  for base in $DELEGATE_BASE_URL; do
+    base="${base%/}"
+    # Explicit failure branch, not a bare assignment: under `set -e` a stopped
+    # first provider would abort resolution before the rest were tried, which
+    # is the exact inverse of the fallthrough this exists to provide.
+    if ! models=$(curl -sS --fail --max-time "${DELEGATE_PROBE_TIMEOUT:-1}" \
+        "$base/models" 2>/dev/null | jq -r '.data[].id' 2>/dev/null | sort); then
+      trace "provider $base: unreachable, skipping"
+      continue
+    fi
+    if [[ -z "$models" ]]; then
+      trace "provider $base: reachable but reports no models, skipping"
+      continue
+    fi
+    for pref in "${prefs[@]}"; do
+      # sort above + grep -im1 here: grep takes the first match and daemon
+      # ordering is not stable (ollama list is recency-ordered), so without the
+      # sort a two-match preference resolves differently run to run.
+      hit=$(printf '%s\n' "$models" | grep -im1 -F -- "$pref" || true)
+      if [[ -n "$hit" ]]; then
+        trace "provider $base: matched preference='$pref' -> model='$hit'"
+        printf '%s\t%s\n' "$base" "$hit"
+        return 0
+      fi
+    done
+    trace "provider $base: no model matches this tier, skipping"
+  done
+  return 1
+}
+
 # Resolve auto backend by probing the MLX server. The probe is cheap
 # (sub-second timeout, single HEAD-equivalent GET) and runs once per
 # invocation. Explicit ollama|mlx skip the probe.
@@ -109,6 +177,12 @@ auto_resolve_backend() {
   fi
 }
 
+# DELEGATE_BASE_URL supersedes backend probing entirely, so skip the probe
+# rather than paying for a resolution that is about to be discarded.
+if [[ -n "${DELEGATE_BASE_URL:-}" ]]; then
+  backend="provider"
+  backend_requested="provider"
+else
 backend_requested="${DELEGATE_BACKEND:-auto}"
 case "$backend_requested" in
   auto)
@@ -120,6 +194,7 @@ case "$backend_requested" in
     ;;
   *) echo "unknown backend: $backend_requested (valid: auto|ollama|mlx)" >&2; exit 2 ;;
 esac
+fi
 
 # Enumerate the installed models the resolved backend can see, one per line.
 # Shared by the resolution path below and by the --print-installed surface.
@@ -233,6 +308,29 @@ if [[ -f "$config" ]]; then
     source "$config"
     trace "preferences (post-override)=${prefs[*]}"
   fi
+fi
+
+# The provider list short-circuits the installed-set path: discovery is only
+# ever "what a running provider reports", never a filesystem scan.
+if [[ -n "${DELEGATE_BASE_URL:-}" ]]; then
+  if ! _resolved=$(resolve_via_providers); then
+    echo "pick-model: no provider holds a model for tier '$tier'" >&2
+    echo "            tried: $DELEGATE_BASE_URL" >&2
+    exit 1
+  fi
+  if (( print_resolution )); then
+    printf '%s\n' "$_resolved"
+  else
+    printf '%s\n' "${_resolved#*	}"
+  fi
+  exit 0
+fi
+
+# Tier-dependent, so unlike --print-backend it cannot be answered before the
+# tier is parsed — which is the whole reason it is a separate flag.
+if (( print_resolution )); then
+  echo "pick-model: --print-resolution requires DELEGATE_BASE_URL" >&2
+  exit 2
 fi
 
 installed=$(list_installed)
