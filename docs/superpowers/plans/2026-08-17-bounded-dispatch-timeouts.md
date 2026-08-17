@@ -34,7 +34,7 @@ The dispatch POST is the call that matters. Recorded history contains a `long-co
 - Consumes: nothing from earlier tasks.
 - Produces: the environment variable `DELEGATE_REQUEST_TIMEOUT` (integer seconds, default `600`) and the shell variable `request_timeout` inside `dispatch_to_model()`. Tasks 2 and 3 deliberately do **not** reuse this variable; they define their own, for the reasons stated in each.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 The existing mocks in `tests/test-delegate.sh` sniff the request *payload* (stdin). Nothing sniffs `curl`'s argv, so add a helper that does. Insert it immediately after `make_mock_curl_think()` ends (currently `:133`), keeping the mock helpers grouped:
 
@@ -139,13 +139,13 @@ assert_contains "DELEGATE_REQUEST_TIMEOUT" "$out" "timeout guidance names the kn
 rm -rf "$tmp"
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `bash tests/test-delegate.sh 2>&1 | grep -E "FAIL|^(pass|fail|PASS:|FAIL:)"`
 
 Expected: the six new `assert_contains` lines FAIL (the argv file contains no `--max-time`, no `--connect-timeout`, and the exit-28 case prints only the generic daemon text). Every pre-existing case still passes. If any pre-existing case now fails, stop — the new helper has leaked into an earlier test's `$tmp`.
 
-- [ ] **Step 3: Add the environment variable to the header doc block**
+- [x] **Step 3: Add the environment variable to the header doc block**
 
 Insert immediately after the `DELEGATE_PREFLIGHT_TIMEOUT` entry (which ends at `:135` with the `Set 0 to disable the canary.` line). Match the existing column alignment exactly — the `#` continuation column is 44:
 
@@ -162,7 +162,7 @@ Insert immediately after the `DELEGATE_PREFLIGHT_TIMEOUT` entry (which ends at `
 #                                           #   killing the 3.2-hour runaway.
 ```
 
-- [ ] **Step 4: Resolve the timeout inside dispatch_to_model()**
+- [x] **Step 4: Resolve the timeout inside dispatch_to_model()**
 
 `dispatch_to_model()` opens at `:1192`. Add the resolution as the first statement in the function body, above the `if [[ "$backend" == "ollama" ]]` at `:1194`:
 
@@ -179,7 +179,7 @@ function already sets `status`, `output`, `payload` and `ttfb_s` as globals —
 verified: `grep -n 'local status\|local output\|local ttfb_s\|local payload'
 scripts/delegate.sh` returns no matches.
 
-- [ ] **Step 5: Add the flags to both dispatch curls**
+- [x] **Step 5: Add the flags to both dispatch curls**
 
 At `:1207`, change:
 
@@ -213,7 +213,7 @@ to:
 
 Both keep `status=$?` on the following line unchanged. `--connect-timeout 5` is a literal rather than a knob because connect failure and generation stall deserve different bounds and only the latter varies by workload.
 
-- [ ] **Step 6: Teach the dispatch-failure guidance about exit 28**
+- [x] **Step 6: Teach the dispatch-failure guidance about exit 28**
 
 The block at `:1273-1282` currently prints the same three lines for every non-zero status. Insert a timeout-specific line, keeping the existing three intact:
 
@@ -234,13 +234,13 @@ fi
 
 This reads `request_timeout` from the caller's scope, which works because Step 4 sets it without `local`, matching how the same function already sets `status` and `output`.
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `bash tests/test-delegate.sh 2>&1 | tail -5`
 
 Expected: `556 passed, 0 failed` becomes `562 passed, 0 failed` (556 existing plus the six new assertions). Any pre-existing failure is a regression — fix it before continuing.
 
-- [ ] **Step 8: Run the rest of the suite for regressions**
+- [x] **Step 8: Run the rest of the suite for regressions**
 
 Run: `bash tests/run-tests.sh 2>&1 | tail -3`
 Expected: `110 passed, 0 failed`, unchanged.
@@ -251,7 +251,7 @@ Expected: `134 passed, 0 failed`, unchanged.
 Run: `bash tests/test-delegate-feedback.sh 2>&1 | tail -3`
 Expected: `226 passed, 0 failed`, unchanged.
 
-- [ ] **Step 9: Verify against the real backend**
+- [x] **Step 9: Verify against the real backend**
 
 The tests prove the flags are passed; this proves they do not break a live call. With `mlx_lm.server` running on `:8080`:
 
@@ -261,7 +261,7 @@ Expected: normal output, no timeout.
 Run: `DELEGATE_BACKEND=mlx DELEGATE_REQUEST_TIMEOUT=1 bash scripts/delegate.sh prose "Write 2000 words about bash"`
 Expected: exit non-zero, stderr contains `did not return within 1s (curl --max-time fired)` and `raise DELEGATE_REQUEST_TIMEOUT`.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add scripts/delegate.sh tests/test-delegate.sh
@@ -294,7 +294,7 @@ Refs: #363"
 
 A separate variable from Task 1's is correct here, not duplication. Embedding latency is three orders of magnitude below generation — measured over 129 recorded embedding rows: p50 144 ms, p95 202 ms, p99 2,574 ms, max 5,486 ms — and `scripts/semantic-search.sh` calls this script once per chunk, so a 600 s ceiling per chunk would let a wedged daemon stall a search for hours. 60 s is roughly 11x the observed maximum.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `tests/test-embed.sh` already has `make_mock_curl_ok` at `:48-70`. Add an argv-recording variant directly after it:
 
@@ -356,12 +356,12 @@ rm -rf "$tmp"
 
 Before running, confirm `$SCRIPT` and the invocation shape match what the rest of `tests/test-embed.sh` uses — read one existing case and copy its argument order rather than assuming the single-positional form above.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `bash tests/test-embed.sh 2>&1 | grep FAIL`
 Expected: the three new assertions FAIL. No pre-existing case fails.
 
-- [ ] **Step 3: Add the environment variable to the header doc block**
+- [x] **Step 3: Add the environment variable to the header doc block**
 
 Insert after the `DELEGATE_EMBED_MAX_CHARS` entry at `:28`, matching that block's narrower alignment (the `#` continuation column in `embed.sh` is 41, not `delegate.sh`'s 44 — copy the neighbouring line's spacing rather than this plan's):
 
@@ -375,7 +375,7 @@ Insert after the `DELEGATE_EMBED_MAX_CHARS` entry at `:28`, matching that block'
 #                                         #   once per chunk.
 ```
 
-- [ ] **Step 4: Add the flags to the curl**
+- [x] **Step 4: Add the flags to the curl**
 
 At `:192`, change:
 
@@ -396,12 +396,12 @@ Inlined rather than assigned to a variable because it has exactly one use site, 
 
 `status=$?` on the following line is unchanged, and the existing `if (( status != 0 ))` block at `:199` already logs a metric row with the curl status, so a timeout is recorded as `exit_status: 28` with no further change.
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `bash tests/test-embed.sh 2>&1 | tail -3`
 Expected: `48 passed, 0 failed` becomes `51 passed, 0 failed`.
 
-- [ ] **Step 6: Verify against the real backend**
+- [x] **Step 6: Verify against the real backend**
 
 Run: `bash scripts/embed.sh "hello world" | head -c 120`
 Expected: a JSON embeddings array, unchanged behaviour.
@@ -409,7 +409,7 @@ Expected: a JSON embeddings array, unchanged behaviour.
 Run: `DELEGATE_EMBED_TIMEOUT=0.001 bash scripts/embed.sh "hello world"; echo "exit=$?"`
 Expected: `exit=28`. If curl instead rejects `0.001` outright, use a value of `1` against a deliberately stopped Ollama and expect exit 28 or 7.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add scripts/embed.sh tests/test-embed.sh
@@ -436,7 +436,7 @@ Refs: #363"
 
 The two curls get different treatment. The push at `:178` carries the payload and its failure is reported to the caller, so it takes the full `DELEGATE_LOKI_TIMEOUT`. The flush at `:189` is explicitly best-effort — it already ends in `|| true` and discards its output — so it takes a fixed 5 s. A best-effort call that can hang for 30 s is the same bug in a smaller costume.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 This file's conventions differ from the other two: it drives the script through
 CLI flags (`--metrics-file`, `--state-file`, `--loki-url`) rather than
@@ -520,12 +520,12 @@ mock appends one space-joined line per call. `assert_contains "--max-time 30"`
 (with the value) rather than bare `--max-time` is what makes the two cases
 distinguish push from flush.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `bash tests/test-sync-metrics-to-loki.sh 2>&1 | grep FAIL`
 Expected: the new assertions FAIL. No pre-existing case fails.
 
-- [ ] **Step 3: Add the environment variable to the header doc block**
+- [x] **Step 3: Add the environment variable to the header doc block**
 
 Insert after the `DELEGATE_LOKI_STATE` entry at `:24`, matching that block's two-column prose style (it differs from both other scripts — copy the neighbouring line):
 
@@ -534,7 +534,7 @@ Insert after the `DELEGATE_LOKI_STATE` entry at `:24`, matching that block's two
 #                            best-effort flush uses a fixed 5s.
 ```
 
-- [ ] **Step 4: Add the flags to the push**
+- [x] **Step 4: Add the flags to the push**
 
 At `:178`, change:
 
@@ -555,7 +555,7 @@ http_code=$(printf '%s' "$payload" | curl -s -o "$resp_file" -w '%{http_code}' \
 
 On a timeout curl writes no `%{http_code}`, so `$http_code` is empty. The existing test at `:180` is `[[ "$http_code" == "204" || "$http_code" == "200" ]]`, which an empty string already fails, routing to the `else` branch that leaves the watermark unchanged and exits 1. That is the correct behaviour for a timed-out push and needs no change — confirm it by reading `:180-196` rather than trusting this paragraph.
 
-- [ ] **Step 5: Add the flags to the flush**
+- [x] **Step 5: Add the flags to the flush**
 
 At `:189`, change:
 
@@ -572,12 +572,12 @@ to:
 
 Fixed 5 s, not the knob: this call is already best-effort and its result is discarded, so there is no workload that justifies waiting longer.
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 Run: `bash tests/test-sync-metrics-to-loki.sh 2>&1 | tail -3`
 Expected: `24 passed, 0 failed` becomes `29 passed, 0 failed` (24 existing plus the five new assertions).
 
-- [ ] **Step 7: Run the full suite**
+- [x] **Step 7: Run the full suite**
 
 Run each and expect the counts unchanged from Task 1 Step 8, plus this task's additions:
 
@@ -592,7 +592,7 @@ bash tests/test-metrics-summary.sh 2>&1 | tail -2
 bash tests/test-sync-metrics-to-loki.sh 2>&1 | tail -2
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add scripts/sync-metrics-to-loki.sh tests/test-sync-metrics-to-loki.sh
