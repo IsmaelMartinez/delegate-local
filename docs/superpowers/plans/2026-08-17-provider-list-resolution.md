@@ -62,7 +62,7 @@ Deleting the Ollama-native branch therefore costs real thinking suppression on O
 - Consumes: nothing from earlier tasks.
 - Produces: the environment variable `DELEGATE_BASE_URL` (space-separated ordered list of base URLs, unset by default), the shell function `resolve_via_providers()` (takes no arguments, reads the `prefs` array from scope as the file's other helpers do, prints `<base_url><TAB><model_id>` on success, returns 1 when no provider yields a match), `DELEGATE_PROBE_TIMEOUT` (integer seconds, default 1), and the flag `--print-resolution` which prints `<base_url><TAB><model_id>` for a given tier. Task 2 consumes `--print-resolution`. `--print-backend` and `--print-installed` keep their current tier-independent behaviour untouched, because `scripts/audit-models.sh` depends on it.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/run-tests.sh` drives `pick-model.sh` through a `run()` helper that injects `DELEGATE_BACKEND=ollama` (`:76`) and executes under `env -i` with a mock `ollama` binary. The new path needs a mock `curl` instead. Read `run()` and `make_mock_ollama` in that file first and copy their shape rather than the sketch below, which shows intent only.
 
@@ -185,13 +185,13 @@ case "$err" in
 esac
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `bash tests/run-tests.sh 2>&1 | grep -i fail`
 
 Expected: the eight new checks fail (`DELEGATE_BASE_URL` is not read, so `pick-model.sh` falls through to its `auto` probe and resolves from the real host). The 110 pre-existing checks still pass. If a pre-existing check fails, stop: the new mock has leaked onto a shared PATH.
 
-- [ ] **Step 3: Document the two new environment variables**
+- [x] **Step 3: Document the two new environment variables**
 
 Insert after the `DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT` line at `:27`, matching the surrounding header prose style (this file uses flowing `#` prose, not the aligned two-column form `delegate.sh` uses — copy the neighbouring lines):
 
@@ -208,7 +208,7 @@ Insert after the `DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT` line at `:27`, matching t
 #             because the whole point of the list is cheap fallthrough.
 ```
 
-- [ ] **Step 4: Add the resolution function**
+- [x] **Step 4: Add the resolution function**
 
 Insert immediately before `backend_requested="${DELEGATE_BACKEND:-auto}"` at `:112`:
 
@@ -255,7 +255,7 @@ resolve_via_providers() {
 
 `sort` is not cosmetic: `grep -im1` takes the first match and daemon ordering is not stable, so without it a two-match preference resolves non-deterministically. `ollama list` is recency-ordered today, so this fixes a latent bug rather than introducing a constraint.
 
-- [ ] **Step 5: Add the userinfo guard and the dispatch branch**
+- [x] **Step 5: Add the userinfo guard and the dispatch branch**
 
 Immediately after the function, still before `backend_requested=`:
 
@@ -277,7 +277,7 @@ fi
 
 The existing `backend_requested` case and everything below it are untouched. The provider path is wired in at the resolution site in the next step.
 
-- [ ] **Step 6: Route resolution through the provider list when it is set**
+- [x] **Step 6: Route resolution through the provider list when it is set**
 
 `list_installed` is consulted at `:238` (`installed=$(list_installed)`). Read `:230-250` and add the provider branch above it so the provider list short-circuits the installed-set path entirely:
 
@@ -305,12 +305,12 @@ The literal tab inside `${_resolved#*	}` must be a real tab character, not `\t`.
 
 `--print-resolution` also needs its flag registered alongside `--print-backend` at `:71-72` and a `print_resolution=0` initialiser alongside `:65-66`. It is deliberately *not* answered early with the other two backend surfaces at `:168-176`: it is tier-dependent, so it must run after the tier is parsed at `:177`, which is exactly why it exists (see D4).
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `bash tests/run-tests.sh 2>&1 | tail -3`
 Expected: `118/118 passed` (110 existing plus the eight new checks).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add scripts/pick-model.sh tests/run-tests.sh
@@ -338,7 +338,7 @@ Refs: #363"
 - Consumes: `DELEGATE_BASE_URL` and `pick-model.sh --print-backend` from Task 1.
 - Produces: the shell variable `resolved_base` in `delegate.sh`, used by `dispatch_to_model()` in place of `$mlx_host/v1`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `tests/test-delegate.sh` already has `make_mock_curl_mlx_ok "$dir" "$payload_sniff" "$argv_sniff"` (`:764-799`), which answers `/v1/models` with `{"object":"list","data":[]}` and records argv. An empty `data` array is no longer adequate once discovery is real, so add a variant that returns a populated list. Insert after `make_mock_curl_mlx_ok` ends at `:799`:
 
@@ -432,12 +432,12 @@ assert_contains "engines/v1/chat/completions" "$argv" "trailing slash is strippe
 rm -rf "$tmp"
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `bash tests/test-delegate.sh 2>&1 | grep FAIL`
 Expected: the six new assertions fail. The 562 pre-existing assertions still pass.
 
-- [ ] **Step 3: Document the variable**
+- [x] **Step 3: Document the variable**
 
 Insert after the `DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT` entry at `:50`, matching the aligned two-column form (`delegate.sh`'s continuation `#` sits at column 45 — measure a neighbouring line rather than copying this block's spacing):
 
@@ -452,7 +452,7 @@ Insert after the `DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT` entry at `:50`, matching 
 #                                           #   by default.
 ```
 
-- [ ] **Step 4: Resolve the base URL**
+- [x] **Step 4: Resolve the base URL**
 
 The backend case sits at `:400-412` and the hosts at `:414-415`. Add the provider branch above it, leaving the existing case intact for the unset path:
 
@@ -484,7 +484,7 @@ fi
 
 Both `%%` and `#` expansions need a literal tab. Read `:920-940` first: the existing failure handling around `$pick_err` must keep working for both branches, so the `if`/`else` above has to preserve whatever exit-status check follows the original line.
 
-- [ ] **Step 5: Dispatch to the resolved base**
+- [x] **Step 5: Dispatch to the resolved base**
 
 In `dispatch_to_model()`, the MLX arm posts to `"$mlx_host/v1/chat/completions"`. Make the destination a variable so the OpenAI arm serves both, changing only the URL expression:
 
@@ -494,12 +494,12 @@ In `dispatch_to_model()`, the MLX arm posts to `"$mlx_host/v1/chat/completions"`
 
 and use `"$chat_url"` in the curl. `resolved_base` already has one trailing slash stripped by Task 1 Step 4 (`base="${base%/}"`), so no doubled slash is possible. The payload, the `--max-time`/`--connect-timeout` flags from PR 1, and the `.choices[0].message.content` parse are all unchanged: this is the point of the design, that the MLX arm was already the generic OpenAI arm.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `bash tests/test-delegate.sh 2>&1 | tail -3`
 Expected: `568 passed, 0 failed` (562 existing plus the six new assertions).
 
-- [ ] **Step 7: Run the full suite**
+- [x] **Step 7: Run the full suite**
 
 ```bash
 bash tests/test-delegate.sh 2>&1 | tail -2                 # 568
@@ -514,7 +514,7 @@ bash tests/test-sync-metrics-to-loki.sh 2>&1 | tail -2     # 30 unchanged
 
 Any change to the five "unchanged" counts means the additive guarantee has been broken. Stop and fix rather than updating the expected number.
 
-- [ ] **Step 8: Verify the goal against the real daemons**
+- [x] **Step 8: Verify the goal against the real daemons**
 
 This is the plan's stated verifiable goal. With MLX on `:8080`, Docker Model Runner on `:12434` and Ollama on `:11434`:
 
@@ -538,7 +538,7 @@ bash scripts/delegate.sh prose "Say the single word: ok"
 ```
 Expected: unchanged behaviour with `DELEGATE_BASE_URL` unset.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add scripts/delegate.sh tests/test-delegate.sh

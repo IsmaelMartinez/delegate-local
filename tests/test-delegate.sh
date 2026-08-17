@@ -5051,6 +5051,102 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_contains "DELEGATE_REQUEST_TIMEOUT" "$out" "timeout guidance names the knob"
 rm -rf "$tmp"
 
+make_mock_curl_provider() {
+  # Mock curl for the DELEGATE_BASE_URL path: answers {base}/models with a
+  # POPULATED list so tier resolution succeeds, records dispatch argv to $3,
+  # and returns a chat-completions body. Unlike make_mock_curl_mlx_ok the
+  # models response is non-empty, because under a provider list /models is
+  # discovery rather than a liveness probe.
+  local dir="$1" payload_sniff="${2:-/dev/null}" argv_sniff="${3:-/dev/null}"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  case "\$arg" in
+    *"/models"*)
+      cat > /dev/null
+      printf '%s' '{"object":"list","data":[{"id":"qwen3.6-provider-test","object":"model"}]}'
+      exit 0
+      ;;
+  esac
+done
+printf '%s\n' "\$*" > "${argv_sniff}"
+out_file=""
+write_out=""
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+cat > "${payload_sniff}"
+body='{"choices":[{"message":{"role":"assistant","content":"provider-output-ok"},"finish_reason":"stop"}]}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
+EOF
+  chmod +x "$dir/curl"
+}
+
+# 38. DELEGATE_BASE_URL dispatches to {base}/chat/completions on the resolved
+# provider, with no MLX_HOST or OLLAMA_HOST involvement.
+tmp=$(mktemp -d)
+argv_sniff="$tmp/argv.txt"
+make_mock_curl_provider "$tmp" "$tmp/payload.json" "$argv_sniff"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BASE_URL="http://localhost:12434/engines/v1" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "provider dispatch exits 0"
+assert_contains "provider-output-ok" "$out" "provider dispatch parses .choices[0].message.content"
+argv=$(cat "$argv_sniff")
+assert_contains "http://localhost:12434/engines/v1/chat/completions" "$argv" "provider dispatch posts to {base}/chat/completions"
+assert_contains '"backend":"docker"' "$(cat "$metrics")" "provider dispatch labels metrics by provider, not a flat 'provider'"
+rm -rf "$tmp" "$metrics"
+
+# 39. The provider dispatch keeps the PR 1 timeout bound.
+tmp=$(mktemp -d)
+argv_sniff="$tmp/argv.txt"
+make_mock_curl_provider "$tmp" "$tmp/payload.json" "$argv_sniff"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_LOCAL_NO_METRICS=1 \
+  DELEGATE_BASE_URL="http://localhost:12434/engines/v1" \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1 || true
+argv=$(cat "$argv_sniff")
+assert_contains "--max-time 600" "$argv" "provider dispatch keeps the 600s bound"
+rm -rf "$tmp"
+
+# 40. A trailing slash on the base URL does not produce a doubled slash.
+tmp=$(mktemp -d)
+argv_sniff="$tmp/argv.txt"
+make_mock_curl_provider "$tmp" "$tmp/payload.json" "$argv_sniff"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_LOCAL_NO_METRICS=1 \
+  DELEGATE_BASE_URL="http://localhost:12434/engines/v1/" \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1 || true
+argv=$(cat "$argv_sniff")
+assert_contains "engines/v1/chat/completions" "$argv" "trailing slash is stripped once"
+rm -rf "$tmp"
+
+# 41. An unknown host still gets a real label rather than a flat "provider", so
+# two unknown endpoints stay distinguishable in sum by (backend).
+tmp=$(mktemp -d)
+make_mock_curl_provider "$tmp" "$tmp/payload.json" "$tmp/argv.txt"
+metrics=$(mktemp)
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_BASE_URL="http://localhost:9999/v1" \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1 || true
+assert_contains '"backend":"localhost:9999"' "$(cat "$metrics")" "unknown provider is labelled host:port"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
