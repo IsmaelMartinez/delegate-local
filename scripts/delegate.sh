@@ -135,6 +135,16 @@
 #                                           #   Set 0 to disable the canary.
 #                                           #   Closes the recipe-stall gap
 #                                           #   in issue #110.
+#   DELEGATE_REQUEST_TIMEOUT=<s>            # default 600. curl --max-time on
+#                                           #   the dispatch POST, paired with
+#                                           #   --connect-timeout 5. Bounds the
+#                                           #   whole request including cold
+#                                           #   model load, not just
+#                                           #   generation: 600 preserves
+#                                           #   every genuine call in recorded
+#                                           #   history (largest: 505 s, of
+#                                           #   which 504.6 s was load) while
+#                                           #   killing the 3.2-hour runaway.
 #   DELEGATE_NO_PREFLIGHT=1                 # alternate disable for the canary
 #                                           #   (equivalent to TIMEOUT=0).
 #   DELEGATE_FORCE_FLAKY=1                  # override the recipe-level flaky-
@@ -1191,6 +1201,13 @@ trap 'rm -f "$body_file"' EXIT
 # every other model's output is.
 dispatch_to_model() {
 local _model="$1"
+# Bounds the whole request including cold model load. Deliberately not
+# validated: a non-numeric value makes curl exit 2 with its own clear
+# "expected a proper numerical parameter" message, which is a better error
+# than anything a hand-rolled check would print. Not local — the dispatch-
+# failure guidance below reads it from the caller's scope, the same way it
+# reads $status.
+request_timeout="${DELEGATE_REQUEST_TIMEOUT:-600}"
 if [[ "$backend" == "ollama" ]]; then
   # think:false suppresses chain-of-thought for thinking-capable models —
   # see DELEGATE_THINK above. The sampler-profile overlay is built via jq
@@ -1204,7 +1221,8 @@ if [[ "$backend" == "ollama" ]]; then
       + (if $top_p != "" then {top_p:($top_p|tonumber)} else {} end)
       + (if $top_k != "" then {top_k:($top_k|tonumber)} else {} end)
       + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end))}')
-  ttfb_s=$(curl -sS --fail -X POST "$ollama_host/api/generate" -d @- \
+  ttfb_s=$(curl -sS --fail --max-time "$request_timeout" --connect-timeout 5 \
+    -X POST "$ollama_host/api/generate" -d @- \
     -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
   status=$?
   if [[ "$status" -eq 0 ]]; then
@@ -1236,7 +1254,8 @@ else
       + (if $top_p != "" then {top_p:($top_p|tonumber)} else {} end)
       + (if $top_k != "" then {top_k:($top_k|tonumber)} else {} end)
       + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end)')
-  ttfb_s=$(curl -sS --fail -X POST "$mlx_host/v1/chat/completions" -d @- \
+  ttfb_s=$(curl -sS --fail --max-time "$request_timeout" --connect-timeout 5 \
+    -X POST "$mlx_host/v1/chat/completions" -d @- \
     -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
   status=$?
   if [[ "$status" -eq 0 ]]; then
@@ -1273,6 +1292,11 @@ dispatch_to_model "$model"
 if (( status != 0 )); then
   {
     echo "delegate: dispatch failed (curl exit $status) — model=\"$model\" tier=\"$tier\" backend=\"$backend\""
+    if (( status == 28 )); then
+      echo "         the request did not return within ${request_timeout}s (curl --max-time fired)"
+      echo "         - raise DELEGATE_REQUEST_TIMEOUT if a cold model load is suspected"
+      echo "         - or pick a smaller model for this tier"
+    fi
     echo "         check the backend daemon (ollama serve / mlx_lm.server) and OLLAMA_HOST / MLX_HOST — see the README Troubleshooting section"
     echo "         still broken? file a bug: https://github.com/${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}/issues/new?template=bug_report.md"
   } >&2

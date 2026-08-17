@@ -43,6 +43,13 @@
 #                                         #   inputs will hit the upstream
 #                                         #   400 error which curl --fail
 #                                         #   surfaces only as exit 22).
+#   DELEGATE_EMBED_TIMEOUT=<s>            # default 60. curl --max-time on the
+#                                         #   embeddings POST. Far below the
+#                                         #   dispatch ceiling because
+#                                         #   embedding is fast (129 recorded
+#                                         #   rows: p50 144ms, max 5,486ms)
+#                                         #   and semantic-search calls this
+#                                         #   once per chunk.
 #
 # Output: a single line on stdout — compact JSON array of floats from
 #         .embeddings[0]. nomic-embed-text returns a 768-dim vector.
@@ -189,7 +196,8 @@ payload=$(jq -nc --arg m "$model" --arg t "$input_text" \
 
 body_file=$(mktemp)
 trap 'rm -f "$body_file"' EXIT
-curl -sS --fail -X POST "$ollama_host/api/embed" -d @- \
+curl -sS --fail --max-time "${DELEGATE_EMBED_TIMEOUT:-60}" --connect-timeout 5 \
+  -X POST "$ollama_host/api/embed" -d @- \
   -o "$body_file" <<< "$payload"
 status=$?
 
