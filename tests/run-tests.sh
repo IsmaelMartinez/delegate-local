@@ -954,6 +954,27 @@ case "$err" in
 esac
 rm -rf "$tmp"
 
+# --print-installed reports what the providers serve, not an HF cache scan.
+# Without the provider arm the "provider" backend label falls through to the
+# MLX arm and this surface silently reports a set routing never consults.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "8080:mlx-a,mlx-b 11434:ollama-a"
+got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BASE_URL="http://localhost:8080/v1 http://localhost:11434/v1" \
+  bash "$PICK" --print-installed 2>/dev/null | tr '\n' ' ')
+assert_eq "mlx-a mlx-b ollama-a " "$got" "provider list: --print-installed unions the providers"
+rm -rf "$tmp"
+
+# An unreachable provider is skipped by --print-installed too, rather than
+# aborting the listing under set -e.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "11434:ollama-a"
+got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  DELEGATE_BASE_URL="http://localhost:9/v1 http://localhost:11434/v1" \
+  bash "$PICK" --print-installed 2>/dev/null | tr '\n' ' ')
+assert_eq "ollama-a " "$got" "provider list: --print-installed skips an unreachable provider"
+rm -rf "$tmp"
+
 # --print-resolution without a provider list is a usage error, not a silent
 # empty line.
 EC=0

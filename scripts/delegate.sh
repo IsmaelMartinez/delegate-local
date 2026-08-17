@@ -1149,7 +1149,10 @@ if [[ -n "$recipe" ]] \
   # Qwen sampler overrides (top_p, top_k, presence_penalty) are pointless
   # at num_predict:1 / max_tokens:1 and would only add JSON noise to the
   # smallest-possible health check.
-  if [[ "$backend" == "ollama" ]]; then
+  # $resolved_base, not $backend, decides the arm: $backend is the metrics
+  # label and is deliberately "ollama" for a provider on Ollama's port, which
+  # must still be reached through the OpenAI arm.
+  if [[ -z "$resolved_base" && "$backend" == "ollama" ]]; then
     canary_payload=$(jq -nc --arg m "$model" --argjson th "$think" \
       '{model:$m, prompt:"hi", stream:false, think:$th, options:{num_predict:1, temperature:0}}')
     canary_url="$ollama_host/api/generate"
@@ -1254,7 +1257,10 @@ local _model="$1"
 # failure guidance below reads it from the caller's scope, the same way it
 # reads $status.
 request_timeout="${DELEGATE_REQUEST_TIMEOUT:-600}"
-if [[ "$backend" == "ollama" ]]; then
+# $resolved_base, not $backend, selects the arm. $backend is the metrics label
+# and is deliberately "ollama" for a provider-list entry on Ollama's port; that
+# request must still go through the OpenAI arm, which is the whole contract.
+if [[ -z "$resolved_base" && "$backend" == "ollama" ]]; then
   # think:false suppresses chain-of-thought for thinking-capable models —
   # see DELEGATE_THINK above. The sampler-profile overlay is built via jq
   # additions so the dispatch payload carries only the keys the caller

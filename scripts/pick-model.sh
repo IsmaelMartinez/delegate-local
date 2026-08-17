@@ -203,6 +203,22 @@ fi
 # on Ollama the audit calls `ollama list` directly to keep the SIZE/MODIFIED
 # columns, and the two agree because both read the same source.
 list_installed() {
+  # Under a provider list, "installed" means what the running providers report,
+  # so report exactly that. Without this the backend=="provider" label falls
+  # through to the MLX arm below and --print-installed silently reports an HF
+  # cache scan that routing never consults.
+  if [[ -n "${DELEGATE_BASE_URL:-}" ]]; then
+    local base ids
+    for base in $DELEGATE_BASE_URL; do
+      base="${base%/}"
+      if ! ids=$(curl -sS --fail --max-time "${DELEGATE_PROBE_TIMEOUT:-1}" \
+          "$base/models" 2>/dev/null | jq -r '.data[].id' 2>/dev/null); then
+        continue
+      fi
+      printf '%s\n' "$ids"
+    done | sort -u
+    return 0
+  fi
   if [[ "$backend" == "ollama" ]]; then
     if ! command -v ollama >/dev/null 2>&1; then
       echo "ollama not on PATH" >&2

@@ -5147,6 +5147,27 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_contains '"backend":"localhost:9999"' "$(cat "$metrics")" "unknown provider is labelled host:port"
 rm -rf "$tmp" "$metrics"
 
+# 42. A provider on Ollama's port is still dispatched through the OpenAI arm.
+# The metrics label and the dispatch mode are separate concerns: labelling the
+# row "ollama" must not route the request to the native /api/generate branch,
+# which ignores the resolved base entirely.
+tmp=$(mktemp -d)
+argv_sniff="$tmp/argv.txt"
+make_mock_curl_provider "$tmp" "$tmp/payload.json" "$argv_sniff"
+metrics=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_BASE_URL="http://localhost:11434/v1" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || true
+argv=$(cat "$argv_sniff")
+assert_contains "http://localhost:11434/v1/chat/completions" "$argv" "ollama-port provider still posts to {base}/chat/completions"
+case "$argv" in
+  *"/api/generate"*) assert_eq "openai arm" "native ollama arm" "ollama-port provider does not fall back to /api/generate" ;;
+  *) assert_eq "openai arm" "openai arm" "ollama-port provider does not fall back to /api/generate" ;;
+esac
+assert_contains '"backend":"ollama"' "$(cat "$metrics")" "ollama-port provider is still labelled ollama in metrics"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
