@@ -215,6 +215,7 @@ push11=$(grep -- '/loki/api/v1/push' "$argv11")
 flush11=$(grep -- '/flush' "$argv11")
 assert_contains "--max-time 30" "$push11" "T11: push defaults to 30s"
 assert_contains "--connect-timeout 5" "$push11" "T11: push sets --connect-timeout"
+assert_contains "-sS" "$push11" "T11: push keeps curl's error line (-sS, not -s)"
 assert_contains "--max-time 5" "$flush11" "T11: flush uses a fixed 5s"
 rm -rf "$tmpt"
 

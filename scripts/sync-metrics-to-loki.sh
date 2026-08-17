@@ -177,7 +177,11 @@ trap 'rm -f "$resp_file"' EXIT
 # which exceeds the ~1 MB ARG_MAX on macOS and fails with "Argument list too
 # long" before curl ever runs. Incremental syncs are small enough to have hidden
 # this, but --full (and any long-deferred catch-up batch) hits the ceiling.
-http_code=$(printf '%s' "$payload" | curl -s -o "$resp_file" -w '%{http_code}' \
+# -sS, not -s: on a timeout or connection failure curl writes no %{http_code}
+# (it emits 000), so the "push failed (HTTP 000)" line alone says nothing about
+# the cause. -S keeps the progress meter off but lets curl's own error line
+# through to stderr.
+http_code=$(printf '%s' "$payload" | curl -sS -o "$resp_file" -w '%{http_code}' \
   --max-time "${DELEGATE_LOKI_TIMEOUT:-30}" --connect-timeout 5 \
   -X POST "${loki_url%/}/loki/api/v1/push" \
   -H 'Content-Type: application/json' --data-binary @-)
