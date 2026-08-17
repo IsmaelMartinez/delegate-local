@@ -49,10 +49,14 @@ make_mock_curl_ok() {
   # Mock curl that drains stdin, optionally records the JSON payload to a
   # sniff file, and writes a canned embedding response either to stdout or
   # to the -o file. Returns a 4-dim vector to keep the test deterministic
-  # and to make the .embeddings[0] | length check trivially 4.
-  local dir="$1" sniff="${2:-/dev/null}"
+  # and to make the .embeddings[0] | length check trivially 4. $3 optionally
+  # records curl's own argv as one space-joined line, so a test can assert on
+  # the flags embed.sh passes ("--max-time 60" as a phrase) rather than on
+  # the payload it sends.
+  local dir="$1" sniff="${2:-/dev/null}" argv_sniff="${3:-/dev/null}"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
+printf '%s\n' "\$*" > "${argv_sniff}"
 out_file=""
 while (( \$# > 0 )); do
   case "\$1" in
@@ -345,6 +349,31 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "DELEGATE_BACKEND=auto: exit 0"
 assert_contains '"backend":"ollama"' "$(cat "$metrics")" "DELEGATE_BACKEND=auto: resolves to ollama in metrics"
 rm -rf "$tmp" "$metrics"
+
+# 18. The embeddings POST is bounded, defaulting to 60 s.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+argv_sniff="$tmp/argv.txt"
+make_mock_curl_ok "$tmp" "$tmp/payload.json" "$argv_sniff"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_LOCAL_NO_METRICS=1 \
+  bash "$SCRIPT" --text "x" </dev/null >/dev/null 2>&1 || true
+argv=$(cat "$argv_sniff" 2>/dev/null)
+assert_contains "--max-time 60" "$argv" "embed defaults to 60s"
+assert_contains "--connect-timeout 5" "$argv" "embed passes --connect-timeout"
+rm -rf "$tmp"
+
+# 19. DELEGATE_EMBED_TIMEOUT overrides the default.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+argv_sniff="$tmp/argv.txt"
+make_mock_curl_ok "$tmp" "$tmp/payload.json" "$argv_sniff"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_EMBED_TIMEOUT=7 \
+  bash "$SCRIPT" --text "x" </dev/null >/dev/null 2>&1 || true
+argv=$(cat "$argv_sniff" 2>/dev/null)
+assert_contains "--max-time 7" "$argv" "DELEGATE_EMBED_TIMEOUT overrides the default"
+rm -rf "$tmp"
 
 echo
 echo "$pass passed, $fail failed"
