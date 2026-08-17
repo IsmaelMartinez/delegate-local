@@ -137,6 +137,42 @@ EOF
   chmod +x "$dir/curl"
 }
 
+make_mock_curl_argv() {
+  # Mock curl that records its own argv to $2 as one space-joined line, then
+  # behaves like make_mock_curl_ok. Lets a test assert on the flags
+  # delegate.sh passes rather than on the payload it sends. Space-joined so a
+  # test can assert the flag and its value together ("--max-time 600") rather
+  # than matching a bare "600" that any other argument could satisfy.
+  local dir="$1" argv_file="$2"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "${argv_file}"
+out_file=""
+write_out=""
+saw_probe=0
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *"/v1/models"*) saw_probe=1; shift ;;
+    *) shift ;;
+  esac
+done
+if (( saw_probe == 1 )); then exit 7; fi
+cat > /dev/null
+body='{"response":"mock-model-output: ok\\n"}'
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+fi
+EOF
+  chmod +x "$dir/curl"
+}
+
 # 1. Missing args -> exit 2.
 EC=0
 out=$(bash "$SCRIPT" 2>&1) || EC=$?
@@ -4954,6 +4990,66 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 2 "$EC" "--project followed by a flag -> exit 2"
 assert_contains "--project requires a value" "$out" "--project followed by a flag: informative stderr"
 rm -rf "$tmp" "$metrics"
+
+# 34. --max-time / --connect-timeout are passed on the Ollama dispatch curl,
+# defaulting to 600 s (see the DELEGATE_REQUEST_TIMEOUT header entry).
+tmp=$(mktemp -d)
+argv_sniff="$tmp/argv.txt"
+make_mock_ollama "$tmp"
+make_mock_curl_argv "$tmp" "$argv_sniff"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_BACKEND=ollama \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1 || true
+argv=$(cat "$argv_sniff" 2>/dev/null)
+assert_contains "--max-time 600" "$argv" "ollama dispatch defaults to 600s"
+assert_contains "--connect-timeout 5" "$argv" "ollama dispatch passes --connect-timeout"
+rm -rf "$tmp"
+
+# 35. DELEGATE_REQUEST_TIMEOUT overrides the default.
+tmp=$(mktemp -d)
+argv_sniff="$tmp/argv.txt"
+make_mock_ollama "$tmp"
+make_mock_curl_argv "$tmp" "$argv_sniff"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_BACKEND=ollama \
+  DELEGATE_REQUEST_TIMEOUT=42 \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1 || true
+argv=$(cat "$argv_sniff" 2>/dev/null)
+assert_contains "--max-time 42" "$argv" "DELEGATE_REQUEST_TIMEOUT overrides the default"
+rm -rf "$tmp"
+
+# 36. The MLX dispatch curl gets the same bounds. Reuses make_mock_curl_mlx_ok,
+# which already sniffs argv and answers the /v1/models probe.
+tmp=$(mktemp -d)
+snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
+mkdir -p "$snap"
+touch "$snap/weights.safetensors"
+argv_sniff="$tmp/argv.txt"
+make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json" "$argv_sniff"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1 || true
+argv=$(cat "$argv_sniff" 2>/dev/null)
+assert_contains "--max-time 600" "$argv" "mlx dispatch defaults to 600s"
+assert_contains "--connect-timeout 5" "$argv" "mlx dispatch passes --connect-timeout"
+rm -rf "$tmp"
+
+# 37. A timeout (curl exit 28) names the knob to raise, rather than sending
+# the caller to the generic daemon-check text.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+cat > "$tmp/curl" <<'EOF'
+#!/usr/bin/env bash
+cat > /dev/null
+echo "curl: (28) Operation timed out" >&2
+exit 28
+EOF
+chmod +x "$tmp/curl"
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_BACKEND=ollama \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || true
+assert_contains "DELEGATE_REQUEST_TIMEOUT" "$out" "timeout guidance names the knob"
+rm -rf "$tmp"
 
 echo
 echo "$pass passed, $fail failed"
