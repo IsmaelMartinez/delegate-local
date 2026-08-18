@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.4](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.3...v0.27.4) (2026-08-18)
+
+
+### Bug Fixes
+
+* delegate-boundary-hook resolves project across cd ([#393](https://github.com/IsmaelMartinez/delegate-local/issues/393)) ([e255450](https://github.com/IsmaelMartinez/delegate-local/commit/e255450ee6158b2568402a682f28f1c37d12b761))
+
 ## [0.27.3](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.2...v0.27.3) (2026-08-18)
 
 
