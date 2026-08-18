@@ -45,17 +45,29 @@ so release PRs merge with `--admin`. The structural fix, a PAT or App token, sta
 ```
   T1  release pipeline            DONE, PR #367
   T2  release 0.24.0              proves T1 end to end
-  T3  #356 placeholder stand-ins  small, independent; lands BEFORE any test surgery
-  T4  embeddings (#357 + #362)    MUST precede T6; see "the circular dependency"
+  T3  #356 placeholder stand-ins  DONE, PR #368
   T5  provider default + mocks    additive; makes the hermeticity risk detectable
+  T4  embeddings (#357 + #362)    needs T5; MUST precede T6
   T6  the deletion                subtractive only; any failure is a missed reference
   T7  eval-skill-triggers.sh      own task, not part of T6
   T8  docs, dashboards, ADRs
   T9  #358 boundary hook drafting moment
   T10 #360 install from published skill
   T11 triage #341 / #340 / #361 / #323
-  T12 new issue: audit-models.sh regression shipped in #365
+  T12 comment on #357 with the audit-models finding
 ```
+
+**T5 runs before T4, corrected during implementation.** The review moved embeddings
+earlier to break the circular dependency, which is right, but starting the work
+surfaced a second constraint it did not account for. `pick-model.sh --print-resolution`
+requires `DELEGATE_BASE_URL`, and with no list configured the embedding tier does not
+resolve at all: `bash scripts/pick-model.sh embedding` exits 1 with zero output on
+both streams, because the MLX probe wins and MLX has no embedding candidate. Only
+`DELEGATE_BACKEND=ollama` makes it resolve, which is precisely the special-case being
+removed. So `embed.sh` would have to invent its own default provider list, diverging
+from `delegate.sh` until T5 hoists it. Landing T5 first gives both scripts one shared
+default. The ordering constraint that actually matters is unchanged: embeddings before
+the deletion.
 
 ### The circular dependency, and why T4 moved
 
@@ -403,20 +415,23 @@ for n in 323 340 341 361; do
 done
 ```
 
-### T12 — file the regression that shipped in #365
+### T12 — record the latent `audit-models.sh` defect on #357
 
 `scripts/pick-model.sh:181-186` short-circuits on `DELEGATE_BASE_URL` before reading
-`DELEGATE_BACKEND`, so `audit-models.sh:25` (`export DELEGATE_BACKEND="$backend"`) and
-`:67` are silently ignored under a provider list. The embedding forcing at `:60-62`
-does nothing and the printed claim is stale. Reproduced:
+`DELEGATE_BACKEND` (deliberately: "DELEGATE_BASE_URL supersedes backend probing
+entirely"). A consequence that was not intended is that `audit-models.sh:60-67`
+forces `DELEGATE_BACKEND="ollama"` for the embedding tier to mirror `embed.sh`'s call
+path, and under a provider list that forcing is silently ignored, while the row still
+prints `[via ollama — embed.sh forces it]`.
 
-```
-DELEGATE_BACKEND=auto -> in effect: provider
-The embedding tier is Ollama-only by design (scripts/embed.sh posts to /api/embed)
-```
-
-Open an issue rather than folding it into another PR, since it is a shipped regression
-and deserves its own history. It is fixed incidentally by T4.
+**Scoped honestly after reproducing it.** The first draft called this a shipped
+regression deserving its own issue. It is not visible today: the embedding tier still
+resolves to `nomic-embed-text:latest` under a provider list, because Ollama is the only
+provider listing an embedding-named model. It fails the same way the embedding
+invariant does, by accident rather than by design, so it belongs as a comment on #357
+(which owns that invariant) rather than as a duplicate issue. `list_installed()` was
+also checked and is fine: under a provider list it correctly unions all three
+providers' models. T4 fixes the forcing incidentally.
 
 ## Release policy
 
