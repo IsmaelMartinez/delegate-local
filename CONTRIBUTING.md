@@ -47,6 +47,18 @@ Conventional-commit prefixes (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `
 
 PRs run frontmatter validation, the content scan, the unit suite, and the trigger eval against GitHub Models. All must pass. The trigger eval uses the auto-provisioned `GITHUB_TOKEN` so there is no secret to configure.
 
+## Releasing
+
+Releases are cut by release-please. Merging to `main` opens or updates a PR titled `chore(main): release X.Y.Z`; merging that PR tags the commit and publishes the release.
+
+Two independent quirks of this repository are worth knowing before cutting one.
+
+Releases publish rather than draft. `release-please-config.json` sets `"draft": false` deliberately. A draft GitHub release does not create its git tag, and release-please anchors changelog generation on tags, so a drafted release silently breaks the *next* one: with no tag to anchor on it regenerates the whole history into the following changelog. That is what happened to v0.21.0 through v0.23.0, whose release PRs all merged normally but left no tags behind, and it is why the 0.24.0 PR was first generated with 314 changelog entries instead of six. Do not set this flag back to `true`.
+
+The release PR's CI needs a manual approval. It is authored by `github-actions[bot]`, and the repository's Actions approval policy is `first_time_contributors`, so its `ci` run completes as `action_required` with zero jobs until someone presses "Approve and run" in the Actions tab. Either approve it, or merge with `gh pr merge <n> --squash --admin` (`enforce_admins` is `false` on `main`). This is unrelated to the draft flag above: it delays a release rather than corrupting the next one. The structural fix, a PAT or GitHub App token for release-please, is tracked in #366.
+
+If a release PR is stale, re-run the `Release Please` workflow from the Actions tab; it has a `workflow_dispatch` trigger for exactly this, so there is no need to push a no-op commit to `main`.
+
 ## Labels
 
 One project-specific issue label you may encounter: `prompt-pattern` marks an issue that captures a recurring delegation MISS — a task shape the local model keeps getting wrong — so the maintainer can graduate it into a calibrated `prompts/<task>.md` recipe (the `delegate-feedback.sh` nudge drafts these; see the README "Calibration feedback loop").
