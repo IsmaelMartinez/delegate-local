@@ -990,7 +990,11 @@ assert_eq "2" "$EC" "provider list: --print-resolution without DELEGATE_BASE_URL
 # behavioural tests: the obvious assertion (--print-backend prints "ollama")
 # keeps passing. Only the two sites below may test the variable directly —
 # the userinfo validation, and the mode assignment itself.
-mode_proxies=$(grep -c 'if \[\[ -n "${DELEGATE_BASE_URL:-}" \]\]' "$PICK" || true)
+#
+# Matches any `[[ … DELEGATE_BASE_URL … ]]` condition rather than one exact
+# string, so it neither false-fails on a reformat nor false-passes on an
+# equivalent spelling (`-z` with negation, `!= ""`, `[[ … ]] &&`).
+mode_proxies=$(grep -c '\[\[.*DELEGATE_BASE_URL' "$PICK" || true)
 assert_eq "2" "$mode_proxies" "pick-model: only userinfo validation and the mode assignment test DELEGATE_BASE_URL directly"
 
 echo
