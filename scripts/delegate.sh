@@ -1150,8 +1150,9 @@ if [[ -n "$recipe" ]] \
     emit_failure 3 "$model" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty"
     # Distinguish curl exit codes so the recovery advice points at the
     # right knob. 28 is the --max-time-fired timeout (the case the canary
-    # was designed for); 7 is "can't reach host" (daemon down or wrong
-    # the host variables); 22 is curl --fail on a non-2xx response
+    # was designed for); 7 is "can't reach host" (the provider daemon is
+    # down, or a host variable points somewhere else); 22 is curl --fail on
+    # a non-2xx response
     # (e.g. an unknown model name returning 404). Anything else falls
     # through to a generic curl-exit-N message that names the code so the
     # caller can look it up.

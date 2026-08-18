@@ -183,9 +183,9 @@ The wrapper's failure modes map onto its exit codes, and every hard failure prin
 
 Exit 1 (`pick-model failed for tier`) means no installed model matches the tier's preference list. Run `bash scripts/audit-models.sh` to see what is installed and how tiers currently route, then either pull a model from the tier's preference list in `scripts/pick-model.sh` or edit that list to match your hardware. `pick-model.sh` distinguishes the two causes: "no provider is reachable" means start a daemon, "no provider holds a model for tier X" means pull a model or edit the preference list.
 
-Exit 3 (`pre-flight canary`) means the resolved model did not answer a 1-token probe within `DELEGATE_PREFLIGHT_TIMEOUT` (default 10 s). The stderr message distinguishes a cold-load timeout (retry with a larger timeout), a connection refusal (start `ollama serve` or `mlx_lm.server`, confirm `OLLAMA_HOST` / `MLX_HOST`), and an HTTP error (usually a bad model name).
+Exit 3 (`pre-flight canary`) means the resolved model did not answer a 1-token probe within `DELEGATE_PREFLIGHT_TIMEOUT` (default 10 s). The stderr message distinguishes a cold-load timeout (retry with a larger timeout), a connection refusal (start the provider daemon — `mlx_lm.server`, Docker Model Runner or `ollama serve` — and confirm `MLX_HOST` / `DOCKER_MODEL_HOST` / `OLLAMA_HOST`, or the `DELEGATE_BASE_URL` you pinned), and an HTTP error (usually a bad model name).
 
-A non-zero curl exit on the dispatch itself (commonly 7, connection refused) means the backend daemon went away between the canary and the full request, or no canary ran (bare non-recipe calls skip it). The same daemon/host checks apply.
+A non-zero curl exit on the dispatch itself (commonly 7, connection refused) means the resolved provider went away between the canary and the full request, or no canary ran (bare non-recipe calls skip it). `bash scripts/pick-model.sh --print-providers` shows which URLs are in play; the same daemon/host checks apply.
 
 Empty or whitespace-only output from an MLX model usually means a raw completions endpoint was hit instead of chat-completions — `delegate.sh` always uses the right one, so this points at a hand-rolled `curl` bypassing the wrapper.
 
