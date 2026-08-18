@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.25.0...v0.26.0) (2026-08-18)
+
+
+### Features
+
+* move embed.sh to the OpenAI-compatible embeddings endpoint ([#378](https://github.com/IsmaelMartinez/delegate-local/issues/378)) ([eec3e8b](https://github.com/IsmaelMartinez/delegate-local/commit/eec3e8b34f1ce7bc5d890cc2cb8c6467d3c8a833))
+
 ## [0.25.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.24.3...v0.25.0) (2026-08-18)
 
 
