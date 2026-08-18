@@ -22,7 +22,7 @@ Recreate in Langfuse:
 4. Clone the saved filter three times and tighten each clone:
    - `delegate-local — by tier` — group by `delegate.tier` in the column controls. The table renders a row per tier with the call count.
    - `delegate-local — by recipe` — group by `delegate.recipe`. Bare-prose-tier calls (no recipe attribute) collapse into a single `null` row that the Grafana panel excludes; in Langfuse the null row is informative because it surfaces the count of non-recipe delegations.
-   - `delegate-local — by backend` — group by `gen_ai.provider.name`. The two-row split (`ollama` versus `mlx`) matches the auto-default backend's behaviour: MLX-when-available, Ollama-fallback.
+   - `delegate-local — by provider` — group by `gen_ai.provider.name`. One row per provider that won a call (`mlx`, `docker`, `ollama`, or `host:port` for anything else), which is the label `delegate.sh` derives from the winning base URL.
 
 Latency and tokens-avoided trends:
 

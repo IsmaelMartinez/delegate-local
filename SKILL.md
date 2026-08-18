@@ -39,7 +39,7 @@ The natural shape is **structure is yours, prose is delegated**: headings, code 
 
 Density threshold — per-edit AND session-level: if you would otherwise type more than ~4 paragraphs of fresh prose in a single delegation site, the skill earns its keep. But also evaluate at session level: if the session will produce more than ~4 paragraphs of total delegatable prose across all edits combined, delegation is the default even if each individual edit is small. A docs-cleanup session touching 9 files with 1-2 paragraphs each is well above threshold in aggregate, even though no single edit crosses it alone. When in doubt, delegate — the setup overhead of `delegate.sh` is near-zero and a rejected output costs less than writing it yourself.
 
-If `ollama` is not on PATH or `ollama list` is empty, do the work yourself and mention why.
+If no provider is reachable, or none serves a model for the tier, `delegate.sh` says which of the two it is on stderr — do the work yourself and mention why.
 
 ### Supervised code drafts — a divergent, executable second opinion
 
@@ -168,15 +168,21 @@ Preference order per tier lives in `scripts/pick-model.sh`. Edit that file (not 
 
 `code`, `prose`, `reasoning`, `long-context`, and `premium-general` all use the standard `delegate.sh <tier> "<prompt>"` wrapper — context on stdin, prompt as the argument, response on stdout, metrics appended to the JSONL.
 
-`vision` and `reasoning-vision` resolve a model name but call `POST /api/generate` directly with a base64-encoded `images` array — `delegate.sh` sends only text, so vision call sites build their own payload until the wrapper grows an `images` parameter. The endpoint is the same daemon `delegate.sh` already uses, so no extra setup is needed:
+`vision` and `reasoning-vision` resolve a model name but have no working dispatch path on the default provider set, so treat them as scaffolding rather than a surface to call. `delegate.sh` sends text only, and `mlx_lm.server` 0.31.3 — which is what the vision tier resolves to when MLX is running — rejects image content outright with `Only 'text' content type is supported.` (measured 2026-08-18). Pull a vision model into a provider that accepts images, pin the list to it, and build the payload by hand:
 
 ```bash
-MODEL=$(bash ~/.claude/skills/delegate-local/scripts/pick-model.sh vision)
+# Set this to a provider you have confirmed accepts image content parts —
+# there is no default that does. The resolution line is tab-separated, so
+# `cut` splits it without a literal tab surviving a copy-paste.
+export DELEGATE_BASE_URL="http://<image-capable-provider>/v1"
+RESOLVED=$(bash ~/.claude/skills/delegate-local/scripts/pick-model.sh --print-resolution vision)
+BASE=$(printf '%s' "$RESOLVED" | cut -f1); MODEL=$(printf '%s' "$RESOLVED" | cut -f2)
 IMG_B64=$(base64 < /tmp/screen.png | tr -d '\n')
-curl -s -H "Content-Type: application/json" http://localhost:11434/api/generate \
+curl -s -H "Content-Type: application/json" "$BASE/chat/completions" \
   -d "$(jq -n --arg m "$MODEL" --arg p "Describe what is in this screenshot." --arg i "$IMG_B64" \
-        '{model:$m, prompt:$p, images:[$i], stream:false}')" \
-  | jq -r '.response'
+        '{model:$m, messages:[{role:"user", content:[{type:"text", text:$p},
+          {type:"image_url", image_url:{url:("data:image/png;base64," + $i)}}]}], stream:false}')" \
+  | jq -r '.choices[0].message.content'
 ```
 
 `embedding` has a wired-up primitive — `scripts/embed.sh` — that takes text on stdin (or via `--text "..."`) and prints the embedding vector to stdout as a compact JSON array of floats. It writes a `source:"embed"` row to the same metrics JSONL `delegate.sh` uses, so embedding traffic surfaces in `metrics-summary.sh` rollups alongside delegation traffic. The recipe `prompts/semantic-search.md` wraps `scripts/semantic-search.sh` (a thin cosine-similarity ranker built on `embed.sh`) and gives the agent a "find the doc that mentions X" surface that avoids reading every file:
