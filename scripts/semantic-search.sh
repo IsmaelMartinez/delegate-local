@@ -20,7 +20,7 @@
 # from the output, so a glob that picks up a deleted or unreadable path
 # doesn't kill the whole search.
 #
-# Env: inherits everything embed.sh honours (OLLAMA_HOST,
+# Env: inherits everything embed.sh honours (DELEGATE_BASE_URL,
 #      DELEGATE_LOCAL_NO_METRICS, DELEGATE_METRICS_FILE).
 
 set -uo pipefail

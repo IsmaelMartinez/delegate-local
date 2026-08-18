@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Unit tests for scripts/embed.sh.
-# Mocks `curl` (used by pick-model.sh for discovery and by embed.sh to call
-# /api/embed) on a restricted PATH so the test runs the same everywhere.
+# Mocks `curl` — used by pick-model.sh for discovery and by embed.sh to call
+# {base}/embeddings — on a restricted PATH so the test runs the same
+# everywhere.
 
 set -u
 
@@ -66,7 +67,7 @@ while (( \$# > 0 )); do
   esac
 done
 cat > "${sniff}"
-body='{"embeddings":[[0.1,0.2,-0.3,0.4]],"model":"nomic-embed-text:latest"}'
+body='{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2,-0.3,0.4]}],"model":"nomic-embed-text:latest"}'
 if [[ -n "\$out_file" ]]; then
   printf '%s' "\$body" > "\$out_file"
 else
@@ -136,7 +137,10 @@ line=$(cat "$metrics")
 assert_contains '"source":"embed"' "$line" "metrics: source=embed"
 assert_contains '"tier":"embedding"' "$line" "metrics: tier=embedding"
 assert_contains '"model":"nomic-embed-text:latest"' "$line" "metrics: model field"
-assert_contains '"backend":"ollama"' "$line" "metrics: backend=ollama"
+# The mock answers every provider, so the first entry of the default list
+# wins and the label is derived from its URL. The case that matters — a
+# different winner produces a different label — is the pinned test below.
+assert_contains '"backend":"mlx"' "$line" "metrics: backend derived from the winning provider"
 assert_contains '"input_chars":11' "$line" "metrics: input_chars counted (len('hello world')=11)"
 assert_contains '"embedding_dim":4' "$line" "metrics: embedding_dim parsed from response"
 assert_contains '"exit_status":0' "$line" "metrics: exit_status=0"
@@ -290,9 +294,9 @@ EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" --text "x" </dev/null 2>&1) || EC=$?
-assert_eq 1 "$EC" "missing .embeddings[0]: exit 1"
-assert_contains "did not contain .embeddings[0]" "$out" "missing .embeddings[0]: descriptive stderr"
-assert_contains '"exit_status":1' "$(cat "$metrics")" "metrics: missing .embeddings[0] -> exit_status=1"
+assert_eq 1 "$EC" "missing .data[0].embedding: exit 1"
+assert_contains "did not contain .data[0].embedding" "$out" "missing .data[0].embedding: descriptive stderr"
+assert_contains '"exit_status":1' "$(cat "$metrics")" "metrics: missing .data[0].embedding -> exit_status=1"
 rm -rf "$tmp" "$metrics"
 
 # 16. JSON output is parser-clean: pipe through jq directly and confirm
@@ -306,6 +310,23 @@ parsed=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --text "x" </dev/null 2>/dev/null | jq -r 'length') || EC=$?
 assert_eq 0 "$EC" "jq round-trip: exit 0"
 assert_eq "4" "$parsed" "jq round-trip: vector length = 4"
+rm -rf "$tmp" "$metrics"
+
+# 17. Pinning the list changes both the endpoint and the metrics label: the
+# embedding tier is no longer wired to one daemon, so the label has to follow
+# the provider that actually answered.
+tmp=$(mktemp -d)
+argv_sniff="$tmp/argv.txt"
+make_mock_curl_ok "$tmp" "/dev/null" "$argv_sniff"
+metrics=$(mktemp)
+EC=0
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_BASE_URL=http://localhost:11434/v1 \
+  bash "$SCRIPT" --text "x" </dev/null >/dev/null 2>&1 || EC=$?
+assert_eq 0 "$EC" "pinned provider: exit 0"
+assert_contains '"backend":"ollama"' "$(cat "$metrics")" "pinned provider: metrics label follows the winning URL"
+assert_contains "http://localhost:11434/v1/embeddings" "$(cat "$argv_sniff")" "pinned provider: POSTs to {base}/embeddings"
 rm -rf "$tmp" "$metrics"
 
 # 18. The embeddings POST is bounded, defaulting to 60 s.

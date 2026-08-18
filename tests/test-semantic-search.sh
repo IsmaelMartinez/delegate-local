@@ -88,7 +88,7 @@ case "$input" in
   *delta*) vec='[-1,0,0,0]' ;;
   *)       vec='[0.3,0.3,0.3,0]' ;;
 esac
-body=$(jq -nc --argjson v "$vec" '{embeddings:[$v],model:"nomic-embed-text:latest"}')
+body=$(jq -nc --argjson v "$vec" '{object:"list",data:[{object:"embedding",index:0,embedding:$v}],model:"nomic-embed-text:latest"}')
 if [[ -n "$out_file" ]]; then printf '%s' "$body" > "$out_file"
 else printf '%s' "$body"; fi
 EOF
