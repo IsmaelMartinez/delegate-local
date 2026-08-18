@@ -171,9 +171,12 @@ Preference order per tier lives in `scripts/pick-model.sh`. Edit that file (not 
 `vision` and `reasoning-vision` resolve a model name but have no working dispatch path on the default provider set, so treat them as scaffolding rather than a surface to call. `delegate.sh` sends text only, and `mlx_lm.server` 0.31.3 — which is what the vision tier resolves to when MLX is running — rejects image content outright with `Only 'text' content type is supported.` (measured 2026-08-18). Pull a vision model into a provider that accepts images, pin the list to it, and build the payload by hand:
 
 ```bash
-BASE_MODEL=$(DELEGATE_BASE_URL="${OLLAMA_HOST:-http://localhost:11434}/v1" \
-  bash ~/.claude/skills/delegate-local/scripts/pick-model.sh --print-resolution vision)
-BASE=${BASE_MODEL%%	*}; MODEL=${BASE_MODEL#*	}
+# Set this to a provider you have confirmed accepts image content parts —
+# there is no default that does. The resolution line is tab-separated, so
+# `cut` splits it without a literal tab surviving a copy-paste.
+export DELEGATE_BASE_URL="http://<image-capable-provider>/v1"
+RESOLVED=$(bash ~/.claude/skills/delegate-local/scripts/pick-model.sh --print-resolution vision)
+BASE=$(printf '%s' "$RESOLVED" | cut -f1); MODEL=$(printf '%s' "$RESOLVED" | cut -f2)
 IMG_B64=$(base64 < /tmp/screen.png | tr -d '\n')
 curl -s -H "Content-Type: application/json" "$BASE/chat/completions" \
   -d "$(jq -n --arg m "$MODEL" --arg p "Describe what is in this screenshot." --arg i "$IMG_B64" \
