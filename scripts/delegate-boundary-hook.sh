@@ -210,14 +210,56 @@ done <<<"$scan"
 
 # --- derive the project name (mirror delegate.sh / lib/otel.sh) -----------
 [[ -n "$hook_cwd" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
-project=""
+cwd_project=""
 common=$(git rev-parse --git-common-dir 2>/dev/null || true)
 if [[ -n "$common" ]]; then
   common_dir=$(cd "$common" 2>/dev/null && pwd || true)
-  [[ -n "$common_dir" ]] && project=$(basename "$(dirname "$common_dir")")
+  [[ -n "$common_dir" ]] && cwd_project=$(basename "$(dirname "$common_dir")")
 else
-  project=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+  cwd_project=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
 fi
+
+# --- which repository is this boundary actually about? (#385) -------------
+# The harness reports the SESSION cwd, but agents routinely run
+# `cd <other-repo> && git commit …`. delegate.sh runs AFTER that cd, so it
+# records the other repo, and a lookup keyed on the session cwd could never
+# match across it: a boundary whose drafting genuinely was delegated got
+# recorded as a miss and nudged anyway. Measured 2026-08-18, 66 opportunities
+# filed under `pr-agent` against 3 delegations there, while 35 delegations sat
+# under `delegate-local` with none.
+#
+# Parsed off the RAW $cmd rather than the $scan surface. That is a deliberate
+# departure from the doctrine above, because scan blanks quoted spans and a
+# quoted path with a space survives there as `cd   `. The match is ^-anchored,
+# so a heredoc body mentioning `cd /x && git commit` cannot reach it, and the
+# captured path is only ever a quoted argument to `cd` inside a subshell. It is
+# never expanded and never eval'd.
+cd_project=""
+_cd_sq="^[[:space:]]*cd[[:space:]]+'([^']+)'[[:space:]]*&&"
+_cd_dq="^[[:space:]]*cd[[:space:]]+\"([^\"]+)\"[[:space:]]*&&"
+_cd_bare="^[[:space:]]*cd[[:space:]]+([^[:space:]&'\"]+)[[:space:]]*&&"
+if [[ "$cmd" =~ $_cd_sq ]] || [[ "$cmd" =~ $_cd_dq ]] || [[ "$cmd" =~ $_cd_bare ]]; then
+  cd_path="${BASH_REMATCH[1]}"
+  # `cd -` resolves to $OLDPWD, which is not knowable from the payload, and a
+  # path carrying $, backtick or ~ would need an expansion the hook must not
+  # perform. Both are rejected outright rather than sanitised.
+  case "$cd_path" in
+    -*|*'$'*|*'`'*|*'~'*) cd_path="" ;;
+  esac
+  if [[ -n "$cd_path" && -d "$cd_path" ]]; then
+    # Derived inside a SUBSHELL that has chdir'd to the target. Do not reach for
+    # `git -C "$cd_path" rev-parse --git-common-dir`: at a repo root that returns
+    # the RELATIVE string `.git`, which then resolves against the hook's own cwd
+    # and silently reproduces the very bug this block exists to fix.
+    # Accepted only when the target is inside a git repository — a `cd /tmp`
+    # must not file the boundary under `tmp` and fragment the denominator.
+    cd_project=$(cd -- "$cd_path" 2>/dev/null || exit
+      c=$(git rev-parse --git-common-dir 2>/dev/null) || exit
+      d=$(cd "$c" 2>/dev/null && pwd) || exit
+      basename "$(dirname "$d")")
+  fi
+fi
+project="${cd_project:-$cwd_project}"
 
 # --- was the body drafted earlier, into a file? (#349) --------------------
 # `--body-file` / `-F` / `--notes-file` / `--file` pointing at a file that
@@ -286,10 +328,10 @@ delegated=false
 if [[ -f "$metrics_file" ]]; then
   # Only the recent tail can fall inside the look-back window, so cap the read
   # instead of slurping the whole (ever-growing) metrics file on each boundary.
-  recent=$(tail -n 500 "$metrics_file" 2>/dev/null | jq -s --argjson win "$((window_min * 60))" --arg proj "$project" --arg recipe "$recipe" --argjson now "$now_epoch" '
+  recent=$(tail -n 500 "$metrics_file" 2>/dev/null | jq -s --argjson win "$((window_min * 60))" --arg proj "$project" --arg proj2 "$cwd_project" --arg recipe "$recipe" --argjson now "$now_epoch" '
     [ .[]
       | select((.source // "delegate") == "delegate")
-      | select((.project // "") == $proj)
+      | select((.project // "") == $proj or (.project // "") == $proj2)
       | select((.recipe // "") == $recipe)
       | ((.ts | fromdateiso8601?) // 0)
       | select(. > ($now - $win)) ] | length' 2>/dev/null) || recent=0
