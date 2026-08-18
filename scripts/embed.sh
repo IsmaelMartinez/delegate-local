@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Embed text via a local Ollama model and print the embedding vector to
-# stdout as a JSON array of floats. Sibling to delegate.sh: same metrics
-# JSONL, same tier resolution via pick-model.sh, but a different call
-# shape (POST {base}/embeddings, vector output) because delegate.sh assumes
+# Embed text via whichever provider in the list serves an embedding model, and
+# print the vector to stdout as a JSON array of floats. Sibling to delegate.sh:
+# same metrics JSONL, same tier resolution via pick-model.sh, same provider
+# list, but a different call shape (POST {base}/embeddings, vector output)
+# because delegate.sh assumes
 # text-in / text-out and special-casing it for embeddings would force
 # several branches off a shared spine. See ROADMAP "Capability expansion
 # — modality tiers" / P1 for rationale.
