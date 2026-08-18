@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for taking the time to look. This repo is one Claude Code skill, two bash scripts of routing logic, and a validation pipeline. There is no build, no linter, and no package manager. The runtime is `bash` (3.2+ — macOS-shipped is fine), `jq`, `awk`, `perl`, and `curl` (used by `scripts/delegate.sh` against the backend HTTP API and by all three scoring modes of the trigger eval — `--api`, `--ollama`, `--github-models`).
+Thanks for taking the time to look. This repo is one Claude Code skill, two bash scripts of routing logic, and a validation pipeline. There is no build, no linter, and no package manager. The runtime is `bash` (3.2+ — macOS-shipped is fine), `jq`, `awk`, `perl`, and `curl` (used by `scripts/delegate.sh` against the backend HTTP API and by all three scoring modes of the trigger eval — `--api`, `--local`, `--github-models`).
 
 ## What lives where
 
@@ -32,7 +32,7 @@ Each kept script has its own per-script test file under `tests/` (`test-delegate
 If you edit the `description` field in `SKILL.md` frontmatter, run the trigger eval against a real model before opening the PR:
 
 ```bash
-bash scripts/eval-skill-triggers.sh --ollama
+bash scripts/eval-skill-triggers.sh --local
 ```
 
 This is free, runs locally in 10–30 seconds, and dogfoods the project's own routing. CI runs the same gate against GitHub Models on every PR, so a regression there will fail the build. The threshold is recall ≥ 0.9 and negative-precision ≥ 0.9 against `evals/eval-set.json`.
