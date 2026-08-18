@@ -5210,6 +5210,87 @@ for legit in \
   esac
 done
 
+make_mock_curl_empty() {
+  # Mock curl returning a well-formed response whose answer is empty because
+  # the token budget was spent before any content was emitted. Serves
+  # /v1/models as well, so provider resolution reaches dispatch rather than
+  # failing earlier and passing this test for the wrong reason.
+  local dir="$1"
+  cat > "$dir/curl" <<'EOF'
+#!/usr/bin/env bash
+out=""; url=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o) out="$2"; shift 2;;
+    http*) url="$1"; shift;;
+    *) shift;;
+  esac
+done
+# Answer the probe before draining stdin: the models request has no stdin and
+# a blocking `cat` would hang the run.
+case "$url" in
+  */models) printf '%s' '{"data":[{"id":"qwen3.6:35b-a3b"}]}'; exit 0 ;;
+esac
+cat >/dev/null
+case "$url" in
+  */api/generate) body='{"response":"","done_reason":"length"}' ;;
+  *) body='{"choices":[{"message":{"content":"","reasoning":"thinking hard"},"finish_reason":"length"}]}' ;;
+esac
+if [[ -n "$out" ]]; then printf '%s' "$body" > "$out"; printf '0.001'; else printf '%s' "$body"; fi
+EOF
+  chmod +x "$dir/curl"
+}
+
+# 45. An empty answer is reported, not returned as silence. Ollama's OpenAI
+# endpoint ignores enable_thinking:false, so reasoning consumes the token
+# budget and the answer comes back "" with finish_reason "length" — measured
+# on 2026-08-18. Returning that as success makes the miss invisible, and the
+# metrics row records an ordinary delegation.
+tmp=$(mktemp -d)
+make_mock_curl_empty "$tmp"
+metrics=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_BASE_URL="http://localhost:9999/v1" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1); rc=$?
+assert_eq "100" "$rc" "empty answer exits with the empty-response sentinel"
+assert_contains "empty response" "$out" "empty answer is reported as such"
+assert_contains "finish_reason=length" "$out" "empty answer names the finish reason"
+assert_contains "DELEGATE_MAX_TOKENS" "$out" "empty answer points at the token budget"
+# The sentinel must not be mistaken for a transport failure: an earlier draft
+# set status=1 and the generic block then printed "curl exit 1" and advised
+# restarting the daemon, which is the wrong diagnosis.
+case "$out" in
+  *"dispatch failed (curl exit"*)
+    assert_eq "no curl advice" "curl advice printed" "empty answer does not print transport advice" ;;
+  *)
+    assert_eq "no curl advice" "no curl advice" "empty answer does not print transport advice" ;;
+esac
+assert_contains '"exit_status":100' "$(cat "$metrics")" "empty answer is visible in the metrics row"
+rm -rf "$tmp" "$metrics"
+
+# 46. The same guard on the Ollama-native arm, which reads .response rather
+# than .choices[0].message.content and reports done_reason. That arm is still
+# reachable via DELEGATE_BACKEND=ollama until it is removed.
+tmp=$(mktemp -d)
+make_mock_ollama "$tmp"
+make_mock_curl_empty "$tmp"
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_BACKEND=ollama \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1); rc=$?
+assert_eq "100" "$rc" "native arm: empty answer exits with the sentinel"
+assert_contains "finish_reason=length" "$out" "native arm: done_reason is reported as the finish reason"
+# The native arm sends no num_predict, so DELEGATE_MAX_TOKENS is not a lever
+# there and naming it would send the caller after a variable that does nothing.
+case "$out" in
+  *DELEGATE_MAX_TOKENS*)
+    assert_eq "no max-tokens advice" "max-tokens advice printed" "native arm: does not suggest DELEGATE_MAX_TOKENS" ;;
+  *)
+    assert_eq "no max-tokens advice" "no max-tokens advice" "native arm: does not suggest DELEGATE_MAX_TOKENS" ;;
+esac
+assert_contains "own context" "$out" "native arm: points at the model's context limit instead"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

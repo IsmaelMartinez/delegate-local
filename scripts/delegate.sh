@@ -1269,6 +1269,18 @@ done
 body_file=$(mktemp)
 trap 'rm -f "$body_file"' EXIT
 
+# Sentinel for "the call succeeded but the model returned nothing". Deliberately
+# above curl's exit-code range (curl tops out at 99) so it can never be confused
+# with a transport failure: overloading a real curl code made the dispatch-
+# failure block below print "curl exit 1" and advise restarting the daemon,
+# which is the wrong diagnosis for an exhausted token budget. It also surfaces
+# in the metrics row as exit_status:100, so the miss is visible to
+# metrics-summary instead of looking like an ordinary short answer.
+EMPTY_RESPONSE_STATUS=100
+# Set alongside the sentinel; read by the failure block. Initialised here
+# because delegate.sh runs under `set -u`.
+empty_finish_reason=""
+
 # dispatch_to_model <model> — build the backend request, POST it, parse the
 # response into $output, and strip any leading reasoning trace. Sets the
 # globals $output, $status, $ttfb_s, $payload. Strip-think is folded in here so
@@ -1305,6 +1317,10 @@ if [[ -z "$resolved_base" && "$backend" == "ollama" ]]; then
   status=$?
   if [[ "$status" -eq 0 ]]; then
     output=$(jq -r '.response // ""' < "$body_file")
+    if [[ -z "$output" ]]; then
+      empty_finish_reason=$(jq -r '.done_reason // "unknown"' < "$body_file")
+      status=$EMPTY_RESPONSE_STATUS
+    fi
   else
     output=""
   fi
@@ -1343,6 +1359,16 @@ else
   status=$?
   if [[ "$status" -eq 0 ]]; then
     output=$(jq -r '.choices[0].message.content // ""' < "$body_file")
+    # A well-formed response with empty content is a real failure, not a short
+    # answer. Providers that ignore chat_template_kwargs.enable_thinking spend
+    # the whole budget on reasoning — which lands in a separate `reasoning`
+    # field, so `content` is genuinely empty — and return finish_reason
+    # "length". Measured on Ollama 2026-08-18: at max_tokens 16 the answer is
+    # "" while MLX and Docker Model Runner both return the real answer.
+    if [[ -z "$output" ]]; then
+      empty_finish_reason=$(jq -r '.choices[0].finish_reason // "unknown"' < "$body_file")
+      status=$EMPTY_RESPONSE_STATUS
+    fi
   else
     output=""
   fi
@@ -1372,7 +1398,29 @@ dispatch_to_model "$model"
 # (e.g. "curl: (7) Failed to connect"); this adds the delegate-branded
 # context and routes persistent breakage toward the bug template instead
 # of leaving the caller with a bare non-zero exit.
-if (( status != 0 )); then
+if (( status == EMPTY_RESPONSE_STATUS )); then
+  {
+    echo "delegate: model returned an empty response — model=\"$model\" tier=\"$tier\" backend=\"$backend\""
+    echo "         finish_reason=$empty_finish_reason"
+    if [[ "$empty_finish_reason" == "length" ]]; then
+      echo "         the budget was spent before any answer was emitted, which happens"
+      echo "         when a thinking-capable model ignores the think:false hint"
+      # max_tokens is assigned only in the OpenAI arm. The native /api/generate
+      # arm sends no num_predict on the dispatch call, so it has no cap of ours
+      # to raise: a "length" stop there is the model's own context limit, and
+      # naming DELEGATE_MAX_TOKENS would send the caller after a variable that
+      # does nothing on that path.
+      if [[ -n "${max_tokens:-}" ]]; then
+        echo "         - raise DELEGATE_MAX_TOKENS (currently $max_tokens)"
+      else
+        echo "         - this path sends no token cap, so the model hit its own context"
+        echo "           limit; shorten the input"
+      fi
+      echo "         - or route this tier to a provider that honours enable_thinking"
+    fi
+    echo "         still broken? file a bug: https://github.com/${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}/issues/new?template=bug_report.md"
+  } >&2
+elif (( status != 0 )); then
   {
     echo "delegate: dispatch failed (curl exit $status) — model=\"$model\" tier=\"$tier\" backend=\"$backend\""
     if (( status == 28 )); then
