@@ -145,6 +145,17 @@
 #                                           #   history (largest: 505 s, of
 #                                           #   which 504.6 s was load) while
 #                                           #   killing the 3.2-hour runaway.
+#   DELEGATE_BASE_URL=<urls>                # space-separated ordered list of
+#                                           #   OpenAI-compatible base URLs.
+#                                           #   When set it supersedes
+#                                           #   DELEGATE_BACKEND: pick-model.sh
+#                                           #   walks the list and dispatch
+#                                           #   posts to {base}/chat/
+#                                           #   completions. The metrics
+#                                           #   backend label is derived from
+#                                           #   the winning URL (mlx / docker /
+#                                           #   ollama, else host:port). Unset
+#                                           #   by default.
 #   DELEGATE_NO_PREFLIGHT=1                 # alternate disable for the canary
 #                                           #   (equivalent to TIMEOUT=0).
 #   DELEGATE_FORCE_FLAKY=1                  # override the recipe-level flaky-
@@ -397,7 +408,16 @@ metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metri
 # skip the probe. The metrics line records the resolved backend, never
 # "auto" — so downstream consumers (metrics-summary, audit-metrics) keep
 # seeing the same shape they did before the auto default.
+# DELEGATE_BASE_URL supersedes backend probing. Which base URL wins is not
+# known until the tier is resolved (a provider can be reachable yet hold no
+# model for this tier), so only the label is set here; the URL comes back from
+# the pick-model call below.
+resolved_base=""
 backend_requested="${DELEGATE_BACKEND:-auto}"
+if [[ -n "${DELEGATE_BASE_URL:-}" ]]; then
+  backend="provider"
+  backend_requested="provider"
+else
 case "$backend_requested" in
   auto)
     mlx_host_probe="${MLX_HOST:-http://localhost:8080}"
@@ -411,6 +431,7 @@ case "$backend_requested" in
   ollama|mlx) backend="$backend_requested" ;;
   *) echo "delegate: unknown DELEGATE_BACKEND='$backend_requested' (valid: auto|ollama|mlx)" >&2; exit 2 ;;
 esac
+fi
 ollama_host="${OLLAMA_HOST:-http://localhost:11434}"
 mlx_host="${MLX_HOST:-http://localhost:8080}"
 
@@ -923,8 +944,33 @@ fi
 # valid-tier list is echoed from pick-model's own message rather than restated
 # here, so there is exactly one source of truth for it.
 pick_err=$(mktemp)
+if [[ -n "${DELEGATE_BASE_URL:-}" ]]; then
+  # One call, not two: --print-resolution returns "<base>\t<model>" so a dead
+  # provider in the list is probed once rather than once per question.
+  _resolved=$(bash "$pick" --print-resolution "$tier" 2>"$pick_err")
+  pick_rc=$?
+  if [[ $pick_rc -eq 0 ]]; then
+    resolved_base="${_resolved%%	*}"
+    model="${_resolved#*	}"
+    # Derive a short metrics label from the base URL. lib/otel.sh maps this to
+    # gen_ai.provider.name and the Grafana overview does sum by (backend), so
+    # emitting the URL would split every historical series and emitting a flat
+    # "provider" would merge every runtime into one. Never falls back to
+    # "openai": that is a registered SemConv value meaning OpenAI, so labelling
+    # a local llama.cpp endpoint with it would be conformant-looking and false.
+    case "$resolved_base" in
+      *:8080*)  backend="mlx" ;;
+      *:12434*) backend="docker" ;;
+      *:11434*) backend="ollama" ;;
+      *) backend=$(printf '%s' "$resolved_base" | sed -E 's|^[a-z]+://||; s|/.*$||') ;;
+    esac
+  else
+    model=""
+  fi
+else
 model=$(bash "$pick" "$tier" 2>"$pick_err")
 pick_rc=$?
+fi
 pick_msg=$(cat "$pick_err" 2>/dev/null)
 rm -f "$pick_err"
 if [[ $pick_rc -ne 0 ]]; then
@@ -1103,14 +1149,17 @@ if [[ -n "$recipe" ]] \
   # Qwen sampler overrides (top_p, top_k, presence_penalty) are pointless
   # at num_predict:1 / max_tokens:1 and would only add JSON noise to the
   # smallest-possible health check.
-  if [[ "$backend" == "ollama" ]]; then
+  # $resolved_base, not $backend, decides the arm: $backend is the metrics
+  # label and is deliberately "ollama" for a provider on Ollama's port, which
+  # must still be reached through the OpenAI arm.
+  if [[ -z "$resolved_base" && "$backend" == "ollama" ]]; then
     canary_payload=$(jq -nc --arg m "$model" --argjson th "$think" \
       '{model:$m, prompt:"hi", stream:false, think:$th, options:{num_predict:1, temperature:0}}')
     canary_url="$ollama_host/api/generate"
   else
     canary_payload=$(jq -nc --arg m "$model" --argjson et "$think" \
       '{model:$m, messages:[{role:"user", content:"hi"}], stream:false, temperature:0, max_tokens:1, chat_template_kwargs:{enable_thinking:$et}}')
-    canary_url="$mlx_host/v1/chat/completions"
+    canary_url="${resolved_base:-$mlx_host/v1}/chat/completions"
   fi
   curl -sS --fail --max-time "$preflight_timeout" -X POST "$canary_url" -d @- >/dev/null 2>&1 <<< "$canary_payload"
   canary_status=$?
@@ -1208,7 +1257,10 @@ local _model="$1"
 # failure guidance below reads it from the caller's scope, the same way it
 # reads $status.
 request_timeout="${DELEGATE_REQUEST_TIMEOUT:-600}"
-if [[ "$backend" == "ollama" ]]; then
+# $resolved_base, not $backend, selects the arm. $backend is the metrics label
+# and is deliberately "ollama" for a provider-list entry on Ollama's port; that
+# request must still go through the OpenAI arm, which is the whole contract.
+if [[ -z "$resolved_base" && "$backend" == "ollama" ]]; then
   # think:false suppresses chain-of-thought for thinking-capable models —
   # see DELEGATE_THINK above. The sampler-profile overlay is built via jq
   # additions so the dispatch payload carries only the keys the caller
@@ -1254,8 +1306,13 @@ else
       + (if $top_p != "" then {top_p:($top_p|tonumber)} else {} end)
       + (if $top_k != "" then {top_k:($top_k|tonumber)} else {} end)
       + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end)')
+  # The MLX arm was always the generic OpenAI arm; parameterising its
+  # destination is what lets any OpenAI-compatible provider work with no
+  # provider-specific branch. resolved_base already had one trailing slash
+  # stripped by pick-model.sh, so the join cannot double up.
+  chat_url="${resolved_base:-$mlx_host/v1}/chat/completions"
   ttfb_s=$(curl -sS --fail --max-time "$request_timeout" --connect-timeout 5 \
-    -X POST "$mlx_host/v1/chat/completions" -d @- \
+    -X POST "$chat_url" -d @- \
     -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
   status=$?
   if [[ "$status" -eq 0 ]]; then
