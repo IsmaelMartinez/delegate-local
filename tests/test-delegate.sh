@@ -4225,7 +4225,7 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --recipe pad prose "go" </dev/null >/dev/null 2>"$errf"
 err=$(cat "$errf"); rm -f "$errf"
 if [[ "$err" == *"no_padding_tail"* ]]; then
-  echo "  FAIL  checks: mid-line participial followed by a sentence not flagged"; fail=$((fail+1))
+  echo "  FAIL  checks: mid-line participial wrongly flagged as a padding tail"; fail=$((fail+1))
 else
   echo "  PASS  checks: mid-line participial followed by a sentence not flagged"; pass=$((pass+1))
 fi
@@ -4238,7 +4238,7 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --recipe pad prose "go" </dev/null >/dev/null 2>"$errf"
 err=$(cat "$errf"); rm -f "$errf"
 if [[ "$err" == *"no_padding_tail"* ]]; then
-  echo "  FAIL  checks: hand-written mid-line participial not flagged"; fail=$((fail+1))
+  echo "  FAIL  checks: hand-written mid-line participial wrongly flagged"; fail=$((fail+1))
 else
   echo "  PASS  checks: hand-written mid-line participial not flagged"; pass=$((pass+1))
 fi
@@ -4262,7 +4262,7 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --recipe pad prose "go" </dev/null >/dev/null 2>"$errf"
 err=$(cat "$errf"); rm -f "$errf"
 if [[ "$err" == *"no_padding_tail"* ]]; then
-  echo "  FAIL  checks: -ings plural not treated as a gerund tail"; fail=$((fail+1))
+  echo "  FAIL  checks: -ings plural wrongly treated as a gerund tail"; fail=$((fail+1))
 else
   echo "  PASS  checks: -ings plural not treated as a gerund tail"; pass=$((pass+1))
 fi
