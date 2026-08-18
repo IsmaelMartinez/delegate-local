@@ -981,6 +981,18 @@ EC=0
 env -i PATH="$SAFE_PATH" HOME="$HOME" bash "$PICK" --print-resolution prose >/dev/null 2>&1 || EC=$?
 assert_eq "2" "$EC" "provider list: --print-resolution without DELEGATE_BASE_URL exits 2"
 
+# Structural guard: resolution and inventory must ask the resolved backend,
+# never "is DELEGATE_BASE_URL set?". The two are equivalent only while the
+# variable has no default. Giving it one — the next step of #363 — makes every
+# presence test answer yes unconditionally, so an explicit DELEGATE_BACKEND
+# would set a label that --print-backend reports and metrics record while
+# resolution still walked the provider list. That failure is invisible to
+# behavioural tests: the obvious assertion (--print-backend prints "ollama")
+# keeps passing. Only the two sites below may test the variable directly —
+# the userinfo validation, and the mode assignment itself.
+mode_proxies=$(grep -c 'if \[\[ -n "${DELEGATE_BASE_URL:-}" \]\]' "$PICK" || true)
+assert_eq "2" "$mode_proxies" "pick-model: only userinfo validation and the mode assignment test DELEGATE_BASE_URL directly"
+
 echo
 echo "=== Results ==="
 total=$((pass+fail))
