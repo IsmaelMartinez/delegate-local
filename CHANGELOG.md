@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.2](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.1...v0.27.2) (2026-08-18)
+
+
+### Bug Fixes
+
+* remove stale dependabot pip block for archived mcp subproject ([#388](https://github.com/IsmaelMartinez/delegate-local/issues/388)) ([d3d120c](https://github.com/IsmaelMartinez/delegate-local/commit/d3d120c53b92cf3cbb3af4346557da78802a4c51))
+
 ## [0.27.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.0...v0.27.1) (2026-08-18)
 
 
