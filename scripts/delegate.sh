@@ -396,6 +396,32 @@ if ! [[ "$nudge_fd" =~ ^[1-9]$ ]]; then
   exit 2
 fi
 
+# Reject a --var value that is nothing but an unreplaced angle-bracket
+# stand-in (`--var why='<why this changed>'`). Callers copy these verbatim from
+# a recipe's ## Invocation block; the model then summarises the placeholder
+# instead of the real content, and the metrics row records an ordinary
+# successful delegation, so the failure is invisible (#356). Validated here
+# with the other fail-fast checks, before the cold-load cost.
+#
+# Only a whole-value single bracket token is rejected. Values that merely
+# contain brackets are the common case and must pass: --var diff= carries real
+# hunks, so HTML, C++ generics, `a < b` and shell redirection all have to
+# survive. Glob matching, not a regex engine, so there is nothing to backtrack.
+for kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
+  [[ "$kv" == *"="* ]] || continue
+  placeholder_value="${kv#*=}"
+  placeholder_value="${placeholder_value#"${placeholder_value%%[![:space:]]*}"}"
+  placeholder_value="${placeholder_value%"${placeholder_value##*[![:space:]]}"}"
+  if [[ "$placeholder_value" == "<"*">" ]]; then
+    placeholder_inner="${placeholder_value:1:${#placeholder_value}-2}"
+    if [[ "$placeholder_inner" != *"<"* && "$placeholder_inner" != *">"* ]]; then
+      echo "delegate: --var ${kv%%=*} is an unreplaced placeholder: '$placeholder_value'" >&2
+      echo "         substitute the real content before delegating" >&2
+      exit 2
+    fi
+  fi
+done
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"

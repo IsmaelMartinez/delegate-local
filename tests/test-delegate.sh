@@ -5168,6 +5168,48 @@ esac
 assert_contains '"backend":"ollama"' "$(cat "$metrics")" "ollama-port provider is still labelled ollama in metrics"
 rm -rf "$tmp" "$metrics"
 
+# 43. A --var value that is nothing but an unreplaced angle-bracket stand-in is
+# rejected before dispatch, and the message names the offending key (#356).
+# Callers copy these verbatim from a recipe's ## Invocation block; the model
+# then summarises the placeholder itself and the metrics row records a success.
+for placeholder in \
+  '<why this changed>' \
+  '<the git diff --cached --stat output>' \
+  '<one or two sentences>' \
+  '<sentences>' \
+  '<type>'; do
+  out=$(env -i PATH="$SAFE_PATH" HOME="$HOME" \
+    bash "$SCRIPT" --recipe commit-message --var why="$placeholder" prose </dev/null 2>&1); rc=$?
+  # Assert the placeholder message specifically. Exit 2 alone is not enough:
+  # this recipe also exits 2 for missing required inputs, so a bare rc check
+  # would pass even with the guard absent.
+  assert_eq "2" "$rc" "placeholder '$placeholder' exits 2"
+  assert_contains "unreplaced placeholder" "$out" "placeholder '$placeholder' is reported as such"
+  assert_contains "why" "$out" "placeholder '$placeholder' names the offending key"
+done
+
+# 44. Values that merely *contain* angle brackets are the common case and must
+# pass the check. --var diff= carries real diff hunks, so a matcher that tripped
+# on HTML, C++ generics, `a < b`, or shell redirection would break the primary
+# path. These may fail later for unrelated reasons (missing required vars, no
+# backend); the assertion is only that they are not rejected as placeholders.
+for legit in \
+  'if (a < b) { x } else if (c > d) { y }' \
+  'std::vector<int> v; if (a < b) return;' \
+  'cmd < in.txt > out.txt' \
+  '<div class="x">hello</div>' \
+  'foo(a<b, c>d)' \
+  '+  <span>ok</span>'; do
+  out=$(env -i PATH="$SAFE_PATH" HOME="$HOME" \
+    bash "$SCRIPT" --recipe commit-message --var diff="$legit" prose </dev/null 2>&1) || true
+  case "$out" in
+    *"unreplaced placeholder"*)
+      assert_eq "accepted" "rejected" "legitimate value is not flagged: $legit" ;;
+    *)
+      assert_eq "accepted" "accepted" "legitimate value is not flagged: $legit" ;;
+  esac
+done
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
