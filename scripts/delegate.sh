@@ -1370,7 +1370,7 @@ run_output_checks() {
 # is a function (it ran at top level before the refactor). The result and the
 # counters — output, checks_run/failed/autofixed, capability_failed — are
 # deliberately NOT local: they are the function's outputs.
-local padding_re check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines
 checks_failed=0
 checks_run=0
 checks_autofixed=0
@@ -1384,11 +1384,39 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
   # preserving, documenting…) were unenumerated: per-verb enumeration is a
   # treadmill the model walks off by reaching for the next unlisted verb. This
   # mirrors the proven matcher in experiments/score-t4.sh (`[a-z]{3,}ing`, whose
-  # {3,} floor and accepted `, string,` false positive carry the same trade-off,
-  # documented there). The This-X arm stays enumerated to bound false positives
+  # {3,} floor carries the same trade-off, documented there). The participial arm
+  # is anchored to the end of the line: the check is named for a TAIL, and an
+  # unanchored arm flagged load-bearing mid-sentence clauses as padding. Measured
+  # 2026-08-18 over the last line of 297 hand-written commit bodies, the
+  # unanchored form raised 2 false positives and this one raises 0, with recall
+  # unchanged on the recipes' own `Wrong:` examples. Three details are load-
+  # bearing and each was measured, so do not "simplify" them away:
+  #   - the `([[:space:]]…)?` keeps `ing` a WORD ending. Dropping it makes
+  #     `[a-z]{3,}ing` a prefix match and every `-ings` plural (settings,
+  #     warnings, findings, strings, mappings) becomes a false positive.
+  #   - the class permits commas, so a genuine tail may contain them
+  #     (`, ensuring the cache, the limiter and the queue stay in sync`); what it
+  #     may not do is cross a sentence boundary.
+  #   - the `{0,200}` bound keeps the match linear. Unbounded, the comma-crossing
+  #     class makes each comma position rescan the rest of the line: GNU grep in
+  #     a UTF-8 locale (what CI and the Docker image run) measured 6336ms on a
+  #     72KB line against 3ms for the bounded form.
+  # KNOWN GAP: a tail containing a non-terminal full stop (`, ensuring parity
+  # with Node.js consumers.`, a version number, a dotted filename) is no longer
+  # detected. Recovering it needs an alternation inside a star, the shape this
+  # repo bans for ReDoS, so it is tracked as issue #390 rather than bolted on here.
+  # The This-X arm stays enumerated to bound false positives
   # but is extended with the gap verbs the same analysis surfaced (prevents,
   # avoids, serves). Warn-only framing keeps any false positive cheap.
-  padding_re=',[[:space:]]+[a-z]{3,}ing([[:space:]]|[.!?,]|$)|(^|[.!?][[:space:]]+)(this[[:space:]]+(means|approach|ensures|enables|guarantees|delivers|provides|prevents|avoids|serves)|in summary|overall|consequently|ultimately|in effect|as a result)\b|(going|moving)[[:space:]]+forward|clos(es|ing)[[:space:]]+the[[:space:]]+(gap|loop)'
+  padding_re=',[[:space:]]+[a-z]{3,}ing([[:space:]][^.!?]{0,200})?[.!?]?[[:space:]]*$|(^|[.!?][[:space:]]+)(this[[:space:]]+(means|approach|ensures|enables|guarantees|delivers|provides|prevents|avoids|serves)|in summary|overall|consequently|ultimately|in effect|as a result)\b|(going|moving)[[:space:]]+forward|clos(es|ing)[[:space:]]+the[[:space:]]+(gap|loop)'
+  # ADR 0017's adoption rule, held byte-identical to the pre-anchor expression on
+  # purpose. The strip is gated twice by a padding match: once to fire, and again
+  # here to decide whether the stripped text is clean enough to adopt. Anchoring
+  # THAT second gate would widen the strip, because a result still carrying a
+  # mid-line participial would newly read as clean and be adopted, silently
+  # mutating output ADR 0017 deliberately left alone with a warning. Detection
+  # narrows; adoption does not.
+  padding_re_adopt=',[[:space:]]+[a-z]{3,}ing([[:space:]]|[.!?,]|$)|(^|[.!?][[:space:]]+)(this[[:space:]]+(means|approach|ensures|enables|guarantees|delivers|provides|prevents|avoids|serves)|in summary|overall|consequently|ultimately|in effect|as a result)\b|(going|moving)[[:space:]]+forward|clos(es|ing)[[:space:]]+the[[:space:]]+(gap|loop)'
   check_first_line=$(printf '%s' "$output" | awk 'NF { print; exit }')
   check_last_line=$(printf '%s' "$output" | awk 'NF { l=$0 } END { print l }')
   while IFS= read -r cline; do
@@ -1444,7 +1472,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
               ')
               if [[ -n "$new_output" && "$new_output" != "$output" ]]; then
                 new_last=$(printf '%s' "$new_output" | awk 'NF { l=$0 } END { print l }')
-                if ! printf '%s' "$new_last" | grep -Eiq "$padding_re"; then
+                if ! printf '%s' "$new_last" | grep -Eiq "$padding_re_adopt"; then
                   output="$new_output"
                   check_first_line=$(printf '%s' "$output" | awk 'NF { print; exit }')
                   check_last_line="$new_last"
