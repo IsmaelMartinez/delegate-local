@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.3](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.2...v0.27.3) (2026-08-18)
+
+
+### Bug Fixes
+
+* anchor no_padding_tail to the line tail ([#391](https://github.com/IsmaelMartinez/delegate-local/issues/391)) ([8296d8c](https://github.com/IsmaelMartinez/delegate-local/commit/8296d8cfe5b8a83f632476ce03f521abc6731ea0))
+
 ## [0.27.2](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.1...v0.27.2) (2026-08-18)
 
 
