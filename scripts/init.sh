@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Print a per-user override config for delegate-local based on what's
-# actually installed in Ollama right now. Read-only — prints to stdout and
+# Print a per-user override config for delegate-local based on what the
+# running providers serve right now. Read-only — prints to stdout and
 # never writes. Redirect to your override path if you like the result:
 #
 #   bash scripts/init.sh > ~/.claude/skills/delegate-local/config.sh
@@ -14,15 +14,12 @@
 
 set -euo pipefail
 
-if ! command -v ollama >/dev/null 2>&1; then
-  echo "ollama not on PATH" >&2
-  exit 1
-fi
-
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 
-installed=$(ollama list 2>/dev/null | awk 'NR>1 {print $1}')
+# Asks pick-model.sh rather than a single daemon: the override it writes is
+# consumed by pick-model.sh, so the two must agree on what "installed" means.
+installed=$(bash "$pick" --print-installed 2>/dev/null)
 if [[ -z "$installed" ]]; then
   echo "no models installed; nothing to personalise" >&2
   exit 1

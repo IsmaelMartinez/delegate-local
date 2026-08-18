@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Unit tests for scripts/delegate.sh.
-# Mocks `ollama list` (used by pick-model.sh) and `curl` (used to call
-# /api/generate) on a restricted PATH so the test runs the same everywhere.
+# Mocks `curl` on a restricted PATH — used by pick-model.sh for provider
+# discovery and by delegate.sh for dispatch — so the test runs the same
+# everywhere, including on a machine with a live model server.
 
 set -u
 
@@ -23,30 +24,44 @@ assert_contains() {
   else echo "  FAIL  $name (missing '$needle')"; fail=$((fail+1)); fi
 }
 
-make_mock_ollama() {
+# Every mock curl below answers GET {base}/models from this list: resolution
+# now happens over HTTP for every provider, so a mock that only knew the
+# dispatch call would fail to resolve a tier — or hang, because the discovery
+# request carries no stdin. A test that needs a different model resolved sets
+# MOCK_MODELS before building its mock and restores it afterwards.
+MOCK_MODELS='qwen3.6:35b-a3b'
+mock_models_json() {
+  local out="" id
+  for id in "$@"; do
+    [[ -n "$out" ]] && out="$out,"
+    out="$out{\"id\":\"${id//\"/\\\"}\",\"object\":\"model\"}"
+  done
+  printf '{"object":"list","data":[%s]}' "$out"
+}
+
+
+make_mock_curl_models_only() {
+  # Serves GET {base}/models and refuses everything else. For tests where
+  # resolution is expected to fail: without a curl mock at all, the real curl
+  # on SAFE_PATH would reach a live daemon and resolve a real model.
   local dir="$1"
-  cat > "$dir/ollama" <<'EOF'
+  cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
-# Mock ollama list — just enough for pick-model.sh to resolve a tier.
-case "${1:-}" in
-  list)
-    cat <<'LIST'
-NAME             ID SIZE   MODIFIED
-qwen3.6:35b-a3b  aa 30 GB  1 day ago
-LIST
-    ;;
-esac
+for _a in "\$@"; do
+  case "\$_a" in */models) printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0 ;; esac
+done
+echo "curl: connection refused" >&2
+exit 7
 EOF
-  chmod +x "$dir/ollama"
+  chmod +x "$dir/curl"
 }
 
 make_mock_curl_ok() {
   # Mock curl: drain stdin (so the pipeline closes cleanly), copy the JSON
   # payload to a sniff file if requested, then emit a canned JSON response.
-  # When invoked with the auto-mode MLX probe URL (/v1/models), exits 7 to
-  # simulate "no MLX server reachable" so the default auto backend falls
-  # back to ollama — that lets every existing ollama-shaped test keep
-  # working without explicitly setting DELEGATE_BACKEND=ollama.
+  # The /v1/models arm answers provider discovery with $MOCK_MODELS, so the
+  # tier resolves against the mock rather than against whatever the host
+  # happens to be running.
   #
   # #170: delegate.sh now invokes the dispatch curl with `-o body_file -w
   # "%{time_starttransfer}"` so it can capture time-to-first-byte and split
@@ -70,9 +85,9 @@ while (( \$# > 0 )); do
     *) shift ;;
   esac
 done
-if (( saw_probe == 1 )); then exit 7; fi
+if (( saw_probe == 1 )); then printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0; fi
 cat > "${sniff}"
-body='{"response":"mock-model-output: ok\\n"}'
+body='{"choices":[{"message":{"content":"mock-model-output: ok\\n"},"finish_reason":"stop"}]}'
 if [[ -n "\$out_file" ]]; then
   printf '%s' "\$body" > "\$out_file"
 else
@@ -96,6 +111,12 @@ make_mock_curl_fail() {
   local dir="$1"
   cat > "$dir/curl" <<'EOF'
 #!/usr/bin/env bash
+# Discovery: pick-model.sh probes GET {base}/models before any dispatch, and
+# that request has no stdin, so this arm answers and exits before anything
+# reads stdin.
+for _a in "$@"; do
+  case "$_a" in */models) printf '%s' '{"object":"list","data":[{"id":"qwen3.6:35b-a3b"}]}'; exit 0 ;; esac
+done
 cat > /dev/null
 echo "curl: connection refused" >&2
 exit 7
@@ -122,9 +143,9 @@ while (( \$# > 0 )); do
     *) shift ;;
   esac
 done
-if (( saw_probe == 1 )); then exit 7; fi
+if (( saw_probe == 1 )); then printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0; fi
 cat > /dev/null
-body='{"response":"${resp}"}'
+body='{"choices":[{"message":{"content":"${resp}"},"finish_reason":"stop"}]}'
 if [[ -n "\$out_file" ]]; then
   printf '%s' "\$body" > "\$out_file"
 else
@@ -158,9 +179,9 @@ while (( \$# > 0 )); do
     *) shift ;;
   esac
 done
-if (( saw_probe == 1 )); then exit 7; fi
+if (( saw_probe == 1 )); then printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0; fi
 cat > /dev/null
-body='{"response":"mock-model-output: ok\\n"}'
+body='{"choices":[{"message":{"content":"mock-model-output: ok\\n"},"finish_reason":"stop"}]}'
 if [[ -n "\$out_file" ]]; then
   printf '%s' "\$body" > "\$out_file"
 else
@@ -185,7 +206,6 @@ assert_eq 2 "$EC" "missing prompt -> exit 2"
 # 2. Happy path: tier resolves, curl mock returns canned JSON, output is
 # parsed cleanly, metrics file has one line with all required fields.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -207,14 +227,14 @@ assert_contains '"prompt_chars":9' "$line" "metrics: prompt_chars"
 if [[ -s "$sniff" ]]; then
   payload=$(cat "$sniff")
   assert_contains '"model":"qwen3.6:35b-a3b"' "$payload" "payload: model field"
-  assert_contains '"think":false' "$payload" "payload: think:false default"
+  assert_contains '"enable_thinking":false' "$payload" "payload: enable_thinking:false default"
   assert_contains '"stream":false' "$payload" "payload: stream:false"
   # Default sampling is greedy for ALL models (Qwen3 included) since the
   # T4 A/B in 2026-05-22-track-a-qwen-sampling-ab.md found the Alibaba-
   # recommended profile regresses commit-message output. Env vars opt INTO
   # non-greedy sampling — bare invocation must have bare temperature:0 and
   # NO top_p/top_k/presence_penalty.
-  assert_contains '"options":{"temperature":0}' "$payload" "payload: bare greedy options.temperature:0"
+  assert_contains '"temperature":0' "$payload" "payload: bare greedy temperature:0"
   case "$payload" in
     *'"top_p"'*) echo "  FAIL  payload: bare greedy must NOT carry top_p"; fail=$((fail+1));;
     *) echo "  PASS  payload: bare greedy omits top_p"; pass=$((pass+1));;
@@ -245,7 +265,6 @@ rm -rf "$tmp" "$metrics"
 
 # 3. Opt-out env var suppresses metrics writing.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); rm -f "$metrics"  # ensure file does not exist
 EC=0
@@ -261,23 +280,17 @@ else
 fi
 rm -rf "$tmp"
 
-# 4. pick-model failure (no model installed) is reflected in metrics + exit.
-# DELEGATE_BACKEND is pinned to ollama here (and in every other no-model
-# block below): under the `auto` default a live local mlx_lm.server would
-# answer the probe via the real curl in SAFE_PATH and resolve a real model
-# from the HF cache (HOME passes through), defeating the no-model mock.
+# 4. pick-model failure (no matching model served) is reflected in metrics +
+# exit. The mock serves a model no tier prefers rather than serving nothing:
+# without a curl mock at all, the real curl in SAFE_PATH would reach a live
+# daemon on the developer's machine and resolve a real model.
 tmp=$(mktemp -d)
-cat > "$tmp/ollama" <<'EOF'
-#!/usr/bin/env bash
-# No matching model installed.
-[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
-unrelated:model  zz 5 GB   1 day ago"
-EOF
-chmod +x "$tmp/ollama"
+MOCK_MODELS='unrelated:model'
+make_mock_curl_models_only "$tmp"
+MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp); : > "$metrics"
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=ollama \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 1 "$EC" "pick-model failure -> exit 1"
@@ -286,7 +299,6 @@ rm -rf "$tmp" "$metrics"
 
 # 5. Stdin context is included in metrics char count.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 EC=0
@@ -301,7 +313,6 @@ rm -rf "$tmp" "$metrics"
 
 # 6. DELEGATE_THINK=true overrides default false in payload.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -311,13 +322,12 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_THINK=true \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "DELEGATE_THINK=true: exits 0"
-assert_contains '"think":true' "$(cat "$sniff")" "payload: think:true when overridden"
+assert_contains '"enable_thinking":true' "$(cat "$sniff")" "payload: enable_thinking:true when overridden"
 rm -rf "$tmp" "$metrics"
 
 # 6b. DELEGATE_THINK with a non-boolean stray value is normalised to false
 # (so a jq parse error can't kill the delegation).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -327,12 +337,11 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_THINK=yes \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "DELEGATE_THINK=yes (non-boolean): still exits 0"
-assert_contains '"think":false' "$(cat "$sniff")" "payload: non-boolean DELEGATE_THINK normalises to false"
+assert_contains '"enable_thinking":false' "$(cat "$sniff")" "payload: non-boolean DELEGATE_THINK normalises to false"
 rm -rf "$tmp" "$metrics"
 
 # 7. HTTP failure (curl non-zero) propagates and is logged.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_fail "$tmp"
 metrics=$(mktemp); : > "$metrics"
 EC=0
@@ -352,7 +361,6 @@ rm -rf "$tmp" "$metrics"
 # substituted via --var land inside {{key}} placeholders; the metrics line
 # carries a "recipe":"NAME" field for layer-2 telemetry.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -396,7 +404,6 @@ rm -rf "$tmp" "$metrics"
 
 # 9. --recipe with an unknown name fails with a clear error and exit 2.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -411,7 +418,6 @@ rm -rf "$tmp" "$metrics"
 
 # 10. Unsubstituted placeholders are a hard error (exit 2, names listed).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -442,7 +448,6 @@ rm -rf "$tmp" "$metrics"
 # 11. {{stdin}} placeholder is substituted with piped stdin content; the
 # stdin is NOT also appended after the recipe (would otherwise duplicate).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -484,7 +489,6 @@ rm -rf "$tmp" "$metrics"
 
 # 12. --recipe makes the prompt arg optional (recipe carries the instruction).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -516,7 +520,6 @@ rm -rf "$tmp" "$metrics"
 # 13. --var value containing newlines and special punctuation survives
 # substitution intact (argv-driven, not shell-re-evaluated).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -550,7 +553,6 @@ rm -rf "$tmp" "$metrics"
 
 # 14. --var without '=' is rejected.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -583,7 +585,6 @@ rm -rf "$tmp" "$metrics"
 # so a non-identifier key would produce a malformed/overbroad substitution
 # instead of a literal {{key}} match — reject with a clear error instead.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -614,7 +615,6 @@ rm -rf "$tmp" "$metrics"
 # 14b. --var key that is a plain identifier (letters, digits, underscore)
 # still substitutes normally after the key-shape guard.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -648,7 +648,6 @@ rm -rf "$tmp" "$metrics"
 # guard. The guard checks the original template's placeholders, not the
 # post-substitution string, so substituted content can contain anything.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -681,7 +680,6 @@ rm -rf "$tmp" "$metrics"
 # the full block — the awk section-end check should not fire while inside
 # a code block.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -719,7 +717,6 @@ rm -rf "$tmp" "$metrics"
 # 17. Recipe metric: prompt_chars includes the recipe template length so a
 # 2-char prompt arg doesn't under-report a multi-line recipe template.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -751,13 +748,13 @@ line=$(cat "$metrics")
 assert_contains '"prompt_chars":12' "$line" "--recipe metric: prompt_chars includes template length"
 rm -rf "$tmp" "$metrics"
 
-# 12. DELEGATE_BACKEND=mlx dispatches to /v1/chat/completions, parses
+# 12. dispatches to /v1/chat/completions, parses
 # .choices[0].message.content, and tags the metrics line with backend:"mlx".
 make_mock_curl_mlx_ok() {
-  # Mock curl that succeeds on both the auto probe (/v1/models — returns
-  # an empty success body) and the dispatch call (/v1/chat/completions —
-  # returns the chat-completions shape). The argv sniff captures the LAST
-  # curl invocation, which is always the dispatch (probe runs first).
+  # Mock curl that succeeds on both discovery (/v1/models) and the dispatch
+  # call (/v1/chat/completions — returns the chat-completions shape). The argv
+  # sniff captures the LAST curl invocation, which is always the dispatch
+  # (discovery runs first).
   # #170: dispatch now uses `-o body_file -w "%{time_starttransfer}"`; the
   # mock parses both and writes the body to the named file when present,
   # while emitting a synthetic 1-ms TTFB to stdout via the -w format.
@@ -769,7 +766,7 @@ for arg in "\$@"; do
     *"/v1/models"*)
       # Probe: drain stdin, emit a minimal models-list response, exit 0.
       cat > /dev/null
-      printf '%s' '{"object":"list","data":[]}'
+      printf '%s' '$(mock_models_json $MOCK_MODELS)'
       exit 0
       ;;
   esac
@@ -801,16 +798,14 @@ EOF
 # 12a. Happy path with MLX backend: fake HF hub, fake curl, assert dispatch.
 tmp=$(mktemp -d)
 # Fake hub with a Qwen3.6 MLX model so prose tier resolves.
-snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
-mkdir -p "$snap"
-touch "$snap/weights.safetensors"
 payload_sniff="$tmp/payload.json"
 argv_sniff="$tmp/argv.txt"
+MOCK_MODELS='mlx-community/Qwen3.6-35B-A3B-Instruct-4bit'
 make_mock_curl_mlx_ok "$tmp" "$payload_sniff" "$argv_sniff"
+MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "MLX happy path exits 0"
@@ -869,131 +864,13 @@ case "$payload" in
 esac
 rm -rf "$tmp" "$metrics"
 
-# 12b. Explicit DELEGATE_BACKEND=ollama tags the metrics line backend:"ollama"
-# and skips the auto probe entirely. (Default backend is now auto — see 12g
-# below for the unset-default test.)
-tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
-make_mock_curl_ok "$tmp"
-metrics=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=ollama \
-  DELEGATE_METRICS_FILE="$metrics" \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "explicit ollama: exits 0"
-assert_contains '"backend":"ollama"' "$(cat "$metrics")" "explicit ollama tagged in metrics"
-assert_contains '"project":"' "$(cat "$metrics")" "metrics row contains project field"
-rm -rf "$tmp" "$metrics"
-
-# 12c. Unknown DELEGATE_BACKEND value -> exit 2 with informative stderr,
-# and the valid-set must mention auto alongside ollama and mlx.
-EC=0
-out=$(env -i PATH="$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=bogus \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
-assert_eq 2 "$EC" "DELEGATE_BACKEND=bogus -> exit 2"
-assert_contains "unknown DELEGATE_BACKEND" "$out" "DELEGATE_BACKEND=bogus -> informative stderr"
-assert_contains "auto|ollama|mlx" "$out" "bogus error names auto in valid set"
-
-# 12g. Default (unset) backend is auto: probe runs and (when MLX is
-# unreachable in the test env) falls back to ollama. The mock's `/v1/models`
-# branch exits 7, so the metrics line should still carry backend:"ollama".
-tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
-make_mock_curl_ok "$tmp"
-metrics=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "default (auto) backend: exits 0"
-assert_contains '"backend":"ollama"' "$(cat "$metrics")" "default auto + probe fails -> tagged ollama"
-rm -rf "$tmp" "$metrics"
-
-# 12h. Auto with reachable MLX server: probe succeeds, wrapper resolves
-# the prose tier against the HF hub cache, dispatches to /v1/chat/completions,
-# and the metrics line is tagged backend:"mlx".
-tmp=$(mktemp -d)
-snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
-mkdir -p "$snap"
-touch "$snap/weights.safetensors"
-argv_sniff="$tmp/argv.txt"
-make_mock_curl_mlx_ok "$tmp" "/dev/null" "$argv_sniff"
-metrics=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=auto HF_HOME="$tmp/hf" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "auto + reachable MLX: exits 0"
-assert_contains '"backend":"mlx"' "$(cat "$metrics")" "auto + reachable MLX: tagged mlx in metrics"
-assert_contains "/v1/chat/completions" "$(cat "$argv_sniff")" "auto + reachable MLX: dispatch hits chat-completions"
-rm -rf "$tmp" "$metrics"
-
-# 12i. DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT is honoured. The probe still
-# returns the canonical mock result (exit 7 from /v1/models in make_mock_curl_ok)
-# regardless of timeout, but the timeout flag must reach curl's argv. We
-# capture the probe's argv into a sniff file and assert --max-time appears
-# with the user's value.
-tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
-probe_argv="$tmp/probe-argv.txt"
-cat > "$tmp/curl" <<EOF
-#!/usr/bin/env bash
-for arg in "\$@"; do
-  case "\$arg" in
-    *"/v1/models"*)
-      printf '%s\n' "\$*" > "${probe_argv}"
-      exit 7
-      ;;
-  esac
-done
-# Dispatch path: honour -o / -w (#170 introduced these on the dispatch
-# curl call so delegate.sh can split duration_ms into queue/generation).
-out_file=""
-write_out=""
-while (( \$# > 0 )); do
-  case "\$1" in
-    -o) out_file="\$2"; shift 2 ;;
-    -w) write_out="\$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-cat > /dev/null
-body='{"response":"mock-model-output: ok\\n"}'
-if [[ -n "\$out_file" ]]; then
-  printf '%s' "\$body" > "\$out_file"
-else
-  printf '%s' "\$body"
-fi
-if [[ -n "\$write_out" ]]; then
-  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
-fi
-EOF
-chmod +x "$tmp/curl"
-metrics=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=auto \
-  DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT=3 \
-  DELEGATE_METRICS_FILE="$metrics" \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "AUTO_PROBE_TIMEOUT override: exits 0"
-assert_contains "--max-time 3" "$(cat "$probe_argv")" "AUTO_PROBE_TIMEOUT override flows into curl argv"
-rm -rf "$tmp" "$metrics"
-
 # 12d. MLX_HOST override is honoured by the dispatch URL.
 tmp=$(mktemp -d)
-snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
-mkdir -p "$snap"
-touch "$snap/weights.safetensors"
 argv_sniff="$tmp/argv.txt"
 make_mock_curl_mlx_ok "$tmp" "/dev/null" "$argv_sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
   MLX_HOST="http://10.0.0.5:9999" \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
@@ -1003,15 +880,11 @@ rm -rf "$tmp" "$metrics"
 
 # 12e. DELEGATE_MAX_TOKENS overrides the MLX max_tokens default.
 tmp=$(mktemp -d)
-snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
-mkdir -p "$snap"
-touch "$snap/weights.safetensors"
 payload_sniff="$tmp/payload.json"
 make_mock_curl_mlx_ok "$tmp" "$payload_sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
   DELEGATE_MAX_TOKENS=16384 \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
@@ -1024,15 +897,11 @@ rm -rf "$tmp" "$metrics"
 # enables reasoning; MLX's enable_thinking:true does the same via the chat
 # template).
 tmp=$(mktemp -d)
-snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
-mkdir -p "$snap"
-touch "$snap/weights.safetensors"
 payload_sniff="$tmp/payload.json"
 make_mock_curl_mlx_ok "$tmp" "$payload_sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
   DELEGATE_THINK=true \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
@@ -1043,18 +912,12 @@ rm -rf "$tmp" "$metrics"
 # 13. jq-based metrics line correctly escapes a model name with embedded
 # double quotes (regression: the prior printf %s implementation would have
 # emitted invalid JSON for such names). Ollama tag rules don't permit
-# quotes today, but pick-model returns whatever ollama list prints, so
+# quotes today, but pick-model returns whatever a provider reports, so
 # defending against future schema changes is cheap.
 tmp=$(mktemp -d)
-cat > "$tmp/ollama" <<'EOF'
-#!/usr/bin/env bash
-[[ "${1:-}" == "list" ]] && cat <<'LIST'
-NAME                  ID SIZE   MODIFIED
-qwen3.6:35b"weird-name aa 30 GB  1 day ago
-LIST
-EOF
-chmod +x "$tmp/ollama"
+MOCK_MODELS='qwen3.6:35b"weird-name'
 make_mock_curl_ok "$tmp"
+MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -1081,7 +944,6 @@ rm -rf "$tmp" "$metrics"
 # delegations carried no feedback row at that point). Captures stderr
 # separately from stdout so the assertion is unambiguous.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -1114,7 +976,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # still lands. If a future PR re-introduces a `[[ -t 2 ]]` gate on the
 # verdict-nudge code path, this test fails loud.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -1146,7 +1007,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # the rest of the behaviour intact (metrics row still written, model
 # output still on stdout). For users who genuinely don't want the noise.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -1171,7 +1031,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # to point a verdict at. Without this guard the nudge would tell users to
 # record a verdict that delegate-feedback.sh would then reject as orphan.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); rm -f "$metrics"
 stderr_file=$(mktemp)
@@ -1192,17 +1051,13 @@ rm -rf "$tmp" "$stderr_file"
 # 17. Non-zero exit (pick-model failure) also silences the nudge — verdicts
 # on failed calls are meaningless because there's no model output to judge.
 tmp=$(mktemp -d)
-cat > "$tmp/ollama" <<'EOF'
-#!/usr/bin/env bash
-[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
-unrelated:model  zz 5 GB   1 day ago"
-EOF
-chmod +x "$tmp/ollama"
+MOCK_MODELS='unrelated:model'
+make_mock_curl_models_only "$tmp"
+MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp); : > "$metrics"
 stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=ollama \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 1 "$EC" "verdict-nudge on failure: still exits 1"
@@ -1227,7 +1082,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # 17a-1. Happy path: fd 3 redirected to a file; nudge lands on the file, not
 # on fd 2.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -1260,7 +1114,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file" "$nudge_file"
 # the gotcha-mode caller doesn't see "Bad file descriptor" noise back on
 # the fd 2 they were trying to keep clean.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -1293,7 +1146,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # setting the env var to the default value behaves the same as leaving it
 # unset (the test in 14/14a covers unset; this pins the explicit-2 path).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -1311,7 +1163,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # model output on stdout. Unusual but harmless; the validation accepts any
 # positive integer.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -1337,7 +1188,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # 17a-5. FD=0 (stdin) is rejected — writing to stdin is nonsense, so a clear
 # error fires before the model is contacted. exit 2.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -1361,7 +1211,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 17a-6. FD=foo (non-numeric) is rejected. exit 2.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -1381,7 +1230,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # a future relaxation of the regex (e.g. accidentally adding a `-?` to
 # handle "0 or negative") would silently break this.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -1399,7 +1247,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # digits makes the failure mode loud (exit 2 here) instead of silent
 # (write fails at nudge time, absorbed by the 2>/dev/null guard).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -1416,7 +1263,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # 17a-7c. FD=99 (larger multi-digit) is also rejected. Same reasoning as
 # 17a-7b — anchors the regex tightness against future relaxation.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -1431,7 +1277,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # 17a-8. FD set AND NO_VERDICT_NUDGE=1 → NO_VERDICT_NUDGE wins. Suppression
 # beats redirect.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -1460,7 +1305,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file" "$nudge_file"
 # 17a-9. FD set AND NO_METRICS=1 → NO_METRICS wins (no metrics row → nothing
 # to verdict against, same as today's NO_METRICS behaviour).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); rm -f "$metrics"
 stderr_file=$(mktemp)
@@ -1484,18 +1328,14 @@ rm -rf "$tmp" "$stderr_file" "$nudge_file"
 # today's non-zero-exit behaviour; failed calls have no model output to
 # judge, so no verdict should be invited.
 tmp=$(mktemp -d)
-cat > "$tmp/ollama" <<'EOF'
-#!/usr/bin/env bash
-[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
-unrelated:model  zz 5 GB   1 day ago"
-EOF
-chmod +x "$tmp/ollama"
+MOCK_MODELS='unrelated:model'
+make_mock_curl_models_only "$tmp"
+MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp); : > "$metrics"
 stderr_file=$(mktemp)
 nudge_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=ollama \
   DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
@@ -1519,8 +1359,8 @@ rm -rf "$tmp" "$metrics" "$stderr_file" "$nudge_file"
 # either followed or was skipped based on the canary outcome, and (c) the
 # metrics row + exit code reflect the right state.
 #
-# Helper: a curl mock that distinguishes the auto-probe (/v1/models — exit
-# 7 to fall back to ollama), the pre-flight canary (1-token payload —
+# Helper: a curl mock that distinguishes discovery (/v1/models — returns the
+# model list), the pre-flight canary (1-token payload —
 # behaviour controlled by $4), and the real dispatch (everything else —
 # always returns the canned response). Each invocation logs `canary` or
 # `dispatch` to an invocations file so tests can count the dispatches.
@@ -1543,7 +1383,7 @@ for arg in "\$@"; do
   esac
 done
 case "\$url" in
-  *"/v1/models"*) exit 7 ;;
+  *"/v1/models"*) printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0 ;;
 esac
 # Parse -o and -w out of argv for the dispatch path; canary path doesn't
 # emit these but the loop costs nothing on either.
@@ -1564,12 +1404,12 @@ if echo "\$payload" | grep -qE '"num_predict":1|"max_tokens":1[,}]'; then
     timeout)    exit 28 ;;
     refused)    exit 7 ;;
     http_error) exit 22 ;;
-    *)          printf '%s' '{"response":"ok"}'; exit 0 ;;
+    *)          printf '%s' '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'; exit 0 ;;
   esac
 fi
 echo "dispatch url=\$url" >> "${invocations_log}"
 echo "\$payload" > "${sniff}"
-body='{"response":"mock-model-output: ok\\n"}'
+body='{"choices":[{"message":{"content":"mock-model-output: ok\\n"},"finish_reason":"stop"}]}'
 if [[ -n "\$out_file" ]]; then
   printf '%s' "\$body" > "\$out_file"
 else
@@ -1604,7 +1444,6 @@ RECIPE
 
 # 18a. Canary succeeds → real dispatch runs, exit 0, single metrics row.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "ok"
@@ -1635,7 +1474,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # 18b. Canary times out (curl --max-time fires, exit 28) → exit 3, no
 # dispatch, stderr names the recipe + model + recovery options.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "timeout"
@@ -1691,7 +1529,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # mock that would have timed out, the dispatch still runs (and the mock's
 # dispatch path returns success).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "timeout"
@@ -1713,7 +1550,6 @@ rm -rf "$tmp" "$metrics"
 
 # 18d. DELEGATE_PREFLIGHT_TIMEOUT=0 is the documented disable equivalent.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "timeout"
@@ -1734,7 +1570,6 @@ rm -rf "$tmp" "$metrics"
 # 18e. DELEGATE_PREFLIGHT_TIMEOUT=N flows into curl's --max-time argv on
 # the canary call. Capture the canary's argv into a sniff file and assert.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 # Custom mock that records the canary's argv specifically (not the
 # auto-probe's, not the dispatch's).
 canary_argv="$tmp/canary-argv.txt"; : > "$canary_argv"
@@ -1747,7 +1582,7 @@ for arg in "\$@"; do
   esac
 done
 case "\$url" in
-  *"/v1/models"*) exit 7 ;;
+  *"/v1/models"*) printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0 ;;
 esac
 # Snapshot argv for the canary-argv assertion before we shift it parsing
 # -o / -w (dispatch path uses these — #170).
@@ -1764,10 +1599,10 @@ done
 payload=\$(cat)
 if echo "\$payload" | grep -qE '"num_predict":1|"max_tokens":1[,}]'; then
   printf '%s\n' "\$argv_snapshot" > "${canary_argv}"
-  printf '%s' '{"response":"ok"}'
+  printf '%s' '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
   exit 0
 fi
-body='{"response":"mock-model-output: ok\\n"}'
+body='{"choices":[{"message":{"content":"mock-model-output: ok\\n"},"finish_reason":"stop"}]}'
 if [[ -n "\$out_file" ]]; then
   printf '%s' "\$body" > "\$out_file"
 else
@@ -1794,7 +1629,6 @@ rm -rf "$tmp" "$metrics"
 # 18f. No --recipe → canary is skipped. A canary mock that would time out
 # does not affect bare delegations (the only call is the dispatch).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "timeout"
@@ -1814,9 +1648,6 @@ rm -rf "$tmp" "$metrics"
 # The canary mock writes its payload to a separate sniff file so we can
 # assert against the MLX shape independently of the dispatch shape.
 tmp=$(mktemp -d)
-snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
-mkdir -p "$snap"
-touch "$snap/weights.safetensors"
 canary_payload_sniff="$tmp/canary-payload.json"; : > "$canary_payload_sniff"
 canary_argv_sniff="$tmp/canary-argv.txt"; : > "$canary_argv_sniff"
 cat > "$tmp/curl" <<EOF
@@ -1829,9 +1660,8 @@ for arg in "\$@"; do
 done
 case "\$url" in
   *"/v1/models"*)
-    # Probe succeeds so auto-mode routes to MLX.
     cat > /dev/null
-    printf '%s' '{"object":"list","data":[]}'
+    printf '%s' '$(mock_models_json $MOCK_MODELS)'
     exit 0
     ;;
 esac
@@ -1869,7 +1699,6 @@ setup_recipe_prompts "$prompts"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
   DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>&1) || EC=$?
@@ -1884,74 +1713,10 @@ assert_contains '"content":"hi"' "$canary_payload" "MLX canary: minimal 'hi' con
 assert_contains '"enable_thinking":false' "$canary_payload" "MLX canary: enable_thinking:false (mirrors dispatch default)"
 rm -rf "$tmp" "$metrics"
 
-# 18h. Ollama canary uses /api/generate with num_predict:1.
-tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
-canary_payload_sniff="$tmp/canary-payload.json"; : > "$canary_payload_sniff"
-canary_argv_sniff="$tmp/canary-argv.txt"; : > "$canary_argv_sniff"
-cat > "$tmp/curl" <<EOF
-#!/usr/bin/env bash
-url=""
-for arg in "\$@"; do
-  case "\$arg" in
-    http*|https*) url="\$arg" ;;
-  esac
-done
-case "\$url" in
-  *"/v1/models"*) exit 7 ;;
-esac
-# Snapshot argv before parsing -o / -w (dispatch path uses these — #170).
-argv_snapshot="\$*"
-out_file=""
-write_out=""
-while (( \$# > 0 )); do
-  case "\$1" in
-    -o) out_file="\$2"; shift 2 ;;
-    -w) write_out="\$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-payload=\$(cat)
-if echo "\$payload" | grep -q '"num_predict":1'; then
-  echo "\$payload" > "${canary_payload_sniff}"
-  printf '%s\n' "\$argv_snapshot" > "${canary_argv_sniff}"
-  printf '%s' '{"response":"k"}'
-  exit 0
-fi
-body='{"response":"mock-model-output: ok\\n"}'
-if [[ -n "\$out_file" ]]; then
-  printf '%s' "\$body" > "\$out_file"
-else
-  printf '%s' "\$body"
-fi
-if [[ -n "\$write_out" ]]; then
-  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
-fi
-EOF
-chmod +x "$tmp/curl"
-prompts="$tmp/prompts"
-setup_recipe_prompts "$prompts"
-metrics=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_PROMPTS_DIR="$prompts" \
-  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "Ollama canary: exits 0"
-canary_payload=$(cat "$canary_payload_sniff")
-canary_argv=$(cat "$canary_argv_sniff")
-assert_contains "/api/generate" "$canary_argv" "Ollama canary: hits /api/generate"
-assert_contains '"num_predict":1' "$canary_payload" "Ollama canary: payload carries num_predict:1"
-assert_contains '"prompt":"hi"' "$canary_payload" "Ollama canary: minimal 'hi' prompt"
-assert_contains '"think":false' "$canary_payload" "Ollama canary: think:false (mirrors dispatch default)"
-rm -rf "$tmp" "$metrics"
-
-# 18i. Canary connection-refused (curl exit 7) → exit 3 + stderr message
 # names the right cause (backend daemon may be down) rather than the
 # generic timeout copy. Addresses gemini-code-assist's PR #129 review
 # concern that --fail conflates non-timeout failures with timeouts.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "refused"
@@ -1985,7 +1750,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # names the right cause (HTTP error, bad model name / invalid payload)
 # rather than the generic timeout copy. Same gemini-code-assist concern.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "http_error"
@@ -2020,7 +1784,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # captures stderr separately so the assertions are unambiguous against the
 # verdict nudge that also fires on the same path.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -2036,7 +1799,7 @@ assert_contains "delegate-meta:" "$stderr_content" "delegate-meta: line prefix o
 # the format contract that PR #133's gemini-code-assist review tightened.
 assert_contains 'model="qwen3.6:35b-a3b' "$stderr_content" "delegate-meta: model field (quoted)"
 assert_contains 'tier="prose"' "$stderr_content" "delegate-meta: tier field (quoted)"
-assert_contains 'backend="ollama"' "$stderr_content" "delegate-meta: backend field (quoted)"
+assert_contains 'backend="mlx"' "$stderr_content" "delegate-meta: backend field (quoted)"
 assert_contains "tokens_local=" "$stderr_content" "delegate-meta: tokens_local field (bare integer)"
 assert_contains "duration_ms=" "$stderr_content" "delegate-meta: duration_ms field (bare integer)"
 # Line is stderr-only — model output on stdout must NOT contain the meta marker.
@@ -2068,7 +1831,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # verdict nudge still fires — meta and nudge are independent surfaces with
 # independent opt-outs).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
@@ -2093,17 +1855,13 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # 21. Non-zero exit (pick-model failure) silences the meta line — counts
 # on a failed call would point at nothing, since there's no model output.
 tmp=$(mktemp -d)
-cat > "$tmp/ollama" <<'EOF'
-#!/usr/bin/env bash
-[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
-unrelated:model  zz 5 GB   1 day ago"
-EOF
-chmod +x "$tmp/ollama"
+MOCK_MODELS='unrelated:model'
+make_mock_curl_models_only "$tmp"
+MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp); : > "$metrics"
 stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=ollama \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 1 "$EC" "delegate-meta on failure: still exits 1"
@@ -2122,7 +1880,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # what emits the meta line, so use the probe-aware mock with `ok` so the
 # canary passes and dispatch runs through to the meta-line code path.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "ok"
@@ -2163,7 +1920,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # context_chars==0, no hang. This is the workaround the parallel agents
 # manually applied; the script now does it implicitly.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 EC=0
@@ -2179,7 +1935,6 @@ rm -rf "$tmp" "$metrics"
 # `echo data | delegate.sh ...` flow. Mirrors test 5 but with the explicit
 # perl-alarm wrapper to assert no-hang.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 EC=0
@@ -2200,7 +1955,6 @@ rm -rf "$tmp" "$metrics"
 # kills the run after 5s if the bug returns — exit 142 from a hang is a
 # clear regression signal versus exit 0 with context_chars=0 from the fix.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 EC=0
@@ -2238,7 +1992,6 @@ rm -rf "$tmp" "$metrics"
 # proves the field shape end-to-end. The sum-equals-duration invariant
 # is the contract we promise downstream consumers (Phase 11 OTel).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 EC=0
@@ -2295,7 +2048,6 @@ rm -rf "$tmp" "$metrics"
 # split is meaningful only on success; on failure consumers can detect
 # "no split available" by queue_wait_ms == 0 alongside exit_status != 0.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_fail "$tmp"
 metrics=$(mktemp); : > "$metrics"
 EC=0
@@ -2332,16 +2084,12 @@ rm -rf "$tmp" "$metrics"
 # fields are emitted anyway so the JSON shape stays consistent across
 # success and failure rows.
 tmp=$(mktemp -d)
-cat > "$tmp/ollama" <<'EOF'
-#!/usr/bin/env bash
-[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
-unrelated:model  zz 5 GB   1 day ago"
-EOF
-chmod +x "$tmp/ollama"
+MOCK_MODELS='unrelated:model'
+make_mock_curl_models_only "$tmp"
+MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp); : > "$metrics"
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=ollama \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 1 "$EC" "queue-wait split on pick-model failure: exit 1"
@@ -2389,7 +2137,6 @@ RECIPE
 
 # 27a. Valid inputs: block + all required --var provided → success.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -2405,7 +2152,6 @@ rm -rf "$tmp" "$metrics"
 
 # 27b. Required --var missing → exit 2 with clear error listing missing key.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -2422,7 +2168,6 @@ rm -rf "$tmp" "$metrics"
 
 # 27c. --var integer fails type check → exit 2 with key/type/value named.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -2440,7 +2185,6 @@ rm -rf "$tmp" "$metrics"
 
 # 27d. Optional `string?` --var missing → success (lazy migration friendly).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -2484,7 +2228,6 @@ rm -rf "$tmp" "$metrics"
 # explicit commit-message `type` lever relies on. The marker line collapses
 # to `override:spicy:end` so a single assert_contains proves substitution.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -2530,7 +2273,6 @@ rm -rf "$tmp" "$metrics"
 # bug would have rendered as `override:{{flavour}}:end` — so a positive
 # assert_contains on `override::end` proves the blanking happened.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -2574,7 +2316,6 @@ rm -rf "$tmp" "$metrics"
 # type-check runs. This is the lazy-migration safety net so existing recipes
 # work unchanged until they're touched for other reasons.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -2609,7 +2350,6 @@ rm -rf "$tmp" "$metrics"
 # mode is deferred). A recipe declaring only `body: string` accepts a
 # caller-supplied --var extra=value without complaint.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -2648,7 +2388,6 @@ rm -rf "$tmp" "$metrics"
 # 27g. Optional `integer?` --var present but invalid → exit 2 (the `?` only
 # affects whether it's required, not whether the type check applies).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -2688,7 +2427,6 @@ rm -rf "$tmp" "$metrics"
 # 27h. Unsupported type in inputs: block → exit 2 (recipe authoring error).
 # Today only integer/string and their `?` forms are supported.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -2727,7 +2465,6 @@ rm -rf "$tmp" "$metrics"
 
 # 27i. Negative integer is accepted (real-world: error codes, offsets).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -2766,7 +2503,6 @@ rm -rf "$tmp" "$metrics"
 # require the piped context via the typed surface without forcing the
 # caller to pass it twice (--var + pipe).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -2800,7 +2536,6 @@ rm -rf "$tmp" "$metrics"
 # 23k. stdin: integer type-checks the piped value. Numeric piped value
 # satisfies; non-numeric exits 2.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -2842,7 +2577,6 @@ rm -rf "$tmp" "$metrics"
 # 23l. Missing-required error message has no trailing space (cosmetic
 # fix). Pin so a future refactor doesn't re-introduce the dangling space.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -2892,8 +2626,8 @@ rm -rf "$tmp" "$metrics"
 # ---------------------------------------------------------------------------
 
 # Curl mock that distinguishes three call types by URL:
-#   - probe (/v1/models)      — exits 7 to fall back to ollama
-#   - dispatch (/api/generate or /v1/chat/completions) — returns canned body
+#   - discovery (/v1/models)  — returns the model list
+#   - dispatch (/v1/chat/completions) — returns canned body
 #   - otel    (/v1/traces)    — captures body to $sniff_otel, returns 200
 # Each invocation appends one "ARGS: ..." line to $invocations_log and one
 # "OTEL_BODY: ..." line per OTel call so the test can count call types and
@@ -2910,7 +2644,7 @@ for arg in "\$@"; do
   esac
 done
 case "\$url" in
-  *"/v1/models"*) exit 7 ;;
+  *"/v1/models"*) printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0 ;;
   *"/v1/traces"*)
     # OTel POST — log argv, capture body, return per behaviour.
     echo "otel \$*" >> "${invocations_log}"
@@ -2935,7 +2669,7 @@ while (( \$# > 0 )); do
   esac
 done
 cat > "${dispatch_sniff}"
-body='{"response":"mock-model-output: ok\\n"}'
+body='{"choices":[{"message":{"content":"mock-model-output: ok\\n"},"finish_reason":"stop"}]}'
 if [[ -n "\$out_file" ]]; then
   printf '%s' "\$body" > "\$out_file"
 else
@@ -2952,7 +2686,6 @@ EOF
 # OTel path would never fire because the dispatch is the only http call
 # made (besides the auto-probe which exits 7).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -2974,7 +2707,6 @@ rm -rf "$tmp" "$metrics"
 # attributes; the resourceSpans → scopeSpans → spans envelope; the span
 # kind/status; the traceId/spanId fields.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3007,7 +2739,7 @@ fi
 assert_contains '"gen_ai.operation.name"' "$otel_body" "OT2: gen_ai.operation.name"
 assert_contains '"chat"' "$otel_body" "OT2: operation.name value is 'chat'"
 assert_contains '"gen_ai.provider.name"' "$otel_body" "OT2: gen_ai.provider.name"
-assert_contains '"ollama"' "$otel_body" "OT2: provider.name value is 'ollama'"
+assert_contains '"mlx"' "$otel_body" "OT2: provider.name value is 'mlx'"
 assert_contains '"gen_ai.request.model"' "$otel_body" "OT2: gen_ai.request.model"
 assert_contains '"qwen3.6:35b-a3b"' "$otel_body" "OT2: request.model is the resolved model"
 assert_contains '"gen_ai.request.temperature"' "$otel_body" "OT2: gen_ai.request.temperature"
@@ -3080,7 +2812,6 @@ rm -rf "$tmp" "$metrics"
 # exit status. The original prose response still lands on stdout. The
 # metrics JSONL row still gets written.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3102,7 +2833,6 @@ rm -rf "$tmp" "$metrics"
 # OT4. OTel timeout (curl exit 28 from --max-time) also doesn't change exit
 # status. Same invariant as OT3 but exercises a different failure mode.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3120,7 +2850,6 @@ rm -rf "$tmp" "$metrics"
 # OT5. DELEGATE_OTEL_TIMEOUT=1 flows into curl's --max-time argv. Capture
 # the OTel curl invocation's args and assert --max-time 1.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3140,7 +2869,6 @@ rm -rf "$tmp" "$metrics"
 # OT6. DELEGATE_OTEL_HEADERS splits on comma and emits one -H per header.
 # This is the auth-pass-through path Grafana Cloud / Langfuse both use.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3166,7 +2894,6 @@ rm -rf "$tmp" "$metrics"
 # OT7. --recipe call emits delegate.recipe as a span attribute. Bare prose-
 # tier calls (OT2 above) explicitly omit the attribute per the schema.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3182,7 +2909,7 @@ for arg in "\$@"; do
   esac
 done
 case "\$url" in
-  *"/v1/models"*) exit 7 ;;
+  *"/v1/models"*) printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0 ;;
   *"/v1/traces"*)
     echo "otel \$*" >> "${invocations}"
     cat > "${otel_sniff}"
@@ -3201,12 +2928,12 @@ done
 payload=\$(cat)
 if echo "\$payload" | grep -qE '"num_predict":1|"max_tokens":1[,}]'; then
   echo "canary" >> "${invocations}"
-  printf '%s' '{"response":"ok"}'
+  printf '%s' '{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
   exit 0
 fi
 echo "dispatch" >> "${invocations}"
 echo "\$payload" > "${sniff}"
-body='{"response":"mock-model-output: ok\\n"}'
+body='{"choices":[{"message":{"content":"mock-model-output: ok\\n"},"finish_reason":"stop"}]}'
 if [[ -n "\$out_file" ]]; then
   printf '%s' "\$body" > "\$out_file"
 else
@@ -3252,16 +2979,12 @@ rm -rf "$tmp" "$metrics"
 # OT8. Pick-model failure → exit 1 still happens, OTel span is emitted with
 # status ERROR (code 2). The metrics row also has exit_status:1.
 tmp=$(mktemp -d)
-cat > "$tmp/ollama" <<'EOF'
-#!/usr/bin/env bash
-[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
-unrelated:model  zz 5 GB   1 day ago"
-EOF
-chmod +x "$tmp/ollama"
+MOCK_MODELS='unrelated:model'
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -3279,7 +3002,6 @@ rm -rf "$tmp" "$metrics"
 # OT9. DELEGATE_OTEL_VERBOSE=1 + failing endpoint → stderr names the failure.
 # Default (verbose unset) is silent — caller doesn't see the error.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3301,7 +3023,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # on stderr. Pin the silent-by-default behaviour so a future change doesn't
 # accidentally spam the caller's tool output.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3331,7 +3052,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # original delegation didn't export (e.g. exporter was turned on between
 # the delegation and the verdict).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 EC=0
@@ -3352,7 +3072,6 @@ rm -rf "$tmp" "$metrics"
 # the documented fix is for callers to url-encode the value (`a%3D1%2C%20b%3D2`)
 # and rely on the script to decode it before emitting -H.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3387,7 +3106,6 @@ rm -rf "$tmp" "$metrics"
 # quoted strings in the wire payload. status.code and span.kind are int32
 # enums and stay JSON numbers.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3450,7 +3168,6 @@ rm -rf "$tmp" "$metrics"
 # The actual content text (the prompt arg and the canned mock response)
 # must not appear anywhere in the body — no key, no value, no sentinel.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3536,7 +3253,6 @@ rm -rf "$tmp" "$metrics"
 # attributes are present with their actual values. The metadata attributes
 # also stay present — opt-in adds content, it doesn't replace metadata.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3580,7 +3296,6 @@ rm -rf "$tmp" "$metrics"
 # string equality to "1" rather than truthiness, so any value other than
 # "1" stays redacted.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3608,7 +3323,6 @@ rm -rf "$tmp" "$metrics"
 # who set INCLUDE_CONTENT=true or =yes expecting truthiness get the safer
 # default (redact) instead of accidentally shipping content.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3652,7 +3366,6 @@ rm -rf "$tmp" "$metrics"
 # QS1. Qwen-family model with no overrides → bare greedy on the Ollama
 # dispatch payload AND on the JSONL metrics row (no sampling_* keys at all).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -3662,7 +3375,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "QS1: Qwen model with no overrides exits 0"
 payload=$(cat "$sniff")
-assert_contains '"options":{"temperature":0}' "$payload" "QS1: bare greedy payload has options.temperature:0"
+assert_contains '"temperature":0' "$payload" "QS1: bare greedy payload has temperature:0"
 case "$payload" in
   *'"temperature":0.7'*) echo "  FAIL  QS1: Qwen model must NOT auto-apply temperature=0.7 (default flipped)"; fail=$((fail+1));;
   *) echo "  PASS  QS1: Qwen model stays greedy by default"; pass=$((pass+1));;
@@ -3703,20 +3416,10 @@ rm -rf "$tmp" "$metrics"
 # QS2. Non-Qwen model also stays greedy by default (same default for all
 # models). Verifies the default-flip applies uniformly, not just to non-Qwen.
 tmp=$(mktemp -d)
-cat > "$tmp/ollama" <<'EOF'
-#!/usr/bin/env bash
-case "${1:-}" in
-  list)
-    cat <<'LIST'
-NAME             ID SIZE   MODIFIED
-deepseek-r1:32b  aa 30 GB  1 day ago
-LIST
-    ;;
-esac
-EOF
-chmod +x "$tmp/ollama"
+MOCK_MODELS='deepseek-r1:32b'
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
+MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -3725,7 +3428,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "QS2: non-Qwen model exits 0"
 payload=$(cat "$sniff")
 assert_contains '"model":"deepseek-r1:32b"' "$payload" "QS2: model resolved to deepseek-r1"
-assert_contains '"options":{"temperature":0}' "$payload" "QS2: non-Qwen payload has bare options.temperature:0"
+assert_contains '"temperature":0' "$payload" "QS2: non-Qwen payload has bare temperature:0"
 case "$payload" in
   *'"top_p"'*) echo "  FAIL  QS2: non-Qwen payload must NOT carry top_p"; fail=$((fail+1));;
   *) echo "  PASS  QS2: non-Qwen payload omits top_p"; pass=$((pass+1));;
@@ -3749,7 +3452,6 @@ rm -rf "$tmp" "$metrics"
 # env vars provide both the dispatch payload sampler and the metrics row
 # entries — surfacing what the caller chose to set.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -3779,7 +3481,6 @@ rm -rf "$tmp" "$metrics"
 # stay unset because the caller didn't request them). Metrics row mirrors:
 # sampling_temperature present, others omitted.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -3805,7 +3506,6 @@ rm -rf "$tmp" "$metrics"
 
 # QS4. Non-numeric DELEGATE_TEMPERATURE exits 2 with a clear stderr.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
 stderr_file=$(mktemp)
@@ -3824,7 +3524,6 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # DELEGATE_TOP_P / DELEGATE_TOP_K / DELEGATE_PRESENCE_PENALTY all exit 2.
 for vname in DELEGATE_TOP_P DELEGATE_TOP_K DELEGATE_PRESENCE_PENALTY; do
   tmp=$(mktemp -d)
-  make_mock_ollama "$tmp"
   make_mock_curl_ok "$tmp"
   metrics=$(mktemp); : > "$metrics"
   stderr_file=$(mktemp)
@@ -3846,7 +3545,6 @@ done
 # case-pattern form.
 for bad in "1-2" "5-" ".-" "1.5.6" "-" "."; do
   tmp=$(mktemp -d)
-  make_mock_ollama "$tmp"
   make_mock_curl_ok "$tmp"
   metrics=$(mktemp); : > "$metrics"
   stderr_file=$(mktemp)
@@ -3865,7 +3563,6 @@ done
 # Each should pass through to dispatch (exit 0).
 for good in "0" "1" "-1" "0.7" "1.3" ".5" "1." "-42" "-0.5"; do
   tmp=$(mktemp -d)
-  make_mock_ollama "$tmp"
   make_mock_curl_ok "$tmp"
   metrics=$(mktemp)
   EC=0
@@ -3882,15 +3579,11 @@ done
 # `options` object. Mirror QS3 to confirm MLX dispatch honours the same
 # env-var surface as Ollama.
 tmp=$(mktemp -d)
-snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
-mkdir -p "$snap"
-touch "$snap/weights.safetensors"
 payload_sniff="$tmp/payload.json"
 make_mock_curl_mlx_ok "$tmp" "$payload_sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
   DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_TEMPERATURE=0.7 \
   DELEGATE_TOP_P=0.8 \
@@ -3908,15 +3601,11 @@ rm -rf "$tmp" "$metrics"
 # QS5b. Non-numeric override on MLX path also exits 2 (same validator runs
 # before the dispatch envelope is built, regardless of backend).
 tmp=$(mktemp -d)
-snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
-mkdir -p "$snap"
-touch "$snap/weights.safetensors"
 make_mock_curl_mlx_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
 stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
   DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_TOP_P=oops \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
@@ -3924,81 +3613,10 @@ assert_eq 2 "$EC" "QS5b: MLX + bad DELEGATE_TOP_P exits 2"
 assert_contains "DELEGATE_TOP_P" "$(cat "$stderr_file")" "QS5b: MLX validator stderr names env var"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# QS6. Canary preflight stays greedy regardless of dispatch profile. With
-# --recipe set the canary fires before dispatch; its payload must carry
-# temperature:0 (Ollama) or temperature:0 + max_tokens:1 (MLX) — never the
-# Qwen profile. Sanity test pins the contract documented in delegate.sh.
+# QS6. The canary stays greedy regardless of the dispatch profile. With
+# --recipe set it fires before dispatch; its payload must carry
+# temperature:0 and max_tokens:1, never the Qwen profile.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
-canary_payload_sniff="$tmp/canary-payload.json"; : > "$canary_payload_sniff"
-cat > "$tmp/curl" <<EOF
-#!/usr/bin/env bash
-url=""
-for arg in "\$@"; do
-  case "\$arg" in
-    http*|https*) url="\$arg" ;;
-  esac
-done
-case "\$url" in
-  *"/v1/models"*) exit 7 ;;
-esac
-out_file=""
-write_out=""
-while (( \$# > 0 )); do
-  case "\$1" in
-    -o) out_file="\$2"; shift 2 ;;
-    -w) write_out="\$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-payload=\$(cat)
-if echo "\$payload" | grep -q '"num_predict":1'; then
-  echo "\$payload" > "${canary_payload_sniff}"
-  printf '%s' '{"response":"k"}'
-  exit 0
-fi
-body='{"response":"mock-model-output: ok\\n"}'
-if [[ -n "\$out_file" ]]; then
-  printf '%s' "\$body" > "\$out_file"
-else
-  printf '%s' "\$body"
-fi
-if [[ -n "\$write_out" ]]; then
-  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
-fi
-EOF
-chmod +x "$tmp/curl"
-prompts="$tmp/prompts"
-setup_recipe_prompts "$prompts"
-metrics=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_PROMPTS_DIR="$prompts" \
-  bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "QS6: canary + dispatch exits 0"
-canary_payload=$(cat "$canary_payload_sniff")
-assert_contains '"num_predict":1' "$canary_payload" "QS6: canary has num_predict:1"
-assert_contains '"temperature":0' "$canary_payload" "QS6: canary stays at temperature:0 (greedy)"
-case "$canary_payload" in
-  *'"top_p"'*) echo "  FAIL  QS6: canary payload must NOT carry top_p"; fail=$((fail+1));;
-  *) echo "  PASS  QS6: canary payload omits top_p"; pass=$((pass+1));;
-esac
-case "$canary_payload" in
-  *'"presence_penalty"'*) echo "  FAIL  QS6: canary payload must NOT carry presence_penalty"; fail=$((fail+1));;
-  *) echo "  PASS  QS6: canary payload omits presence_penalty"; pass=$((pass+1));;
-esac
-case "$canary_payload" in
-  *'"temperature":0.7'*) echo "  FAIL  QS6: canary must not inherit Qwen 0.7"; fail=$((fail+1));;
-  *) echo "  PASS  QS6: canary stays greedy"; pass=$((pass+1));;
-esac
-rm -rf "$tmp" "$metrics"
-
-# QS6b. MLX canary also stays greedy.
-tmp=$(mktemp -d)
-snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
-mkdir -p "$snap"
-touch "$snap/weights.safetensors"
 canary_payload_sniff="$tmp/canary-payload.json"; : > "$canary_payload_sniff"
 cat > "$tmp/curl" <<EOF
 #!/usr/bin/env bash
@@ -4011,7 +3629,7 @@ done
 case "\$url" in
   *"/v1/models"*)
     cat > /dev/null
-    printf '%s' '{"object":"list","data":[]}'
+    printf '%s' '$(mock_models_json $MOCK_MODELS)'
     exit 0
     ;;
 esac
@@ -4046,21 +3664,20 @@ setup_recipe_prompts "$prompts"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
   DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe canary-recipe prose "tail" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "QS6b: MLX canary + dispatch exits 0"
+assert_eq 0 "$EC" "QS6: canary + dispatch exits 0"
 canary_payload=$(cat "$canary_payload_sniff")
-assert_contains '"max_tokens":1' "$canary_payload" "QS6b: MLX canary has max_tokens:1"
-assert_contains '"temperature":0' "$canary_payload" "QS6b: MLX canary stays at temperature:0"
+assert_contains '"max_tokens":1' "$canary_payload" "QS6: canary has max_tokens:1"
+assert_contains '"temperature":0' "$canary_payload" "QS6: canary stays at temperature:0"
 case "$canary_payload" in
-  *'"top_p"'*) echo "  FAIL  QS6b: MLX canary must NOT carry top_p"; fail=$((fail+1));;
-  *) echo "  PASS  QS6b: MLX canary omits top_p"; pass=$((pass+1));;
+  *'"top_p"'*) echo "  FAIL  QS6: canary must NOT carry top_p"; fail=$((fail+1));;
+  *) echo "  PASS  QS6: canary omits top_p"; pass=$((pass+1));;
 esac
 case "$canary_payload" in
-  *'"temperature":0.7'*) echo "  FAIL  QS6b: MLX canary must not inherit Qwen 0.7"; fail=$((fail+1));;
-  *) echo "  PASS  QS6b: MLX canary stays greedy"; pass=$((pass+1));;
+  *'"temperature":0.7'*) echo "  FAIL  QS6: canary must not inherit Qwen 0.7"; fail=$((fail+1));;
+  *) echo "  PASS  QS6: canary stays greedy"; pass=$((pass+1));;
 esac
 rm -rf "$tmp" "$metrics"
 
@@ -4074,16 +3691,12 @@ rm -rf "$tmp" "$metrics"
 # failure path, output_text is "" so `delegate.output` is absent; the
 # success-path test (OT15) covers the non-empty case.
 tmp=$(mktemp -d)
-cat > "$tmp/ollama" <<'EOF'
-#!/usr/bin/env bash
-[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
-unrelated:model  zz 5 GB   1 day ago"
-EOF
-chmod +x "$tmp/ollama"
+MOCK_MODELS='unrelated:model'
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
+MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4181,7 +3794,6 @@ RECIPE
 # for the prose tier; the recipe's frontmatter pattern `qwen3.6:35b` is a
 # case-insensitive substring of that, so the gate fires.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "success"
@@ -4219,7 +3831,6 @@ rm -rf "$tmp" "$metrics"
 # F2. DELEGATE_FORCE_FLAKY=1 overrides the gate — request flows through to
 # the canary + dispatch even when the model matches a flaky pattern.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "success"
@@ -4243,7 +3854,6 @@ rm -rf "$tmp" "$metrics"
 # request proceeds (canary + dispatch). The recipe's flaky_on_models lists
 # only non-matching strings; the mock's qwen3.6:35b-a3b is unaffected.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "success"
@@ -4265,7 +3875,6 @@ rm -rf "$tmp" "$metrics"
 # F4. Recipe WITHOUT flaky_on_models frontmatter skips the gate entirely
 # (back-compat — recipes that pre-date the convention keep working).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "success"
@@ -4291,7 +3900,6 @@ rm -rf "$tmp" "$metrics"
 # exercised by the lowercase-on-lowercase match in F1 because the code
 # always tr's both to lowercase before comparing.)
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_probe_aware "$tmp" "$sniff" "$invocations" "success"
@@ -4332,7 +3940,6 @@ rm -rf "$tmp" "$metrics"
 
 # 30a. Strip ON: <think>reason</think>\n\nANSWER -> only the answer reaches stdout.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_think "$tmp" '<think>\nLet me work through this carefully.\n</think>\n\nCLEAN_ANSWER_123'
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4343,7 +3950,6 @@ rm -rf "$tmp" "$metrics"
 
 # 30b. Strip OFF (default): the full trace is preserved on stdout.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_think "$tmp" '<think>\nLet me work through this carefully.\n</think>\n\nCLEAN_ANSWER_123'
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4355,7 +3961,6 @@ rm -rf "$tmp" "$metrics"
 
 # 30c. Strip ON but response has no </think>: no-op, output unchanged.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4367,7 +3972,6 @@ rm -rf "$tmp" "$metrics"
 # 30d. Strip ON, template-prefilled trace (closing </think> only, no opening
 # tag — the real qwen3-next-thinking shape): answer after </think> survives.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_think "$tmp" 'Reasoning emitted with no opening tag.\n</think>\n\nPREFILLED_ANSWER_456'
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4380,14 +3984,9 @@ rm -rf "$tmp" "$metrics"
 # — reasoning models emit traces and the tier exists to route them. Needs an
 # ollama mock listing a reasoning model so pick-model resolves the tier.
 tmp=$(mktemp -d)
-cat > "$tmp/ollama" <<'EOF'
-#!/usr/bin/env bash
-case "${1:-}" in
-  list) printf 'NAME             ID SIZE   MODIFIED\ndeepseek-r1:32b  rr 19 GB  1 day ago\n' ;;
-esac
-EOF
-chmod +x "$tmp/ollama"
+MOCK_MODELS='deepseek-r1:32b'
 make_mock_curl_think "$tmp" '<think>\nreasoning here\n</think>\n\nREASONING_ANSWER_789'
+MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
@@ -4398,14 +3997,9 @@ rm -rf "$tmp" "$metrics"
 # 30f. Reasoning tier with DELEGATE_STRIP_THINK=0 force-disables the strip
 # (escape hatch for a reasoning recipe whose own output may contain </think>).
 tmp=$(mktemp -d)
-cat > "$tmp/ollama" <<'EOF'
-#!/usr/bin/env bash
-case "${1:-}" in
-  list) printf 'NAME             ID SIZE   MODIFIED\ndeepseek-r1:32b  rr 19 GB  1 day ago\n' ;;
-esac
-EOF
-chmod +x "$tmp/ollama"
+MOCK_MODELS='deepseek-r1:32b'
 make_mock_curl_think "$tmp" '<think>\nreasoning here\n</think>\n\nREASONING_ANSWER_789'
+MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_STRIP_THINK=0 \
@@ -4417,7 +4011,6 @@ rm -rf "$tmp" "$metrics"
 # filled from scripts/flavor-defaults.sh when no profile.sh is installed
 # (back-compat), and overridden by a per-user profile.sh.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -4467,7 +4060,6 @@ rm -rf "$tmp" "$metrics"
 # block runs on the finalised output (warn-only) and reports failures on stderr
 # plus a checks_failed=N field on the delegate-meta line.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/chk.md" <<'EOF'
@@ -4552,7 +4144,6 @@ rm -rf "$tmp" "$metrics"
 # the participial arm matches any gerund tail rather than an enumerated verb
 # list, and subject_type catches an ignored caller-supplied conventional type.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/pad.md" <<'EOF'
@@ -4728,7 +4319,6 @@ DIFF
 # covers the git-backfill path); this isolates the diff->commit-message NAME
 # mapping plus the metrics recipe field.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp); : > "$metrics"
@@ -4769,7 +4359,6 @@ rm -rf "$tmp" "$metrics"
 
 # A2. --recipe auto + non-diff context -> exit 2, clear "could not infer".
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -4784,7 +4373,6 @@ rm -rf "$tmp" "$metrics"
 
 # A3. --recipe auto with no piped context -> exit 2, "needs context".
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -4829,7 +4417,6 @@ EOF
 # cannot diverge to the index. Passing only --var why must exit 0.
 if command -v git >/dev/null 2>&1; then
   tmp=$(mktemp -d)
-  make_mock_ollama "$tmp"
   sniff="$tmp/payload.json"
   make_mock_curl_ok "$tmp" "$sniff"
   metrics=$(mktemp); : > "$metrics"
@@ -4862,7 +4449,6 @@ if command -v git >/dev/null 2>&1; then
   # `git show`): diff_stat still fills from the piped diff, so the call must NOT
   # hard-fail on a missing diff_stat. This is the Bug-1 regression guard.
   tmp=$(mktemp -d)
-  make_mock_ollama "$tmp"
   sniff="$tmp/payload.json"
   make_mock_curl_ok "$tmp" "$sniff"
   metrics=$(mktemp); : > "$metrics"
@@ -4892,7 +4478,6 @@ fi
 # install a model for a tier that cannot exist — 23 such calls across four
 # projects, several concluding the skill was broken. Pin both paths.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4915,15 +4500,12 @@ rm -rf "$tmp" "$metrics"
 # A tier that IS valid but resolves to nothing keeps the original exit 1 and
 # the install-a-model advice, which is correct for that case.
 tmp=$(mktemp -d)
-cat > "$tmp/ollama" <<'EOF'
-#!/usr/bin/env bash
-# Mock: no models installed at all, so every valid tier is unresolvable.
-echo "NAME  ID  SIZE  MODIFIED"
-EOF
-chmod +x "$tmp/ollama"
+MOCK_MODELS=''
+make_mock_curl_models_only "$tmp"
+MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_BACKEND=ollama \
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 1 "$EC" "valid but unresolvable tier -> exit 1"
@@ -4937,12 +4519,11 @@ rm -rf "$tmp" "$metrics"
 # recorded project=delegate-local, which never matched the boundary hook's own
 # (correct, hook-cwd) derivation — so the nudge fired despite compliance.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 EC=0
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=ollama DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_PROJECT=repo-butler \
   bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1 || EC=$?
 assert_eq 0 "$EC" "DELEGATE_PROJECT: exits 0"
@@ -4952,7 +4533,7 @@ assert_eq repo-butler "$(jq -r .project < "$metrics")" "DELEGATE_PROJECT overrid
 # --project NAME does the same and wins over the env var.
 EC=0
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=ollama DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_PROJECT=from-env \
   bash "$SCRIPT" --project from-flag prose "Summarise" </dev/null >/dev/null 2>&1 || EC=$?
 assert_eq 0 "$EC" "--project: exits 0"
@@ -4961,7 +4542,7 @@ assert_eq from-flag "$(jq -r .project < "$metrics")" "--project wins over DELEGA
 
 # The --project=NAME form is accepted too.
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=ollama DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" --project=teams-for-linux prose "Summarise" </dev/null >/dev/null 2>&1
 assert_eq teams-for-linux "$(jq -r .project < "$metrics")" "--project=NAME form accepted"
 : > "$metrics"
@@ -4969,14 +4550,14 @@ assert_eq teams-for-linux "$(jq -r .project < "$metrics")" "--project=NAME form 
 # Neither set: the cwd derivation is unchanged. Run from a throwaway directory
 # outside any git repo so the expected value is just its basename.
 (cd "$tmp" && env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=ollama DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1)
 assert_eq "$(basename "$tmp")" "$(jq -r .project < "$metrics")" "no override: falls back to the cwd derivation"
 
 # --project with no value is a usage error, not a silently empty project.
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=ollama DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" --project </dev/null 2>&1) || EC=$?
 assert_eq 2 "$EC" "--project without a value -> exit 2"
 assert_contains "--project requires a value" "$out" "--project without a value: informative stderr"
@@ -4985,7 +4566,7 @@ assert_contains "--project requires a value" "$out" "--project without a value: 
 # the project to "--recipe" and silently swallow the recipe.
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=ollama DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" --project --recipe commit-message prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 2 "$EC" "--project followed by a flag -> exit 2"
 assert_contains "--project requires a value" "$out" "--project followed by a flag: informative stderr"
@@ -4995,10 +4576,9 @@ rm -rf "$tmp" "$metrics"
 # defaulting to 600 s (see the DELEGATE_REQUEST_TIMEOUT header entry).
 tmp=$(mktemp -d)
 argv_sniff="$tmp/argv.txt"
-make_mock_ollama "$tmp"
 make_mock_curl_argv "$tmp" "$argv_sniff"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_BACKEND=ollama \
+  DELEGATE_LOCAL_NO_METRICS=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1 || true
 argv=$(cat "$argv_sniff" 2>/dev/null)
 assert_contains "--max-time 600" "$argv" "ollama dispatch defaults to 600s"
@@ -5008,10 +4588,9 @@ rm -rf "$tmp"
 # 35. DELEGATE_REQUEST_TIMEOUT overrides the default.
 tmp=$(mktemp -d)
 argv_sniff="$tmp/argv.txt"
-make_mock_ollama "$tmp"
 make_mock_curl_argv "$tmp" "$argv_sniff"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_BACKEND=ollama \
+  DELEGATE_LOCAL_NO_METRICS=1 \
   DELEGATE_REQUEST_TIMEOUT=42 \
   bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1 || true
 argv=$(cat "$argv_sniff" 2>/dev/null)
@@ -5021,13 +4600,10 @@ rm -rf "$tmp"
 # 36. The MLX dispatch curl gets the same bounds. Reuses make_mock_curl_mlx_ok,
 # which already sniffs argv and answers the /v1/models probe.
 tmp=$(mktemp -d)
-snap="$tmp/hf/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
-mkdir -p "$snap"
-touch "$snap/weights.safetensors"
 argv_sniff="$tmp/argv.txt"
 make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json" "$argv_sniff"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_BACKEND=mlx HF_HOME="$tmp/hf" \
+  DELEGATE_LOCAL_NO_METRICS=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1 || true
 argv=$(cat "$argv_sniff" 2>/dev/null)
 assert_contains "--max-time 600" "$argv" "mlx dispatch defaults to 600s"
@@ -5037,16 +4613,21 @@ rm -rf "$tmp"
 # 37. A timeout (curl exit 28) names the knob to raise, rather than sending
 # the caller to the generic daemon-check text.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 cat > "$tmp/curl" <<'EOF'
 #!/usr/bin/env bash
+# Discovery: pick-model.sh probes GET {base}/models before any dispatch, and
+# that request has no stdin, so this arm answers and exits before anything
+# reads stdin.
+for _a in "$@"; do
+  case "$_a" in */models) printf '%s' '{"object":"list","data":[{"id":"qwen3.6:35b-a3b"}]}'; exit 0 ;; esac
+done
 cat > /dev/null
 echo "curl: (28) Operation timed out" >&2
 exit 28
 EOF
 chmod +x "$tmp/curl"
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_BACKEND=ollama \
+  DELEGATE_LOCAL_NO_METRICS=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || true
 assert_contains "DELEGATE_REQUEST_TIMEOUT" "$out" "timeout guidance names the knob"
 rm -rf "$tmp"
@@ -5232,10 +4813,7 @@ case "$url" in
   */models) printf '%s' '{"data":[{"id":"qwen3.6:35b-a3b"}]}'; exit 0 ;;
 esac
 cat >/dev/null
-case "$url" in
-  */api/generate) body='{"response":"","done_reason":"length"}' ;;
-  *) body='{"choices":[{"message":{"content":"","reasoning":"thinking hard"},"finish_reason":"length"}]}' ;;
-esac
+body='{"choices":[{"message":{"content":"","reasoning":"thinking hard"},"finish_reason":"length"}]}'
 if [[ -n "$out" ]]; then printf '%s' "$body" > "$out"; printf '0.001'; else printf '%s' "$body"; fi
 EOF
   chmod +x "$dir/curl"
@@ -5269,27 +4847,6 @@ esac
 assert_contains '"exit_status":100' "$(cat "$metrics")" "empty answer is visible in the metrics row"
 rm -rf "$tmp" "$metrics"
 
-# 46. The same guard on the Ollama-native arm, which reads .response rather
-# than .choices[0].message.content and reports done_reason. That arm is still
-# reachable via DELEGATE_BACKEND=ollama until it is removed.
-tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
-make_mock_curl_empty "$tmp"
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=ollama \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1); rc=$?
-assert_eq "100" "$rc" "native arm: empty answer exits with the sentinel"
-assert_contains "finish_reason=length" "$out" "native arm: done_reason is reported as the finish reason"
-# The native arm sends no num_predict, so DELEGATE_MAX_TOKENS is not a lever
-# there and naming it would send the caller after a variable that does nothing.
-case "$out" in
-  *DELEGATE_MAX_TOKENS*)
-    assert_eq "no max-tokens advice" "max-tokens advice printed" "native arm: does not suggest DELEGATE_MAX_TOKENS" ;;
-  *)
-    assert_eq "no max-tokens advice" "no max-tokens advice" "native arm: does not suggest DELEGATE_MAX_TOKENS" ;;
-esac
-assert_contains "own context" "$out" "native arm: points at the model's context limit instead"
-rm -rf "$tmp"
 
 echo
 echo "$pass passed, $fail failed"

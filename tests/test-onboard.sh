@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Unit tests for scripts/onboard.sh. Drives the confirm-or-edit loop through the
 # DELEGATE_ONBOARD_ASSUME_TTY=1 seam (a real pty can't run in CI) against a
-# throwaway git repo with a known commit corpus and a mocked `ollama` on a
+# throwaway git repo with a known commit corpus and a mocked `curl` on a
 # restricted PATH, pinning the print-only no-write contract, the write/backup/
 # decline branches, input validation, and the round-trip through load-flavor.sh.
 
@@ -20,16 +20,20 @@ assert_absent() { case "$2" in *"$1"*) echo "  FAIL  $3 (unexpected '$1')"; fail
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# Mock ollama so init.sh's environment probe succeeds deterministically.
+# Mock the provider discovery endpoint so init.sh's environment probe succeeds
+# deterministically: init.sh asks pick-model.sh what is installed, and that is
+# an HTTP probe against every provider in the list.
 mock="$tmp/bin"; mkdir -p "$mock"
-cat > "$mock/ollama" <<'EOF'
+cat > "$mock/curl" <<'EOF'
 #!/bin/bash
-if [[ "${1:-}" == "list" ]]; then
-  echo "NAME                  ID    SIZE   MODIFIED"
-  echo "qwen3.6:35b-a3b-q8_0  abc   20GB   now"
-fi
+for a in "$@"; do
+  case "$a" in
+    */models) printf '%s' '{"object":"list","data":[{"id":"qwen3.6:35b-a3b-q8_0"}]}'; exit 0 ;;
+  esac
+done
+exit 7
 EOF
-chmod +x "$mock/ollama"
+chmod +x "$mock/curl"
 
 # Throwaway corpus repo: subject lengths 7,7,9,10,14,17 -> P90 index 5 -> max 14;
 # types feat x3 + fix x2 (docs appears once and is dropped by the >=2 rule).
@@ -123,14 +127,19 @@ assert_eq "0" "$ec" "T8: non-git cwd exits 0"
 assert_contains "fall back to shipped defaults" "$out" "T8: explains the fallback"
 assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=72" "$out" "T8: shipped default becomes the prefill"
 
-# --- T9: no ollama on PATH -> env section skipped, flavor still offered ------
+# --- T9: no provider reachable -> env section skipped, flavor still offered --
+# The host variables point at closed ports rather than relying on nothing being
+# installed: discovery is an HTTP probe now, so a developer machine with a live
+# daemon would otherwise answer it and resolve a real model.
 out=$( cd "$corpus" && env PATH="$SAFE_PATH" \
+  MLX_HOST=http://localhost:1 DOCKER_MODEL_HOST=http://localhost:2 \
+  OLLAMA_HOST=http://localhost:3 \
   DELEGATE_LOCAL_PROFILE="$tmp/t9p.sh" DELEGATE_LOCAL_CONFIG="$tmp/t9c.sh" \
   bash "$SCRIPT" </dev/null 2>&1 ); ec=$?
-assert_eq "0" "$ec" "T9: no-ollama exits 0"
+assert_eq "0" "$ec" "T9: no provider reachable exits 0"
 assert_contains "environment probe skipped" "$out" "T9: explains the skipped probe"
 assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=14" "$out" "T9: flavor candidate still printed"
-assert_absent "routing override candidate" "$out" "T9: no config fragment without ollama"
+assert_absent "routing override candidate" "$out" "T9: no config fragment without a provider"
 
 # --- T10: invalid edit re-prompts, then a valid retry is accepted ------------
 out=$(run_onboard 'abc\n55\n\nn\n' "$tmp/t10p.sh" "$tmp/t10c.sh")

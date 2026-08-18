@@ -63,6 +63,14 @@ make_mock_curl_deterministic() {
   local dir="$1"
   cat > "$dir/curl" <<'EOF'
 #!/usr/bin/env bash
+# Discovery: embed.sh shells out to pick-model.sh, which probes
+# GET {base}/models before any embedding call. That request carries no stdin,
+# so it has to be answered before the unconditional read below.
+for _a in "$@"; do
+  case "$_a" in
+    */models) printf '%s' '{"object":"list","data":[{"id":"nomic-embed-text:latest"}]}'; exit 0 ;;
+  esac
+done
 out_file=""
 while (( $# > 0 )); do
   case "$1" in

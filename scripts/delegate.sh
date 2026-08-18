@@ -39,16 +39,6 @@
 #   with a clear error before the model is contacted.
 #
 # Env:
-#   DELEGATE_BACKEND=auto|ollama|mlx        # default auto. auto probes
-#                                           #   ${MLX_HOST:-http://localhost:8080}/v1/models
-#                                           #   with a 1 s timeout and picks
-#                                           #   mlx if reachable, otherwise
-#                                           #   ollama. Explicit ollama or
-#                                           #   mlx skips the probe. The
-#                                           #   metrics line always logs the
-#                                           #   resolved backend, never "auto".
-#   DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT=<s> # override the auto probe timeout
-#                                           #   (default 1, integer seconds).
 #   DELEGATE_LOCAL_NO_METRICS=1              # opt out of metrics logging
 #                                           #   (back-compat: DELEGATE_TO_OLLAMA_NO_METRICS
 #                                           #   is accepted if the new name is unset)
@@ -147,15 +137,16 @@
 #                                           #   killing the 3.2-hour runaway.
 #   DELEGATE_BASE_URL=<urls>                # space-separated ordered list of
 #                                           #   OpenAI-compatible base URLs.
-#                                           #   When set it supersedes
-#                                           #   DELEGATE_BACKEND: pick-model.sh
-#                                           #   walks the list and dispatch
-#                                           #   posts to {base}/chat/
-#                                           #   completions. The metrics
+#                                           #   pick-model.sh walks the list
+#                                           #   and dispatch posts to {base}/
+#                                           #   chat/completions. Defaults to
+#                                           #   MLX, Docker Model Runner and
+#                                           #   Ollama on their standard ports
+#                                           #   — see pick-model.sh, which
+#                                           #   owns the default. The metrics
 #                                           #   backend label is derived from
 #                                           #   the winning URL (mlx / docker /
-#                                           #   ollama, else host:port). Unset
-#                                           #   by default.
+#                                           #   ollama, else host:port).
 #   DELEGATE_NO_PREFLIGHT=1                 # alternate disable for the canary
 #                                           #   (equivalent to TIMEOUT=0).
 #   DELEGATE_FORCE_FLAKY=1                  # override the recipe-level flaky-
@@ -223,11 +214,15 @@
 #                                           #   reasoning tier, for a reasoning
 #                                           #   recipe whose own output may
 #                                           #   contain </think>.
-#   OLLAMA_HOST=<url>                       # default http://localhost:11434
 #   MLX_HOST=<url>                          # default http://localhost:8080
-#   DELEGATE_MAX_TOKENS=<int>               # default 4096. MLX-only — the
-#                                           #   OpenAI completions shape
-#                                           #   requires max_tokens. Raise
+#   DOCKER_MODEL_HOST=<url>                 # default http://localhost:12434
+#   OLLAMA_HOST=<url>                       # default http://localhost:11434
+#                                           #   The three feed the default
+#                                           #   DELEGATE_BASE_URL list; see
+#                                           #   pick-model.sh, which owns it.
+#   DELEGATE_MAX_TOKENS=<int>               # default 4096. The OpenAI
+#                                           #   completions shape requires
+#                                           #   max_tokens. Raise
 #                                           #   for long-context tier or
 #                                           #   verbose models.
 #   DELEGATE_TEMPERATURE=<float>            # override sampler temperature.
@@ -429,37 +424,13 @@ prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
 # delegate_project is derived after lib/otel.sh is sourced (it provides
 # delegate_project_name); first used in the metric/span emission near the end.
-# Resolve auto backend by probing the MLX server. Cheap (sub-second
-# timeout, single GET) and runs once per invocation. Explicit ollama|mlx
-# skip the probe. The metrics line records the resolved backend, never
-# "auto" — so downstream consumers (metrics-summary, audit-metrics) keep
-# seeing the same shape they did before the auto default.
-# DELEGATE_BASE_URL supersedes backend probing. Which base URL wins is not
-# known until the tier is resolved (a provider can be reachable yet hold no
-# model for this tier), so only the label is set here; the URL comes back from
-# the pick-model call below.
+# Which base URL wins is not known until the tier is resolved (a provider can
+# be reachable yet hold no model for this tier), so nothing is decided here:
+# both the URL and the metrics label come back from the pick-model call below.
+# This placeholder label only ever reaches a metrics row for a failure that
+# happened before resolution.
 resolved_base=""
-backend_requested="${DELEGATE_BACKEND:-auto}"
-if [[ -n "${DELEGATE_BASE_URL:-}" ]]; then
-  backend="provider"
-  backend_requested="provider"
-else
-case "$backend_requested" in
-  auto)
-    mlx_host_probe="${MLX_HOST:-http://localhost:8080}"
-    probe_timeout="${DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT:-1}"
-    if curl -sS --max-time "$probe_timeout" --fail "$mlx_host_probe/v1/models" >/dev/null 2>&1; then
-      backend="mlx"
-    else
-      backend="ollama"
-    fi
-    ;;
-  ollama|mlx) backend="$backend_requested" ;;
-  *) echo "delegate: unknown DELEGATE_BACKEND='$backend_requested' (valid: auto|ollama|mlx)" >&2; exit 2 ;;
-esac
-fi
-ollama_host="${OLLAMA_HOST:-http://localhost:11434}"
-mlx_host="${MLX_HOST:-http://localhost:8080}"
+backend="provider"
 
 # Normalise DELEGATE_THINK to a strict JSON boolean ("true"/"false") before
 # it reaches jq --argjson, so a stray value like "yes" / "True" / " true "
@@ -516,8 +487,8 @@ log_metric() {
   # Non-Qwen models emit only sampling_temperature (always 0); Qwen models
   # emit all four; env-var overrides surface as whatever the caller set.
   # jq builds the line so any quote, backslash, or newline in $model or
-  # $recipe_name (recipe names are filename-safe today but model names come
-  # from `ollama list` parsing and are not under our control) escapes
+  # $recipe_name (recipe names are filename-safe today but model ids come
+  # from whatever a provider reports and are not under our control) escapes
   # correctly rather than producing invalid JSON.
   # recipe joins the other optional fields as a conditional append, so the row
   # shape (recipe present iff this was a --recipe call) holds without a second
@@ -970,36 +941,27 @@ fi
 # valid-tier list is echoed from pick-model's own message rather than restated
 # here, so there is exactly one source of truth for it.
 pick_err=$(mktemp)
-# Gated on the resolved backend rather than on DELEGATE_BASE_URL being
-# non-empty, matching pick-model.sh. Equivalent today; not equivalent once the
-# variable has a default, at which point this test would answer yes even for an
-# explicitly requested ollama/mlx backend.
-if [[ "$backend" == "provider" ]]; then
-  # One call, not two: --print-resolution returns "<base>\t<model>" so a dead
-  # provider in the list is probed once rather than once per question.
-  _resolved=$(bash "$pick" --print-resolution "$tier" 2>"$pick_err")
-  pick_rc=$?
-  if [[ $pick_rc -eq 0 ]]; then
-    resolved_base="${_resolved%%	*}"
-    model="${_resolved#*	}"
-    # Derive a short metrics label from the base URL. lib/otel.sh maps this to
-    # gen_ai.provider.name and the Grafana overview does sum by (backend), so
-    # emitting the URL would split every historical series and emitting a flat
-    # "provider" would merge every runtime into one. Never falls back to
-    # "openai": that is a registered SemConv value meaning OpenAI, so labelling
-    # a local llama.cpp endpoint with it would be conformant-looking and false.
-    case "$resolved_base" in
-      *:8080*)  backend="mlx" ;;
-      *:12434*) backend="docker" ;;
-      *:11434*) backend="ollama" ;;
-      *) backend=$(printf '%s' "$resolved_base" | sed -E 's|^[a-z]+://||; s|/.*$||') ;;
-    esac
-  else
-    model=""
-  fi
-else
-model=$(bash "$pick" "$tier" 2>"$pick_err")
+# One call, not two: --print-resolution returns "<base>\t<model>" so a dead
+# provider in the list is probed once rather than once per question.
+_resolved=$(bash "$pick" --print-resolution "$tier" 2>"$pick_err")
 pick_rc=$?
+if [[ $pick_rc -eq 0 ]]; then
+  resolved_base="${_resolved%%	*}"
+  model="${_resolved#*	}"
+  # Derive a short metrics label from the base URL. lib/otel.sh maps this to
+  # gen_ai.provider.name and the Grafana overview does sum by (backend), so
+  # emitting the URL would split every historical series and emitting a flat
+  # "provider" would merge every runtime into one. Never falls back to
+  # "openai": that is a registered SemConv value meaning OpenAI, so labelling
+  # a local llama.cpp endpoint with it would be conformant-looking and false.
+  case "$resolved_base" in
+    *:8080*)  backend="mlx" ;;
+    *:12434*) backend="docker" ;;
+    *:11434*) backend="ollama" ;;
+    *) backend=$(printf '%s' "$resolved_base" | sed -E 's|^[a-z]+://||; s|/.*$||') ;;
+  esac
+else
+  model=""
 fi
 pick_msg=$(cat "$pick_err" 2>/dev/null)
 rm -f "$pick_err"
@@ -1179,18 +1141,9 @@ if [[ -n "$recipe" ]] \
   # Qwen sampler overrides (top_p, top_k, presence_penalty) are pointless
   # at num_predict:1 / max_tokens:1 and would only add JSON noise to the
   # smallest-possible health check.
-  # $resolved_base, not $backend, decides the arm: $backend is the metrics
-  # label and is deliberately "ollama" for a provider on Ollama's port, which
-  # must still be reached through the OpenAI arm.
-  if [[ -z "$resolved_base" && "$backend" == "ollama" ]]; then
-    canary_payload=$(jq -nc --arg m "$model" --argjson th "$think" \
-      '{model:$m, prompt:"hi", stream:false, think:$th, options:{num_predict:1, temperature:0}}')
-    canary_url="$ollama_host/api/generate"
-  else
-    canary_payload=$(jq -nc --arg m "$model" --argjson et "$think" \
-      '{model:$m, messages:[{role:"user", content:"hi"}], stream:false, temperature:0, max_tokens:1, chat_template_kwargs:{enable_thinking:$et}}')
-    canary_url="${resolved_base:-$mlx_host/v1}/chat/completions"
-  fi
+  canary_payload=$(jq -nc --arg m "$model" --argjson et "$think" \
+    '{model:$m, messages:[{role:"user", content:"hi"}], stream:false, temperature:0, max_tokens:1, chat_template_kwargs:{enable_thinking:$et}}')
+  canary_url="$resolved_base/chat/completions"
   curl -sS --fail --max-time "$preflight_timeout" -X POST "$canary_url" -d @- >/dev/null 2>&1 <<< "$canary_payload"
   canary_status=$?
   if (( canary_status != 0 )); then
@@ -1198,7 +1151,7 @@ if [[ -n "$recipe" ]] \
     # Distinguish curl exit codes so the recovery advice points at the
     # right knob. 28 is the --max-time-fired timeout (the case the canary
     # was designed for); 7 is "can't reach host" (daemon down or wrong
-    # OLLAMA_HOST/MLX_HOST); 22 is curl --fail on a non-2xx response
+    # the host variables); 22 is curl --fail on a non-2xx response
     # (e.g. an unknown model name returning 404). Anything else falls
     # through to a generic curl-exit-N message that names the code so the
     # caller can look it up.
@@ -1213,7 +1166,7 @@ if [[ -n "$recipe" ]] \
       echo "         recipe='$recipe' tier='$tier' model='$model' backend='$backend'"
       echo "         Options:"
       echo "         - retry with DELEGATE_PREFLIGHT_TIMEOUT=30 if cold-load is suspected"
-      echo "         - start the backend daemon (ollama serve, or mlx_lm.server) and confirm OLLAMA_HOST / MLX_HOST"
+      echo "         - start the provider daemon (mlx_lm.server, Docker Model Runner or ollama serve) and confirm MLX_HOST / DOCKER_MODEL_HOST / OLLAMA_HOST"
       echo "         - re-route to a smaller-parameter model on this host"
       echo "         - hand-write the output (recommended for 35B-class prose tiers on recipe-shaped prompts — see prompts/$recipe.md)"
       echo "         - silence the probe with DELEGATE_NO_PREFLIGHT=1 (sends the full request and inherits the failure)"
@@ -1259,9 +1212,8 @@ ${p}"
 done
 
 # Build the JSON payload via jq so prompts containing quotes / backslashes /
-# newlines are escaped correctly. Each backend has its own request and
-# response envelope — Ollama's /api/generate returns .response, MLX's
-# OpenAI-compatible /v1/chat/completions returns .choices[0].message.content.
+# newlines are escaped correctly. Every provider speaks the same envelope:
+# POST {base}/chat/completions, answer at .choices[0].message.content.
 #
 # curl -w "%{time_starttransfer}" reports seconds-from-curl-start until the
 # first response byte arrived. This is the closest measurable proxy for
@@ -1299,83 +1251,49 @@ local _model="$1"
 # failure guidance below reads it from the caller's scope, the same way it
 # reads $status.
 request_timeout="${DELEGATE_REQUEST_TIMEOUT:-600}"
-# $resolved_base, not $backend, selects the arm. $backend is the metrics label
-# and is deliberately "ollama" for a provider-list entry on Ollama's port; that
-# request must still go through the OpenAI arm, which is the whole contract.
-if [[ -z "$resolved_base" && "$backend" == "ollama" ]]; then
-  # think:false suppresses chain-of-thought for thinking-capable models —
-  # see DELEGATE_THINK above. The sampler-profile overlay is built via jq
-  # additions so the dispatch payload carries only the keys the caller
-  # opted into via env vars; with no overrides the payload is the bare
-  # {temperature:0} greedy shape regardless of model family.
-  payload=$(jq -nc --arg m "$_model" --arg p "$full_input" --argjson th "$think" \
-    --argjson temp "$sampling_temperature" \
-    --arg top_p "$sampling_top_p" --arg top_k "$sampling_top_k" --arg pp "$sampling_presence_penalty" \
-    '{model:$m, prompt:$p, stream:false, think:$th, options:({temperature:$temp}
-      + (if $top_p != "" then {top_p:($top_p|tonumber)} else {} end)
-      + (if $top_k != "" then {top_k:($top_k|tonumber)} else {} end)
-      + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end))}')
-  ttfb_s=$(curl -sS --fail --max-time "$request_timeout" --connect-timeout 5 \
-    -X POST "$ollama_host/api/generate" -d @- \
-    -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
-  status=$?
-  if [[ "$status" -eq 0 ]]; then
-    output=$(jq -r '.response // ""' < "$body_file")
-    if [[ -z "$output" ]]; then
-      empty_finish_reason=$(jq -r '.done_reason // "unknown"' < "$body_file")
-      status=$EMPTY_RESPONSE_STATUS
-    fi
-  else
-    output=""
+# Every provider is reached the same way: POST {base}/chat/completions with the
+# OpenAI chat shape. /v1/completions is the raw-prompt endpoint — it bypasses
+# the model's chat template, so instruction-tuned models emit whitespace until
+# max_tokens. /chat/completions wraps the input via apply_chat_template and
+# produces real instruction-following output. The response carries
+# .choices[0].message.content (and .choices[0].message.reasoning when thinking
+# is on — chat_template_kwargs.enable_thinking is passed so the content field
+# carries the answer rather than the reasoning trace).
+max_tokens="${DELEGATE_MAX_TOKENS:-4096}"
+# $think is already the normalised "true"/"false" string from the top of the
+# script. Providers honour top_p / top_k / presence_penalty on the top-level
+# options, so the sampler-profile overlay is built via jq additions and the
+# payload carries only the keys the caller opted into via env vars; with no
+# overrides it is the bare {temperature:0} greedy shape regardless of model
+# family.
+payload=$(jq -nc --arg m "$_model" --arg p "$full_input" --argjson mt "$max_tokens" --argjson et "$think" \
+  --argjson temp "$sampling_temperature" \
+  --arg top_p "$sampling_top_p" --arg top_k "$sampling_top_k" --arg pp "$sampling_presence_penalty" \
+  '{model:$m, messages:[{role:"user", content:$p}], stream:false, temperature:$temp, max_tokens:$mt, chat_template_kwargs:{enable_thinking:$et}}
+    + (if $top_p != "" then {top_p:($top_p|tonumber)} else {} end)
+    + (if $top_k != "" then {top_k:($top_k|tonumber)} else {} end)
+    + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end)')
+# resolved_base already had one trailing slash stripped by pick-model.sh, so
+# the join cannot double up.
+chat_url="$resolved_base/chat/completions"
+ttfb_s=$(curl -sS --fail --max-time "$request_timeout" --connect-timeout 5 \
+  -X POST "$chat_url" -d @- \
+  -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
+status=$?
+if [[ "$status" -eq 0 ]]; then
+  output=$(jq -r '.choices[0].message.content // ""' < "$body_file")
+  # A well-formed response with empty content is a real failure, not a short
+  # answer. Providers that ignore chat_template_kwargs.enable_thinking spend
+  # the whole budget on reasoning — which lands in a separate `reasoning`
+  # field, so `content` is genuinely empty — and return finish_reason
+  # "length". Measured on Ollama 2026-08-18: at max_tokens 16 the answer is
+  # "" while MLX and Docker Model Runner both return the real answer.
+  if [[ -z "$output" ]]; then
+    empty_finish_reason=$(jq -r '.choices[0].finish_reason // "unknown"' < "$body_file")
+    status=$EMPTY_RESPONSE_STATUS
   fi
 else
-  # MLX server (mlx_lm.server) speaks the OpenAI chat-completions shape.
-  # /v1/completions is the raw-prompt endpoint — it bypasses the model's
-  # chat template, so instruction-tuned models emit whitespace until
-  # max_tokens. /v1/chat/completions wraps the input via apply_chat_template
-  # and produces real instruction-following output. The response carries
-  # .choices[0].message.content (and .choices[0].message.reasoning when
-  # thinking is on — we mirror Ollama's think:false default by passing
-  # chat_template_kwargs.enable_thinking=false so the content field carries
-  # the answer rather than the reasoning trace.
-  max_tokens="${DELEGATE_MAX_TOKENS:-4096}"
-  # $think is already the normalised "true"/"false" string from lines
-  # 111-115; enable_thinking maps to it directly (think:true -> reasoning
-  # on, same semantic as Ollama's think field, just expressed through the
-  # chat-template kwarg). MLX honours top_p / top_k / presence_penalty on
-  # the top-level options (OpenAI-compatible chat-completions shape — same
-  # field names, different envelope from Ollama's nested options object).
-  payload=$(jq -nc --arg m "$_model" --arg p "$full_input" --argjson mt "$max_tokens" --argjson et "$think" \
-    --argjson temp "$sampling_temperature" \
-    --arg top_p "$sampling_top_p" --arg top_k "$sampling_top_k" --arg pp "$sampling_presence_penalty" \
-    '{model:$m, messages:[{role:"user", content:$p}], stream:false, temperature:$temp, max_tokens:$mt, chat_template_kwargs:{enable_thinking:$et}}
-      + (if $top_p != "" then {top_p:($top_p|tonumber)} else {} end)
-      + (if $top_k != "" then {top_k:($top_k|tonumber)} else {} end)
-      + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end)')
-  # The MLX arm was always the generic OpenAI arm; parameterising its
-  # destination is what lets any OpenAI-compatible provider work with no
-  # provider-specific branch. resolved_base already had one trailing slash
-  # stripped by pick-model.sh, so the join cannot double up.
-  chat_url="${resolved_base:-$mlx_host/v1}/chat/completions"
-  ttfb_s=$(curl -sS --fail --max-time "$request_timeout" --connect-timeout 5 \
-    -X POST "$chat_url" -d @- \
-    -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
-  status=$?
-  if [[ "$status" -eq 0 ]]; then
-    output=$(jq -r '.choices[0].message.content // ""' < "$body_file")
-    # A well-formed response with empty content is a real failure, not a short
-    # answer. Providers that ignore chat_template_kwargs.enable_thinking spend
-    # the whole budget on reasoning — which lands in a separate `reasoning`
-    # field, so `content` is genuinely empty — and return finish_reason
-    # "length". Measured on Ollama 2026-08-18: at max_tokens 16 the answer is
-    # "" while MLX and Docker Model Runner both return the real answer.
-    if [[ -z "$output" ]]; then
-      empty_finish_reason=$(jq -r '.choices[0].finish_reason // "unknown"' < "$body_file")
-      status=$EMPTY_RESPONSE_STATUS
-    fi
-  else
-    output=""
-  fi
+  output=""
 fi
 
 # Reasoning-trace strip, folded into dispatch so any trace-emitting reasoning
@@ -1409,17 +1327,7 @@ if (( status == EMPTY_RESPONSE_STATUS )); then
     if [[ "$empty_finish_reason" == "length" ]]; then
       echo "         the budget was spent before any answer was emitted, which happens"
       echo "         when a thinking-capable model ignores the think:false hint"
-      # max_tokens is assigned only in the OpenAI arm. The native /api/generate
-      # arm sends no num_predict on the dispatch call, so it has no cap of ours
-      # to raise: a "length" stop there is the model's own context limit, and
-      # naming DELEGATE_MAX_TOKENS would send the caller after a variable that
-      # does nothing on that path.
-      if [[ -n "${max_tokens:-}" ]]; then
-        echo "         - raise DELEGATE_MAX_TOKENS (currently $max_tokens)"
-      else
-        echo "         - this path sends no token cap, so the model hit its own context"
-        echo "           limit; shorten the input"
-      fi
+      echo "         - raise DELEGATE_MAX_TOKENS (currently $max_tokens)"
       echo "         - or route this tier to a provider that honours enable_thinking"
     fi
     echo "         still broken? file a bug: https://github.com/${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}/issues/new?template=bug_report.md"
@@ -1432,7 +1340,7 @@ elif (( status != 0 )); then
       echo "         - raise DELEGATE_REQUEST_TIMEOUT if a cold model load is suspected"
       echo "         - or pick a smaller model for this tier"
     fi
-    echo "         check the backend daemon (ollama serve / mlx_lm.server) and OLLAMA_HOST / MLX_HOST — see the README Troubleshooting section"
+    echo "         check the provider daemon (mlx_lm.server / Docker Model Runner / ollama serve) and MLX_HOST / DOCKER_MODEL_HOST / OLLAMA_HOST — see the README Troubleshooting section"
     echo "         still broken? file a bug: https://github.com/${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}/issues/new?template=bug_report.md"
   } >&2
 fi
@@ -1658,8 +1566,8 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] \
   # String-typed fields are quoted so a model or recipe name containing a
   # space stays a single token rather than ambiguating the format ("recipe=my
   # name" otherwise reads as `recipe=my` + bare `name`). Today's Ollama tags
-  # and MLX HF identifiers don't have spaces, but model names come from
-  # `ollama list` parsing and the JSONL surface already escapes them via jq;
+  # and MLX HF identifiers don't have spaces, but model ids come from whatever
+  # a provider reports and the JSONL surface already escapes them via jq;
   # the stderr surface owes the same defensive shape — flagged on PR #133.
   # Integer fields (tokens_local, duration_ms) stay bare to avoid visual
   # noise on the line.

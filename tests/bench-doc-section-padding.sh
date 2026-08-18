@@ -34,10 +34,22 @@ has_padding() { printf '%s' "$1" | tr '\n' ' ' | grep -Eiq "$padding_re"; }
 # Approximate sentence count: terminal . ! ? followed by whitespace or end.
 count_sentences() { printf '%s' "$1" | tr '\n' ' ' | grep -oE '[.!?]+([[:space:]]|$)' | wc -l | tr -d ' '; }
 
+# Map a bench arm to the provider it pins. An arm is one entry in
+# DELEGATE_BASE_URL now, not a DELEGATE_BACKEND mode: pinning the list to a
+# single provider is what keeps the arms comparable.
+backend_base() {
+  case "$1" in
+    mlx)    printf '%s/v1' "${MLX_HOST:-http://localhost:8080}" ;;
+    docker) printf '%s/engines/v1' "${DOCKER_MODEL_HOST:-http://localhost:12434}" ;;
+    ollama) printf '%s/v1' "${OLLAMA_HOST:-http://localhost:11434}" ;;
+    *) echo "bench: unknown backend '$1' (valid: mlx|docker|ollama)" >&2; exit 2 ;;
+  esac
+}
+
 for backend in $BACKENDS; do
-  model="$(DELEGATE_BACKEND="$backend" bash "$PICK" prose 2>/dev/null || echo '?')"
+  model="$(DELEGATE_BASE_URL="$(backend_base "$backend")" bash "$PICK" prose 2>/dev/null || echo '?')"
   # Warm the model once so a cold-load canary doesn't poison the first score.
-  printf 'warmup' | DELEGATE_BACKEND="$backend" DELEGATE_LOCAL_NO_METRICS=1 \
+  printf 'warmup' | DELEGATE_BASE_URL="$(backend_base "$backend")" DELEGATE_LOCAL_NO_METRICS=1 \
     DELEGATE_PREFLIGHT_TIMEOUT="${DELEGATE_PREFLIGHT_TIMEOUT:-90}" \
     bash "$DELEGATE" prose "ok" >/dev/null 2>&1 || true
   pads=0; caps=0; errors=0; total=0
@@ -46,7 +58,7 @@ for backend in $BACKENDS; do
     maxs=$(awk '/^max_sentences:/{sub(/^max_sentences:[[:space:]]*/,""); print; exit}' "$f")
     topic=$(awk '/^topic:/{sub(/^topic:[[:space:]]*/,""); print; exit}' "$f")
     facts=$(awk 'show{print} /^facts:[[:space:]]*$/{show=1}' "$f")
-    out="$(DELEGATE_BACKEND="$backend" DELEGATE_LOCAL_NO_METRICS=1 \
+    out="$(DELEGATE_BASE_URL="$(backend_base "$backend")" DELEGATE_LOCAL_NO_METRICS=1 \
            DELEGATE_PREFLIGHT_TIMEOUT="${DELEGATE_PREFLIGHT_TIMEOUT:-90}" \
            bash "$DELEGATE" --recipe doc-section \
              --var topic="$topic" --var facts="$facts" --var max_sentences="$maxs" \

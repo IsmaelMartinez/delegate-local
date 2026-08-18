@@ -66,7 +66,7 @@ All attributes in this table follow the published OTel SemConv (https://opentele
 
 Notes on each:
 
-- `gen_ai.operation.name` is always `chat`. The OTel SemConv enumerates `chat`, `text_completion`, `embeddings`, and others; this skill routes through Ollama's `/api/generate` (the raw completion endpoint — chat templating is applied by `scripts/delegate.sh` shaping the prompt before posting, not by the Ollama daemon) and MLX's `/v1/chat/completions` (OpenAI-compatible, applies the model's chat template server-side). Despite the endpoint asymmetry both calls are chat-shaped from the user's perspective, so `chat` is the accurate value for both backends.
+- `gen_ai.operation.name` is always `chat`. The OTel SemConv enumerates `chat`, `text_completion`, `embeddings`, and others; this skill routes every call through `{base}/chat/completions` (OpenAI-compatible, applies the model's chat template server-side), so `chat` is the accurate value for every provider.
 - `gen_ai.provider.name` is set from the JSONL `backend` field. Both `ollama` and `mlx` are already registered as provider strings in the SemConv registry, so the values are conventional rather than ad-hoc.
 - `gen_ai.request.model` is the model tag as Ollama or MLX sees it — `qwen3.6:35b-a3b-q8_0` for Ollama, `mlx-community/Qwen3.6-35B-A3B-8bit` for MLX. The raw tag is preserved so downstream filtering and grouping work against the same identifier a user would type into `ollama run` or `mlx_lm.generate`.
 - `gen_ai.request.temperature` is hardcoded to `0` in `scripts/delegate.sh` (the skill never varies it). Emitting the attribute is still useful because Grafana's GenAI dashboards group by temperature when set.
