@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.5](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.4...v0.27.5) (2026-08-18)
+
+
+### Documentation
+
+* record the quality-signal repair outcome ([#395](https://github.com/IsmaelMartinez/delegate-local/issues/395)) ([6fcc1fb](https://github.com/IsmaelMartinez/delegate-local/commit/6fcc1fb18b9a653fd079145959876095085fe565))
+
 ## [0.27.4](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.3...v0.27.4) (2026-08-18)
 
 
