@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+  # Lets a stale release PR be regenerated without waiting for an unrelated
+  # push to main. Needed on 2026-08-18, when v0.21.0 through v0.23.0 had gone
+  # out as drafts and left no tags for release-please to anchor on.
+  workflow_dispatch:
 
 permissions:
   contents: write
