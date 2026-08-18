@@ -4212,6 +4212,77 @@ if [[ "$out" == *"surfacing the new latency numbers"* ]]; then
 else
   echo "  FAIL  checks: non-allowlisted participial wrongly stripped"; fail=$((fail+1))
 fi
+# 33e. Precision: a participial that is NOT the tail. The check is named for a
+# tail, but the arm was unanchored and matched anywhere in the last line, so a
+# load-bearing mid-sentence clause failed the check on output that was then used
+# verbatim (observed 2026-08-18 on a real github-issue-body delegation, recorded
+# HIT). The clause here is followed by a further sentence, so the line does not
+# end on padding.
+make_mock_curl_think "$tmp" 'short subject\n\nthe block is deleted, leaving the actions block unchanged. the fix is verified by the next run'
+errf=$(mktemp)
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe pad prose "go" </dev/null >/dev/null 2>"$errf"
+err=$(cat "$errf"); rm -f "$errf"
+if [[ "$err" == *"no_padding_tail"* ]]; then
+  echo "  FAIL  checks: mid-line participial wrongly flagged as a padding tail"; fail=$((fail+1))
+else
+  echo "  PASS  checks: mid-line participial followed by a sentence not flagged"; pass=$((pass+1))
+fi
+# 33f. Precision: the same shape with a semicolon-joined continuation, taken from
+# the hand-written body of commit 8010551 which the unanchored arm flagged.
+make_mock_curl_think "$tmp" 'short subject\n\nauto-strip the padding clause on a filler-verb allowlist, adopting the strip only when it clears the padding; persist the counters to metrics so quality is observable. default-on with an opt-out'
+errf=$(mktemp)
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe pad prose "go" </dev/null >/dev/null 2>"$errf"
+err=$(cat "$errf"); rm -f "$errf"
+if [[ "$err" == *"no_padding_tail"* ]]; then
+  echo "  FAIL  checks: hand-written mid-line participial wrongly flagged"; fail=$((fail+1))
+else
+  echo "  PASS  checks: hand-written mid-line participial not flagged"; pass=$((pass+1))
+fi
+# 33g. Recall guard for the anchor: a genuine padding tail that itself contains a
+# comma must still be detected. The clause may contain commas; what it may not do
+# is cross a sentence boundary. This is why the class is [^.!?]* and not [^,.!?]*.
+make_mock_curl_think "$tmp" 'short subject\n\nthe change lands, ensuring the cache, the limiter and the queue stay in sync'
+errf=$(mktemp)
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe pad prose "go" </dev/null >/dev/null 2>"$errf"
+err=$(cat "$errf"); rm -f "$errf"
+assert_contains "check 'no_padding_tail' FAILED" "$err" "checks: padding tail with an internal comma still detected"
+# 33h. Precision: `ing` must remain a WORD ending. Without the trailing
+# whitespace group the arm degrades to a prefix match and every `-ings` plural
+# (settings, warnings, findings, strings, mappings) becomes a false positive.
+make_mock_curl_think "$tmp" 'short subject\n\nreads the flag from the repo config, settings are merged per section'
+errf=$(mktemp)
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe pad prose "go" </dev/null >/dev/null 2>"$errf"
+err=$(cat "$errf"); rm -f "$errf"
+if [[ "$err" == *"no_padding_tail"* ]]; then
+  echo "  FAIL  checks: -ings plural wrongly treated as a gerund tail"; fail=$((fail+1))
+else
+  echo "  PASS  checks: -ings plural not treated as a gerund tail"; pass=$((pass+1))
+fi
+# 33i. ADR 0017's adoption rule is unchanged by the detection anchor. A trailing
+# padding clause whose line ALSO carries a mid-line participial is detected and
+# stripped, but the strip must still be rejected because the result is not clean
+# under the broad adoption gate. Anchoring that second gate would silently mutate
+# output that ADR 0017 deliberately leaves alone with a warning.
+make_mock_curl_think "$tmp" 'short subject\n\nadds a cache, improving latency. also fixes the lock, ensuring parity'
+errf=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe pad prose "go" </dev/null 2>"$errf")
+err=$(cat "$errf"); rm -f "$errf"
+assert_contains "check 'no_padding_tail' FAILED" "$err" "checks: adoption gate still rejects a not-clean strip"
+if [[ "$out" == *"ensuring parity"* ]]; then
+  echo "  PASS  checks: adoption unchanged, output not silently mutated"; pass=$((pass+1))
+else
+  echo "  FAIL  checks: adoption widened, output was silently stripped"; fail=$((fail+1))
+fi
 # subject_type recipe: optional type input echoed into the check value.
 cat > "$prompts/typ.md" <<'EOF'
 ---
