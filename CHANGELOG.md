@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.0...v0.27.1) (2026-08-18)
+
+
+### Documentation
+
+* correct the last provider-list-contradicted guidance ([#382](https://github.com/IsmaelMartinez/delegate-local/issues/382)) ([c359030](https://github.com/IsmaelMartinez/delegate-local/commit/c35903011af842499de6c2363f8d7dce77b0ab0d))
+
 ## [0.27.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.26.0...v0.27.0) (2026-08-18)
 
 
