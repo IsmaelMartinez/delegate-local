@@ -161,7 +161,7 @@ The mechanisms are fork-friendly out of the box — routing, metrics, and the fe
 4. **Re-calibrate triggering for your models.** `evals/eval-set.json` carries the trigger queries from the upstream project. Routing works without touching it, but a fork keeps the SKILL.md description calibrated by re-running the trigger eval against its own installed models:
 
    ```bash
-   bash scripts/eval-skill-triggers.sh --ollama
+   bash scripts/eval-skill-triggers.sh --local
    ```
 
 5. **Update `CODEOWNERS`** to point `*` at your own handle so review requests go to you, not the upstream author.
@@ -197,9 +197,9 @@ Three scripts gate every PR via GitHub Actions:
 
 - `scripts/validate-frontmatter.sh SKILL.md` — asserts the SKILL.md frontmatter has required fields, the `name` matches the directory, and `name` matches the Claude Skills regex.
 - `scripts/validate-skill-content.sh SKILL.md` — scans for eight categories of dangerous content (auth-disable, permissive flags, credential exfiltration, base64 obfuscation, zero-width / bidi unicode, broad tool grants, unresolved merge markers, external URLs). Justified false positives go in `.content-check-allow`.
-- `scripts/eval-skill-triggers.sh` — validates `evals/eval-set.json` shape by default; with `--ollama [model]` runs each tagged query through a local Ollama model (free, on-device; defaults to `pick-model.sh code` which baselines at 1.000 / 1.000 against the current eval set on the reference host); with `--github-models [model]` runs against GitHub Models (free up to the per-model rate-limit tier; defaults to `openai/gpt-4o-mini` which baselines at 0.900 / 1.000); with `--api` and `ANTHROPIC_API_KEY` set, runs against Claude — kept for the rare case Claude-grade scoring is wanted. All three modes use only the SKILL.md frontmatter description as the trigger surface and assert recall + negative-precision thresholds.
+- `scripts/eval-skill-triggers.sh` — validates `evals/eval-set.json` shape by default; with `--local [model]` runs each tagged query through a local provider from `DELEGATE_BASE_URL` (free, on-device; defaults to `pick-model.sh code`, which baselines at 1.000 / 1.000 against the current eval set on the reference host); with `--github-models [model]` runs against GitHub Models (free up to the per-model rate-limit tier; defaults to `openai/gpt-4o-mini` which baselines at 0.900 / 1.000); with `--api` and `ANTHROPIC_API_KEY` set, runs against Claude — kept for the rare case Claude-grade scoring is wanted. All three modes use only the SKILL.md frontmatter description as the trigger surface and assert recall + negative-precision thresholds.
 
-The `--ollama` mode is the recommended local pre-merge gate (10–30 s on a mid-tier machine, dogfoods the project's own routing). The `--github-models` mode is the recommended CI gate — uses the auto-provisioned `GITHUB_TOKEN` so there is no secret to configure; the workflow declares `permissions: models: read` to grant scope. The `--api` mode is opt-in via the `ANTHROPIC_API_KEY` repo secret (Settings → Secrets and variables → Actions); without the secret the CI step is skipped, not failed.
+The `--local` mode is the recommended pre-merge gate (10–30 s on a mid-tier machine, dogfoods the project's own routing). The `--github-models` mode is the recommended CI gate — uses the auto-provisioned `GITHUB_TOKEN` so there is no secret to configure; the workflow declares `permissions: models: read` to grant scope. The `--api` mode is opt-in via the `ANTHROPIC_API_KEY` repo secret (Settings → Secrets and variables → Actions); without the secret the CI step is skipped, not failed.
 
 ## Calibration feedback loop
 

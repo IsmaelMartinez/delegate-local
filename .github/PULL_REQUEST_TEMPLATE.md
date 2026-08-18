@@ -14,7 +14,7 @@ Confirm the gates that apply:
 - [ ] `bash scripts/validate-frontmatter.sh SKILL.md` passes
 - [ ] `bash scripts/validate-skill-content.sh SKILL.md` passes
 - [ ] `bash scripts/eval-skill-triggers.sh` passes (shape mode)
-- [ ] If `SKILL.md` frontmatter `description` changed: `bash scripts/eval-skill-triggers.sh --ollama` passes recall ≥ 0.9 and negative-precision ≥ 0.9
+- [ ] If `SKILL.md` frontmatter `description` changed: `bash scripts/eval-skill-triggers.sh --local` passes recall ≥ 0.9 and negative-precision ≥ 0.9
 - [ ] If `pick-model.sh` preferences changed: corresponding test in `tests/run-tests.sh` updated
 
 ## Notes for the reviewer

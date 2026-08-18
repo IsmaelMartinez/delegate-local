@@ -124,24 +124,37 @@ EOF
 # Mock curl that emits one batched response per invocation. Captures body to
 # $sniff and selects verdicts via the classifier rule.
 make_mock_curl_batched() {
-  local dir="$1" sniff="$2" backend="$3" rule="$4"
+  # $5 optionally restricts which host substring answers GET {base}/models, so
+  # a test can prove resolution landed on a specific provider. Empty means
+  # every provider answers, which is what most tests want.
+  local dir="$1" sniff="$2" backend="$3" rule="$4" models_host="${5:-}"
   write_classifier_helper "$dir"
   local helper="$dir/build-verdicts.sh"
   case "$backend" in
-    ollama)
+    local)
       cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
 body=""
+url=""
 while [[ \$# -gt 0 ]]; do
   case "\$1" in
     -d) body="\$2"; shift 2 ;;
+    http*) url="\$1"; shift ;;
     *)  shift ;;
   esac
 done
+# Discovery: pick-model.sh probes GET {base}/models before any scoring call.
+case "\$url" in
+  */models)
+    if [[ -n "${models_host}" && "\$url" != *"${models_host}"* ]]; then exit 7; fi
+    printf '%s' '{"object":"list","data":[{"id":"mock-model:latest"},{"id":"mock-model"},{"id":"explicit-model:99b"},{"id":"qwen3-coder:mock"}]}'
+    exit 0
+    ;;
+esac
 printf '%s\n' "\$body" >> "${sniff}"
 verdicts=\$(printf '%s' "\$body" | "${helper}" "${rule}")
-# Wrap as the model's text response inside the ollama envelope.
-jq -nc --arg r "\$verdicts" '{response: \$r}'
+# Wrap as the model's answer inside the chat-completions envelope.
+jq -nc --arg r "\$verdicts" '{choices:[{message:{content:\$r},finish_reason:"stop"}]}'
 EOF
       ;;
     anthropic)
@@ -183,10 +196,17 @@ EOF
 }
 
 # Mock curl that fails (transport error).
+# Serves discovery so resolution succeeds, then fails the scoring call — the
+# transport error under test is the scoring call, not the probe.
 make_mock_curl_fail() {
   local dir="$1"
   cat > "$dir/curl" <<'EOF'
 #!/usr/bin/env bash
+for a in "$@"; do
+  case "$a" in
+    */models) printf '%s' '{"object":"list","data":[{"id":"mock-model"},{"id":"mock-model:latest"}]}'; exit 0 ;;
+  esac
+done
 echo "curl: connection refused" >&2
 exit 7
 EOF
@@ -195,11 +215,18 @@ EOF
 
 # Mock pick-model.sh that returns a canned model name.
 make_mock_pick_model() {
-  local dir="$1" model="$2"
+  # Answers the two surfaces eval-skill-triggers.sh uses: --print-resolution
+  # (base + model in one call, for the default path) and --print-providers
+  # (the list to walk when a model is named explicitly).
+  local dir="$1" model="$2" base="${3:-http://localhost:11434/v1}"
   mkdir -p "$dir/scripts"
   cat > "$dir/scripts/pick-model.sh" <<EOF
 #!/usr/bin/env bash
-echo "${model}"
+case "\${1:-}" in
+  --print-providers) printf '%s\n' "${base}" ;;
+  --print-resolution) printf '%s\t%s\n' "${base}" "${model}" ;;
+  *) echo "${model}" ;;
+esac
 EOF
   chmod +x "$dir/scripts/pick-model.sh"
   cp "$SCRIPT" "$dir/scripts/eval-skill-triggers.sh"
@@ -232,117 +259,114 @@ assert_eq 2 "$EC" "--api without key -> exit 2"
 assert_contains "ANTHROPIC_API_KEY not set" "$out" "--api without key -> error message"
 rm -rf "$tmp"
 
-# 4. --ollama with explicit model and a perfect mock curl -> 1.000 / 1.000 pass.
+# 4. --local with explicit model and a perfect mock curl -> 1.000 / 1.000 pass.
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 sniff="$tmp/sniff.txt"
-make_mock_curl_batched "$tmp" "$sniff" ollama perfect
+make_mock_curl_batched "$tmp" "$sniff" local perfect
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model:latest --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
-assert_eq 0 "$EC" "--ollama perfect mock -> exits 0"
-assert_contains "scoring: backend=ollama model=mock-model:latest" "$out" "--ollama: model header"
-assert_contains "recall=1.000 negative-precision=1.000" "$out" "--ollama perfect: 1.000/1.000"
-assert_contains "OK trigger evals (ollama)" "$out" "--ollama: OK message"
-# Assert exactly one curl call was made (batching).
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model:latest --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 0 "$EC" "--local perfect mock -> exits 0"
+assert_contains "scoring: backend=local model=mock-model:latest" "$out" "--local: model header"
+assert_contains "recall=1.000 negative-precision=1.000" "$out" "--local perfect: 1.000/1.000"
+assert_contains "OK trigger evals (local)" "$out" "--local: OK message"
+# Batching: one scoring request for the whole eval set, not one per query.
+# $sniff records scoring bodies only — the mock answers the discovery probe
+# (GET {base}/models) and exits before writing, so the probe is deliberately
+# not counted here.
 calls=$(wc -l < "$sniff" | tr -d ' ')
-assert_eq 1 "$calls" "--ollama: exactly one batched call (was $calls)"
+assert_eq 1 "$calls" "--local: exactly one batched scoring call (was $calls)"
 rm -rf "$tmp"
 
-# 5. --ollama with default (pick-model.sh code) resolves a model.
+# 5. --local with default (pick-model.sh code) resolves a model.
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 make_mock_pick_model "$tmp" "picked-by-tier:42b"
 sniff="$tmp/sniff.txt"
-make_mock_curl_batched "$tmp" "$sniff" ollama perfect
+make_mock_curl_batched "$tmp" "$sniff" local perfect
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$tmp/scripts/eval-skill-triggers.sh" --ollama --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
-assert_eq 0 "$EC" "--ollama default -> exits 0"
-assert_contains "scoring: backend=ollama model=picked-by-tier:42b" "$out" "--ollama default: model from pick-model.sh"
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$tmp/scripts/eval-skill-triggers.sh" --local --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 0 "$EC" "--local default -> exits 0"
+assert_contains "scoring: backend=local model=picked-by-tier:42b" "$out" "--local default: model from pick-model.sh"
 rm -rf "$tmp"
 
-# 6. --ollama transport error -> exit 2.
+# 6. --local transport error -> exit 2.
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 make_mock_curl_fail "$tmp"
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
-assert_eq 2 "$EC" "--ollama transport error -> exit 2"
-assert_contains "ollama transport error" "$out" "--ollama transport error -> message"
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 2 "$EC" "--local transport error -> exit 2"
+assert_contains "local transport error" "$out" "--local transport error -> message"
 rm -rf "$tmp"
 
-# 7. --ollama: a bad classifier (always TRIGGER) trips the precision threshold.
+# 7. --local: a bad classifier (always TRIGGER) trips the precision threshold.
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 sniff="$tmp/sniff.txt"
-make_mock_curl_batched "$tmp" "$sniff" ollama all-trigger
+make_mock_curl_batched "$tmp" "$sniff" local all-trigger
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
-assert_eq 1 "$EC" "--ollama always-TRIGGER -> exit 1 (threshold breach)"
-assert_contains "negative-precision=0.000" "$out" "--ollama always-TRIGGER -> 0 precision"
-assert_contains "negative-precision<" "$out" "--ollama always-TRIGGER -> FAIL precision-side message"
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 1 "$EC" "--local always-TRIGGER -> exit 1 (threshold breach)"
+assert_contains "negative-precision=0.000" "$out" "--local always-TRIGGER -> 0 precision"
+assert_contains "negative-precision<" "$out" "--local always-TRIGGER -> FAIL precision-side message"
 rm -rf "$tmp"
 
-# 8. --ollama: verdict normalisation (lowercase, trailing newline) still scores.
+# 8. --local: verdict normalisation (lowercase, trailing newline) still scores.
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 sniff="$tmp/sniff.txt"
-make_mock_curl_batched "$tmp" "$sniff" ollama all-trigger-lc
+make_mock_curl_batched "$tmp" "$sniff" local all-trigger-lc
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 # All 8 positives counted as TRIGGER (correct) but all 8 negatives also counted as
 # TRIGGER (wrong). Recall=1.0, neg-precision=0.0.
-assert_contains "recall=1.000 negative-precision=0.000" "$out" "--ollama: lowercase+punct normalised to TRIGGER"
+assert_contains "recall=1.000 negative-precision=0.000" "$out" "--local: lowercase+punct normalised to TRIGGER"
 rm -rf "$tmp"
 
-# 9. --ollama request body shape: contains the system prompt with the skill description.
+# 9. --local request body shape: contains the system prompt with the skill description.
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 sniff="$tmp/sniff.txt"
-make_mock_curl_batched "$tmp" "$sniff" ollama all-trigger
+make_mock_curl_batched "$tmp" "$sniff" local all-trigger
 EC=0
-(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || EC=$?
+(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || EC=$?
 first_body=$(head -1 "$sniff")
-assert_contains '"model":"mock-model"' "$first_body" "--ollama body: model field"
-assert_contains '"think":false' "$first_body" "--ollama body: think:false"
-assert_contains '"format":"json"' "$first_body" "--ollama body: format:json (batched JSON output)"
-assert_contains '"temperature":0' "$first_body" "--ollama body: temperature:0"
-assert_contains '"stream":false' "$first_body" "--ollama body: stream:false"
-assert_contains "delegate-local" "$first_body" "--ollama body: skill description leaks through"
-assert_contains "summarise this log" "$first_body" "--ollama body: query in prompt"
-assert_contains '\"id\":\"p01\"' "$first_body" "--ollama body: ids in batched payload"
+assert_contains '"model":"mock-model"' "$first_body" "--local body: model field"
+assert_contains '"role":"system"' "$first_body" "--local body: system message carries the trigger prompt"
+assert_contains '"response_format":{"type":"json_object"}' "$first_body" "--local body: JSON mode requested"
+assert_contains '"temperature":0' "$first_body" "--local body: temperature:0"
+assert_contains '"stream":false' "$first_body" "--local body: stream:false"
+assert_contains "delegate-local" "$first_body" "--local body: skill description leaks through"
+assert_contains "summarise this log" "$first_body" "--local body: query in prompt"
+assert_contains '\"id\":\"p01\"' "$first_body" "--local body: ids in batched payload"
 rm -rf "$tmp"
 
-# 10. OLLAMA_HOST env override is honoured.
+# 10. OLLAMA_HOST feeds the default provider list, so it still steers the
+# scoring call — but through pick-model.sh rather than a hardcoded host. Only
+# the :9999 provider answers discovery, which is what proves the dispatch
+# landed on the overridden host rather than on the first list entry.
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
-write_classifier_helper "$tmp"
-helper="$tmp/build-verdicts.sh"
-cat > "$tmp/curl" <<EOF
+sniff="$tmp/sniff.txt"
+make_mock_curl_batched "$tmp" "$sniff" local all-trigger ":9999"
+cat > "$tmp/curl-wrap" <<EOF
 #!/usr/bin/env bash
-url="" body=""
-while [[ \$# -gt 0 ]]; do
-  case "\$1" in
-    -d) body="\$2"; shift 2 ;;
-    http*) url="\$1"; shift ;;
-    *) shift ;;
-  esac
-done
-echo "URL=\$url" >> "$tmp/curl-url-sniff.txt"
-verdicts=\$(printf '%s' "\$body" | "$helper" all-trigger)
-jq -nc --arg r "\$verdicts" '{response: \$r}'
+for a in "\$@"; do case "\$a" in http*) echo "URL=\$a" >> "$tmp/curl-url-sniff.txt" ;; esac; done
+exec "$tmp/curl-real" "\$@"
 EOF
-chmod +x "$tmp/curl"
+mv "$tmp/curl" "$tmp/curl-real"; mv "$tmp/curl-wrap" "$tmp/curl"; chmod +x "$tmp/curl"
 : > "$tmp/curl-url-sniff.txt"
-(cd "$tmp" && PATH="$tmp:$SAFE_PATH" OLLAMA_HOST=http://other.host:9999 bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || true
-url_line=$(head -1 "$tmp/curl-url-sniff.txt")
-assert_contains "http://other.host:9999/api/generate" "$url_line" "--ollama: OLLAMA_HOST override honoured"
+(cd "$tmp" && PATH="$tmp:$SAFE_PATH" OLLAMA_HOST=http://other.host:9999 bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || true
+urls=$(cat "$tmp/curl-url-sniff.txt")
+assert_contains "http://other.host:9999/v1/chat/completions" "$urls" "--local: OLLAMA_HOST steers the scoring call through the default list"
 rm -rf "$tmp"
 
 # 11. --api backend hits Anthropic endpoint with a perfect classifier and the key header.
@@ -369,16 +393,16 @@ url_line=$(head -1 "$tmp/url-sniff.txt")
 assert_contains "https://api.anthropic.com/v1/messages" "$url_line" "--api: hits Anthropic URL"
 rm -rf "$tmp"
 
-# 12. --ollama [model] arg parsing: model captured even when followed by other flags.
+# 12. --local [model] arg parsing: model captured even when followed by other flags.
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
 sniff="$tmp/sniff.txt"
-make_mock_curl_batched "$tmp" "$sniff" ollama perfect
+make_mock_curl_batched "$tmp" "$sniff" local perfect
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama explicit-model:99b --skill SKILL.md --eval-set eval-set.json 2>&1) || EC=$?
-assert_eq 0 "$EC" "--ollama with later --skill flag -> exits 0"
-assert_contains "model=explicit-model:99b" "$out" "--ollama: explicit model parsed despite trailing flags"
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local explicit-model:99b --skill SKILL.md --eval-set eval-set.json 2>&1) || EC=$?
+assert_eq 0 "$EC" "--local with later --skill flag -> exits 0"
+assert_contains "model=explicit-model:99b" "$out" "--local: explicit model parsed despite trailing flags"
 rm -rf "$tmp"
 
 # 13. --github-models with no GITHUB_TOKEN -> exit 2.
@@ -528,14 +552,19 @@ make_eval_set "$tmp"
 make_skill "$tmp"
 cat > "$tmp/curl" <<'EOF'
 #!/usr/bin/env bash
+for _a in "$@"; do
+  case "$_a" in
+    */models) printf '%s' '{"object":"list","data":[{"id":"mock-model"},{"id":"mock-model:latest"}]}'; exit 0 ;;
+  esac
+done
 # Return a response with no JSON object at all.
-printf '%s' '{"response":"sorry, I cannot help with that."}'
+printf '%s' '{"choices":[{"message":{"content":"sorry, I cannot help with that."}}]}'
 EOF
 chmod +x "$tmp/curl"
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
-assert_eq 2 "$EC" "--ollama non-JSON response -> exit 2"
-assert_contains "did not contain a parseable verdicts array" "$out" "--ollama non-JSON: parse error message"
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 2 "$EC" "--local non-JSON response -> exit 2"
+assert_contains "did not contain a parseable verdicts array" "$out" "--local non-JSON: parse error message"
 rm -rf "$tmp"
 
 # 21. Markdown-fence stripping: model emits ```json ... ``` -> still parses.
@@ -546,6 +575,11 @@ write_classifier_helper "$tmp"
 helper="$tmp/build-verdicts.sh"
 cat > "$tmp/curl" <<EOF
 #!/usr/bin/env bash
+for _a in "\$@"; do
+  case "\$_a" in
+    */models) printf '%s' '{"object":"list","data":[{"id":"mock-model"},{"id":"mock-model:latest"}]}'; exit 0 ;;
+  esac
+done
 body=""
 while [[ \$# -gt 0 ]]; do
   case "\$1" in
@@ -557,13 +591,13 @@ verdicts=\$(printf '%s' "\$body" | "$helper" perfect)
 fenced="\\\`\\\`\\\`json
 \${verdicts}
 \\\`\\\`\\\`"
-jq -nc --arg r "\$fenced" '{response: \$r}'
+jq -nc --arg r "\$fenced" '{choices:[{message:{content:\$r}}]}'
 EOF
 chmod +x "$tmp/curl"
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
-assert_eq 0 "$EC" "--ollama fenced JSON -> exits 0"
-assert_contains "recall=1.000 negative-precision=1.000" "$out" "--ollama fenced: parses cleanly"
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 0 "$EC" "--local fenced JSON -> exits 0"
+assert_contains "recall=1.000 negative-precision=1.000" "$out" "--local fenced: parses cleanly"
 rm -rf "$tmp"
 
 # 22. Missing-verdict path: model only verdicts a subset -> warning + counted as misses.
@@ -574,14 +608,19 @@ make_skill "$tmp"
 # count as fp (NOTRIGGER expected, no verdict received).
 cat > "$tmp/curl" <<'EOF'
 #!/usr/bin/env bash
-printf '%s' '{"response":"{\"verdicts\":[{\"id\":\"p01\",\"verdict\":\"TRIGGER\"},{\"id\":\"p02\",\"verdict\":\"TRIGGER\"},{\"id\":\"p03\",\"verdict\":\"TRIGGER\"},{\"id\":\"p04\",\"verdict\":\"TRIGGER\"},{\"id\":\"p05\",\"verdict\":\"TRIGGER\"},{\"id\":\"p06\",\"verdict\":\"TRIGGER\"},{\"id\":\"p07\",\"verdict\":\"TRIGGER\"},{\"id\":\"p08\",\"verdict\":\"TRIGGER\"}]}"}'
+for _a in "$@"; do
+  case "$_a" in
+    */models) printf '%s' '{"object":"list","data":[{"id":"mock-model"},{"id":"mock-model:latest"}]}'; exit 0 ;;
+  esac
+done
+printf '%s' '{"choices":[{"message":{"content":"{\"verdicts\":[{\"id\":\"p01\",\"verdict\":\"TRIGGER\"},{\"id\":\"p02\",\"verdict\":\"TRIGGER\"},{\"id\":\"p03\",\"verdict\":\"TRIGGER\"},{\"id\":\"p04\",\"verdict\":\"TRIGGER\"},{\"id\":\"p05\",\"verdict\":\"TRIGGER\"},{\"id\":\"p06\",\"verdict\":\"TRIGGER\"},{\"id\":\"p07\",\"verdict\":\"TRIGGER\"},{\"id\":\"p08\",\"verdict\":\"TRIGGER\"}]}"}}]}'
 EOF
 chmod +x "$tmp/curl"
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 # 8 positives correctly TRIGGER (recall=1.0), 8 negatives missing → counted as fp (neg-precision=0).
-assert_contains "8 verdicts missing" "$out" "--ollama partial: warning surfaces missing count"
-assert_contains "recall=1.000 negative-precision=0.000" "$out" "--ollama partial: missing counted as misses"
+assert_contains "8 verdicts missing" "$out" "--local partial: warning surfaces missing count"
+assert_contains "recall=1.000 negative-precision=0.000" "$out" "--local partial: missing counted as misses"
 rm -rf "$tmp"
 
 # N. gate:false diagnostic queries (#277 dir 3) are scored and reported but
@@ -599,9 +638,9 @@ jq '.queries += [
   {"id":"e01","tag":"embedded","expect":"trigger","gate":false,"query":"fix the bug then commit and push"}
 ]' "$tmp/eval-set.json" > "$tmp/eval-set.json.new" && mv "$tmp/eval-set.json.new" "$tmp/eval-set.json"
 sniff="$tmp/body.txt"
-make_mock_curl_batched "$tmp" "$sniff" ollama perfect
+make_mock_curl_batched "$tmp" "$sniff" local perfect
 EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --ollama mock-model:latest --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model:latest --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 assert_eq 0 "$EC" "gate:false: gating still passes (exit 0)"
 assert_contains "recall=1.000 negative-precision=1.000" "$out" "gate:false: diagnostics excluded from gating recall"
 assert_contains "diagnostic (non-gating, embedded sub-step): dtp=1 dfn=1 embedded-recall=0.500" "$out" "gate:false: diagnostic line reports embedded-recall"

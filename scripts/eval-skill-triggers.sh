@@ -5,7 +5,7 @@
 #   default (shape):  validate JSON, assert balance and required fields.
 #   --api:            score every query in a single Anthropic API call (paid).
 #                     Requires ANTHROPIC_API_KEY.
-#   --ollama [model]: score every query in a single local Ollama call (free).
+#   --local [model]:  score every query in a single local provider call (free).
 #                     Defaults to scripts/pick-model.sh code if no model is
 #                     given. Trigger eval is closed-form binary classification —
 #                     the same shape SKILL.md identifies as the code tier's
@@ -13,8 +13,10 @@
 #                     than the reasoning-tier resolution on this workload.
 #                     Override with an explicit model name when measuring a
 #                     different scorer; thresholds in the eval set are the
-#                     calibration target, not the chosen model. Requires the
-#                     Ollama daemon at OLLAMA_HOST (default http://localhost:11434).
+#                     calibration target, not the chosen model. Requires one
+#                     provider from DELEGATE_BASE_URL to be running; the model
+#                     is resolved and dispatched through the same list every
+#                     delegation uses, so the gate works on any of them.
 #   --github-models [model]:
 #                     score every query in a single GitHub Models call (free up
 #                     to the per-model rate-limit tier). Defaults to
@@ -34,13 +36,13 @@
 #
 # All three scoring modes use the same SKILL.md-frontmatter-as-trigger-surface
 # prompt and the same recall / negative-precision thresholds from the eval set.
-# Ollama is the recommended local pre-merge gate (dogfooded routing); GitHub
+# The local mode is the recommended pre-merge gate (dogfooded routing); GitHub
 # Models is the recommended CI gate (free, no secret to configure); Anthropic
 # remains for the rare case Claude-grade scoring is wanted.
 #
-# Usage:  eval-skill-triggers.sh [--api | --ollama [model] | --github-models [model]] [--eval-set path] [--skill path]
+# Usage:  eval-skill-triggers.sh [--api | --local [model] | --github-models [model]] [--eval-set path] [--skill path]
 # Env:    ANTHROPIC_API_KEY (required for --api)
-#         OLLAMA_HOST       (optional for --ollama; default localhost:11434)
+#         DELEGATE_BASE_URL (optional for --local; pick-model.sh owns the default)
 #         GITHUB_TOKEN      (required for --github-models)
 # Exit:   0 pass, 1 threshold breach / shape error, 2 usage / config / parse error.
 
@@ -48,7 +50,8 @@ set -uo pipefail
 
 mode="shape"
 backend=""
-ollama_model=""
+local_model=""
+local_base=""
 github_model=""
 eval_set="evals/eval-set.json"
 skill="SKILL.md"
@@ -56,11 +59,11 @@ skill="SKILL.md"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --api) mode="api"; backend="anthropic"; shift ;;
-    --ollama)
-      mode="api"; backend="ollama"; shift
-      # Optional model name immediately after --ollama; if the next arg starts
+    --local)
+      mode="api"; backend="local"; shift
+      # Optional model name immediately after --local; if the next arg starts
       # with -- treat it as the next flag instead.
-      if [[ $# -gt 0 && "$1" != --* ]]; then ollama_model="$1"; shift; fi
+      if [[ $# -gt 0 && "$1" != --* ]]; then local_model="$1"; shift; fi
       ;;
     --github-models)
       mode="api"; backend="github_models"; shift
@@ -68,7 +71,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --eval-set) eval_set="$2"; shift 2 ;;
     --skill) skill="$2"; shift 2 ;;
-    *) echo "usage: eval-skill-triggers.sh [--api | --ollama [model] | --github-models [model]] [--eval-set path] [--skill path]" >&2; exit 2 ;;
+    *) echo "usage: eval-skill-triggers.sh [--api | --local [model] | --github-models [model]] [--eval-set path] [--skill path]" >&2; exit 2 ;;
   esac
 done
 
@@ -97,11 +100,11 @@ echo "shape: total=$total positive=$pos negative=$neg diagnostic=$diagnostic mis
 (( missing_fields == 0 )) || { echo "FAIL: $missing_fields queries missing fields" >&2; exit 1; }
 
 if [[ "$mode" == "shape" ]]; then
-  echo "OK shape mode (run with --api, --ollama, or --github-models for trigger-accuracy check)"
+  echo "OK shape mode (run with --api, --local, or --github-models for trigger-accuracy check)"
   exit 0
 fi
 
-# Scoring mode (Anthropic, Ollama, or GitHub Models backend).
+# Scoring mode (Anthropic, a local provider, or GitHub Models).
 command -v curl >/dev/null || { echo "curl not on PATH" >&2; exit 2; }
 
 # Extract the frontmatter description from SKILL.md (used as the trigger surface).
@@ -121,14 +124,29 @@ case "$backend" in
     [[ -n "${ANTHROPIC_API_KEY:-}" ]] || { echo "ANTHROPIC_API_KEY not set" >&2; exit 2; }
     scoring_model=$(jq -r '.model // "claude-sonnet-4-6"' "$eval_set")
     ;;
-  ollama)
-    if [[ -n "$ollama_model" ]]; then
-      scoring_model="$ollama_model"
+  local)
+    pick="$(dirname "$0")/pick-model.sh"
+    [[ -x "$pick" ]] || { echo "pick-model.sh not found at $pick" >&2; exit 2; }
+    if [[ -n "$local_model" ]]; then
+      # A hand-named scorer can live on a provider the code tier did not pick,
+      # so ask each provider in turn rather than assuming the tier's winner
+      # serves it. Dispatching to the wrong base is a 404 at best and a
+      # silently different model at worst.
+      scoring_model="$local_model"
+      while IFS= read -r _b; do
+        _b="${_b%/}"
+        if curl -sS --fail --max-time "${DELEGATE_PROBE_TIMEOUT:-1}" "$_b/models" 2>/dev/null \
+             | jq -e --arg m "$scoring_model" 'any(.data[]; .id == $m)' >/dev/null 2>&1; then
+          local_base="$_b"; break
+        fi
+      done < <(bash "$pick" --print-providers)
+      [[ -n "$local_base" ]] || { echo "no provider serves model '$scoring_model'" >&2; exit 2; }
     else
-      pick="$(dirname "$0")/pick-model.sh"
-      [[ -x "$pick" ]] || { echo "pick-model.sh not found at $pick" >&2; exit 2; }
-      scoring_model=$(bash "$pick" code 2>/dev/null) || true
-      [[ -n "$scoring_model" ]] || { echo "pick-model.sh code returned empty (no installed model for the tier?)" >&2; exit 2; }
+      # One call for both answers, so a dead provider is probed once.
+      _resolved=$(bash "$pick" --print-resolution code 2>/dev/null) \
+        || { echo "pick-model.sh code returned empty (no provider serving a model for the tier?)" >&2; exit 2; }
+      local_base="${_resolved%%	*}"
+      scoring_model="${_resolved#*	}"
     fi
     ;;
   github_models)
@@ -178,22 +196,24 @@ score_batch() {
         -d "$payload" 2>/dev/null) || return 1
       jq -r '.content[0].text // empty' <<<"$resp"
       ;;
-    ollama)
-      local host="${OLLAMA_HOST:-http://localhost:11434}"
+    local)
       local payload resp
+      # Same envelope as the github_models arm below: one chat-completions
+      # shape covers every OpenAI-compatible provider, so the local gate is no
+      # longer wired to one daemon's native API. JSON mode verified 2026-08-18
+      # against both mlx_lm.server 0.31.3 and Ollama.
       payload=$(jq -nc --arg model "$scoring_model" --arg sys "$system_prompt" --arg user "$user_payload" --argjson max "$out_budget" '{
         model: $model,
-        system: $sys,
-        prompt: $user,
-        think: false,
-        format: "json",
-        options: {temperature: 0, num_predict: $max},
+        messages: [{role:"system", content:$sys}, {role:"user", content:$user}],
+        temperature: 0,
+        max_tokens: $max,
+        response_format: {type: "json_object"},
         stream: false
       }')
-      resp=$(curl -fsS --max-time 120 "$host/api/generate" \
+      resp=$(curl -fsS --max-time 120 "$local_base/chat/completions" \
         -H "content-type: application/json" \
         -d "$payload" 2>/dev/null) || return 1
-      jq -r '.response // empty' <<<"$resp"
+      jq -r '.choices[0].message.content // empty' <<<"$resp"
       ;;
     github_models)
       local host="${GITHUB_MODELS_HOST:-https://models.github.ai}"
