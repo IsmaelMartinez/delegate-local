@@ -970,7 +970,11 @@ fi
 # valid-tier list is echoed from pick-model's own message rather than restated
 # here, so there is exactly one source of truth for it.
 pick_err=$(mktemp)
-if [[ -n "${DELEGATE_BASE_URL:-}" ]]; then
+# Gated on the resolved backend rather than on DELEGATE_BASE_URL being
+# non-empty, matching pick-model.sh. Equivalent today; not equivalent once the
+# variable has a default, at which point this test would answer yes even for an
+# explicitly requested ollama/mlx backend.
+if [[ "$backend" == "provider" ]]; then
   # One call, not two: --print-resolution returns "<base>\t<model>" so a dead
   # provider in the list is probed once rather than once per question.
   _resolved=$(bash "$pick" --print-resolution "$tier" 2>"$pick_err")

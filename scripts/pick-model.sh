@@ -178,7 +178,10 @@ auto_resolve_backend() {
 }
 
 # DELEGATE_BASE_URL supersedes backend probing entirely, so skip the probe
-# rather than paying for a resolution that is about to be discarded.
+# rather than paying for a resolution that is about to be discarded. This is
+# the one place the variable's presence decides the mode; every site downstream
+# asks $backend instead, so that giving the variable a default later changes
+# the mode here and nowhere else.
 if [[ -n "${DELEGATE_BASE_URL:-}" ]]; then
   backend="provider"
   backend_requested="provider"
@@ -207,7 +210,14 @@ list_installed() {
   # so report exactly that. Without this the backend=="provider" label falls
   # through to the MLX arm below and --print-installed silently reports an HF
   # cache scan that routing never consults.
-  if [[ -n "${DELEGATE_BASE_URL:-}" ]]; then
+  #
+  # Gated on the resolved backend rather than on DELEGATE_BASE_URL being
+  # non-empty. The two are equivalent today, since the backend is set to
+  # "provider" exactly when the variable is non-empty, but they diverge the
+  # moment the variable acquires a default: "is it set?" then answers yes
+  # unconditionally, and an explicit DELEGATE_BACKEND would set a label while
+  # resolution still walked the provider list.
+  if [[ "$backend" == "provider" ]]; then
     local base ids
     for base in $DELEGATE_BASE_URL; do
       base="${base%/}"
@@ -327,8 +337,9 @@ if [[ -f "$config" ]]; then
 fi
 
 # The provider list short-circuits the installed-set path: discovery is only
-# ever "what a running provider reports", never a filesystem scan.
-if [[ -n "${DELEGATE_BASE_URL:-}" ]]; then
+# ever "what a running provider reports", never a filesystem scan. Gated on the
+# resolved backend for the reason given at list_installed().
+if [[ "$backend" == "provider" ]]; then
   if ! _resolved=$(resolve_via_providers); then
     echo "pick-model: no provider holds a model for tier '$tier'" >&2
     echo "            tried: $DELEGATE_BASE_URL" >&2
