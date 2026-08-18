@@ -12,14 +12,6 @@
 #   embed.sh --text "<text>"                  # text via flag
 #
 # Env:
-#   DELEGATE_BACKEND=auto|ollama          # default ollama. MLX out of scope
-#                                         #   for v1 — the wrapper exits 2
-#                                         #   with a message saying MLX
-#                                         #   embedding isn't wired up yet.
-#                                         #   `auto` falls through to ollama
-#                                         #   (the MLX probe isn't run; this
-#                                         #   keeps the script independent
-#                                         #   of MLX_HOST being set).
 #   OLLAMA_HOST=<url>                     # default http://localhost:11434
 #   DELEGATE_LOCAL_NO_METRICS=1            # opt out of metrics logging
 #                                         #   (back-compat: DELEGATE_TO_OLLAMA_NO_METRICS
@@ -138,23 +130,10 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 
 metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
-backend_requested="${DELEGATE_BACKEND:-ollama}"
-case "$backend_requested" in
-  ollama|auto)
-    # auto falls through to ollama because the MLX probe assumes an
-    # mlx_lm.server running on port 8080, which is not required for
-    # embedding work today. v1 keeps the surface minimal.
-    backend="ollama"
-    ;;
-  mlx)
-    echo "embed: DELEGATE_BACKEND=mlx is not wired up yet (Ollama only in v1)" >&2
-    exit 2
-    ;;
-  *)
-    echo "embed: unknown DELEGATE_BACKEND='$backend_requested' (valid: auto|ollama)" >&2
-    exit 2
-    ;;
-esac
+# Not a variable: this script posts to Ollama's /api/embed and nothing else,
+# so the metrics label is a statement of fact rather than a choice. Migrating
+# it to the OpenAI-compatible embeddings endpoint is issue #362.
+backend="ollama"
 ollama_host="${OLLAMA_HOST:-http://localhost:11434}"
 
 log_metric() {
@@ -178,8 +157,11 @@ start_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 
 # Force the embedding-tier resolution via pick-model.sh — never hardcode the
 # model name (the installed-model set drifts and the override hook can
-# reorder the prefs).
-if ! model=$(DELEGATE_BACKEND=ollama bash "$pick" embedding 2>/dev/null); then
+# reorder the prefs). The provider list is pinned to Ollama because the POST
+# below goes to Ollama's /api/embed: resolving against the full default list
+# could return a model only MLX or Docker serves, which this endpoint would
+# then 404 on.
+if ! model=$(DELEGATE_BASE_URL="$ollama_host/v1" bash "$pick" embedding 2>/dev/null); then
   end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
   fail_dur_ms=$((end_epoch_ms - start_epoch_ms))
   log_metric "$ts_start" "embedding" "(none)" "${#input_text}" 0 "$fail_dur_ms" 1

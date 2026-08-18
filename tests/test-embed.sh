@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Unit tests for scripts/embed.sh.
-# Mocks `ollama list` (used by pick-model.sh) and `curl` (used to call
+# Mocks `curl` (used by pick-model.sh for discovery and by embed.sh to call
 # /api/embed) on a restricted PATH so the test runs the same everywhere.
 
 set -u
@@ -28,21 +28,17 @@ assert_not_contains() {
   else echo "  FAIL  $name (contained '$needle' but should not)"; fail=$((fail+1)); fi
 }
 
-make_mock_ollama() {
-  local dir="$1"
-  cat > "$dir/ollama" <<'EOF'
-#!/usr/bin/env bash
-# Mock ollama list — just enough for pick-model.sh embedding tier to resolve.
-case "${1:-}" in
-  list)
-    cat <<'LIST'
-NAME                       ID SIZE    MODIFIED
-nomic-embed-text:latest    aa 274 MB  1 day ago
-LIST
-    ;;
-esac
-EOF
-  chmod +x "$dir/ollama"
+# The id list every mock curl serves from GET {base}/models. pick-model.sh
+# resolves the embedding tier over HTTP now, so a test that needs resolution
+# to fail sets this to something the tier does not prefer.
+MOCK_MODELS='nomic-embed-text:latest'
+mock_models_json() {
+  local out="" id
+  for id in "$@"; do
+    [[ -n "$out" ]] && out="$out,"
+    out="$out{\"id\":\"$id\",\"object\":\"model\"}"
+  done
+  printf '{"object":"list","data":[%s]}' "$out"
 }
 
 make_mock_curl_ok() {
@@ -56,6 +52,11 @@ make_mock_curl_ok() {
   local dir="$1" sniff="${2:-/dev/null}" argv_sniff="${3:-/dev/null}"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
+# Discovery: pick-model.sh probes GET {base}/models first, and that request
+# carries no stdin, so this arm answers before anything reads stdin.
+for _a in "\$@"; do
+  case "\$_a" in */models) printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0 ;; esac
+done
 printf '%s\n' "\$*" > "${argv_sniff}"
 out_file=""
 while (( \$# > 0 )); do
@@ -77,8 +78,13 @@ EOF
 
 make_mock_curl_fail() {
   local dir="$1"
-  cat > "$dir/curl" <<'EOF'
+  cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
+# Discovery: pick-model.sh probes GET {base}/models first, and that request
+# carries no stdin, so this arm answers before anything reads stdin.
+for _a in "\$@"; do
+  case "\$_a" in */models) printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0 ;; esac
+done
 cat > /dev/null
 echo "curl: connection refused" >&2
 exit 7
@@ -108,7 +114,6 @@ assert_eq 2 "$EC" "--text without value -> exit 2"
 # output is a one-line JSON array on stdout, metrics row written with
 # the right fields.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -139,7 +144,6 @@ rm -rf "$tmp" "$metrics"
 
 # 5. Happy path via --text flag.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -154,7 +158,6 @@ rm -rf "$tmp" "$metrics"
 
 # 6. --text overrides stdin (flag wins when both are present).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -168,7 +171,6 @@ rm -rf "$tmp" "$metrics"
 
 # 7. NO_METRICS env var suppresses metrics file creation.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); rm -f "$metrics"
 EC=0
@@ -187,12 +189,9 @@ rm -rf "$tmp"
 # 8. pick-model failure (no embedding model installed) -> exit 1, metrics
 # row with exit_status=1.
 tmp=$(mktemp -d)
-cat > "$tmp/ollama" <<'EOF'
-#!/usr/bin/env bash
-[[ "${1:-}" == "list" ]] && echo "NAME             ID SIZE   MODIFIED
-unrelated:model  zz 5 GB   1 day ago"
-EOF
-chmod +x "$tmp/ollama"
+MOCK_MODELS='unrelated:model'
+make_mock_curl_ok "$tmp"
+MOCK_MODELS='nomic-embed-text:latest'
 metrics=$(mktemp); : > "$metrics"
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -207,7 +206,6 @@ rm -rf "$tmp" "$metrics"
 
 # 9. HTTP failure (curl non-zero) propagates and is logged.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_fail "$tmp"
 metrics=$(mktemp); : > "$metrics"
 EC=0
@@ -222,32 +220,9 @@ fi
 assert_contains '"exit_status":7' "$(cat "$metrics")" "metrics: HTTP failure exit_status logged"
 rm -rf "$tmp" "$metrics"
 
-# 10. DELEGATE_BACKEND=mlx -> exit 2 (out of scope for v1).
-tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=mlx \
-  bash "$SCRIPT" --text "x" </dev/null 2>&1) || EC=$?
-assert_eq 2 "$EC" "DELEGATE_BACKEND=mlx: exit 2"
-assert_contains "not wired up yet" "$out" "DELEGATE_BACKEND=mlx: stderr names the cause"
-rm -rf "$tmp"
-
-# 11. DELEGATE_BACKEND=bogus -> exit 2.
-tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_BACKEND=bogus \
-  bash "$SCRIPT" --text "x" </dev/null 2>&1) || EC=$?
-assert_eq 2 "$EC" "DELEGATE_BACKEND=bogus: exit 2"
-assert_contains "unknown DELEGATE_BACKEND" "$out" "DELEGATE_BACKEND=bogus: stderr"
-rm -rf "$tmp"
-
 # 12. Long input is truncated with a stderr warning; the post-truncation
 # length goes into input_chars.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -266,7 +241,6 @@ rm -rf "$tmp" "$metrics"
 
 # 13. DELEGATE_EMBED_MAX_CHARS=0 disables truncation entirely.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
 metrics=$(mktemp)
@@ -283,7 +257,6 @@ rm -rf "$tmp" "$metrics"
 
 # 14. Non-numeric DELEGATE_EMBED_MAX_CHARS -> exit 2.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_EMBED_MAX_CHARS=banana \
@@ -294,20 +267,22 @@ rm -rf "$tmp"
 
 # 15. Response without .embeddings[0] -> exit 1, descriptive stderr.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
-cat > "$tmp/curl" <<'EOF'
+cat > "$tmp/curl" <<EOF
 #!/usr/bin/env bash
+for _a in "\$@"; do
+  case "\$_a" in */models) printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0 ;; esac
+done
 out_file=""
-while (( $# > 0 )); do
-  case "$1" in
-    -o) out_file="$2"; shift 2 ;;
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
     *) shift ;;
   esac
 done
 cat > /dev/null
 body='{"error":"not an embedding model"}'
-if [[ -n "$out_file" ]]; then printf '%s' "$body" > "$out_file"
-else printf '%s' "$body"; fi
+if [[ -n "\$out_file" ]]; then printf '%s' "\$body" > "\$out_file"
+else printf '%s' "\$body"; fi
 EOF
 chmod +x "$tmp/curl"
 metrics=$(mktemp); : > "$metrics"
@@ -323,7 +298,6 @@ rm -rf "$tmp" "$metrics"
 # 16. JSON output is parser-clean: pipe through jq directly and confirm
 # the array round-trips.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 EC=0
@@ -334,25 +308,8 @@ assert_eq 0 "$EC" "jq round-trip: exit 0"
 assert_eq "4" "$parsed" "jq round-trip: vector length = 4"
 rm -rf "$tmp" "$metrics"
 
-# 17. The auto backend falls through to ollama (no MLX probe; embedding
-# v1 is Ollama-only).
-tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
-sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
-metrics=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_BACKEND=auto \
-  bash "$SCRIPT" --text "x" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "DELEGATE_BACKEND=auto: exit 0"
-assert_contains '"backend":"ollama"' "$(cat "$metrics")" "DELEGATE_BACKEND=auto: resolves to ollama in metrics"
-rm -rf "$tmp" "$metrics"
-
 # 18. The embeddings POST is bounded, defaulting to 60 s.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 argv_sniff="$tmp/argv.txt"
 make_mock_curl_ok "$tmp" "$tmp/payload.json" "$argv_sniff"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -365,7 +322,6 @@ rm -rf "$tmp"
 
 # 19. DELEGATE_EMBED_TIMEOUT overrides the default.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp"
 argv_sniff="$tmp/argv.txt"
 make_mock_curl_ok "$tmp" "$tmp/payload.json" "$argv_sniff"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \

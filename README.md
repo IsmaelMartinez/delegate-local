@@ -40,15 +40,23 @@ git diff HEAD~5 | bash scripts/delegate.sh prose "Summarise in 3 bullets."
 
 ## Requirements
 
-- [Ollama](https://ollama.com) with at least one model pulled (the default backend), or [`mlx-lm`](https://github.com/ml-explore/mlx-lm) on Apple Silicon (see [Backends](#backends) below)
+- At least one OpenAI-compatible model server running locally: [Ollama](https://ollama.com) with a model pulled, [`mlx-lm`](https://github.com/ml-explore/mlx-lm) on Apple Silicon, or Docker Model Runner (see [Providers](#providers) below)
 - `jq` (for `audit-models.sh`)
 - `llmfit` (optional, enables upgrade suggestions based on your hardware)
 
-## Backends
+## Providers
 
-The default is `DELEGATE_BACKEND=auto`: on each call, `delegate.sh` probes `localhost:8080` for an MLX server. If it responds, the call routes through MLX (Apple's Metal-native runtime — lower memory, faster prefill). Otherwise it falls back to Ollama. Non-Apple-Silicon hosts always fall through to Ollama transparently.
+Every call goes to an OpenAI-compatible `POST {base}/chat/completions`. `DELEGATE_BASE_URL` is an ordered list of base URLs, and the first provider that is both reachable and serving a model the tier prefers takes the call. The default list is built from the host variables, so a non-default port or a remote daemon keeps working:
 
-On Apple Silicon, MLX is the recommended backend. Install and auto-start via launchd are documented in [docs/install-mlx.md](docs/install-mlx.md). The quick version:
+```
+${MLX_HOST:-http://localhost:8080}/v1
+${DOCKER_MODEL_HOST:-http://localhost:12434}/engines/v1
+${OLLAMA_HOST:-http://localhost:11434}/v1
+```
+
+MLX leads because [ADR 0022](docs/adr/0022-mlx-primary-backend-rationale.md) measured it at roughly an order of magnitude lower latency than Ollama on identical weights. A provider that is down costs one refused connection and is skipped; a host running only Ollama routes there with no configuration.
+
+On Apple Silicon, MLX is the recommended provider. Install and auto-start via launchd are documented in [docs/install-mlx.md](docs/install-mlx.md). The quick version:
 
 ```bash
 python3 -m venv ~/venvs/mlx-lm && ~/venvs/mlx-lm/bin/pip install mlx-lm
@@ -56,7 +64,7 @@ python3 -m venv ~/venvs/mlx-lm && ~/venvs/mlx-lm/bin/pip install mlx-lm
 ~/venvs/mlx-lm/bin/mlx_lm.server --model mlx-community/Qwen3.6-35B-A3B-8bit --port 8080 &
 ```
 
-Force a specific backend with `DELEGATE_BACKEND=ollama` or `DELEGATE_BACKEND=mlx`. The metrics JSONL tags each call with a `backend` field so `scripts/metrics-summary.sh` can break down latency per backend.
+Pin a single provider by setting `DELEGATE_BASE_URL` yourself, for example `DELEGATE_BASE_URL=http://localhost:11434/v1`. The metrics JSONL tags each call with a `backend` field derived from the winning URL (`mlx` / `docker` / `ollama`, else `host:port`) so `scripts/metrics-summary.sh` can break down latency per provider.
 
 ## Install
 
@@ -173,11 +181,11 @@ The mechanisms are fork-friendly out of the box — routing, metrics, and the fe
 
 The wrapper's failure modes map onto its exit codes, and every hard failure prints recovery options on stderr.
 
-Exit 1 (`pick-model failed for tier`) means no installed model matches the tier's preference list. Run `bash scripts/audit-models.sh` to see what is installed and how tiers currently route, then either pull a model from the tier's preference list in `scripts/pick-model.sh` or edit that list to match your hardware. If you run MLX, also check that `DELEGATE_BACKEND` resolves to the backend you expect — `auto` probes `MLX_HOST` and falls back to Ollama.
+Exit 1 (`pick-model failed for tier`) means no installed model matches the tier's preference list. Run `bash scripts/audit-models.sh` to see what is installed and how tiers currently route, then either pull a model from the tier's preference list in `scripts/pick-model.sh` or edit that list to match your hardware. `pick-model.sh` distinguishes the two causes: "no provider is reachable" means start a daemon, "no provider holds a model for tier X" means pull a model or edit the preference list.
 
-Exit 3 (`pre-flight canary`) means the resolved model did not answer a 1-token probe within `DELEGATE_PREFLIGHT_TIMEOUT` (default 10 s). The stderr message distinguishes a cold-load timeout (retry with a larger timeout), a connection refusal (start `ollama serve` or `mlx_lm.server`, confirm `OLLAMA_HOST` / `MLX_HOST`), and an HTTP error (usually a bad model name).
+Exit 3 (`pre-flight canary`) means the resolved model did not answer a 1-token probe within `DELEGATE_PREFLIGHT_TIMEOUT` (default 10 s). The stderr message distinguishes a cold-load timeout (retry with a larger timeout), a connection refusal (start the provider daemon — `mlx_lm.server`, Docker Model Runner or `ollama serve` — and confirm `MLX_HOST` / `DOCKER_MODEL_HOST` / `OLLAMA_HOST`, or the `DELEGATE_BASE_URL` you pinned), and an HTTP error (usually a bad model name).
 
-A non-zero curl exit on the dispatch itself (commonly 7, connection refused) means the backend daemon went away between the canary and the full request, or no canary ran (bare non-recipe calls skip it). The same daemon/host checks apply.
+A non-zero curl exit on the dispatch itself (commonly 7, connection refused) means the resolved provider went away between the canary and the full request, or no canary ran (bare non-recipe calls skip it). `bash scripts/pick-model.sh --print-providers` shows which URLs are in play; the same daemon/host checks apply.
 
 Empty or whitespace-only output from an MLX model usually means a raw completions endpoint was hit instead of chat-completions — `delegate.sh` always uses the right one, so this points at a hand-rolled `curl` bypassing the wrapper.
 

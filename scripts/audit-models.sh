@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# Audit the installed models of the active backend against llmfit
-# recommendations for this hardware. Shows tier routing, flags uninstalled
-# models that outscore installed ones, and prints pull suggestions. Does not
-# install or remove anything.
+# Audit the models the running providers serve against llmfit recommendations
+# for this hardware. Shows tier routing, flags uninstalled models that outscore
+# installed ones, and prints pull suggestions. Does not install or remove
+# anything.
 #
-# The backend is resolved through pick-model.sh rather than assumed, because
-# DELEGATE_BACKEND defaults to `auto`: on a host running mlx_lm.server the
-# routing every delegation uses is the HuggingFace hub cache, and an audit
-# that printed `ollama list` regardless sent debugging at the wrong inventory.
+# The provider list comes from pick-model.sh rather than being restated here,
+# so the audit can never report an inventory that routing does not consult.
 #
 # llmfit's own `installed` flag tracks HuggingFace GGUF cache, not Ollama's
 # model store, so we cross-check each candidate against `ollama list` using
@@ -18,53 +16,48 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 
-backend_requested="${DELEGATE_BACKEND:-auto}"
-backend=$(bash "$pick" --print-backend)
-# Pin every downstream pick-model call to the already-resolved backend: one
-# MLX probe per audit instead of one per tier, and no chance of a mid-run flip.
-export DELEGATE_BACKEND="$backend"
+# Pin the list for the whole audit so the tier table below and the inventory
+# above it are answered against the same providers, even if a daemon stops
+# mid-run.
+DELEGATE_BASE_URL=$(bash "$pick" --print-providers | tr '\n' ' ')
+DELEGATE_BASE_URL="${DELEGATE_BASE_URL% }"
+export DELEGATE_BASE_URL
 
-if [[ "$backend" == "ollama" ]] && ! command -v ollama >/dev/null 2>&1; then
-  echo "ollama not on PATH"; exit 1
-fi
-
-echo "=== Backend ==="
-printf "  DELEGATE_BACKEND=%s -> in effect: %s\n" "$backend_requested" "$backend"
-if [[ "$backend" == "mlx" ]]; then
-  echo "  Inventory below is the HuggingFace hub cache, not 'ollama list'."
-fi
+echo "=== Providers ==="
+for base in $DELEGATE_BASE_URL; do
+  if curl -sS --fail --max-time "${DELEGATE_PROBE_TIMEOUT:-1}" "${base%/}/models" >/dev/null 2>&1; then
+    printf "  %-44s reachable\n" "$base"
+  else
+    printf "  %-44s unreachable\n" "$base"
+  fi
+done
+echo "  First match wins: the first reachable provider holding a model the tier"
+echo "  prefers takes the call."
 echo "  The embedding tier is Ollama-only by design (scripts/embed.sh posts to"
-echo "  /api/embed); MLX is out of scope for it regardless of the backend above."
+echo "  /api/embed), so it is resolved against the Ollama provider alone."
 echo
 
-echo "=== Installed models (backend=$backend) ==="
-if [[ "$backend" == "ollama" ]]; then
-  ollama list
-else
-  bash "$pick" --print-installed
-fi
+echo "=== Installed models (union of the reachable providers) ==="
+bash "$pick" --print-installed
 echo
 
 # Every tier, not just the four active ones: the scaffolded tiers resolving to
 # (none) is exactly the state that needs surfacing when a recipe routed to one
 # of them silently produced nothing. Tier names come from --print-prefs so the
 # list stays single-sourced in pick-model.sh.
-echo "=== Tier routing (which installed model wins per tier, backend=$backend) ==="
+echo "=== Tier routing (which model wins per tier) ==="
 while IFS= read -r tier; do
   [[ -n "$tier" ]] || continue
-  # embed.sh resolves the embedding tier with DELEGATE_BACKEND=ollama forced
-  # (scripts/embed.sh:175 — MLX is out of scope there), so the audit mirrors
-  # that call path. Resolving it against the active backend would report a
-  # misleading '(none)' on an MLX host that has the embedding model installed.
-  tier_backend="$backend"
+  # embed.sh pins the embedding tier to the Ollama provider (its POST goes to
+  # Ollama's /api/embed), so the audit mirrors that call path. Resolving it
+  # against the full list would name a model this endpoint cannot serve.
+  tier_providers="$DELEGATE_BASE_URL"
   suffix=""
   if [[ "$tier" == "embedding" ]]; then
-    tier_backend="ollama"
-    if [[ "$backend" != "ollama" ]]; then
-      suffix="   [via ollama — embed.sh forces it]"
-    fi
+    tier_providers="${OLLAMA_HOST:-http://localhost:11434}/v1"
+    suffix="   [via ollama — embed.sh pins it]"
   fi
-  if ! model=$(DELEGATE_BACKEND="$tier_backend" bash "$pick" "$tier" 2>/dev/null); then
+  if ! model=$(DELEGATE_BASE_URL="$tier_providers" bash "$pick" "$tier" 2>/dev/null); then
     model="(none)"
   fi
   printf "  %-17s -> %s%s\n" "$tier" "$model" "$suffix"

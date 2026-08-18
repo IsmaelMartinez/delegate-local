@@ -1,6 +1,6 @@
-# Install — MLX backend (Apple Silicon)
+# Install — MLX provider (Apple Silicon)
 
-The skill defaults to `DELEGATE_BACKEND=auto` (since 2026-05-13): on every invocation it probes `${MLX_HOST:-http://localhost:8080}/v1/models` with a 1-second timeout, picks MLX if reachable, and falls back to Ollama otherwise. Non-Apple-Silicon hosts and Apple Silicon hosts without `mlx_lm.server` running both fall through to Ollama transparently — the auto default is strictly an opt-in upgrade, not a behaviour change. To force one backend regardless of probe state, set `DELEGATE_BACKEND=ollama` or `DELEGATE_BACKEND=mlx` explicitly.
+MLX is the first entry in the default provider list, so starting `mlx_lm.server` is the whole configuration: the next call probes `${MLX_HOST:-http://localhost:8080}/v1/models`, finds a model the tier prefers, and routes there. A host without it running falls through to the next provider in the list. To pin MLX and nothing else, set `DELEGATE_BASE_URL="${MLX_HOST:-http://localhost:8080}/v1"`.
 
 On Apple Silicon, `mlx-lm` is an alternative inference runtime that uses Apple's native Metal kernels and unified-memory-aware KV cache. For the same Q8 model, MLX is typically 10–30% lighter on memory and faster on prefill than Ollama's llama.cpp backend (measured: 2× faster wall-clock, 25% lighter peak memory on `Qwen3.6-35B-A3B-8bit` — the rationale for preferring MLX when available is recorded in [`adr/0022-mlx-primary-backend-rationale.md`](adr/0022-mlx-primary-backend-rationale.md)). This guide covers the install steps plus the lifecycle differences vs Ollama.
 
@@ -43,7 +43,7 @@ huggingface-cli download mlx-community/Qwen3.6-35B-A3B-Instruct-8bit
 huggingface-cli download mlx-community/Qwen3.6-35B-A3B-Instruct-4bit
 ```
 
-`huggingface-cli` lands the weights under `~/.cache/huggingface/hub/models--mlx-community--<name>/snapshots/<hash>/`. `pick-model.sh` scans that directory when `DELEGATE_BACKEND=mlx` is set, so the model is discoverable immediately after the download finishes.
+`huggingface-cli` lands the weights under `~/.cache/huggingface/hub/models--mlx-community--<name>/snapshots/<hash>/`. Discovery asks the running server what it serves rather than scanning that directory, so the model becomes routable once `mlx_lm.server` is started with it, not merely once the download finishes.
 
 ## Start the server
 
@@ -122,27 +122,27 @@ Logs go to `~/Library/Logs/mlx-lm-server.log`. The `KeepAlive` key restarts the 
 
 ## Route a delegation through MLX
 
-With the auto default in place, simply starting `mlx_lm.server` is enough — the next `delegate.sh` call will probe the server, find it reachable, and route through MLX without any env-var changes:
+Starting `mlx_lm.server` is enough — the next `delegate.sh` call probes it, finds it reachable, and routes through MLX without any env-var changes:
 
 ```bash
 mlx_lm.server --port 8080 --model mlx-community/Qwen3.6-35B-A3B-Instruct-8bit &
 bash scripts/delegate.sh prose "Summarise this paragraph in two sentences." </path/to/some.txt
 ```
 
-To force MLX even if the probe would have picked Ollama (e.g. for testing), pass `DELEGATE_BACKEND=mlx` explicitly:
+To exclude every other provider (e.g. for testing), pin the list:
 
 ```bash
-DELEGATE_BACKEND=mlx bash scripts/delegate.sh prose "Summarise this paragraph in two sentences." </path/to/some.txt
+DELEGATE_BASE_URL=http://localhost:8080/v1 bash scripts/delegate.sh prose "Summarise this paragraph in two sentences." </path/to/some.txt
 ```
 
-`pick-model.sh` resolves the tier against the MLX hub cache; `delegate.sh` posts to `http://localhost:8080/v1/chat/completions` (override via `MLX_HOST`) and parses `.choices[0].message.content`. The payload includes `chat_template_kwargs: {enable_thinking: false}` so reasoning-capable models like Qwen3.6 emit their answer in `content` rather than the reasoning trace (set `DELEGATE_THINK=true` to flip it on per-call). The raw `/v1/completions` endpoint is deliberately avoided — it bypasses the model's chat template and produces whitespace-only output on instruction-tuned models. Every call appends a metrics row tagged `"backend":"mlx"` so `scripts/metrics-summary.sh` can break latency and token totals down per backend.
+`pick-model.sh` resolves the tier against what the server reports; `delegate.sh` posts to `http://localhost:8080/v1/chat/completions` (override via `MLX_HOST`) and parses `.choices[0].message.content`. The payload includes `chat_template_kwargs: {enable_thinking: false}` so reasoning-capable models like Qwen3.6 emit their answer in `content` rather than the reasoning trace (set `DELEGATE_THINK=true` to flip it on per-call). The raw `/v1/completions` endpoint is deliberately avoided — it bypasses the model's chat template and produces whitespace-only output on instruction-tuned models. Every call appends a metrics row tagged `"backend":"mlx"` so `scripts/metrics-summary.sh` can break latency and token totals down per backend.
 
 ## Per-tier override
 
-The default `max_tokens` for MLX delegations is 4096. Raise it for the `long-context` tier or for verbose models:
+The default `max_tokens` is 4096. Raise it for the `long-context` tier or for verbose models:
 
 ```bash
-DELEGATE_BACKEND=mlx DELEGATE_MAX_TOKENS=16384 bash scripts/delegate.sh long-context "..."
+DELEGATE_MAX_TOKENS=16384 bash scripts/delegate.sh long-context "..."
 ```
 
 ## What happens on a cross-tier request
@@ -158,10 +158,10 @@ If your workload mixes tiers in fast succession and the cumulative wait is notic
 After install, the dry-run trace confirms routing:
 
 ```bash
-DELEGATE_BACKEND=mlx bash scripts/pick-model.sh --dry-run prose
+DELEGATE_BASE_URL=http://localhost:8080/v1 bash scripts/pick-model.sh --dry-run prose
 ```
 
-The trace shows the backend, the prefs list, the scanned hub directory, and which model matched. If "no preference matched any installed model" comes back, the model name doesn't contain any of the prefs substrings (case-insensitive) — check `huggingface-cli` finished the download and the snapshot directory has weight files.
+The trace shows the provider list, the prefs list, and which model matched. If "no provider holds a model for tier" comes back, the model the server is serving doesn't contain any of the prefs substrings (case-insensitive); if "no provider is reachable" comes back, `mlx_lm.server` is not running on that port.
 
 ## Stop the server (reclaim memory)
 

@@ -8,6 +8,11 @@ Accepted. Records a learning that, until this ADR, lived only in the archived
 `experiments/results/2026-05-12-mlx-vs-ollama*.md` and `2026-05-27-mlx-baseline.md`
 retrospectives (recoverable from tag `pre-cleanup-2026-06-19`).
 
+The mechanism described below changed on 2026-08-18: `DELEGATE_BACKEND` and its
+MLX probe were removed in favour of an ordered `DELEGATE_BASE_URL` provider list
+(issue #363). The finding this ADR records is unchanged and is exactly why MLX
+is the first entry in that list.
+
 ## Context
 
 `DELEGATE_BACKEND=auto` (the default since 2026-05-13) probes `mlx_lm.server`

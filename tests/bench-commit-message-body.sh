@@ -22,17 +22,29 @@ fail=0
 # the same `< 2` -> fail threshold.
 score_body() { local n; n=$(printf '%s\n' "$1" | tr -d '\r' | awk 'NF { n++ } END { print n + 0 }'); (( n >= 2 )); }
 
+# Map a bench arm to the provider it pins. An arm is one entry in
+# DELEGATE_BASE_URL now, not a DELEGATE_BACKEND mode: pinning the list to a
+# single provider is what keeps the arms comparable.
+backend_base() {
+  case "$1" in
+    mlx)    printf '%s/v1' "${MLX_HOST:-http://localhost:8080}" ;;
+    docker) printf '%s/engines/v1' "${DOCKER_MODEL_HOST:-http://localhost:12434}" ;;
+    ollama) printf '%s/v1' "${OLLAMA_HOST:-http://localhost:11434}" ;;
+    *) echo "bench: unknown backend '$1' (valid: mlx|docker|ollama)" >&2; exit 2 ;;
+  esac
+}
+
 for backend in $BACKENDS; do
-  model="$(DELEGATE_BACKEND="$backend" bash "$PICK" prose 2>/dev/null || echo '?')"
+  model="$(DELEGATE_BASE_URL="$(backend_base "$backend")" bash "$PICK" prose 2>/dev/null || echo '?')"
   # Warm the model once so a cold-load canary doesn't poison the first score.
-  printf 'warmup' | DELEGATE_BACKEND="$backend" DELEGATE_LOCAL_NO_METRICS=1 \
+  printf 'warmup' | DELEGATE_BASE_URL="$(backend_base "$backend")" DELEGATE_LOCAL_NO_METRICS=1 \
     DELEGATE_PREFLIGHT_TIMEOUT="${DELEGATE_PREFLIGHT_TIMEOUT:-90}" \
     bash "$DELEGATE" prose "ok" >/dev/null 2>&1 || true
   drops=0; errors=0; total=0
   for d in "$FIX_DIR"/*.diff; do
     base="$(basename "$d" .diff)"; why="$(cat "${d%.diff}.why")"; total=$((total+1))
     err_log=$(mktemp "${TMPDIR:-/tmp}/bench-cmbd.XXXXXX")
-    out="$(DELEGATE_BACKEND="$backend" DELEGATE_LOCAL_NO_METRICS=1 \
+    out="$(DELEGATE_BASE_URL="$(backend_base "$backend")" DELEGATE_LOCAL_NO_METRICS=1 \
            DELEGATE_PREFLIGHT_TIMEOUT="${DELEGATE_PREFLIGHT_TIMEOUT:-90}" \
            bash "$DELEGATE" --recipe auto --var why="$why" --var recent_commits="$RC" \
              prose "Write the commit message." < "$d" 2>"$err_log")"; rc=$?

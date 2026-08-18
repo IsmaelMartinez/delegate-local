@@ -80,14 +80,14 @@ dry-run: provider http://localhost:8080/v1: matched preference='qwen3.6'
 Doing this refactor first, on its own, with the default still unset, means the change
 is provable by *absence of change*: every suite must hold its exact baseline.
 
-- [ ] **Step 1: Change the gates at `pick-model.sh:210` and `:331`**
+- [x] **Step 1: Change the gates at `pick-model.sh:210` and `:331`**
 
 Replace `if [[ -n "${DELEGATE_BASE_URL:-}" ]]; then` with
 `if [[ "$backend" == "provider" ]]; then` at both sites. Leave `:115` alone: it is
 input validation on the variable itself, not a mode question, and it must run whenever
 a value is present. Leave `:182` alone: it is what *assigns* the mode.
 
-- [ ] **Step 2: Change the gates at `delegate.sh:443` and `:973`**
+- [x] **Step 2: Change the gates at `delegate.sh:443` and `:973`**
 
 Same substitution. `delegate.sh:443` currently runs its own copy of the precedence
 logic; it must end up asking `pick-model.sh` rather than deciding independently,
@@ -100,20 +100,20 @@ $ printf '...' | MLX_HOST=http://localhost:18080 bash scripts/delegate.sh prose 
 rc=22  curl: (22) The requested URL returned error: 404
 ```
 
-- [ ] **Step 3: Update the comments that describe the old contract**
+- [x] **Step 3: Update the comments that describe the old contract**
 
 `pick-model.sh:180-181` says "DELEGATE_BASE_URL supersedes backend probing entirely".
 `pick-model.sh:206-209` and `:329-330` describe the gate as conditional on the list
 being set. `delegate.sh:148-151` says "When set it supersedes DELEGATE_BACKEND". All
 four become wrong in stage 2 and misleading now.
 
-- [ ] **Step 4: Verify by absence of change**
+- [x] **Step 4: Verify by absence of change**
 
 Run every suite in the baseline table. **Every count must be identical.** A single
 changed number means the refactor was not behaviour-preserving, and the cause must be
 found before proceeding rather than absorbed by editing an assertion.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -m "refactor: gate provider resolution on the resolved backend, not on DELEGATE_BASE_URL"
@@ -160,7 +160,7 @@ reviewer could apply, **56 failures remained** that are genuine per-call-site
 migrations, clustered in `payload:`, `checks:` (16), `strip-think` (7), the Ollama
 canary tests (4), `QS1/QS2/QS6` and `OT2/OT3/OT4/OT15`.
 
-- [ ] **Step 1: Rewrite the assertions that the design contradicts**
+- [x] **Step 1: Rewrite the assertions that the design contradicts**
 
 These cannot be fixed by re-mocking; they assert behaviour that ceases to exist.
 
@@ -177,7 +177,7 @@ tests/test-delegate.sh:930-931 12h
 tests/test-delegate.sh:952    12i DELEGATE_BACKEND_AUTO_PROBE_TIMEOUT
 ```
 
-- [ ] **Step 2: Build the default list from the host variables, not literals**
+- [x] **Step 2: Build the default list from the host variables, not literals**
 
 Three hardcoded ports would make `MLX_HOST` and `OLLAMA_HOST` dead, silently
 re-routing anyone running Ollama on a non-default port or a remote host back to
@@ -195,7 +195,7 @@ Use `${MLX_HOST:-http://localhost:8080}/v1`,
 ADR 0022 measured MLX at roughly an order of magnitude lower latency on identical
 weights.
 
-- [ ] **Step 3: Fix `run-tests.sh`'s `make_mock_ollama` to serve its own model list**
+- [x] **Step 3: Fix `run-tests.sh`'s `make_mock_ollama` to serve its own model list**
 
 The `run()` pin at `tests/run-tests.sh:76` cannot simply be dropped: doing so measured
 76/123. `run-tests.sh` has its own `make_mock_ollama` at `:44` that takes the model
@@ -204,7 +204,7 @@ vision, embedding, premium-general, reasoning-vision and override cases). A fixe
 provider body breaks every one. The mock must emit a `curl` shim serving **the same
 `$2` list** as `{"data":[{"id":…}]}`.
 
-- [ ] **Step 4: Give `test-semantic-search.sh`'s mock a models arm**
+- [x] **Step 4: Give `test-semantic-search.sh`'s mock a models arm**
 
 Not named in the first draft, and it runs in CI. `semantic-search.sh:69` shells out to
 `embed.sh`, and `make_mock_curl_deterministic` (`tests/test-semantic-search.sh:62`)
@@ -213,14 +213,14 @@ ids are found, and the suite drops **29 to 8**. Add a `*/models)` arm returning
 `{"data":[{"id":"nomic-embed-text:latest"}]}`, and give it an early `exit 0` before
 the unconditional `payload=$(cat)`, which otherwise hangs on a stdin-less probe.
 
-- [ ] **Step 5: Fix `audit-models.sh`**
+- [x] **Step 5: Fix `audit-models.sh`**
 
 `audit-models.sh:22-25` takes `--print-backend`, gets `provider`, and re-exports it as
 `DELEGATE_BACKEND=provider`, which the backend `case` rejects with exit 2 under
 `set -euo pipefail`. Measured: the script dies after printing its first heading, where
 today it prints a full inventory and the eight-tier routing table.
 
-- [ ] **Step 6: Make "nothing reachable" say so**
+- [x] **Step 6: Make "nothing reachable" say so**
 
 With all providers down, `resolve_via_providers` cannot distinguish "nothing
 reachable" from "reachable but no matching model", so both collapse to "no provider
@@ -228,9 +228,9 @@ holds a model for tier 'prose'", and `delegate.sh` wraps that in advice to run
 `audit-models.sh`. Both statements are false on a machine with no daemon running.
 Count reachable providers and, when the count is zero, say so.
 
-- [ ] **Step 7: Migrate the 56 remaining per-call-site assertions**
+- [x] **Step 7: Migrate the 56 remaining per-call-site assertions**
 
-- [ ] **Step 8: Verify under both conditions**
+- [x] **Step 8: Verify under both conditions**
 
 Run every suite with daemons live, then again with the default list pointed at three
 dead ports. State both sets of counts in the PR with a reason for every change.
@@ -294,3 +294,54 @@ fix) and `test-semantic-search.sh` (drops to 8/21), both in CI.
 `dispatch failed (curl exit 1)` and advising a daemon restart, which is the wrong
 diagnosis and a real curl code. Shipped in #370 as `EMPTY_RESPONSE_STATUS=100`, above
 curl's range, with a test asserting the transport advice is not printed.
+
+### What stage 2 actually did, beyond the steps above
+
+Kept because each one is a thing the plan did not predict.
+
+**`--print-backend` became `--print-providers`.** With one mode left, the flag
+could only ever print the string `provider`. `audit-models.sh` was its only
+caller and needed the list, not a constant, so the surface was replaced rather
+than left as dead weight. The audit grew a `=== Providers ===` section that
+marks each entry reachable or unreachable, which is the answer to "why is every
+tier `(none)`?".
+
+**Four more consumers had to move, none of them named in the plan.**
+`scripts/init.sh` discovered models with `ollama list`, so on an MLX-only host
+it exited 1 while delegation worked fine; it now asks
+`pick-model.sh --print-installed`. `scripts/embed.sh` pinned the embedding tier
+with `DELEGATE_BACKEND=ollama`, which became inert the moment the variable was
+deleted, silently letting the tier resolve to a model only MLX serves and then
+POSTing it to Ollama's `/api/embed`; it now pins `DELEGATE_BASE_URL` to the
+Ollama provider instead. `tests/bench-commit-message-body.sh` and
+`tests/bench-doc-section-padding.sh` loop over `BENCH_BACKENDS="mlx ollama"`
+via `DELEGATE_BACKEND`, so both arms would have measured the same provider and
+reported it as a comparison; they now pin the list per arm.
+
+**`embed.sh`'s own `DELEGATE_BACKEND` went too.** Leaving it meant a user with
+`DELEGATE_BACKEND=mlx` exported for any reason would get
+"embed: DELEGATE_BACKEND=mlx is not wired up yet" from a variable nothing else
+reads. The label is now the constant `ollama`, which is what the endpoint
+actually is until #362 moves it.
+
+**Test hermeticity was the real cost, not the assertion count.** The suites
+mocked an `ollama` binary; discovery is HTTP now, so a developer machine with a
+live daemon answered probes the mocks were supposed to intercept. Every mock
+grew a `/models` arm that answers *before* the unconditional `cat`, since the
+discovery request carries no stdin and a blocking read hangs the run. The whole
+matrix was then run twice, once with all three daemons live and once with the
+host variables pointed at closed ports, and produced identical counts.
+
+**The structural guard changed target.** The stage 1 guard counted
+`DELEGATE_BASE_URL` mode proxies; with the mode gone there is nothing to count.
+It is replaced by a guard that the four dispatch-path scripts contain neither
+`/api/generate` nor `DELEGATE_BACKEND`, both of which are one copy-paste from
+git history away and invisible to behavioural tests while the OpenAI arm works.
+
+**QS6 and QS6b turned out to be the same test.** They differed only in which
+canary envelope they asserted. QS6b was kept.
+
+**Counts.** `run-tests.sh` 123 -> 95, `test-delegate.sh` 601 -> 575,
+`test-embed.sh` 51 -> 45; every drop is an assertion on deleted behaviour
+(hub-cache scan, auto probe, `DELEGATE_BACKEND` validation, the native
+envelope). The other fourteen suites hold their exact baselines.

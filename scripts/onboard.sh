@@ -47,10 +47,10 @@ err_tmp=$(mktemp)
 trap 'rm -f "$err_tmp"' EXIT
 
 # --- Probe 1: environment (facts, no questions) ------------------------------
-# init.sh prints a routing override built from `ollama list`; a host without
-# ollama or models just skips this section — flavor-only onboarding still works.
-# Relay init.sh's own stderr reason (no-ollama vs no-models differ) rather than
-# guessing one.
+# init.sh prints a routing override built from what the running providers
+# serve; a host with no provider reachable just skips this section — flavor-only
+# onboarding still works. Relay init.sh's own stderr reason rather than guessing
+# one.
 config_candidate=""
 if ! config_candidate=$(bash "$script_dir/init.sh" 2>"$err_tmp"); then
   config_candidate=""

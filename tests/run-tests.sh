@@ -39,19 +39,40 @@ assert_contains() {
   fi
 }
 
-# Create a mock `ollama` binary at $1/ollama that prints the given list body ($2)
-# when called with `ollama list`. Other args no-op with exit 0.
-make_mock_ollama() {
-  local dir="$1" list_body="$2"
-  cat > "$dir/ollama" <<EOF
+# Mock curl answering GET {base}/models with an OpenAI models list. $2 is a
+# space-separated "port:id,id" spec; a port absent from the spec exits 7
+# (connection refused) so a dead provider can be simulated without binding a
+# socket, and a port with an empty id list answers with an empty data array so
+# "reachable but serving nothing" is distinguishable from "unreachable".
+# Discovery is the only thing pick-model.sh curls, so this mock needs no
+# chat-completions arm.
+make_mock_provider() {
+  local dir="$1" spec="$2"
+  cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
-if [[ "\${1:-}" == "list" ]]; then
-  cat <<'LIST'
-$list_body
-LIST
-fi
+url=""
+for a in "\$@"; do case "\$a" in http*) url="\$a" ;; esac; done
+port=\$(printf '%s' "\$url" | sed -n 's|.*://[^:/]*:\([0-9]*\).*|\1|p')
+for entry in ${spec}; do
+  p="\${entry%%:*}"; ids="\${entry#*:}"
+  if [[ "\$p" == "\$port" ]]; then
+    printf '{"object":"list","data":['
+    if [[ -n "\$ids" ]]; then
+      first=1
+      IFS=, read -ra arr <<< "\$ids"
+      for id in "\${arr[@]}"; do
+        if (( first == 0 )); then printf ','; fi
+        printf '{"id":"%s","object":"model"}' "\$id"
+        first=0
+      done
+    fi
+    printf ']}'
+    exit 0
+  fi
+done
+exit 7
 EOF
-  chmod +x "$dir/ollama"
+  chmod +x "$dir/curl"
 }
 
 # pick-model.sh does not need llmfit, but audit-models.sh does. Keep a simple stub.
@@ -73,7 +94,10 @@ run() {
   # forwarded so override tests can opt in to a specific config path.
   local custom_path="$1"; shift
   local sandbox_home; sandbox_home=$(mktemp -d)
-  local extra=(DELEGATE_BACKEND=ollama)
+  # One provider, on Ollama's port, so a mock built by make_mock_provider with
+  # an "1:..." spec answers it. Tests that install no mock get a real curl
+  # against a closed port, which refuses instantly rather than resolving DNS.
+  local extra=(DELEGATE_BASE_URL=http://localhost:1/v1)
   if [[ -n "${DELEGATE_LOCAL_CONFIG:-}" ]]; then
     extra+=(DELEGATE_LOCAL_CONFIG="$DELEGATE_LOCAL_CONFIG")
   fi
@@ -97,23 +121,21 @@ rm -rf "$tmp"
 EC=0; run "$SAFE_PATH" bash "$PICK" bogus || true
 assert_eq "2" "$EC" "unknown tier exits 2"
 
-# 3. ollama missing -> exit 1 with clear message.
+# 3. No provider answering -> exit 1 with clear message.
 EC=0; run "$SAFE_PATH" bash "$PICK" code || true
-assert_eq "1" "$EC" "missing ollama -> exit 1"
-assert_contains "ollama not on PATH" "$ERR" "missing ollama -> informative stderr"
+assert_eq "1" "$EC" "no provider reachable -> exit 1"
+assert_contains "no provider is reachable" "$ERR" "no provider reachable -> informative stderr"
 
 # 4. Empty model list -> exit 1.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME  ID  SIZE  MODIFIED"
+make_mock_provider "$tmp" "1:"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" code || true
-assert_eq "1" "$EC" "empty ollama list -> exit 1"
+assert_eq "1" "$EC" "provider serving nothing -> exit 1"
 rm -rf "$tmp"
 
 # 5. Code tier with coder installed returns it.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME                      ID SIZE   MODIFIED
-qwen3-coder:30b-a3b-q8_0  xx 32 GB  2 weeks ago
-gemma4:latest             yy 9.6 GB 2 weeks ago"
+make_mock_provider "$tmp" "1:qwen3-coder:30b-a3b-q8_0,gemma4:latest"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" code || true
 assert_eq "0" "$EC" "code tier exits 0"
 assert_eq "qwen3-coder:30b-a3b-q8_0" "$OUT" "code tier picks qwen3-coder"
@@ -121,66 +143,55 @@ rm -rf "$tmp"
 
 # 6. Prose tier with only gemma4 falls back to gemma4.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME           ID SIZE   MODIFIED
-gemma4:latest  yy 9.6 GB 2 weeks ago"
+make_mock_provider "$tmp" "1:gemma4:latest"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
 assert_eq "gemma4:latest" "$OUT" "prose falls to gemma4 when no qwen3.6"
 rm -rf "$tmp"
 
 # 7. Prose tier prefers qwen3.6 when installed (the new preference).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
-qwen3.6:35b-a3b   aa 30 GB  1 day ago
-gemma4:latest     yy 9.6 GB 2 weeks ago"
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b,gemma4:latest"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
 assert_eq "qwen3.6:35b-a3b" "$OUT" "prose picks qwen3.6 when installed"
 rm -rf "$tmp"
 
 # 7b. Prose tier prefers qwen3.6 over qwen3-next when both are installed.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME                              ID SIZE   MODIFIED
-qwen3.6:35b-a3b                   aa 30 GB  1 day ago
-qwen3-next:80b-a3b-instruct-q8_0  bb 84 GB  1 week ago"
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b,qwen3-next:80b-a3b-instruct-q8_0"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
 assert_eq "qwen3.6:35b-a3b" "$OUT" "prose picks qwen3.6 ahead of qwen3-next"
 rm -rf "$tmp"
 
 # 8. No preference match -> exit 1 (do NOT return an arbitrary fallback).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME               ID SIZE  MODIFIED
-unrelated:model    zz 5 GB  1 day ago"
+make_mock_provider "$tmp" "1:unrelated:model"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" code || true
 assert_eq "1" "$EC" "no match -> exit 1"
 rm -rf "$tmp"
 
 # 9. long-context tier prefers qwen3.6 when available.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME            ID SIZE  MODIFIED
-qwen3.6:35b-a3b aa 30 GB 1 day ago
-llama4:scout    bb 67 GB 2 weeks ago"
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b,llama4:scout"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" long-context || true
 assert_eq "qwen3.6:35b-a3b" "$OUT" "long-context picks qwen3.6 first"
 rm -rf "$tmp"
 
 # 10. --dry-run with a matching install: stdout = model, stderr has the trace.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
-qwen3.6:35b-a3b   aa 30 GB  1 day ago
-gemma4:latest     yy 9.6 GB 2 weeks ago"
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b,gemma4:latest"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" --dry-run prose || true
 assert_eq "0" "$EC" "dry-run match -> exit 0"
 assert_eq "qwen3.6:35b-a3b" "$OUT" "dry-run match -> stdout still has model"
 assert_contains "dry-run: tier=prose" "$ERR" "dry-run match -> stderr has tier line"
-assert_contains "dry-run: matched preference='qwen3.6'" "$ERR" "dry-run match -> stderr names matched preference"
+assert_contains "matched preference='qwen3.6'" "$ERR" "dry-run match -> stderr names matched preference"
 rm -rf "$tmp"
 
 # 11. --dry-run with no matching install: exit 1, stderr explains why.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME            ID SIZE  MODIFIED
-unrelated:model zz 5 GB  1 day ago"
+make_mock_provider "$tmp" "1:unrelated:model"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" --dry-run code || true
 assert_eq "1" "$EC" "dry-run no match -> exit 1"
-assert_contains "no preference matched any installed model" "$ERR" "dry-run no match -> stderr explains why"
+assert_contains "no model matches this tier" "$ERR" "dry-run no match -> stderr explains why"
 rm -rf "$tmp"
 
 # 12. --dry-run without a tier arg: usage error (exit 2).
@@ -195,56 +206,49 @@ assert_contains "unknown option: --bogus" "$ERR" "unknown flag -> stderr names t
 
 # 14. vision tier picks qwen3-vl thinking model when installed.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME                          ID SIZE   MODIFIED
-qwen3-vl:30b-a3b-thinking     vv 25 GB  1 day ago"
+make_mock_provider "$tmp" "1:qwen3-vl:30b-a3b-thinking"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" vision || true
 assert_eq "qwen3-vl:30b-a3b-thinking" "$OUT" "vision picks qwen3-vl thinking variant"
 rm -rf "$tmp"
 
 # 15. embedding tier picks nomic-embed-text when installed.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME                ID SIZE   MODIFIED
-nomic-embed-text    nn 137 MB 1 day ago"
+make_mock_provider "$tmp" "1:nomic-embed-text"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" embedding || true
 assert_eq "nomic-embed-text" "$OUT" "embedding picks nomic-embed-text"
 rm -rf "$tmp"
 
 # 16. embedding tier falls back to bge-large when nomic absent.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME       ID SIZE   MODIFIED
-bge-large  bb 335 MB 1 day ago"
+make_mock_provider "$tmp" "1:bge-large"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" embedding || true
 assert_eq "bge-large" "$OUT" "embedding falls back to bge-large"
 rm -rf "$tmp"
 
 # 17. premium-general tier picks qwen3.5 122b variant when installed.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME                       ID SIZE    MODIFIED
-qwen3.5:122b-a10b-q4_K_M   pp 70 GB   1 day ago"
+make_mock_provider "$tmp" "1:qwen3.5:122b-a10b-q4_K_M"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" premium-general || true
 assert_eq "qwen3.5:122b-a10b-q4_K_M" "$OUT" "premium-general picks qwen3.5:122b"
 rm -rf "$tmp"
 
 # 18. premium-general does NOT silently downshift to qwen3.5:27b.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME         ID SIZE  MODIFIED
-qwen3.5:27b  qq 17 GB 1 day ago"
+make_mock_provider "$tmp" "1:qwen3.5:27b"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" premium-general || true
 assert_eq "1" "$EC" "premium-general -> exit 1 when only smaller qwen3.5 installed"
 rm -rf "$tmp"
 
 # 19. reasoning-vision picks phi4-reasoning-vision when installed.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME                       ID SIZE   MODIFIED
-phi4-reasoning-vision:15b  rv 11 GB  1 day ago"
+make_mock_provider "$tmp" "1:phi4-reasoning-vision:15b"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" reasoning-vision || true
 assert_eq "phi4-reasoning-vision:15b" "$OUT" "reasoning-vision picks phi4-reasoning-vision"
 rm -rf "$tmp"
 
 # 20. reasoning-vision falls back to qwen3-vl thinking when phi4 absent.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME                       ID SIZE   MODIFIED
-qwen3-vl:30b-a3b-thinking  vv 25 GB  1 day ago"
+make_mock_provider "$tmp" "1:qwen3-vl:30b-a3b-thinking"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" reasoning-vision || true
 assert_eq "qwen3-vl:30b-a3b-thinking" "$OUT" "reasoning-vision falls back to qwen3-vl thinking"
 rm -rf "$tmp"
@@ -253,9 +257,7 @@ rm -rf "$tmp"
 # installed. Pinned by the 2026-05-03 v6 baseline (deepseek-r1 5/5 vs
 # phi4-reasoning 3.33/5 on directive-rule severity classification, same prompt).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME                  ID SIZE   MODIFIED
-deepseek-r1:32b       dd 19 GB  1 day ago
-phi4-reasoning:plus   pp 11 GB  1 week ago"
+make_mock_provider "$tmp" "1:deepseek-r1:32b,phi4-reasoning:plus"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" reasoning || true
 assert_eq "deepseek-r1:32b" "$OUT" "reasoning picks deepseek-r1 ahead of phi4-reasoning"
 rm -rf "$tmp"
@@ -266,9 +268,7 @@ echo "=== pick-model.sh override (Phase 9) ==="
 # 21. Override file reorders prefs: prose normally picks qwen3.6 first, but
 # an override that puts gemma4 ahead must win.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
-qwen3.6:35b-a3b   aa 30 GB  1 day ago
-gemma4:latest     yy 9.6 GB 2 weeks ago"
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b,gemma4:latest"
 cat > "$tmp/config.sh" <<'EOF'
 case "$tier" in
   prose) prefs=("gemma4" "qwen3.6") ;;
@@ -282,9 +282,7 @@ rm -rf "$tmp"
 
 # 22. Override that only touches one tier leaves other tiers on shipped defaults.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
-qwen3-coder:30b   xx 30 GB  1 day ago
-qwen3.6:35b-a3b   aa 30 GB  1 day ago"
+make_mock_provider "$tmp" "1:qwen3-coder:30b,qwen3.6:35b-a3b"
 cat > "$tmp/config.sh" <<'EOF'
 case "$tier" in
   prose) prefs=("not-installed-model") ;;
@@ -298,8 +296,7 @@ rm -rf "$tmp"
 
 # 23. Override file absent: defaults resolve exactly as before.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
-qwen3.6:35b-a3b   aa 30 GB  1 day ago"
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b"
 EC=0
 DELEGATE_LOCAL_CONFIG="$tmp/does-not-exist.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
 assert_eq "qwen3.6:35b-a3b" "$OUT" "missing override file -> shipped defaults still resolve"
@@ -308,9 +305,7 @@ rm -rf "$tmp"
 
 # 23b. World-writable override is rejected with a warning; shipped defaults win.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
-qwen3.6:35b-a3b   aa 30 GB  1 day ago
-gemma4:latest     yy 9.6 GB 2 weeks ago"
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b,gemma4:latest"
 cat > "$tmp/config.sh" <<'EOF'
 case "$tier" in
   prose) prefs=("gemma4" "qwen3.6") ;;
@@ -326,9 +321,7 @@ rm -rf "$tmp"
 
 # 24. --dry-run surfaces the override in the trace so users can debug it.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
-qwen3.6:35b-a3b   aa 30 GB  1 day ago
-gemma4:latest     yy 9.6 GB 2 weeks ago"
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b,gemma4:latest"
 cat > "$tmp/config.sh" <<'EOF'
 case "$tier" in
   prose) prefs=("gemma4" "qwen3.6") ;;
@@ -346,25 +339,23 @@ echo "=== scripts/init.sh (Phase 9) ==="
 
 INIT="$SKILL_DIR/scripts/init.sh"
 
-# 25. ollama missing -> exit 1.
+# 25. No provider reachable -> exit 1 with hint.
 EC=0; run "$SAFE_PATH" bash "$INIT" || true
-assert_eq "1" "$EC" "init: missing ollama -> exit 1"
-assert_contains "ollama not on PATH" "$ERR" "init: missing ollama -> informative stderr"
+assert_eq "1" "$EC" "init: no provider reachable -> exit 1"
+assert_contains "nothing to personalise" "$ERR" "init: no provider reachable -> hint message"
 
-# 26. Empty model list -> exit 1 with hint.
+# 26. Provider reachable but serving nothing -> exit 1 with the same hint.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME  ID  SIZE  MODIFIED"
+make_mock_provider "$tmp" "1:"
 EC=0; run "$tmp:$SAFE_PATH" bash "$INIT" || true
-assert_eq "1" "$EC" "init: empty ollama list -> exit 1"
+assert_eq "1" "$EC" "init: empty provider list -> exit 1"
 assert_contains "nothing to personalise" "$ERR" "init: empty list -> hint message"
 rm -rf "$tmp"
 
 # 27. With installed models, init prints a valid bash override that, when
 # fed back into pick-model.sh, resolves to the same model.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME              ID SIZE   MODIFIED
-qwen3.6:35b-a3b   aa 30 GB  1 day ago
-gemma4:latest     yy 9.6 GB 2 weeks ago"
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b,gemma4:latest"
 EC=0; run "$tmp:$SAFE_PATH" bash "$INIT" || true
 assert_eq "0" "$EC" "init: happy path exits 0"
 assert_contains "case \"\$tier\" in" "$OUT" "init: emits a case-on-tier block"
@@ -381,15 +372,18 @@ rm -rf "$tmp"
 echo
 echo "=== audit-models.sh ==="
 
-# A. ollama missing -> exit 1.
-EC=0; run "$SAFE_PATH" bash "$AUDIT" || true
-assert_eq "1" "$EC" "audit: missing ollama -> exit 1"
-
-# B. ollama present, llmfit missing -> graceful skip, exit 0.
+# A. Nothing reachable is a report, not a failure: the audit is what a user
+# runs to find out why delegation stopped working.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME             ID SIZE  MODIFIED
-qwen3-coder:30b  xx 30 GB 1 day ago
-gemma4:latest    yy 9 GB  1 day ago"
+make_mock_provider "$tmp" ""
+EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
+assert_eq "0" "$EC" "audit: no provider reachable -> exit 0"
+assert_contains "unreachable" "$OUT" "audit: no provider reachable -> marks the provider unreachable"
+rm -rf "$tmp"
+
+# B. Provider present, llmfit missing -> graceful skip, exit 0.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "1:qwen3-coder:30b,gemma4:latest"
 EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
 assert_eq "0" "$EC" "audit: no llmfit -> exit 0"
 assert_contains "Upgrade check skipped" "$OUT" "audit: no llmfit -> skip message"
@@ -400,290 +394,96 @@ rm -rf "$tmp"
 # code review instead.)
 
 echo
-echo "=== pick-model.sh: DELEGATE_BACKEND=mlx ==="
-
-# Helper: build a fake HuggingFace hub directory under $1/hub with snapshot
-# weights at models--$2--<name>/snapshots/<hash>/ for each <name> in $3..$N.
-make_fake_hub() {
-  local base="$1" org="$2"; shift 2
-  mkdir -p "$base/hub"
-  for name in "$@"; do
-    local snap="$base/hub/models--${org}--${name}/snapshots/abc123"
-    mkdir -p "$snap"
-    # An empty snapshot dir is treated as a half-downloaded model and skipped,
-    # so drop a sentinel file to signal a complete download.
-    touch "$snap/weights.safetensors"
-  done
-}
-
-# Unknown backend value -> exit 2.
-tmp=$(mktemp -d)
-EC=0
-OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=bogus bash "$PICK" prose 2>&1) || EC=$?
-assert_eq "2" "$EC" "DELEGATE_BACKEND=bogus -> exit 2"
-assert_contains "unknown backend" "$OUT" "DELEGATE_BACKEND=bogus -> informative stderr"
-rm -rf "$tmp"
-
-# MLX with no hub dir -> exit 1.
-tmp=$(mktemp -d)
-EC=0
-OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp/nope" bash "$PICK" prose 2>&1) || EC=$?
-assert_eq "1" "$EC" "DELEGATE_BACKEND=mlx + missing hub -> exit 1"
-assert_contains "MLX hub cache not found" "$OUT" "missing hub -> informative stderr"
-rm -rf "$tmp"
-
-# MLX hub with one Qwen3.6 model installed -> prose tier resolves to it.
-tmp=$(mktemp -d)
-make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit"
-EC=0
-OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" prose 2>&1) || EC=$?
-assert_eq "0" "$EC" "MLX prose with Qwen3.6 installed -> exit 0"
-assert_eq "mlx-community/Qwen3.6-35B-A3B-Instruct-4bit" "$OUT" "MLX prose -> Qwen3.6 model"
-rm -rf "$tmp"
-
-# Case-insensitive matching: prefs list uses lowercase 'qwen3.6' but the MLX
-# model name carries mixed case. The match should still succeed.
-tmp=$(mktemp -d)
-make_fake_hub "$tmp" "mlx-community" "Qwen3.6-Reasoner-30B-A3B-8bit"
-EC=0
-OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" prose 2>&1) || EC=$?
-assert_eq "mlx-community/Qwen3.6-Reasoner-30B-A3B-8bit" "$OUT" "MLX case-insensitive match"
-rm -rf "$tmp"
-
-# MLX hub with only a half-downloaded snapshot -> still treated as no models.
-tmp=$(mktemp -d)
-mkdir -p "$tmp/hub/models--mlx-community--Qwen3.6-35B-A3B-Instruct-4bit/snapshots/abc"
-# snapshot dir exists but is empty (interrupted pull) -> skipped.
-EC=0
-OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" prose 2>&1) || EC=$?
-assert_eq "1" "$EC" "MLX empty snapshot -> exit 1"
-assert_contains "no models installed" "$OUT" "MLX empty snapshot -> informative stderr"
-rm -rf "$tmp"
-
-# MLX hub with multiple models — tier preference order is respected.
-# code tier prefers qwen3-coder over qwen3.6, so install both and assert.
-tmp=$(mktemp -d)
-make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit" "Qwen3-Coder-30B-A3B-Instruct-4bit"
-EC=0
-OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" code 2>&1) || EC=$?
-assert_eq "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit" "$OUT" "MLX code tier prefers qwen3-coder over qwen3.6"
-rm -rf "$tmp"
-
-# Dry-run trace includes the backend line.
-tmp=$(mktemp -d)
-make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit"
-EC=0
-OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" --dry-run prose 2>&1) || EC=$?
-assert_contains "backend=mlx" "$OUT" "MLX --dry-run trace surfaces backend"
-rm -rf "$tmp"
-
-# The scaffolded tiers must resolve under MLX too. Ollama tags separate the
-# parameter count with a colon (qwen3.5:122b) but HuggingFace names hyphenate
-# it (Qwen3.5-122B-A10B-4bit), so a colon-only pref can never substring-match
-# an MLX name. Both spellings have to be in the prefs list.
-tmp=$(mktemp -d)
-make_fake_hub "$tmp" "mlx-community" "Qwen3.5-122B-A10B-4bit"
-EC=0
-OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" premium-general 2>&1) || EC=$?
-assert_eq "0" "$EC" "MLX premium-general with Qwen3.5-122B installed -> exit 0"
-assert_eq "mlx-community/Qwen3.5-122B-A10B-4bit" "$OUT" "MLX premium-general -> hyphenated Qwen3.5-122B"
-rm -rf "$tmp"
-
-tmp=$(mktemp -d)
-make_fake_hub "$tmp" "mlx-community" "Qwen3-VL-30B-A3B-Thinking-8bit"
-EC=0
-OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" reasoning-vision 2>&1) || EC=$?
-assert_eq "0" "$EC" "MLX reasoning-vision with Qwen3-VL-Thinking installed -> exit 0"
-assert_eq "mlx-community/Qwen3-VL-30B-A3B-Thinking-8bit" "$OUT" "MLX reasoning-vision -> hyphenated Qwen3-VL-Thinking"
-rm -rf "$tmp"
-
-# The vision tier prefers the thinking variant — the colon-form pref already
-# encodes that for Ollama. Without the hyphenated spelling the bare 'qwen3-vl'
-# fallback matches either sibling arbitrarily, so install both and assert the
-# thinking one still wins under MLX.
-tmp=$(mktemp -d)
-make_fake_hub "$tmp" "mlx-community" "Qwen3-VL-30B-A3B-Instruct-8bit" "Qwen3-VL-30B-A3B-Thinking-8bit"
-EC=0
-OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" bash "$PICK" vision 2>&1) || EC=$?
-assert_eq "mlx-community/Qwen3-VL-30B-A3B-Thinking-8bit" "$OUT" "MLX vision prefers thinking over instruct sibling"
-rm -rf "$tmp"
-
-echo
-echo "=== pick-model.sh: DELEGATE_BACKEND=auto (probe) ==="
-
-# Mock-curl helper. Writes a script that exits with the requested status
-# regardless of argv — used to simulate "MLX server reachable" (exit 0) and
-# "MLX server unreachable" (non-zero). The real pick-model code never reads
-# curl's stdout for the probe, only its exit status, so the mock only needs
-# to set $?.
-make_mock_curl() {
-  local dir="$1" exit_code="$2"
-  cat > "$dir/curl" <<EOF
-#!/usr/bin/env bash
-exit ${exit_code}
-EOF
-  chmod +x "$dir/curl"
-}
-
-# auto + reachable MLX -> resolves to mlx and uses the hub-cache resolver.
-tmp=$(mktemp -d)
-make_mock_curl "$tmp" 0
-make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit"
-EC=0
-OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
-  DELEGATE_BACKEND=auto HF_HOME="$tmp" \
-  bash "$PICK" --dry-run prose 2>&1) || EC=$?
-assert_eq "0" "$EC" "auto + curl-ok: exit 0"
-assert_contains "backend=auto -> probed MLX_HOST and resolved to 'mlx'" "$OUT" "auto + curl-ok: trace shows mlx resolution"
-assert_contains "mlx-community/Qwen3.6-35B-A3B-Instruct-4bit" "$OUT" "auto + curl-ok: uses MLX hub cache"
-rm -rf "$tmp"
-
-# auto + unreachable MLX -> resolves to ollama and uses ollama list.
-tmp=$(mktemp -d)
-make_mock_curl "$tmp" 7  # curl: 7 = couldn't connect
-make_mock_ollama "$tmp" "NAME                  ID  SIZE   MODIFIED
-qwen3.6:35b-a3b-q8_0  aa  30 GB  1 day ago"
-EC=0
-OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
-  DELEGATE_BACKEND=auto \
-  bash "$PICK" --dry-run prose 2>&1) || EC=$?
-assert_eq "0" "$EC" "auto + curl-fail: exit 0"
-assert_contains "backend=auto -> probed MLX_HOST and resolved to 'ollama'" "$OUT" "auto + curl-fail: trace shows ollama resolution"
-assert_contains "qwen3.6:35b-a3b-q8_0" "$OUT" "auto + curl-fail: uses ollama list"
-rm -rf "$tmp"
-
-# Default (env var unset) is now auto, not ollama — the trace surfaces the probe.
-tmp=$(mktemp -d)
-make_mock_curl "$tmp" 7
-make_mock_ollama "$tmp" "NAME                  ID  SIZE   MODIFIED
-qwen3.6:35b-a3b-q8_0  aa  30 GB  1 day ago"
-EC=0
-# Note: env -i clears DELEGATE_BACKEND, so this exercises the new auto default.
-OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
-  bash "$PICK" --dry-run prose 2>&1) || EC=$?
-assert_eq "0" "$EC" "default (unset) backend: exit 0"
-assert_contains "backend=auto -> probed MLX_HOST" "$OUT" "default backend triggers the auto probe"
-rm -rf "$tmp"
-
-# Explicit DELEGATE_BACKEND=ollama still skips the probe entirely — the
-# probe trace line must NOT appear when the user pinned the backend.
-tmp=$(mktemp -d)
-# Deliberately no mock curl — if the probe ran, this test would fail anyway
-# because curl wouldn't be on PATH. Explicit ollama must not invoke it.
-make_mock_ollama "$tmp" "NAME                  ID  SIZE   MODIFIED
-qwen3.6:35b-a3b-q8_0  aa  30 GB  1 day ago"
-EC=0
-OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
-  DELEGATE_BACKEND=ollama \
-  bash "$PICK" --dry-run prose 2>&1) || EC=$?
-assert_eq "0" "$EC" "explicit ollama: exit 0"
-case "$OUT" in
-  *"backend=auto"*) echo "  FAIL  explicit ollama should not show auto trace"; fail=$((fail+1));;
-  *) echo "  PASS  explicit ollama skips the auto probe"; pass=$((pass+1));;
-esac
-rm -rf "$tmp"
-
-# Updated error message: bogus value must mention auto in the valid set.
-tmp=$(mktemp -d)
-EC=0
-OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=bogus bash "$PICK" prose 2>&1) || EC=$?
-assert_eq "2" "$EC" "DELEGATE_BACKEND=bogus -> exit 2"
-assert_contains "valid: auto|ollama|mlx" "$OUT" "bogus error names auto in valid set"
-rm -rf "$tmp"
-
-echo
-echo "=== pick-model.sh: --print-backend / --print-installed ==="
+echo "=== pick-model.sh: --print-providers / --print-installed ==="
 
 # Both surfaces answer without a tier argument — a caller asking "which
-# backend is in effect?" has no tier to name.
+# providers are in effect?" has no tier to name.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME                  ID  SIZE   MODIFIED
-qwen3.6:35b-a3b-q8_0  aa  30 GB  1 day ago
-gemma4:latest         bb  9 GB   1 day ago"
-EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" --print-backend || true
-assert_eq "0" "$EC" "--print-backend exits 0 without a tier"
-assert_eq "ollama" "$OUT" "--print-backend prints the pinned backend"
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b-q8_0,gemma4:latest"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" --print-providers || true
+assert_eq "0" "$EC" "--print-providers exits 0 without a tier"
+assert_eq "http://localhost:1/v1" "$OUT" "--print-providers prints the pinned list"
 
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" --print-installed || true
 assert_eq "0" "$EC" "--print-installed exits 0 without a tier"
-assert_eq "qwen3.6:35b-a3b-q8_0
-gemma4:latest" "$OUT" "--print-installed lists the ollama tags"
+assert_eq "gemma4:latest
+qwen3.6:35b-a3b-q8_0" "$OUT" "--print-installed lists what the provider serves"
 rm -rf "$tmp"
 
-# auto resolves through the same probe the routing path uses, so an audit can
-# never report a different backend than the one delegate.sh will pick.
-tmp=$(mktemp -d)
-make_mock_curl "$tmp" 0
+# The default list is built from the host variables, not from literal ports:
+# hardcoding them would make a non-default port or a remote daemon unreachable
+# while silently reporting localhost as the target.
 EC=0
-OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=auto HF_HOME="$tmp" \
-  bash "$PICK" --print-backend 2>/dev/null) || EC=$?
-assert_eq "mlx" "$OUT" "--print-backend resolves auto through the MLX probe"
-rm -rf "$tmp"
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" \
+  MLX_HOST=http://mlx.test:1234 \
+  DOCKER_MODEL_HOST=http://docker.test:2345 \
+  OLLAMA_HOST=http://ollama.test:3456 \
+  bash "$PICK" --print-providers 2>/dev/null) || EC=$?
+assert_eq "http://mlx.test:1234/v1
+http://docker.test:2345/engines/v1
+http://ollama.test:3456/v1" "$OUT" "--print-providers honours MLX_HOST / DOCKER_MODEL_HOST / OLLAMA_HOST"
 
-# MLX inventory comes from the hub cache and still skips half-downloaded models.
-tmp=$(mktemp -d)
-make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit"
-mkdir -p "$tmp/hub/models--mlx-community--Half-Downloaded-4bit/snapshots/abc"
+# The shipped default, with no host variables set at all.
 EC=0
-OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" \
-  bash "$PICK" --print-installed 2>/dev/null) || EC=$?
-assert_eq "0" "$EC" "--print-installed on MLX exits 0"
-assert_eq "mlx-community/Qwen3.6-35B-A3B-Instruct-4bit" "$OUT" \
-  "--print-installed lists MLX hub models and skips empty snapshots"
+OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" bash "$PICK" --print-providers 2>/dev/null) || EC=$?
+assert_eq "http://localhost:8080/v1
+http://localhost:12434/engines/v1
+http://localhost:11434/v1" "$OUT" "--print-providers defaults to MLX, Docker Model Runner, Ollama in that order"
+
+# Nothing reachable is reported as such. Collapsing it into "no provider holds
+# a model for this tier" sent debugging after a model pull on a host where the
+# real problem was that no daemon was running.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" ""
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+assert_eq "1" "$EC" "no provider reachable -> exit 1"
+assert_contains "no provider is reachable" "$ERR" "no provider reachable -> says so"
 rm -rf "$tmp"
 
-# Missing ollama is still a hard error on the ollama backend.
+# Reachable but holding nothing this tier wants is the other failure, and it
+# needs the opposite remedy.
 tmp=$(mktemp -d)
-EC=0; run "$SAFE_PATH" bash "$PICK" --print-installed || true
-assert_eq "1" "$EC" "--print-installed without ollama -> exit 1"
-assert_contains "ollama not on PATH" "$ERR" "--print-installed without ollama -> informative stderr"
+make_mock_provider "$tmp" "1:unrelated:model"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+assert_eq "1" "$EC" "reachable but no tier match -> exit 1"
+assert_contains "no provider holds a model for tier 'prose'" "$ERR" "reachable but no tier match -> names the tier"
 rm -rf "$tmp"
 
 echo
-echo "=== audit-models.sh: backend awareness ==="
+echo "=== audit-models.sh: provider awareness ==="
 
-# The audit has to name the backend it is reporting on: printing `ollama list`
-# on a host whose routing resolved to mlx sent debugging at the wrong
-# inventory (issue #344).
+# The audit has to name the providers it is reporting on: printing one
+# daemon's inventory on a host whose routing consulted another sent debugging
+# at the wrong model set (issue #344).
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME             ID SIZE  MODIFIED
-qwen3-coder:30b  xx 30 GB 1 day ago"
+make_mock_provider "$tmp" "1:qwen3-coder:30b"
 EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
-assert_eq "0" "$EC" "audit: ollama backend -> exit 0"
-assert_contains "in effect: ollama" "$OUT" "audit: names the backend in effect"
+assert_eq "0" "$EC" "audit: reachable provider -> exit 0"
+assert_contains "reachable" "$OUT" "audit: reports provider reachability"
+assert_contains "qwen3-coder:30b" "$OUT" "audit: inventory is what the provider serves"
 assert_contains "embedding tier is Ollama-only" "$OUT" "audit: states embedding is ollama-only by design"
 assert_contains "reasoning-vision" "$OUT" "audit: routing table covers the scaffolded tiers"
 rm -rf "$tmp"
 
-# MLX backend: inventory is the hub cache, and a host with no ollama at all
-# still gets a full routing report instead of an early exit 1.
+# A host with no ollama binary at all still gets a full routing report instead
+# of an early exit 1: nothing on the routing path needs the CLI any more.
 tmp=$(mktemp -d)
-make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit"
-EC=0
-OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" \
-  bash "$AUDIT" 2>&1) || EC=$?
-assert_eq "0" "$EC" "audit: mlx backend without ollama -> exit 0"
-assert_contains "in effect: mlx" "$OUT" "audit: names mlx as the backend in effect"
-assert_contains "HuggingFace hub cache" "$OUT" "audit: mlx run says where the inventory comes from"
-assert_contains "mlx-community/Qwen3.6-35B-A3B-Instruct-4bit" "$OUT" "audit: mlx inventory lists hub models"
-assert_contains "prose" "$OUT" "audit: mlx run still prints tier routing"
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b-q8_0"
+EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
+assert_eq "0" "$EC" "audit: no ollama binary -> exit 0"
+assert_contains "prose" "$OUT" "audit: still prints tier routing without the ollama CLI"
 assert_contains "Upgrade check skipped" "$OUT" "audit: no ollama -> llmfit cross-check skipped, not fatal"
 rm -rf "$tmp"
 
-# embed.sh forces DELEGATE_BACKEND=ollama for the embedding tier, so on an mlx
-# host the audit must resolve that one tier through Ollama too. Reporting
-# '(none)' there would send debugging after a model that is in fact installed
-# and reachable on the real call path.
+# embed.sh pins the embedding tier to the Ollama provider, so the audit must
+# resolve that one tier the same way. Reporting '(none)' there would send
+# debugging after a model that is in fact installed and reachable on the real
+# call path.
 tmp=$(mktemp -d)
-make_mock_ollama "$tmp" "NAME                   ID SIZE   MODIFIED
-nomic-embed-text:v1.5  xx 274 MB 1 day ago"
-make_fake_hub "$tmp" "mlx-community" "Qwen3.6-35B-A3B-Instruct-4bit"
-EC=0
-OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" DELEGATE_BACKEND=mlx HF_HOME="$tmp" \
-  bash "$AUDIT" 2>&1) || EC=$?
-assert_eq "0" "$EC" "audit: mlx backend with ollama present -> exit 0"
-assert_contains "nomic-embed-text" "$OUT" "audit: embedding tier resolves via ollama on an mlx host"
-assert_contains "embed.sh forces it" "$OUT" "audit: marks the embedding tier as resolved via ollama"
+make_mock_provider "$tmp" "1:nomic-embed-text:v1.5"
+EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
+assert_contains "nomic-embed-text" "$OUT" "audit: embedding tier resolves via the ollama provider"
+assert_contains "embed.sh pins it" "$OUT" "audit: marks the embedding tier as resolved via ollama"
 rm -rf "$tmp"
 
 echo
@@ -823,38 +623,6 @@ fi
 
 echo "=== pick-model.sh: DELEGATE_BASE_URL provider list ==="
 
-make_mock_provider() {
-  # Mock curl answering GET {base}/models with an OpenAI models list. $2 is a
-  # space-separated "port:id,id" spec; a port absent from the spec exits 7
-  # (connection refused) so a dead provider can be simulated without binding a
-  # socket. Discovery is the only thing pick-model.sh curls, so this mock needs
-  # no chat-completions arm.
-  local dir="$1" spec="$2"
-  cat > "$dir/curl" <<EOF
-#!/usr/bin/env bash
-url=""
-for a in "\$@"; do case "\$a" in http*) url="\$a" ;; esac; done
-port=\$(printf '%s' "\$url" | sed -n 's|.*://[^:/]*:\([0-9]*\).*|\1|p')
-for entry in ${spec}; do
-  p="\${entry%%:*}"; ids="\${entry#*:}"
-  if [[ "\$p" == "\$port" ]]; then
-    printf '{"object":"list","data":['
-    first=1
-    IFS=, read -ra arr <<< "\$ids"
-    for id in "\${arr[@]}"; do
-      if (( first == 0 )); then printf ','; fi
-      printf '{"id":"%s","object":"model"}' "\$id"
-      first=0
-    done
-    printf ']}'
-    exit 0
-  fi
-done
-exit 7
-EOF
-  chmod +x "$dir/curl"
-}
-
 # The first reachable provider holding a tier match wins.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "8080:mlx-community/Qwen3.6-35B-A3B-8bit 11434:qwen3.6-ollama"
@@ -975,27 +743,29 @@ got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
 assert_eq "ollama-a " "$got" "provider list: --print-installed skips an unreachable provider"
 rm -rf "$tmp"
 
-# --print-resolution without a provider list is a usage error, not a silent
-# empty line.
-EC=0
-env -i PATH="$SAFE_PATH" HOME="$HOME" bash "$PICK" --print-resolution prose >/dev/null 2>&1 || EC=$?
-assert_eq "2" "$EC" "provider list: --print-resolution without DELEGATE_BASE_URL exits 2"
+# --print-resolution needs no explicit list: the default is a real list, so
+# the flag answers from it. This is the assertion that fails if the default is
+# ever taken back out.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "11434:qwen3.6-ollama"
+got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
+  bash "$PICK" --print-resolution prose 2>/dev/null)
+assert_eq "http://localhost:11434/v1	qwen3.6-ollama" "$got" \
+  "provider list: --print-resolution answers from the default list"
+rm -rf "$tmp"
 
-# Structural guard: resolution and inventory must ask the resolved backend,
-# never "is DELEGATE_BASE_URL set?". The two are equivalent only while the
-# variable has no default. Giving it one — the next step of #363 — makes every
-# presence test answer yes unconditionally, so an explicit DELEGATE_BACKEND
-# would set a label that --print-backend reports and metrics record while
-# resolution still walked the provider list. That failure is invisible to
-# behavioural tests: the obvious assertion (--print-backend prints "ollama")
-# keeps passing. Only the two sites below may test the variable directly —
-# the userinfo validation, and the mode assignment itself.
-#
-# Matches any `[[ … DELEGATE_BASE_URL … ]]` condition rather than one exact
-# string, so it neither false-fails on a reformat nor false-passes on an
-# equivalent spelling (`-z` with negation, `!= ""`, `[[ … ]] &&`).
-mode_proxies=$(grep -c '\[\[.*DELEGATE_BASE_URL' "$PICK" || true)
-assert_eq "2" "$mode_proxies" "pick-model: only userinfo validation and the mode assignment test DELEGATE_BASE_URL directly"
+# Structural guard for the deletion. The native /api/generate arm and
+# DELEGATE_BACKEND are both easy to reintroduce by copy-paste from git
+# history, and a reintroduced arm is invisible to behavioural tests for as
+# long as the OpenAI arm keeps working. The file list is explicit rather than
+# a tree walk: scripts/eval-skill-triggers.sh still posts to /api/generate and
+# is tracked separately, and scripts/metrics-summary.sh names DELEGATE_BACKEND
+# in a comment about pre-2026-05 metrics rows that really were written that
+# way.
+leftovers=$(grep -l 'api/generate\|DELEGATE_BACKEND' \
+  "$SKILL_DIR/scripts/delegate.sh" "$SKILL_DIR/scripts/pick-model.sh" \
+  "$SKILL_DIR/scripts/embed.sh" "$SKILL_DIR/scripts/audit-models.sh" 2>/dev/null || true)
+assert_eq "" "$leftovers" "dispatch path: no /api/generate arm and no DELEGATE_BACKEND left"
 
 echo
 echo "=== Results ==="
