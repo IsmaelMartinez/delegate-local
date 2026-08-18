@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.3](https://github.com/IsmaelMartinez/delegate-local/compare/v0.24.2...v0.24.3) (2026-08-18)
+
+
+### Bug Fixes
+
+* stop the monthly reminder pointing at archived scripts ([#374](https://github.com/IsmaelMartinez/delegate-local/issues/374)) ([ecb858c](https://github.com/IsmaelMartinez/delegate-local/commit/ecb858c42d5d11480642465d8d30e75a3363123c)), closes [#341](https://github.com/IsmaelMartinez/delegate-local/issues/341)
+
 ## [0.24.2](https://github.com/IsmaelMartinez/delegate-local/compare/v0.24.1...v0.24.2) (2026-08-18)
 
 
