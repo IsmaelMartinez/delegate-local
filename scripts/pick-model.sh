@@ -44,8 +44,9 @@
 #
 # Note: vision and reasoning-vision tiers resolve a model name but do NOT go
 # through scripts/delegate.sh today (which lacks --image flag passthrough);
-# embedding tier uses `POST /api/embed` (no `ollama` CLI subcommand exists),
-# not `ollama run`. See SKILL.md for the call shape per tier.
+# embedding tier goes through scripts/embed.sh, which posts to
+# `{base}/embeddings` and returns a vector rather than text. See SKILL.md for
+# the call shape per tier.
 
 set -euo pipefail
 

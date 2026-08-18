@@ -2,7 +2,7 @@
 # Embed text via a local Ollama model and print the embedding vector to
 # stdout as a JSON array of floats. Sibling to delegate.sh: same metrics
 # JSONL, same tier resolution via pick-model.sh, but a different call
-# shape (POST /api/embed, vector output) because delegate.sh assumes
+# shape (POST {base}/embeddings, vector output) because delegate.sh assumes
 # text-in / text-out and special-casing it for embeddings would force
 # several branches off a shared spine. See ROADMAP "Capability expansion
 # — modality tiers" / P1 for rationale.
@@ -12,7 +12,11 @@
 #   embed.sh --text "<text>"                  # text via flag
 #
 # Env:
-#   OLLAMA_HOST=<url>                     # default http://localhost:11434
+#   DELEGATE_BASE_URL=<urls>              # the provider list; see
+#                                         #   pick-model.sh, which owns the
+#                                         #   default. The tier resolves to
+#                                         #   whichever provider serves an
+#                                         #   embedding model.
 #   DELEGATE_LOCAL_NO_METRICS=1            # opt out of metrics logging
 #                                         #   (back-compat: DELEGATE_TO_OLLAMA_NO_METRICS
 #                                         #   is accepted if the new name is unset)
@@ -130,11 +134,11 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 
 metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
-# Not a variable: this script posts to Ollama's /api/embed and nothing else,
-# so the metrics label is a statement of fact rather than a choice. Migrating
-# it to the OpenAI-compatible embeddings endpoint is issue #362.
-backend="ollama"
-ollama_host="${OLLAMA_HOST:-http://localhost:11434}"
+# Both are set from the winning provider once the tier resolves; the
+# placeholder label only ever reaches a metrics row for a failure that
+# happened before resolution.
+backend="provider"
+resolved_base=""
 
 log_metric() {
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
@@ -155,31 +159,42 @@ log_metric() {
 ts_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 start_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 
-# Force the embedding-tier resolution via pick-model.sh — never hardcode the
-# model name (the installed-model set drifts and the override hook can
-# reorder the prefs). The provider list is pinned to Ollama because the POST
-# below goes to Ollama's /api/embed: resolving against the full default list
-# could return a model only MLX or Docker serves, which this endpoint would
-# then 404 on.
-if ! model=$(DELEGATE_BASE_URL="$ollama_host/v1" bash "$pick" embedding 2>/dev/null); then
+# Resolve the embedding tier via pick-model.sh — never hardcode the model name
+# (the installed-model set drifts and the override hook can reorder the prefs).
+# The provider is whichever one in the list actually serves an embedding model,
+# which is the same question the tier already answers: no daemon is pinned here,
+# so a host serving nomic-embed-text from something other than Ollama works
+# without a change. --print-resolution returns "<base>\t<model>" so a dead
+# provider is probed once rather than once per question, matching delegate.sh.
+if ! _resolved=$(bash "$pick" --print-resolution embedding 2>/dev/null); then
   end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
   fail_dur_ms=$((end_epoch_ms - start_epoch_ms))
   log_metric "$ts_start" "embedding" "(none)" "${#input_text}" 0 "$fail_dur_ms" 1
   echo "embed: pick-model failed for tier 'embedding' (is nomic-embed-text installed?)" >&2
   exit 1
 fi
+resolved_base="${_resolved%%	*}"
+model="${_resolved#*	}"
+# Same URL-derived label as delegate.sh, so both sources land in the same
+# per-provider series in metrics-summary and the Grafana overview.
+case "$resolved_base" in
+  *:8080*)  backend="mlx" ;;
+  *:12434*) backend="docker" ;;
+  *:11434*) backend="ollama" ;;
+  *) backend=$(printf '%s' "$resolved_base" | sed -E 's|^[a-z]+://||; s|/.*$||') ;;
+esac
 
 # Build the POST body via jq so quotes, backslashes, and newlines in
-# input_text escape correctly. Ollama's /api/embed accepts either `input:
-# "<string>"` for a single text or `input: ["a", "b"]` for a batch; v1
-# embeds one text per call.
+# input_text escape correctly. The OpenAI embeddings shape accepts either
+# `input: "<string>"` for a single text or `input: ["a", "b"]` for a batch;
+# v1 embeds one text per call.
 payload=$(jq -nc --arg m "$model" --arg t "$input_text" \
   '{model:$m, input:$t}')
 
 body_file=$(mktemp)
 trap 'rm -f "$body_file"' EXIT
 curl -sS --fail --max-time "${DELEGATE_EMBED_TIMEOUT:-60}" --connect-timeout 5 \
-  -X POST "$ollama_host/api/embed" -d @- \
+  -X POST "$resolved_base/embeddings" -d @- \
   -o "$body_file" <<< "$payload"
 status=$?
 
@@ -188,12 +203,16 @@ duration_ms=$((end_epoch_ms - start_epoch_ms))
 
 if (( status != 0 )); then
   log_metric "$ts_start" "embedding" "$model" "${#input_text}" 0 "$duration_ms" "$status"
-  echo "embed: curl POST $ollama_host/api/embed failed with exit $status" >&2
+  echo "embed: curl POST $resolved_base/embeddings failed with exit $status" >&2
   exit "$status"
 fi
 
-# Parse the response: .embeddings is an array of vectors (one per input);
-# v1 only sends one input so we take .embeddings[0]. One jq call emits
+# Parse the response: .data is an array of objects (one per input); v1 only
+# sends one input so we take .data[0].embedding. Vectors stored before this
+# script moved off Ollama's native /api/embed stay valid: measured 2026-08-18
+# on nomic-embed-text:latest, both endpoints returned the same 768 floats to
+# the last digit and the same unit norm, so dimensionality and normalisation
+# are unchanged and cosine scores against old vectors are still meaningful. One jq call emits
 # both the compact JSON vector and its length as a tab-separated row, so
 # the parse + dimensionality lookup share a single jq process instead of
 # the two-pass shape an earlier iteration used. `select(. != null)`
@@ -201,10 +220,10 @@ fi
 # the variables stay empty for the post-read guard. `@json` re-emits the
 # vector as a compact JSON literal — same shape downstream jq arithmetic
 # expects.
-read -r vector embedding_dim < <(jq -r '.embeddings[0] | select(. != null) | [(@json), length] | @tsv' < "$body_file")
+read -r vector embedding_dim < <(jq -r '.data[0].embedding | select(. != null) | [(@json), length] | @tsv' < "$body_file")
 if [[ -z "$vector" || "$vector" == "null" ]]; then
   log_metric "$ts_start" "embedding" "$model" "${#input_text}" 0 "$duration_ms" 1
-  echo "embed: response did not contain .embeddings[0] (model '$model' may not be an embedding model)" >&2
+  echo "embed: response did not contain .data[0].embedding (model '$model' may not be an embedding model)" >&2
   exit 1
 fi
 

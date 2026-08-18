@@ -461,7 +461,6 @@ EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
 assert_eq "0" "$EC" "audit: reachable provider -> exit 0"
 assert_contains "reachable" "$OUT" "audit: reports provider reachability"
 assert_contains "qwen3-coder:30b" "$OUT" "audit: inventory is what the provider serves"
-assert_contains "embedding tier is Ollama-only" "$OUT" "audit: states embedding is ollama-only by design"
 assert_contains "reasoning-vision" "$OUT" "audit: routing table covers the scaffolded tiers"
 rm -rf "$tmp"
 
@@ -475,15 +474,16 @@ assert_contains "prose" "$OUT" "audit: still prints tier routing without the oll
 assert_contains "Upgrade check skipped" "$OUT" "audit: no ollama -> llmfit cross-check skipped, not fatal"
 rm -rf "$tmp"
 
-# embed.sh pins the embedding tier to the Ollama provider, so the audit must
-# resolve that one tier the same way. Reporting '(none)' there would send
-# debugging after a model that is in fact installed and reachable on the real
-# call path.
+# The embedding tier carries no special case any more: it resolves against the
+# same list as every other tier, to whichever provider serves an embedding
+# model. The audit used to pin it to Ollama and label it, which was a
+# display-layer patch over a routing-layer fact (issue #357).
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:nomic-embed-text:v1.5"
 EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
-assert_contains "nomic-embed-text" "$OUT" "audit: embedding tier resolves via the ollama provider"
-assert_contains "embed.sh pins it" "$OUT" "audit: marks the embedding tier as resolved via ollama"
+assert_contains "nomic-embed-text" "$OUT" "audit: embedding tier resolves like any other tier"
+assert_absent_out() { case "$OUT" in *"$1"*) echo "  FAIL  $2"; fail=$((fail+1));; *) echo "  PASS  $2"; pass=$((pass+1));; esac; }
+assert_absent_out "embed.sh pins it" "audit: no per-tier provider pin is advertised"
 rm -rf "$tmp"
 
 echo

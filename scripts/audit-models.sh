@@ -33,8 +33,6 @@ for base in $DELEGATE_BASE_URL; do
 done
 echo "  First match wins: the first reachable provider holding a model the tier"
 echo "  prefers takes the call."
-echo "  The embedding tier is Ollama-only by design (scripts/embed.sh posts to"
-echo "  /api/embed), so it is resolved against the Ollama provider alone."
 echo
 
 echo "=== Installed models (union of the reachable providers) ==="
@@ -48,19 +46,10 @@ echo
 echo "=== Tier routing (which model wins per tier) ==="
 while IFS= read -r tier; do
   [[ -n "$tier" ]] || continue
-  # embed.sh pins the embedding tier to the Ollama provider (its POST goes to
-  # Ollama's /api/embed), so the audit mirrors that call path. Resolving it
-  # against the full list would name a model this endpoint cannot serve.
-  tier_providers="$DELEGATE_BASE_URL"
-  suffix=""
-  if [[ "$tier" == "embedding" ]]; then
-    tier_providers="${OLLAMA_HOST:-http://localhost:11434}/v1"
-    suffix="   [via ollama — embed.sh pins it]"
-  fi
-  if ! model=$(DELEGATE_BASE_URL="$tier_providers" bash "$pick" "$tier" 2>/dev/null); then
+  if ! model=$(bash "$pick" "$tier" 2>/dev/null); then
     model="(none)"
   fi
-  printf "  %-17s -> %s%s\n" "$tier" "$model" "$suffix"
+  printf "  %-17s -> %s\n" "$tier" "$model"
 done < <(bash "$pick" --print-prefs | cut -d: -f1)
 echo
 
