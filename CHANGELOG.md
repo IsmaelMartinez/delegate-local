@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.2](https://github.com/IsmaelMartinez/delegate-local/compare/v0.24.1...v0.24.2) (2026-08-18)
+
+
+### Code Improvements
+
+* gate provider resolution on the resolved backend ([#372](https://github.com/IsmaelMartinez/delegate-local/issues/372)) ([49fefb9](https://github.com/IsmaelMartinez/delegate-local/commit/49fefb922573975eff62b3d01946448014630f72)), closes [#363](https://github.com/IsmaelMartinez/delegate-local/issues/363)
+
 ## [0.24.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.24.0...v0.24.1) (2026-08-18)
 
 
