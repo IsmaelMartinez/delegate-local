@@ -1403,9 +1403,19 @@ if (( status == EMPTY_RESPONSE_STATUS )); then
     echo "delegate: model returned an empty response — model=\"$model\" tier=\"$tier\" backend=\"$backend\""
     echo "         finish_reason=$empty_finish_reason"
     if [[ "$empty_finish_reason" == "length" ]]; then
-      echo "         the token budget was spent before any answer was emitted, which"
-      echo "         happens when a thinking-capable model ignores the think:false hint"
-      echo "         - raise DELEGATE_MAX_TOKENS (currently ${max_tokens:-4096})"
+      echo "         the budget was spent before any answer was emitted, which happens"
+      echo "         when a thinking-capable model ignores the think:false hint"
+      # max_tokens is assigned only in the OpenAI arm. The native /api/generate
+      # arm sends no num_predict on the dispatch call, so it has no cap of ours
+      # to raise: a "length" stop there is the model's own context limit, and
+      # naming DELEGATE_MAX_TOKENS would send the caller after a variable that
+      # does nothing on that path.
+      if [[ -n "${max_tokens:-}" ]]; then
+        echo "         - raise DELEGATE_MAX_TOKENS (currently $max_tokens)"
+      else
+        echo "         - this path sends no token cap, so the model hit its own context"
+        echo "           limit; shorten the input"
+      fi
       echo "         - or route this tier to a provider that honours enable_thinking"
     fi
     echo "         still broken? file a bug: https://github.com/${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}/issues/new?template=bug_report.md"

@@ -5280,6 +5280,15 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1); rc=$?
 assert_eq "100" "$rc" "native arm: empty answer exits with the sentinel"
 assert_contains "finish_reason=length" "$out" "native arm: done_reason is reported as the finish reason"
+# The native arm sends no num_predict, so DELEGATE_MAX_TOKENS is not a lever
+# there and naming it would send the caller after a variable that does nothing.
+case "$out" in
+  *DELEGATE_MAX_TOKENS*)
+    assert_eq "no max-tokens advice" "max-tokens advice printed" "native arm: does not suggest DELEGATE_MAX_TOKENS" ;;
+  *)
+    assert_eq "no max-tokens advice" "no max-tokens advice" "native arm: does not suggest DELEGATE_MAX_TOKENS" ;;
+esac
+assert_contains "own context" "$out" "native arm: points at the model's context limit instead"
 rm -rf "$tmp"
 
 echo
