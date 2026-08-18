@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.24.0...v0.24.1) (2026-08-18)
+
+
+### Bug Fixes
+
+* report an empty model response instead of returning silence ([#370](https://github.com/IsmaelMartinez/delegate-local/issues/370)) ([eef2d84](https://github.com/IsmaelMartinez/delegate-local/commit/eef2d8417d2a7ec3c826e827b2406106e74fea97)), closes [#363](https://github.com/IsmaelMartinez/delegate-local/issues/363)
+
 ## [0.24.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.23.0...v0.24.0) (2026-08-18)
 
 
