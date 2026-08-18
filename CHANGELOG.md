@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.24.3...v0.25.0) (2026-08-18)
+
+
+### Features
+
+* unify provider resolution on the OpenAI-compatible list ([#376](https://github.com/IsmaelMartinez/delegate-local/issues/376)) ([3170509](https://github.com/IsmaelMartinez/delegate-local/commit/3170509247ad8ea7a961402bbf90a18c86c3cae1))
+
 ## [0.24.3](https://github.com/IsmaelMartinez/delegate-local/compare/v0.24.2...v0.24.3) (2026-08-18)
 
 
