@@ -530,6 +530,117 @@ out=$(payload 'git commit -m "fix: thing"' "$spacedir" | DELEGATE_METRICS_FILE="
 ctx=$(jq -r '.hookSpecificOutput.additionalContext' <<<"$out")
 assert_contains '--project "a project"' "$ctx" "spaced project: quoted in the rendered command"
 
+# --- #385: the boundary's repo is the one the command cd's into -------------
+# Every test above runs in a cwd that is NOT a git repo, so the git-aware branch
+# of the derivation never executes there and a basename-of-path implementation
+# would pass all of them while being wrong in production. These build real
+# repositories on purpose.
+gitroot=$(mktemp -d)
+mk_repo() { # dir
+  mkdir -p "$1" && ( cd "$1" && git init -q . \
+    && git config user.email t@t.t && git config user.name t \
+    && : > f && git add f && git commit -qm init )
+}
+mk_repo "$gitroot/repo-a" >/dev/null 2>&1
+mk_repo "$gitroot/repo-b" >/dev/null 2>&1
+mkdir -p "$gitroot/repo-b/sub"
+( cd "$gitroot/repo-b" && git worktree add -q "$gitroot/wt-x" -b wtb ) >/dev/null 2>&1
+seed_delegation() { # project recipe
+  jq -nc --arg ts "$nowts" --arg p "$1" --arg r "$2" \
+    '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:$r}' >> "$METRICS"
+}
+
+# 30. A commit in another repo, reached by a leading cd, is attributed there and
+# matches a delegation recorded under that repo.
+: > "$METRICS"; seed_delegation repo-b commit-message
+out=$(payload "cd $gitroot/repo-b && git commit -m x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq repo-b "$(jq -r .project <<<"$(last_row)")" "cd: project taken from the cd target"
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "cd: delegation under the cd target matches"
+assert_eq "" "$out" "cd: no nudge when the drafting was delegated"
+
+# 31. A subdirectory of the target still resolves to the repository.
+: > "$METRICS"; seed_delegation repo-b commit-message
+payload "cd $gitroot/repo-b/sub && git commit -m x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq repo-b "$(jq -r .project <<<"$(last_row)")" "cd: subdirectory resolves to the repo"
+
+# 32. A worktree resolves to the repository, not the worktree directory name.
+# `git rev-parse --git-common-dir` is what makes this work; basename-of-path
+# would record 'wt-x'.
+: > "$METRICS"; seed_delegation repo-b commit-message
+payload "cd $gitroot/wt-x && git commit -m x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq repo-b "$(jq -r .project <<<"$(last_row)")" "cd: worktree resolves to the repo"
+
+# 33. A cd to a path that is not a git repository is NOT accepted: recording
+# `project:"tmp"` would fragment the trigger-rate denominator across scratch
+# keys rather than merely misattributing it to one real repo.
+: > "$METRICS"
+payload "cd $tmpcwd && git commit -m x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq repo-a "$(jq -r .project <<<"$(last_row)")" "cd: non-repo target falls back to the cwd"
+
+# 34. A cd to a path that does not exist falls back to the cwd.
+: > "$METRICS"
+payload "cd $gitroot/no-such-dir && git commit -m x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq repo-a "$(jq -r .project <<<"$(last_row)")" "cd: missing target falls back to the cwd"
+
+# 35. No cd prefix: behaviour is unchanged.
+: > "$METRICS"
+payload 'git commit -m x' "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq repo-a "$(jq -r .project <<<"$(last_row)")" "no cd: project still from the cwd"
+
+# 36. Either-match guard. --project (#342) exists so a caller can attribute a
+# delegation to a repo other than the one it is cd'd into, and those pairings
+# match today. Replacing the cwd candidate instead of adding to it would move
+# this from working to broken.
+: > "$METRICS"; seed_delegation repo-a commit-message
+payload "cd $gitroot/repo-b && git commit -m x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "cd: a delegation under the cwd project still matches"
+
+# 37. A delegation under neither candidate still counts as missed.
+: > "$METRICS"; seed_delegation some-other-repo commit-message
+payload "cd $gitroot/repo-b && git commit -m x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "cd: unrelated project still records a miss"
+
+# 38. `cd -` must never reach the shell: it resolves to $OLDPWD, which is not
+# the boundary's repo and is not knowable from the payload.
+: > "$METRICS"
+payload "cd - && git commit -m x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq repo-a "$(jq -r .project <<<"$(last_row)")" "cd -: rejected, falls back to the cwd"
+
+# 39. A path carrying a shell expansion is rejected rather than expanded. The
+# hook must never evaluate agent-supplied text.
+: > "$METRICS"
+payload 'cd $(echo /tmp) && git commit -m x' "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq repo-a "$(jq -r .project <<<"$(last_row)")" "cd \$(...): rejected, not expanded"
+
+# 40. A quoted path containing a space is parsed. The scan surface blanks quoted
+# spans, which is why this parse runs on the raw command.
+mk_repo "$gitroot/a repo" >/dev/null 2>&1
+: > "$METRICS"
+payload "cd \"$gitroot/a repo\" && git commit -m x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq "a repo" "$(jq -r .project <<<"$(last_row)")" "cd: quoted path with a space is parsed"
+
+# 41. A heredoc body that merely mentions a cd cannot retarget the boundary: the
+# parse is anchored at the start of the command.
+: > "$METRICS"
+payload "git commit -F - <<'EOF'
+cd $gitroot/repo-b && git commit -m x
+EOF" "$gitroot/repo-a" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq repo-a "$(jq -r .project <<<"$(last_row)")" "heredoc mentioning cd: not retargeted"
+
+( cd "$gitroot/repo-b" && git worktree remove --force "$gitroot/wt-x" ) >/dev/null 2>&1
+rm -rf "$gitroot"
+
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
