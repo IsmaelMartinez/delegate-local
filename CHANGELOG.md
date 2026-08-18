@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.24.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.23.0...v0.24.0) (2026-08-18)
+
+
+### Features
+
+* resolve models through an OpenAI-compatible provider list ([#365](https://github.com/IsmaelMartinez/delegate-local/issues/365)) ([c565dae](https://github.com/IsmaelMartinez/delegate-local/commit/c565daec2c3fc1f9b01637c821705f0bf520f403)), closes [#363](https://github.com/IsmaelMartinez/delegate-local/issues/363)
+
+
+### Bug Fixes
+
+* bound every outbound curl with a wall-clock timeout ([#364](https://github.com/IsmaelMartinez/delegate-local/issues/364)) ([7b09db4](https://github.com/IsmaelMartinez/delegate-local/commit/7b09db4b0a09a3fe024eed1e6a7818a1691b8de9)), closes [#363](https://github.com/IsmaelMartinez/delegate-local/issues/363)
+* make audit-models.sh report the backend actually in effect ([#354](https://github.com/IsmaelMartinez/delegate-local/issues/354)) ([b9bdd53](https://github.com/IsmaelMartinez/delegate-local/commit/b9bdd53f695b77f9b91dbac58f9b58d48464f222))
+* name the required --var keys in the boundary hook nudge ([#359](https://github.com/IsmaelMartinez/delegate-local/issues/359)) ([11864f3](https://github.com/IsmaelMartinez/delegate-local/commit/11864f3c730c2b4a0607b7720424ebfbddc800a8)), closes [#277](https://github.com/IsmaelMartinez/delegate-local/issues/277)
+* publish releases instead of drafting them so tags are created ([#367](https://github.com/IsmaelMartinez/delegate-local/issues/367)) ([a4086ef](https://github.com/IsmaelMartinez/delegate-local/commit/a4086ef546cfb2c8939844a60b59fb5d2ee62988)), closes [#366](https://github.com/IsmaelMartinez/delegate-local/issues/366)
+* reject --var values that are unreplaced placeholder stand-ins ([#368](https://github.com/IsmaelMartinez/delegate-local/issues/368)) ([f4cab8d](https://github.com/IsmaelMartinez/delegate-local/commit/f4cab8d825f61fbab49e9d56c7e83daba4d188c4)), closes [#356](https://github.com/IsmaelMartinez/delegate-local/issues/356)
+* stop the boundary hook nagging on compliant and pre-drafted work ([#355](https://github.com/IsmaelMartinez/delegate-local/issues/355)) ([a657f01](https://github.com/IsmaelMartinez/delegate-local/commit/a657f01085969a0e0f4d7f179cc82d2189f7adbc))
+
+
+### Documentation
+
+* make literal --var values the primary recipe invocation form ([#353](https://github.com/IsmaelMartinez/delegate-local/issues/353)) ([aea1df5](https://github.com/IsmaelMartinez/delegate-local/commit/aea1df5b0e00c609fe1185f2f5d6605f3ab00fd9))
+
 ## [0.23.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.22.0...v0.23.0) (2026-08-12)
 
 
