@@ -41,9 +41,11 @@ No test file changes. The verification is the pipeline itself, observed on the n
 - [ ] **Step 1: Record the current state so the change is provable**
 
 ```bash
-cd /Users/ismael.martinez/projects/github/delegate-local
+cd "$(git rev-parse --show-toplevel)"
 jq -r '.packages["."].draft' release-please-config.json   # expect: true
-grep -c 'workflow_dispatch' .github/workflows/release-please.yml  # expect: 0
+# grep exits 1 when nothing matches, which aborts the block under `set -e`,
+# so assert absence directly instead of counting it.
+! grep -q 'workflow_dispatch' .github/workflows/release-please.yml && echo "PASS: absent as expected"
 ```
 
 - [ ] **Step 2: Create the branch**
@@ -175,13 +177,29 @@ after replying. Merge with `gh pr merge <n> --squash --delete-branch`.
 After the merge lands on main, release-please re-runs on the push event. Then:
 
 ```bash
-gh pr view 352 --json title,body --jq .title
-gh pr diff 352 --patch | grep -c '^+\* '     # expect: 7 (six prior commits plus this one)
-git rev-list --count v0.23.0..origin/main    # expect: 7
+# Resolve the PR rather than hardcoding 352: release-please normally updates
+# its PR in place, but if the computed version changes it can close and reopen
+# with a new number, and this step would then verify a stale PR.
+pr=$(gh pr list --state open --json number,title \
+      --jq '.[]|select(.title|startswith("chore(main): release "))|.number')
+# `|| true` because grep -c prints 0 but exits 1 on no match, aborting `set -e`.
+bullets=$(gh pr diff "$pr" --patch | grep -c '^+\* ' || true)
+expected=$(git log --format=%s v0.23.0..origin/main \
+            | grep -cE '^(feat|fix|perf|security|deps|refactor|docs|ci|test|chore)(\(.+\))?!?: ' || true)
+breaking=$(git log --format=%B v0.23.0..origin/main | grep -c '^BREAKING CHANGE' || true)
+echo "pr=$pr bullets=$bullets expected=$((expected + breaking))"
+test "$bullets" -eq $((expected + breaking))
 ```
 
-The two counts must match. That equality is the whole point of the task: it proves
-release-please has recovered its anchor.
+Bullets must equal the count of commits release-please is *configured to render*,
+which is not the same as the raw commit count. `changelog-sections` lists ten types,
+so a commit outside them produces no bullet; a breaking change produces a bullet with
+no extra commit; and once the release commit itself is on `main`, `v0.23.0..main`
+includes a `chore(main): release` commit that release-please omits from its own
+changelog. Measured across the repository's history, bullets equal commits minus one
+in 13 of 22 releases and are exactly equal in one, so a naive equality would be wrong
+most of the time. That the check passes is what proves release-please recovered its
+anchor.
 
 - [ ] **Step 13: Merge the release PR and confirm the tag exists**
 

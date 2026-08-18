@@ -119,10 +119,13 @@ them yields no bullet; and a breaking change yields a bullet with no extra commi
 ```bash
 pr=$(gh pr list --state open --json number,title \
       --jq '.[]|select(.title|startswith("chore(main): release "))|.number')
-bullets=$(gh pr diff "$pr" --patch | grep -c '^+\* ')
+# `|| true` on every grep -c: it prints 0 but exits 1 when nothing matches,
+# which aborts the whole block under `set -e`. A zero count is a real answer
+# here (no breaking changes is the normal case), not a failure.
+bullets=$(gh pr diff "$pr" --patch | grep -c '^+\* ' || true)
 expected=$(git log --format=%s v0.23.0..origin/main \
-            | grep -cE '^(feat|fix|perf|security|deps|refactor|docs|ci|test|chore)(\(.+\))?!?: ')
-breaking=$(git log --format=%B v0.23.0..origin/main | grep -c '^BREAKING CHANGE')
+            | grep -cE '^(feat|fix|perf|security|deps|refactor|docs|ci|test|chore)(\(.+\))?!?: ' || true)
+breaking=$(git log --format=%B v0.23.0..origin/main | grep -c '^BREAKING CHANGE' || true)
 test "$bullets" -eq $((expected + breaking))
 ```
 
