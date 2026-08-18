@@ -271,9 +271,12 @@ assert_eq 0 "$EC" "--local perfect mock -> exits 0"
 assert_contains "scoring: backend=local model=mock-model:latest" "$out" "--local: model header"
 assert_contains "recall=1.000 negative-precision=1.000" "$out" "--local perfect: 1.000/1.000"
 assert_contains "OK trigger evals (local)" "$out" "--local: OK message"
-# Assert exactly one curl call was made (batching).
+# Batching: one scoring request for the whole eval set, not one per query.
+# $sniff records scoring bodies only — the mock answers the discovery probe
+# (GET {base}/models) and exits before writing, so the probe is deliberately
+# not counted here.
 calls=$(wc -l < "$sniff" | tr -d ' ')
-assert_eq 1 "$calls" "--local: exactly one batched call (was $calls)"
+assert_eq 1 "$calls" "--local: exactly one batched scoring call (was $calls)"
 rm -rf "$tmp"
 
 # 5. --local with default (pick-model.sh code) resolves a model.
