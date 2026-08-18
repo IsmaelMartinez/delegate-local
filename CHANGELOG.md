@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.26.0...v0.27.0) (2026-08-18)
+
+
+### Features
+
+* run the local trigger eval through the provider list ([#380](https://github.com/IsmaelMartinez/delegate-local/issues/380)) ([1069ae8](https://github.com/IsmaelMartinez/delegate-local/commit/1069ae8c0d2bd8cdd5d8e5b630bcb9b4003e697e))
+
 ## [0.26.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.25.0...v0.26.0) (2026-08-18)
 
 
