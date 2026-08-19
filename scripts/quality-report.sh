@@ -211,7 +211,7 @@ read -r clean_hit fixed_hit miss_classified faith padding structural style opera
     }
   ' "$reasoned_tsv" "$cats_file"
 )
-problems=$(( fixed_hit + miss ))
+problems=$(( fixed_hit + miss_classified ))
 
 # --- output -----------------------------------------------------------------
 mode_label=$([[ $classify -eq 1 ]] && echo "local-model classification" || echo "keyword heuristic")
@@ -238,7 +238,7 @@ printf '  miss (rewritten / discarded): %4d  (%s)\n' "$miss_classified" "$(pct "
 printf 'Indeterminate (no reason):      %4d\n' "$unreasoned"
 printf '\n'
 if (( classify )); then
-  printf 'Failure modes in the %d problem cases (fixed-hits + misses):\n' "$problems"
+  printf 'Failure modes in the %d classified problem cases (fixed-hits + classified misses):\n' "$problems"
   printf '  faithfulness  %4d  (%s)   <- hallucination / factual error; structural checks cannot catch this\n' "$faith" "$(pct "$faith" "$problems")"
   printf '  padding       %4d  (%s)\n' "$padding" "$(pct "$padding" "$problems")"
   printf '  structural    %4d  (%s)\n' "$structural" "$(pct "$structural" "$problems")"

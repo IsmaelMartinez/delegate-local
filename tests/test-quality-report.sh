@@ -194,5 +194,39 @@ out=$(bash "$SCRIPT" --file "$denfx" --tier human 2>/dev/null)
 assert_contains "Clean-as-is rate:         100%   (1/1 classified)" "$out" "clean-as-is: denominated on classified, not total"
 rm -f "$denfx"
 
+# The failure-mode denominator counts CLASSIFIED problem cases only. The
+# category tallies come from classified reasoned rows, so mixing them with the
+# raw miss count — which includes misses that carry no reason and were never
+# categorised — understated every percentage. Fixture: 3 reasoned rows plus one
+# UNREASONED miss, so miss(2) > miss_classified(1).
+dfx=$(mktemp)
+cat > "$dfx" <<'EOF'
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","kept":true,"reason":"note one"}
+{"ts":"2026-06-01T10:01:00Z","source":"feedback","kept":true,"reason":"note two"}
+{"ts":"2026-06-01T10:02:00Z","source":"feedback","kept":false,"reason":"note three"}
+{"ts":"2026-06-01T10:03:00Z","source":"feedback","kept":false}
+EOF
+dstub=$(mktemp); chmod +x "$dstub"
+cat > "$dstub" <<'STUB'
+#!/usr/bin/env bash
+labels=(CLEAN FAITHFULNESS PADDING)
+i=0
+while IFS= read -r line; do
+  [[ "$line" =~ ^([0-9]+)\. ]] || continue
+  echo "${BASH_REMATCH[1]}: ${labels[$(( i % 3 ))]}"
+  i=$((i+1))
+done
+STUB
+out=$(DELEGATE_QUALITY_DELEGATE_SH="$dstub" bash "$SCRIPT" --file "$dfx" --tier human --classify 2>/dev/null)
+# 3 classified: CLEAN hit, FAITHFULNESS hit (=fixed), PADDING miss.
+# problems = 1 fixed-hit + 1 classified miss = 2. The unreasoned miss is excluded.
+assert_contains "Failure modes in the 2 classified problem cases" "$out" "failure-modes: denominator excludes the unreasoned miss"
+assert_contains "(fixed-hits + classified misses)" "$out" "failure-modes: label names the classified denominator"
+# Both categories are 50% of 2. Under the old `fixed_hit + miss` denominator of
+# 3 they would have read 33%.
+assert_contains "faithfulness     1  (50%)" "$out" "failure-modes: percentage is over the classified denominator"
+assert_contains "Verdicts:                 4  (2 hits, 2 misses, 0 scaffold)" "$out" "failure-modes: headline still counts every verdict"
+rm -f "$dfx" "$dstub"
+
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
