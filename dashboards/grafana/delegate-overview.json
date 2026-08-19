@@ -106,7 +106,7 @@
       "id": 2,
       "type": "stat",
       "title": "Tokens avoided",
-      "description": "Sum of delegate.estimated_tokens_avoided \u2014 the headline value metric (work kept on-device).",
+      "description": "Successful delegations only \u2014 a failed call produced no output to avoid. Does not account for output the agent later rewrote (~19%); see metrics-summary.sh.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -158,7 +158,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | unwrap estimated_tokens_avoided [$__range]))",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status=\"0\" | unwrap estimated_tokens_avoided [$__range]))",
           "queryType": "instant"
         }
       ]
@@ -166,8 +166,8 @@
     {
       "id": 3,
       "type": "gauge",
-      "title": "HIT rate",
-      "description": "Share of recorded verdicts that were HIT over the range.",
+      "title": "Adoption rate",
+      "description": "Usage, NOT quality: how often the agent shipped its own delegated output as-is (verdict_source=agent, ADR 0015). The human HIT rate lives on the Calibration dashboard.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -223,7 +223,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"true\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" [$__range]))",
           "queryType": "instant"
         }
       ]
@@ -232,7 +232,7 @@
       "id": 4,
       "type": "stat",
       "title": "p95 generation",
-      "description": "95th-percentile model decode time (delegate.generation_ms).",
+      "description": "p95 model decode on SUCCESSFUL calls. Including failures nearly doubles this (9.5s vs 5.0s) by counting canary-timeout wall time as decode.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -284,7 +284,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "quantile_over_time(0.95, {service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | unwrap generation_ms [$__range]) by ()",
+          "expr": "quantile_over_time(0.95, {service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status=\"0\" | unwrap generation_ms [$__range]) by ()",
           "queryType": "instant"
         }
       ]
@@ -363,7 +363,7 @@
       "id": 6,
       "type": "stat",
       "title": "Projects",
-      "description": "Distinct repos that delegated in range.",
+      "description": "Distinct projects. Excludes the empty-label series from rows with no project, and counts delegate-to-ollama as delegate-local (#230 rename).",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -415,7 +415,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "count(sum by (project) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" [$__range])))",
+          "expr": "count(sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\")))",
           "queryType": "instant"
         }
       ]
@@ -424,7 +424,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "Delegations over time by tier",
-      "description": "Call volume grouped by delegate.tier.",
+      "description": "Successful delegations only, so rejected tier names stay out of the legend.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -474,7 +474,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (tier) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" [$__auto]))",
+          "expr": "sum by (tier) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status=\"0\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "{{tier}}"
         }
@@ -484,7 +484,7 @@
       "id": 8,
       "type": "timeseries",
       "title": "Delegations over time by project",
-      "description": "Call volume grouped by repo.",
+      "description": "Successful delegations only. delegate-to-ollama folded into delegate-local (#230 rename).",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -534,7 +534,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (project) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" [$__auto]))",
+          "expr": "sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status=\"0\" | project!=\"\" [$__auto])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))",
           "queryType": "range",
           "legendFormat": "{{project}}"
         }
@@ -544,7 +544,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Tokens avoided over time",
-      "description": "delegate.estimated_tokens_avoided summed per step.",
+      "description": "Successful delegations only.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -594,7 +594,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | unwrap estimated_tokens_avoided [$__auto]))",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status=\"0\" | unwrap estimated_tokens_avoided [$__auto]))",
           "queryType": "range",
           "legendFormat": "tokens avoided"
         }
@@ -604,7 +604,7 @@
       "id": 10,
       "type": "bargauge",
       "title": "Tokens avoided by project",
-      "description": "Which repos got the most value from local delegation.",
+      "description": "Successful delegations only. delegate-to-ollama folded into delegate-local (#230 rename).",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -655,7 +655,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (project) (sum_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | unwrap estimated_tokens_avoided [$__range]))",
+          "expr": "sum by (project) (label_replace(sum by (project) (sum_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status=\"0\" | project!=\"\" | unwrap estimated_tokens_avoided [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))",
           "queryType": "instant",
           "legendFormat": "{{project}}"
         }
@@ -665,7 +665,7 @@
       "id": 11,
       "type": "piechart",
       "title": "Calls by recipe",
-      "description": "Distribution of --recipe calls (bare-tier calls excluded).",
+      "description": "Successful delegations only \u2014 a rejected call did not exercise the recipe.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -714,7 +714,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | recipe!=\"\" [$__range]))",
+          "expr": "sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status=\"0\" | recipe!=\"\" [$__range]))",
           "queryType": "instant",
           "legendFormat": "{{recipe}}"
         }
@@ -724,7 +724,7 @@
       "id": 12,
       "type": "timeseries",
       "title": "Delegations over time by backend",
-      "description": "ollama vs mlx call volume.",
+      "description": "Successful delegations only, so a rejected call's backend stays out of the legend.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -774,7 +774,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (backend) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | backend!=\"\" [$__auto]))",
+          "expr": "sum by (backend) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status=\"0\" | backend!=\"\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "{{backend}}"
         }
@@ -784,7 +784,7 @@
       "id": 13,
       "type": "piechart",
       "title": "Tier distribution",
-      "description": "Share of calls by routing tier.",
+      "description": "Successful delegations only, so rejected tier names stay out of the legend.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -833,7 +833,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (tier) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | tier!=\"\" [$__range]))",
+          "expr": "sum by (tier) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status=\"0\" | tier!=\"\" [$__range]))",
           "queryType": "instant",
           "legendFormat": "{{tier}}"
         }

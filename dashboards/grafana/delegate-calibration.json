@@ -1,6 +1,6 @@
 {
   "uid": "delegate-calibration",
-  "title": "delegate-local \u2014 Calibration (HIT/MISS)",
+  "title": "delegate-local \u2014 Calibration (adoption vs HIT)",
   "tags": [
     "delegate-local",
     "genai",
@@ -44,16 +44,215 @@
     {
       "id": 27,
       "type": "gauge",
-      "title": "HIT rate (overall)",
-      "description": "Share of verdicts that were HIT.",
+      "title": "HIT rate (human verdicts)",
+      "description": "Quality: did a PERSON judge the output good. verdict_source absent (ADR 0015). n is small and stale \u2014 read it next to the Human verdicts count.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
-        "h": 6,
-        "w": 6,
+        "h": 5,
+        "w": 4,
         "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.6
+              },
+              {
+                "color": "green",
+                "value": 0.8
+              }
+            ]
+          },
+          "mappings": [],
+          "noValue": "no human verdicts in range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source!=\"agent\" | kept=\"true\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source!=\"agent\" [$__range]))",
+          "queryType": "instant"
+        }
+      ]
+    },
+    {
+      "id": 28,
+      "type": "stat",
+      "title": "Human verdicts",
+      "description": "How many PERSON-recorded verdicts in range. Red at 0 means the quality signal is not being fed: record one with `delegate-feedback.sh hit|miss` (no --source).",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "green",
+                "value": 30
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source!=\"agent\" [$__range])) or vector(0)",
+          "queryType": "instant"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "stat",
+      "title": "Calibration debt",
+      "description": "Delegations with no HUMAN verdict. Agent-observed rows do not pay this down.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" [$__range])) - (sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source!=\"agent\" [$__range])) or vector(0))",
+          "queryType": "instant"
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "type": "gauge",
+      "title": "Adoption rate",
+      "description": "Usage, NOT quality: how often the agent shipped its own delegated output as-is (verdict_source=agent, ADR 0015). Never read this as a quality number.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
         "y": 0
       },
       "fieldConfig": {
@@ -101,24 +300,24 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"true\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" [$__range]))",
           "queryType": "instant"
         }
       ]
     },
     {
-      "id": 28,
+      "id": 36,
       "type": "stat",
-      "title": "Verdicts recorded",
-      "description": "Total HIT+MISS verdicts in range.",
+      "title": "Adoption observations",
+      "description": "Count of agent-observed rows (verdict_source=agent). This is usage telemetry, not the calibration sample \u2014 that is Human verdicts.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 6,
+        "h": 5,
+        "w": 4,
+        "x": 16,
         "y": 0
       },
       "fieldConfig": {
@@ -162,93 +361,24 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" [$__range])) or vector(0)",
           "queryType": "instant"
         }
       ]
     },
     {
-      "id": 29,
+      "id": 37,
       "type": "stat",
-      "title": "MISS count",
-      "description": "Verdicts marked MISS.",
+      "title": "Rewritten",
+      "description": "Agent-observed rewrites, scaffold excluded (delegate-feedback.sh: scaffold is useful, not a miss). Not a quality MISS count.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 12,
-        "y": 0
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "mappings": [],
-          "color": {
-            "mode": "thresholds",
-            "fixedColor": "text"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 5
-              },
-              {
-                "color": "red",
-                "value": 20
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" [$__range]))",
-          "queryType": "instant"
-        }
-      ]
-    },
-    {
-      "id": 30,
-      "type": "stat",
-      "title": "Untracked delegations",
-      "description": "Delegations minus verdicts \u2014 calibration debt (record a verdict with delegate-feedback.sh).",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 18,
+        "h": 5,
+        "w": 4,
+        "x": 20,
         "y": 0
       },
       "fieldConfig": {
@@ -292,7 +422,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" [$__range])) - sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"false\" | scaffold!=\"true\" [$__range])) or vector(0)",
           "queryType": "instant"
         }
       ]
@@ -300,8 +430,8 @@
     {
       "id": 31,
       "type": "timeseries",
-      "title": "HIT rate trend",
-      "description": "HIT rate over time across all recipes.",
+      "title": "Adoption rate trend",
+      "description": "Agent-observed usage rate over time. Not a quality trend.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -310,7 +440,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 6
+        "y": 5
       },
       "fieldConfig": {
         "defaults": {
@@ -351,17 +481,17 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__auto])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__auto]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"true\" [$__auto])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" [$__auto]))",
           "queryType": "range",
-          "legendFormat": "HIT rate"
+          "legendFormat": "adoption rate"
         }
       ]
     },
     {
       "id": 32,
       "type": "timeseries",
-      "title": "Verdict volume",
-      "description": "HIT and MISS counts per step.",
+      "title": "Adoption volume",
+      "description": "Agent-observed: shipped as-is vs rewritten, per step.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -370,7 +500,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 6
+        "y": 5
       },
       "fieldConfig": {
         "defaults": {
@@ -411,9 +541,9 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__auto]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"true\" [$__auto]))",
           "queryType": "range",
-          "legendFormat": "HIT"
+          "legendFormat": "used"
         },
         {
           "refId": "B",
@@ -422,17 +552,17 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" [$__auto]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"false\" | scaffold!=\"true\" [$__auto]))",
           "queryType": "range",
-          "legendFormat": "MISS"
+          "legendFormat": "rewrote"
         }
       ]
     },
     {
       "id": 33,
       "type": "timeseries",
-      "title": "HIT rate by recipe",
-      "description": "Per-recipe HIT rate \u2014 the load-bearing calibration signal.",
+      "title": "Adoption by recipe",
+      "description": "Per-recipe agent-observed usage rate. Not per-recipe quality.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -441,7 +571,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 14
+        "y": 13
       },
       "fieldConfig": {
         "defaults": {
@@ -485,7 +615,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | recipe!=\"\" [$__auto])) / sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | recipe!=\"\" [$__auto]))",
+          "expr": "sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"true\" | recipe!=\"\" [$__auto])) / sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | recipe!=\"\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "{{recipe}}"
         }
@@ -494,8 +624,8 @@
     {
       "id": 34,
       "type": "bargauge",
-      "title": "HIT rate by project",
-      "description": "Per-repo HIT rate.",
+      "title": "Adoption by project",
+      "description": "Per-repo agent-observed usage rate.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -504,7 +634,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 14
+        "y": 13
       },
       "fieldConfig": {
         "defaults": {
@@ -546,7 +676,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__range])) / sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
+          "expr": "sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"true\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\")) / sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))",
           "queryType": "instant",
           "legendFormat": "{{project}}"
         }
@@ -555,17 +685,17 @@
     {
       "id": 35,
       "type": "logs",
-      "title": "Recent MISSes (reason + recipe)",
-      "description": "Most recent MISS verdicts. The reason field is the input to recipe calibration.",
+      "title": "Recent human rejections",
+      "description": "MISS verdicts recorded by a person. The reason field is the input to recipe calibration.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
         "h": 10,
-        "w": 24,
+        "w": 12,
         "x": 0,
-        "y": 22
+        "y": 21
       },
       "options": {
         "showTime": true,
@@ -585,7 +715,45 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" | line_format \"{{.project}} recipe={{.recipe}} \u2014 {{.reason}}\"",
+          "expr": "{service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source!=\"agent\" | kept=\"false\" | line_format \"{{.project}} recipe={{.recipe}} \u2014 {{.reason}}\"",
+          "queryType": "range"
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "type": "logs",
+      "title": "Recent agent rewrites",
+      "description": "Output the agent did not ship as-is. Usage evidence, not a quality judgment.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"false\" | scaffold!=\"true\" | line_format \"{{.project}} recipe={{.recipe}} \u2014 {{.reason}}\"",
           "queryType": "range"
         }
       ]

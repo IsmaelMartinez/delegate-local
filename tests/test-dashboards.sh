@@ -46,7 +46,8 @@ fi
 KNOWN_FIELDS="ts source project tier recipe backend model service \
 prompt_chars context_chars output_chars duration_ms queue_wait_ms \
 generation_ms exit_status estimated_tokens_avoided kept reason ref_ts \
-embedding_dim input_chars eval_tokens prompt_tokens output_bytes session"
+embedding_dim input_chars eval_tokens prompt_tokens output_bytes session \
+verdict_source scaffold"
 
 is_known() {
   local needle="$1" f
@@ -154,8 +155,8 @@ else
   echo "  PASS  dashboards/grafana/ contains $dash_count dashboard(s)"; pass=$((pass+1))
 fi
 
-# 5. The calibration dashboard keeps a per-recipe HIT-rate panel. Per-recipe
-#    HIT-rate is the load-bearing calibration signal (#187); the sync script
+# 5. The calibration dashboard keeps a per-recipe rate panel. Per-recipe rate is
+#    the load-bearing calibration signal (#187); the sync script
 #    enriches feedback rows with the parent recipe so this is a LogQL
 #    `by (recipe)` group-by. Pin it so a future edit cannot silently drop it.
 CALIBRATION="$DASHBOARDS/grafana/delegate-calibration.json"
@@ -185,6 +186,26 @@ if [[ -f "$CALIBRATION" ]]; then
     echo "  FAIL  delegate-calibration.json: per-recipe HIT-rate panel legend uses sum (5955%-style step-sum inflation on a ratio)"; fail=$((fail+1))
   fi
 fi
+
+# 5e. ADR 0015 partitions feedback into human verdicts (quality) and
+#     verdict_source="agent" (usage). metrics-summary.sh has always honoured it;
+#     the dashboards did not, so `HIT rate 72.7%` was 973 agent-observed rows and
+#     20 human ones aggregated together. Every target that selects the feedback
+#     stream must therefore commit to a population. Keyed on the STREAM, not the
+#     panel title: a title-keyed rule misses `Verdicts recorded` / `Verdict
+#     volume` / `Untracked delegations` (three of the nine conflated panels) and
+#     guards nothing once the panels are renamed to "Adoption".
+for dash in "$DASHBOARDS/grafana"/*.json; do
+  base=$(basename "$dash")
+  unpartitioned=$(jq -r '[.. | objects | select(has("targets")) | . as $p
+      | (.targets // [])[] | select((.expr // "") | contains("source=\"feedback\""))
+      | select((.expr // "") | contains("verdict_source") | not) | $p.title] | unique | join(", ")' "$dash")
+  if [[ -z "$unpartitioned" ]]; then
+    echo "  PASS  $base: every feedback-stream query commits to a verdict tier"; pass=$((pass+1))
+  else
+    echo "  FAIL  $base: feedback query with no verdict_source predicate (ADR 0015 conflation): $unpartitioned"; fail=$((fail+1))
+  fi
+done
 
 # 5d. The canary-failure stat panel MUST key on the exit code delegate.sh
 #     actually writes for a pre-flight canary/preflight-timeout stall. That is
