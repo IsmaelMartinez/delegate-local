@@ -126,7 +126,7 @@ migration snapshot, which is the intended end state.
 
 ### What review changed
 
-The plan that entered review is not the one that shipped. Two designs were
+The plan that entered review is not the one that shipped. Three designs were
 rejected on measurement:
 
 A shared `scripts/lib/paths.sh` looked like the obvious DRY move. Three of the
