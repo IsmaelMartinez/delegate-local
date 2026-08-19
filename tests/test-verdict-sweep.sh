@@ -129,6 +129,98 @@ out=$(printf 's\n' | DELEGATE_SWEEP_ASSUME_TTY=1 bash "$SCRIPT" --file "$met" 2>
 assert_eq "0" "$ec" "T10: malformed feedback row (no ref_ts) does not crash"
 assert_contains "$R1" "$out" "T10: the untracked delegate row is still listed"
 
+# --- T11: --calibrate (the second-look sample) ------------------------------
+# The default work set is "no feedback row of any tier", so an agent verdict
+# marks a row done and a human can never revisit it. That is right for coverage
+# and wrong for calibration: the bias ADR 0015 predicts ("I used it, so it was
+# good") is only visible on rows the agent claimed as hits.
+NOW=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 3600))')
+OLDER=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 7200))')
+OLDEST=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 10800))')
+FB=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 60))')
+cal="$tmp/cal.jsonl"
+LONG="ninety-plus characters of agent reasoning that runs well past the hundred character truncation boundary and keeps going"
+{
+  # eligible: agent HIT, no human verdict
+  printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"m","exit_status":0}\n' "$NOW"
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":true,"verdict_source":"agent","reason":"%s"}\n' "$FB" "$NOW" "$LONG"
+  # NOT eligible: agent MISS (no self-flattery left to catch)
+  printf '{"ts":"%s","source":"delegate","recipe":"pr-description","tier":"prose","model":"m","exit_status":0}\n' "$OLDER"
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":false,"verdict_source":"agent"}\n' "$FB" "$OLDER"
+  # NOT eligible: agent SCAFFOLD (the prompt has no key for that outcome)
+  printf '{"ts":"%s","source":"delegate","recipe":"doc-section","tier":"prose","model":"m","exit_status":0}\n' "$OLDEST"
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":false,"scaffold":true,"verdict_source":"agent"}\n' "$FB" "$OLDEST"
+} > "$cal"
+
+out=$(printf 'q\n' | DELEGATE_SWEEP_ASSUME_TTY=1 bash "$SCRIPT" --calibrate --file "$cal" 2>&1)
+assert_contains "$NOW" "$out" "T11: --calibrate offers the agent-HIT row"
+assert_absent  "$OLDER" "$out" "T11: --calibrate skips an agent-MISS row"
+assert_absent  "$OLDEST" "$out" "T11: --calibrate skips an agent-SCAFFOLD row"
+assert_contains "agent said HIT" "$out" "T11: the agent claim is shown"
+assert_contains "was the output good" "$out" "T11: the human is asked the human question"
+
+# A long reason is truncated so it cannot destroy the prompt line.
+assert_contains "…" "$out" "T11: an over-long agent reason is truncated"
+assert_absent "and keeps going" "$out" "T11: the truncated tail is not printed"
+
+# The two modes are disjoint, asserted both ways.
+out_def=$(printf 'q\n' | DELEGATE_SWEEP_ASSUME_TTY=1 bash "$SCRIPT" --file "$cal" 2>&1)
+assert_contains "no untracked delegations" "$out_def" "T11: the default mode offers none of the agent-verdicted rows"
+
+# --- T12: a row that already has a HUMAN verdict is offered by neither -------
+cal2="$tmp/cal2.jsonl"
+{
+  printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"m","exit_status":0}\n' "$NOW"
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":true,"verdict_source":"agent"}\n' "$FB" "$NOW"
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":false}\n' "$FB" "$NOW"
+} > "$cal2"
+out=$(printf 'q\n' | DELEGATE_SWEEP_ASSUME_TTY=1 bash "$SCRIPT" --calibrate --file "$cal2" 2>&1)
+assert_contains "no agent-hit delegations" "$out" "T12: a row with a human verdict is not re-offered"
+out=$(printf 'q\n' | DELEGATE_SWEEP_ASSUME_TTY=1 bash "$SCRIPT" --file "$cal2" 2>&1)
+assert_contains "no untracked delegations" "$out" "T12: nor by the default mode"
+
+# A reasonless agent verdict still renders.
+cal3="$tmp/cal3.jsonl"
+{
+  printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"m","exit_status":0}\n' "$NOW"
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":true,"verdict_source":"agent"}\n' "$FB" "$NOW"
+} > "$cal3"
+out=$(printf 'q\n' | DELEGATE_SWEEP_ASSUME_TTY=1 bash "$SCRIPT" --calibrate --file "$cal3" 2>&1)
+assert_contains "(no reason recorded)" "$out" "T12: a reasonless agent verdict still renders"
+
+# --- T13: the recorded verdict is HUMAN-tier and coexists -------------------
+out=$(printf 'm\n' | DELEGATE_SWEEP_ASSUME_TTY=1 bash "$SCRIPT" --calibrate --file "$cal3" 2>&1)
+assert_contains "MISS recorded" "$out" "T13: --calibrate records through delegate-feedback.sh"
+human_rows=$(jq -c 'select(.source=="feedback" and (.verdict_source|not))' "$cal3" | wc -l | tr -d ' ')
+agent_rows=$(jq -c 'select(.source=="feedback" and .verdict_source=="agent")' "$cal3" | wc -l | tr -d ' ')
+assert_eq "1" "$human_rows" "T13: exactly one human-tier row was written"
+assert_eq "1" "$agent_rows" "T13: the agent row still stands (coexists, not replaced)"
+
+# --- T14: --sample caps, and takes most recent by ts not file order ---------
+cal4="$tmp/cal4.jsonl"
+: > "$cal4"
+# Capture each stamp ONCE and reuse it. Recomputing `time - 3600` for the
+# assertion after writing the row is a clock race: a second ticking over between
+# the two makes them differ and the test fails intermittently.
+T_OLD=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 10800))')
+T_MID=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 7200))')
+T_NEW=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 3600))')
+# Written OLDEST-first in the file so a tail would pick the wrong rows.
+for T in "$T_OLD" "$T_MID" "$T_NEW"; do
+  printf '{"ts":"%s","source":"delegate","recipe":"r","tier":"prose","model":"m","exit_status":0}\n' "$T" >> "$cal4"
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":true,"verdict_source":"agent"}\n' "$FB" "$T" >> "$cal4"
+done
+NEWEST="$T_NEW"
+EARLIEST="$T_OLD"
+out=$(printf 'q\n' | DELEGATE_SWEEP_ASSUME_TTY=1 bash "$SCRIPT" --calibrate --sample 1 --file "$cal4" 2>&1)
+assert_contains "1 delegation(s) the agent graded" "$out" "T14: --sample 1 caps the offer"
+assert_contains "$NEWEST" "$out" "T14: --sample takes the most recent by ts"
+assert_absent "$EARLIEST" "$out" "T14: --sample drops the older rows"
+out=$(printf 'q\n' | DELEGATE_SWEEP_ASSUME_TTY=1 bash "$SCRIPT" --calibrate --sample 0 --file "$cal4" 2>&1)
+assert_contains "3 delegation(s) the agent graded" "$out" "T14: --sample 0 means no cap"
+ec=0; bash "$SCRIPT" --calibrate --sample abc --file "$cal4" >/dev/null 2>&1 || ec=$?
+assert_eq "2" "$ec" "T14: a non-numeric --sample exits 2"
+
 echo
 echo "$pass passed, $fail failed"
 if [[ "$fail" -gt 0 ]]; then exit 1; fi

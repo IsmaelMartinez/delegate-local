@@ -108,7 +108,12 @@ IFS=$'\t' read -r ts_first ts_last total_avoided errors n_delegate n_experiment 
   [
     (map(call) | min_by(.ts) | .ts),
     (map(call) | max_by(.ts) | .ts),
-    (map(call | .estimated_tokens_avoided) | add),
+    # `// 0` matters: `add` over an all-null list returns null, which @tsv
+    # renders as an EMPTY field. Tab is IFS whitespace, so bash read collapses
+    # the resulting double-tab into one delimiter and shifts every later column
+    # left. A file whose delegate rows carry no estimated_tokens_avoided then
+    # misreports errors, delegate and experiment counts at once, silently.
+    ((map(call | .estimated_tokens_avoided) | add) // 0),
     (map(call | select(.exit_status != 0)) | length),
     (map(call | select(src == "delegate")) | length),
     (map(call | select(src == "experiment")) | length),
@@ -314,6 +319,20 @@ if (( n_feedback > 0 )); then
     | "  Recipe delegations (calibration signal): n=\($rn)  hits=\($rx|map(select(.h=="hit"))|length)  misses=\($rx|map(select(.h=="miss"))|length)" + (if $show_scaffold then "  scaffold=\($rx|map(select(.h=="scaffold"))|length)" else "" end) + (if $show_agent then "  agent=\($an)" else "" end) + "  untracked=\($rx|map(select(.h==null and .a==null))|length)" + (if $rn > 0 then "  coverage=\((($rx|map(select(.h!=null or .a!=null))|length) * 100 / $rn) | floor)%" else "" end),
       ($rx | group_by(.tier) | map({tier:.[0].tier, n:length, hits:(map(select(.h=="hit"))|length), misses:(map(select(.h=="miss"))|length), scaffold:(map(select(.h=="scaffold"))|length), agent:(map(select(.a!=null))|length), untracked:(map(select(.h==null and .a==null))|length)}) | sort_by(-.n) | .[] | "    \(.tier | . + (" " * (14 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + (if $show_agent then "  agent=\(.agent)" else "" end) + "  untracked=\(.untracked)"),
       (if $show_agent then "  Agent-observed (usage, not quality): n=\($an)  used=\($rx|map(select(.a=="hit"))|length)  rewrote=\($rx|map(select(.a=="miss"))|length)" + (if $show_scaffold then "  scaffold=\($rx|map(select(.a=="scaffold"))|length)" else "" end) + (if $an > 0 then "  usage_rate=\((($rx|map(select(.a=="hit"))|length) * 100 / $an) | floor)%" else "" end) else empty end),
+      # Self-flattery rate (#412 follow-up). Directional on purpose: a SYMMETRIC
+      # agreement rate between the two tiers measures nothing, because they
+      # answer different questions — a human MISS beside an agent HIT is two
+      # compatible facts (shipped, and not good), not a contradiction. The one
+      # quantity that bears on the ADR 0015 bias warning is conditional: of the
+      # output the agent chose to ship, how much did a person judge not good.
+      # The reverse direction (agent rewrote something a human would have kept)
+      # is waste, not bias, so it is not folded in. Scoped to $rx like every
+      # other line here, and n is printed because the only pairs predating
+      # verdict-sweep --calibrate are ADR 0015 backfill artifacts.
+      (($rx | map(select(.a == "hit" and .h != null))) as $paired
+       | if ($paired | length) > 0 then
+           "  Agent self-flattery (human verdict on agent-shipped output): n=\($paired|length)  human-miss=\($paired|map(select(.h=="miss"))|length)  rate=\((($paired|map(select(.h=="miss"))|length) * 100 / ($paired|length)) | floor)%"
+         else empty end),
       (if $wn > 0 then "  Raw / no-recipe (verdicts optional — experiments, audits, ad-hoc): n=\($wn)  tracked=\($raw|map(select(.h!=null or .a!=null))|length)  untracked=\($raw|map(select(.h==null and .a==null))|length)" else empty end)
   ' "$metrics_file"
   echo

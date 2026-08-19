@@ -660,6 +660,76 @@ case "$decomp_lines" in
 esac
 rm -f "$allfail"
 
+# Agent self-flattery: of the output the agent chose to ship, how much did a
+# person judge not good. Directional on purpose — a symmetric agreement rate
+# between the two tiers measures nothing, because they answer different
+# questions and a human MISS beside an agent HIT is two compatible facts.
+# A file whose delegate rows carry no estimated_tokens_avoided made `add`
+# return null, which @tsv renders as an empty field — and because tab is IFS
+# whitespace, bash read collapsed the double-tab and shifted every later column
+# left, so errors/delegate/experiment were all wrong at once with no error.
+shift_fx=$(mktemp)
+cat > "$shift_fx" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T09:01:00Z","source":"delegate","recipe":"commit-message","tier":"prose","exit_status":0}
+EOF
+out=$(bash "$SCRIPT" --file "$shift_fx" 2>&1)
+assert_contains "Total invocations:   2  (delegate=2, experiment=0)" "$out" "null tokens: source counts do not shift"
+assert_contains "Errors (non-zero):   0" "$out" "null tokens: error count does not shift"
+assert_contains "Tokens avoided (≈):  0" "$out" "null tokens: prints 0, not empty"
+rm -f "$shift_fx"
+
+sf=$(mktemp)
+cat > "$sf" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T09:01:00Z","source":"delegate","recipe":"commit-message","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T09:02:00Z","source":"delegate","recipe":"pr-description","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T09:03:00Z","source":"delegate","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":true,"verdict_source":"agent"}
+{"ts":"2026-06-01T10:01:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":false}
+{"ts":"2026-06-01T10:02:00Z","source":"feedback","ref_ts":"2026-06-01T09:01:00Z","kept":true,"verdict_source":"agent"}
+{"ts":"2026-06-01T10:03:00Z","source":"feedback","ref_ts":"2026-06-01T09:01:00Z","kept":true}
+{"ts":"2026-06-01T10:04:00Z","source":"feedback","ref_ts":"2026-06-01T09:02:00Z","kept":false,"verdict_source":"agent"}
+{"ts":"2026-06-01T10:05:00Z","source":"feedback","ref_ts":"2026-06-01T09:02:00Z","kept":false}
+{"ts":"2026-06-01T10:06:00Z","source":"feedback","ref_ts":"2026-06-01T09:03:00Z","kept":true,"verdict_source":"agent"}
+{"ts":"2026-06-01T10:07:00Z","source":"feedback","ref_ts":"2026-06-01T09:03:00Z","kept":false}
+EOF
+out=$(bash "$SCRIPT" --file "$sf" 2>&1)
+# Two recipe rows carry agent=hit AND a human verdict: 09:00 (human miss) and
+# 09:01 (human hit). 09:02 is agent=miss so it is not a shipped output. 09:03
+# has no recipe, so it lives in the Raw block and is out of this scope.
+assert_contains "Agent self-flattery (human verdict on agent-shipped output): n=2  human-miss=1  rate=50%" "$out" \
+  "self-flattery: conditional on agent-shipped, scoped to recipe delegations"
+rm -f "$sf"
+
+# It is a conditional, not an agreement rate: an agent MISS beside a human MISS
+# is not counted, because the agent did not ship that output.
+sf2=$(mktemp)
+cat > "$sf2" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":false,"verdict_source":"agent"}
+{"ts":"2026-06-01T10:01:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":false}
+EOF
+out=$(bash "$SCRIPT" --file "$sf2" 2>&1)
+case "$out" in
+  *"self-flattery"*) assert_eq "absent" "present" "self-flattery: an agent MISS pair is not counted" ;;
+  *)                 assert_eq "absent" "absent"  "self-flattery: an agent MISS pair is not counted" ;;
+esac
+rm -f "$sf2"
+
+# Silent when no pair exists, so single-tier files print exactly as before.
+sf3=$(mktemp)
+cat > "$sf3" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":true,"verdict_source":"agent"}
+EOF
+out=$(bash "$SCRIPT" --file "$sf3" 2>&1)
+case "$out" in
+  *"self-flattery"*) assert_eq "absent" "present" "self-flattery: silent with no human verdict to pair" ;;
+  *)                 assert_eq "absent" "absent"  "self-flattery: silent with no human verdict to pair" ;;
+esac
+rm -f "$sf3"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
