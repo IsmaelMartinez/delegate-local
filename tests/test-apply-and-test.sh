@@ -6,6 +6,17 @@
 
 set -u
 
+# pytest is not optional here: both suites below assert on real test runs, so
+# without it every PASS-path assertion fails with an unhelpful import error
+# rather than one clear message. Skip locally, fail in CI, so a runner missing
+# pytest can never look like a green run.
+py="${APPLY_AND_TEST_PYTHON:-python3}"
+if ! "$py" -m pytest --version >/dev/null 2>&1; then
+  msg="pytest not installed for $py; this suite runs real tests and verifies nothing without it"
+  if [[ -n "${CI:-}" ]]; then echo "  FAIL  $msg" >&2; exit 1; fi
+  echo "  SKIP  $msg" >&2; exit 0
+fi
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$REPO/scripts/apply-and-test.sh"
 
