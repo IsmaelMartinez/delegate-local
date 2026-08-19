@@ -20,7 +20,7 @@
 # Env (overridden by the matching flags):
 #   DELEGATE_LOKI_URL        Loki base URL. Default http://localhost:3100.
 #   DELEGATE_METRICS_FILE    metrics JSONL. Default
-#                            ~/.claude/skills/delegate-local/metrics.jsonl.
+#                            ~/.local/share/delegate-local/metrics.jsonl.
 #   DELEGATE_LOKI_STATE      watermark file. Default <metrics-file>.loki-sync.
 #   DELEGATE_LOKI_TIMEOUT    curl --max-time on the push. Default 30. The
 #                            best-effort flush uses a fixed 5s.
@@ -30,7 +30,7 @@
 set -uo pipefail
 
 loki_url="${DELEGATE_LOKI_URL:-http://localhost:3100}"
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
+metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 state_file=""
 full=0
 dry_run=0

@@ -134,7 +134,7 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
+metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 # Both are set from the winning provider once the tier resolves; the
 # placeholder label only ever reaches a metrics row for a failure that
 # happened before resolution.

@@ -14,7 +14,7 @@
 
 set -uo pipefail
 
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
+metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 since=""
 days=""
 
@@ -31,6 +31,16 @@ done
 if [[ ! -f "$metrics_file" ]]; then
   echo "no metrics file at $metrics_file" >&2
   echo "(run delegate.sh at least once, or set DELEGATE_METRICS_FILE)" >&2
+  # #360: user data moved out of the installer-owned skill directory. Point an
+  # existing install at the migration rather than silently starting from zero.
+  # Deliberately NOT a resolution fallback: a fallback never disarms, so losing
+  # the new file at any later date would silently revert every consumer to the
+  # migration-day snapshot. A message the user acts on cannot do that.
+  _legacy="$HOME/.claude/skills/delegate-local/metrics.jsonl"
+  if [[ -f "$_legacy" ]]; then
+    echo "  $_legacy exists with $(grep -c '' "$_legacy" 2>/dev/null || echo 0) rows" >&2
+    echo "  migrate it: bash scripts/onboard.sh --migrate-data" >&2
+  fi
   exit 1
 fi
 

@@ -50,6 +50,9 @@ jobs:
       - name: Project-name resolution tests
         run: bash tests/test-project-name.sh
 
+      - name: User-data path tests
+        run: bash tests/test-paths.sh
+
       - name: Embed.sh tests
         run: bash tests/test-embed.sh
 

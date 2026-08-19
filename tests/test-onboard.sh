@@ -162,6 +162,70 @@ assert_contains "unknown arg" "$out" "T12: names the bad flag"
 out=$(run_onboard '\n\ny' "$tmp/t13p.sh" "$tmp/t13c.sh")
 assert_contains 'case "$tier" in' "$(cat "$tmp/t13c.sh")" "T13: config written from an unterminated trailing y"
 
+# --- --migrate-data (#360) --------------------------------------------------
+# User data used to default inside the installer-owned skill directory, where
+# `skills update` could delete it. These pin the move across.
+migrate() { # home
+  env -i PATH="$SAFE_PATH" HOME="$1" bash "$SCRIPT" --migrate-data 2>&1
+}
+mk_legacy() { # home
+  mkdir -p "$1/.claude/skills/delegate-local"
+  printf '{"a":1}\n{"a":2}\n' > "$1/.claude/skills/delegate-local/metrics.jsonl"
+  echo "FLAVOR=1" > "$1/.claude/skills/delegate-local/profile.sh"
+  echo "3321" > "$1/.claude/skills/delegate-local/metrics.loki-sync"
+}
+
+# M1. No legacy directory at all: nothing to do, and that is not an error.
+h="$tmp/m1"; mkdir -p "$h"
+out=$(migrate "$h"); ec=$?
+assert_eq 0 "$ec" "M1: no legacy dir exits 0"
+assert_contains "nothing to migrate" "$out" "M1: says nothing to migrate"
+
+# M2. The repoint-first trap. A legacy directory holding none of the data files
+# means, on a machine that has run delegate.sh, that the skill symlink already
+# moved and the history is elsewhere. Failing loudly is the point: the silent
+# version reports success having copied nothing.
+h="$tmp/m2"; mkdir -p "$h/.claude/skills/delegate-local"
+out=$(migrate "$h"); ec=$?
+assert_eq 1 "$ec" "M2: legacy dir with no data exits non-zero"
+assert_contains "repointed already" "$out" "M2: names the likely cause"
+
+# M3. The real move: copies, and carries metrics.loki-sync so the Loki
+# watermark is not reset.
+h="$tmp/m3"; mk_legacy "$h"
+out=$(migrate "$h"); ec=$?
+assert_eq 0 "$ec" "M3: migration exits 0"
+for n in metrics.jsonl profile.sh metrics.loki-sync; do
+  if [[ -f "$h/.local/share/delegate-local/$n" ]]; then
+    echo "  PASS  M3: $n copied"; pass=$((pass+1))
+  else echo "  FAIL  M3: $n not copied"; fail=$((fail+1)); fi
+done
+assert_eq "2" "$(grep -c '' "$h/.local/share/delegate-local/metrics.jsonl")" "M3: rows preserved"
+
+# M4. Copy, never move — the original must survive so the operation cannot
+# destroy anything.
+assert_eq "2" "$(grep -c '' "$h/.claude/skills/delegate-local/metrics.jsonl")" "M4: legacy original untouched"
+
+# M5. Idempotent: a second run finds identical targets and reports so.
+out=$(migrate "$h"); ec=$?
+assert_eq 0 "$ec" "M5: second run exits 0"
+assert_contains "already migrated" "$out" "M5: reports already migrated"
+
+# M6. A target that exists and DIFFERS is never overwritten.
+echo '{"different":true}' > "$h/.local/share/delegate-local/metrics.jsonl"
+out=$(migrate "$h"); ec=$?
+assert_eq 1 "$ec" "M6: differing target exits non-zero"
+assert_contains "refusing to overwrite" "$out" "M6: refuses to overwrite"
+assert_eq "2" "$(grep -c '' "$h/.claude/skills/delegate-local/metrics.jsonl")" "M6: legacy still untouched"
+
+# M7. DELEGATE_LOCAL_DATA_DIR redirects the destination.
+h="$tmp/m7"; mk_legacy "$h"
+out=$(env -i PATH="$SAFE_PATH" HOME="$h" DELEGATE_LOCAL_DATA_DIR="$h/custom" \
+      bash "$SCRIPT" --migrate-data 2>&1)
+if [[ -f "$h/custom/metrics.jsonl" ]]; then
+  echo "  PASS  M7: honours DELEGATE_LOCAL_DATA_DIR"; pass=$((pass+1))
+else echo "  FAIL  M7: ignored DELEGATE_LOCAL_DATA_DIR"; fail=$((fail+1)); fi
+
 echo
 echo "$pass passed, $fail failed"
 if [[ "$fail" -gt 0 ]]; then exit 1; fi

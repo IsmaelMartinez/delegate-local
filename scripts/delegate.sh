@@ -421,7 +421,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
+metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 # delegate_project is derived after lib/otel.sh is sourced (it provides
 # delegate_project_name); first used in the metric/span emission near the end.
 # Which base URL wins is not known until the tier is resolved (a provider can

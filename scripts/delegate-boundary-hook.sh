@@ -352,7 +352,7 @@ fi
 # workflow the nudge asks for, and skipping the lookup recorded that compliant
 # case as delegated:false — removing the sensor's best outcome from both sides
 # of the ratio. delegated:true wins over pre-drafted when both apply.
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
+metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 window_min="${DELEGATE_BOUNDARY_WINDOW_MIN:-10}"
 now_epoch=$(date -u +%s)
 delegated=false

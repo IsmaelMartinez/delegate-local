@@ -82,7 +82,7 @@
 
 set -uo pipefail
 
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
+metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 stale_seconds="${DELEGATE_FEEDBACK_STALE_SECONDS:-300}"
 github_repo="${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}"
 
@@ -165,7 +165,19 @@ esac
 shift
 reason="$*"
 
-[[ -f "$metrics_file" ]] || { echo "metrics file not found: $metrics_file" >&2; exit 1; }
+# The migration hint (#360) is repeated here rather than shared, because the
+# only two scripts that need it are this one (the agent's entry point) and
+# metrics-summary.sh (the human's). A shared lib was reviewed and rejected; see
+# the design doc.
+if [[ ! -f "$metrics_file" ]]; then
+  echo "metrics file not found: $metrics_file" >&2
+  _legacy="$HOME/.claude/skills/delegate-local/metrics.jsonl"
+  if [[ -f "$_legacy" ]]; then
+    echo "  $_legacy exists with $(grep -c '' "$_legacy" 2>/dev/null || echo 0) rows" >&2
+    echo "  migrate it: bash scripts/onboard.sh --migrate-data" >&2
+  fi
+  exit 1
+fi
 command -v jq >/dev/null || { echo "jq not on PATH" >&2; exit 2; }
 
 # Convert ISO 8601 (Y-m-dTH:M:SZ) to epoch seconds. Cross-platform: BSD

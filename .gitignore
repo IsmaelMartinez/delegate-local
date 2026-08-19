@@ -34,3 +34,8 @@ experiments/sessions/**/v*-patched/
 # The directory is kept for tooling discoverability via .gitkeep, but the
 # raw run outputs are local-only — re-runnable on demand.
 evals/results/*.jsonl
+
+# Loki sync watermark, derived as ${metrics_file%.jsonl}.loki-sync by
+# scripts/sync-metrics-to-loki.sh. The metrics.jsonl.* pattern above does not
+# match it.
+metrics.loki-sync
