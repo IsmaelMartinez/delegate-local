@@ -14,7 +14,7 @@
 # 4. Every JSONL field referenced by a LogQL `unwrap X` / `| json | X` clause
 #    is in the known JSONL field allowlist, so a dashboard cannot chart a
 #    field the exporter never writes.
-# 5. The calibration dashboard keeps a per-recipe HIT-rate panel (`by (recipe)`).
+# 5. The calibration dashboard keeps a per-recipe adoption-rate panel (`by (recipe)`).
 # 6. The Langfuse README (no-portable-JSON backend) still exists.
 #
 # bash-3.2 portable: no associative arrays, no `grep -P`.
@@ -46,7 +46,8 @@ fi
 KNOWN_FIELDS="ts source project tier recipe backend model service \
 prompt_chars context_chars output_chars duration_ms queue_wait_ms \
 generation_ms exit_status estimated_tokens_avoided kept reason ref_ts \
-embedding_dim input_chars eval_tokens prompt_tokens output_bytes session"
+embedding_dim input_chars eval_tokens prompt_tokens output_bytes session \
+verdict_source scaffold"
 
 is_known() {
   local needle="$1" f
@@ -154,23 +155,26 @@ else
   echo "  PASS  dashboards/grafana/ contains $dash_count dashboard(s)"; pass=$((pass+1))
 fi
 
-# 5. The calibration dashboard keeps a per-recipe HIT-rate panel. Per-recipe
-#    HIT-rate is the load-bearing calibration signal (#187); the sync script
-#    enriches feedback rows with the parent recipe so this is a LogQL
-#    `by (recipe)` group-by. Pin it so a future edit cannot silently drop it.
+# 5. The calibration dashboard keeps a per-recipe adoption-rate panel. Per-recipe
+#    breakdown is the load-bearing shape (#187) — it is what makes a bad recipe
+#    visible rather than averaged away; the sync script enriches feedback rows
+#    with the parent recipe so this is a LogQL `by (recipe)` group-by. Pin it so
+#    a future edit cannot silently drop it. Note this measures ADOPTION, not
+#    quality: per ADR 0015 only a human verdict carries a quality judgment, and
+#    assertion 5e is what keeps the two apart.
 CALIBRATION="$DASHBOARDS/grafana/delegate-calibration.json"
 if [[ -f "$CALIBRATION" ]]; then
   per_recipe=$(jq -r '[.panels[] | select((.targets // []) | map(.expr // "") | join(" ") | (contains("by (recipe)") and contains("kept=")))] | length' "$CALIBRATION" 2>/dev/null)
   if [[ "$per_recipe" -ge 1 ]]; then
-    echo "  PASS  delegate-calibration.json: per-recipe HIT-rate panel present"; pass=$((pass+1))
+    echo "  PASS  delegate-calibration.json: per-recipe adoption-rate panel present"; pass=$((pass+1))
   else
-    echo "  FAIL  delegate-calibration.json: no per-recipe (by (recipe)) HIT-rate panel"; fail=$((fail+1))
+    echo "  FAIL  delegate-calibration.json: no per-recipe (by (recipe)) adoption-rate panel"; fail=$((fail+1))
   fi
 else
   echo "  FAIL  delegate-calibration.json missing"; fail=$((fail+1))
 fi
 
-# 5c. The per-recipe HIT-rate panel is a percentunit ratio time series. Its
+# 5c. The per-recipe adoption-rate panel is a percentunit ratio time series. Its
 #     legend reduce MUST NOT be `sum`: summing a fractional per-step ratio over
 #     every step in the range adds the steps together and the percentunit unit
 #     then multiplies by 100, surfacing impossible values like 5955%. A ratio
@@ -180,11 +184,31 @@ fi
 if [[ -f "$CALIBRATION" ]]; then
   recipe_sum_calc=$(jq -r '[.. | objects | select((.targets // []) | map(.expr // "") | join(" ") | (contains("by (recipe)") and contains("kept="))) | .options.legend.calcs // [] | index("sum")] | map(select(. != null)) | length' "$CALIBRATION" 2>/dev/null)
   if [[ "$recipe_sum_calc" == "0" ]]; then
-    echo "  PASS  delegate-calibration.json: per-recipe HIT-rate legend reduce is not sum (no step-sum inflation)"; pass=$((pass+1))
+    echo "  PASS  delegate-calibration.json: per-recipe adoption-rate legend reduce is not sum (no step-sum inflation)"; pass=$((pass+1))
   else
-    echo "  FAIL  delegate-calibration.json: per-recipe HIT-rate panel legend uses sum (5955%-style step-sum inflation on a ratio)"; fail=$((fail+1))
+    echo "  FAIL  delegate-calibration.json: per-recipe adoption-rate panel legend uses sum (5955%-style step-sum inflation on a ratio)"; fail=$((fail+1))
   fi
 fi
+
+# 5e. ADR 0015 partitions feedback into human verdicts (quality) and
+#     verdict_source="agent" (usage). metrics-summary.sh has always honoured it;
+#     the dashboards did not, so `HIT rate 72.7%` was 973 agent-observed rows and
+#     20 human ones aggregated together. Every target that selects the feedback
+#     stream must therefore commit to a population. Keyed on the STREAM, not the
+#     panel title: a title-keyed rule misses `Verdicts recorded` / `Verdict
+#     volume` / `Untracked delegations` (three of the nine conflated panels) and
+#     guards nothing once the panels are renamed to "Adoption".
+for dash in "$DASHBOARDS/grafana"/*.json; do
+  base=$(basename "$dash")
+  unpartitioned=$(jq -r '[.. | objects | select(has("targets")) | . as $p
+      | (.targets // [])[] | select((.expr // "") | contains("source=\"feedback\""))
+      | select((.expr // "") | contains("verdict_source") | not) | $p.title] | unique | join(", ")' "$dash")
+  if [[ -z "$unpartitioned" ]]; then
+    echo "  PASS  $base: every feedback-stream query commits to a verdict tier"; pass=$((pass+1))
+  else
+    echo "  FAIL  $base: feedback query with no verdict_source predicate (ADR 0015 conflation): $unpartitioned"; fail=$((fail+1))
+  fi
+done
 
 # 5d. The canary-failure stat panel MUST key on the exit code delegate.sh
 #     actually writes for a pre-flight canary/preflight-timeout stall. That is
