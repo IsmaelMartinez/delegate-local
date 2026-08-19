@@ -13,13 +13,13 @@ The default is redact: only metadata leaves the host. Operators who explicitly w
 
 The source for every attribute is one of:
 
-- A field already present on a JSONL row written by `scripts/delegate.sh` or `scripts/delegate-feedback.sh` to `~/.claude/skills/delegate-local/metrics.jsonl`. Track A reads the row and translates each field to the attribute name listed below.
+- A field already present on a JSONL row written by `scripts/delegate.sh` or `scripts/delegate-feedback.sh` to `~/.local/share/delegate-local/metrics.jsonl`. Track A reads the row and translates each field to the attribute name listed below.
 - A constant the exporter inlines (the operation name, the temperature, the span-name format).
 - A value generated at delegation time by the exporter itself (the trace ID and span ID, written back to the JSONL row as `otel_trace_id` / `otel_span_id` so `delegate-feedback.sh` can correlate without a second lookup).
 
 ## Sample JSONL row used as the example below
 
-A real recent delegation row from `~/.claude/skills/delegate-local/metrics.jsonl`:
+A real recent delegation row from `~/.local/share/delegate-local/metrics.jsonl`:
 
 ```json
 {"ts":"2026-05-21T21:46:56Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b-q8_0","prompt_chars":80,"context_chars":3739,"output_chars":2807,"duration_ms":19267,"queue_wait_ms":412,"generation_ms":18855,"exit_status":0,"estimated_tokens_avoided":1656}

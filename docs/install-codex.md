@@ -45,4 +45,4 @@ The default config path is the Claude Code one (`~/.claude/skills/...`). On a Co
 rm -rf ~/.codex/skills/delegate-local
 ```
 
-The metrics file written by `delegate.sh` defaults to `~/.claude/skills/delegate-local/metrics.jsonl` regardless of which agent invoked it. To redirect it, set `DELEGATE_METRICS_FILE=~/.codex/skills/delegate-local/metrics.jsonl` in the shell that runs Codex.
+The metrics file written by `delegate.sh` defaults to `~/.local/share/delegate-local/metrics.jsonl` regardless of which agent invoked it. To redirect it, set `DELEGATE_METRICS_FILE=~/.codex/skills/delegate-local/metrics.jsonl` in the shell that runs Codex.

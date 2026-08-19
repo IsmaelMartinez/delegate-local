@@ -235,7 +235,10 @@ trace "preferences=${prefs[*]}"
 # trade-offs (sudo, shared-HOME CI, env-var redirection) are documented in
 # experiments/sessions/2026-05-03-security-review-delegation/RETROSPECTIVE.md
 # F1/F2 — the threat model assumes single-user dev.
-config="${DELEGATE_LOCAL_CONFIG:-${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-local/config.sh}}"
+# Path: DELEGATE_LOCAL_CONFIG (or the legacy DELEGATE_TO_OLLAMA_CONFIG),
+# else $DELEGATE_LOCAL_DATA_DIR/config.sh, else
+# ~/.local/share/delegate-local/config.sh.
+config="${DELEGATE_LOCAL_CONFIG:-${DELEGATE_TO_OLLAMA_CONFIG:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/config.sh}}"
 if [[ -f "$config" ]]; then
   # Defense-in-depth: skip the override if it isn't owned by the current
   # user, or if it has group/world write bits set. The trust model assumes

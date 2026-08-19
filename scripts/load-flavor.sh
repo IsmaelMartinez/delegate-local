@@ -8,8 +8,10 @@
 # dispatcher never executes user bash in its own shell.
 #
 # Env:
+#   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
+#                               (default ~/.local/share/delegate-local)
 #   DELEGATE_LOCAL_PROFILE   override profile path
-#                            (default ~/.claude/skills/delegate-local/profile.sh)
+#                            (default ~/.local/share/delegate-local/profile.sh)
 set -uo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,7 +26,7 @@ defaults="$script_dir/flavor-defaults.sh"
 #    skip the file if it isn't owned by the current user or is group/world-writable,
 #    so a stray chmod can't turn it into arbitrary code execution under our process.
 #    BSD stat first (macOS), GNU stat fallback (Linux).
-profile="${DELEGATE_LOCAL_PROFILE:-$HOME/.claude/skills/delegate-local/profile.sh}"
+profile="${DELEGATE_LOCAL_PROFILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/profile.sh}"
 if [[ -f "$profile" ]]; then
   if stat -f '%Su' "$profile" >/dev/null 2>&1; then
     p_owner=$(stat -f '%Su' "$profile"); p_mode=$(stat -f '%Lp' "$profile")

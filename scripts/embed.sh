@@ -21,6 +21,8 @@
 #   DELEGATE_LOCAL_NO_METRICS=1            # opt out of metrics logging
 #                                         #   (back-compat: DELEGATE_TO_OLLAMA_NO_METRICS
 #                                         #   is accepted if the new name is unset)
+#   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
+#                               (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE=<path>          # override metrics destination
 #   DELEGATE_EMBED_MAX_CHARS=<int>        # default 6000. Inputs longer than
 #                                         #   this are head-truncated with a
@@ -134,7 +136,7 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
+metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 # Both are set from the winning provider once the tier resolves; the
 # placeholder label only ever reaches a metrics row for a failure that
 # happened before resolution.

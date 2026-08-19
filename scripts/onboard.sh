@@ -17,19 +17,28 @@
 # .bak.<ts> backup first. Writes are chmod 600 so the profile passes
 # load-flavor.sh's owner/mode trust check immediately.
 #
+# Migration:
+#   bash scripts/onboard.sh --migrate-data
+# copies the per-user files from the legacy location inside the skill directory
+# to the data directory. It COPIES, never moves, so it cannot destroy anything.
+#
 # Env:
+#   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
+#                               (default ~/.local/share/delegate-local)
 #   DELEGATE_LOCAL_CONFIG       config.sh target
-#                               (default ~/.claude/skills/delegate-local/config.sh)
+#                               (default $DELEGATE_LOCAL_DATA_DIR/config.sh)
 #   DELEGATE_LOCAL_PROFILE      profile.sh target
-#                               (default ~/.claude/skills/delegate-local/profile.sh)
+#                               (default $DELEGATE_LOCAL_DATA_DIR/profile.sh)
 #   DELEGATE_ONBOARD_ASSUME_TTY=1  test seam: read answers from stdin instead of
 #                               /dev/tty (a real pty can't be driven in CI)
 # Exit: 0 on the happy / print-only / quit paths; 2 on a usage error.
 set -uo pipefail
 
+migrate_data=0
 while (($# > 0)); do
   case "$1" in
-    -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    --migrate-data) migrate_data=1; shift;;
     *) echo "onboard: unknown arg '$1'" >&2; exit 2;;
   esac
 done
@@ -37,8 +46,75 @@ done
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Same target resolution (including the legacy env name) as pick-model.sh's
 # config hook — writing where the consumer doesn't read would be a silent no-op.
-config_target="${DELEGATE_LOCAL_CONFIG:-${DELEGATE_TO_OLLAMA_CONFIG:-$HOME/.claude/skills/delegate-local/config.sh}}"
-profile_target="${DELEGATE_LOCAL_PROFILE:-$HOME/.claude/skills/delegate-local/profile.sh}"
+config_target="${DELEGATE_LOCAL_CONFIG:-${DELEGATE_TO_OLLAMA_CONFIG:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/config.sh}}"
+profile_target="${DELEGATE_LOCAL_PROFILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/profile.sh}"
+
+# --- --migrate-data: legacy skill directory -> data directory (#360) -------
+# The per-user files used to default to $HOME/.claude/skills/delegate-local/,
+# which is the directory the skill installer owns, so `skills update` could
+# delete four months of calibration history. They now default to the data
+# directory. This moves an existing install across.
+#
+# COPY, never move: the operation must not be able to destroy anything. The
+# leftover legacy files are harmless because resolution no longer looks at
+# them at all, which is exactly why the read-only fallback design was rejected
+# (it could resurrect a stale snapshot months later).
+if (( migrate_data )); then
+  legacy_dir="$HOME/.claude/skills/delegate-local"
+  data_dir="${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}"
+  # metrics.loki-sync rides along: sync-metrics-to-loki.sh derives it as
+  # ${metrics_file%.jsonl}.loki-sync, so leaving it behind resets the watermark
+  # and re-pushes every row. Harmless (Loki de-duplicates identical
+  # timestamp/line pairs) but it strands a file that still looks authoritative.
+  migrate_names="metrics.jsonl config.sh profile.sh metrics.loki-sync"
+
+  if [[ ! -d "$legacy_dir" ]]; then
+    echo "onboard: nothing to migrate — no legacy directory at $legacy_dir" >&2
+    exit 0
+  fi
+  found=0
+  for n in $migrate_names; do [[ -f "$legacy_dir/$n" ]] && found=1; done
+  if (( ! found )); then
+    # The directory is there but empty of user data. On a machine that ever ran
+    # delegate.sh that means the skill symlink has already been repointed and
+    # the real history is sitting somewhere else, unreachable. Failing loudly
+    # here is the whole point: the silent version reports success having copied
+    # nothing.
+    {
+      echo "onboard: $legacy_dir exists but holds none of: $migrate_names"
+      echo "         if this machine has run delegate.sh before, the skill symlink"
+      echo "         was probably repointed already and the history is elsewhere."
+      echo "         Find it before migrating: the old checkout still has it."
+    } >&2
+    exit 1
+  fi
+
+  mkdir -p "$data_dir" || { echo "onboard: cannot create $data_dir" >&2; exit 1; }
+  copied=0
+  for n in $migrate_names; do
+    src="$legacy_dir/$n"
+    [[ -f "$src" ]] || continue
+    dst="$data_dir/$n"
+    if [[ -f "$dst" ]]; then
+      if cmp -s "$src" "$dst"; then
+        echo "onboard: $n already migrated, unchanged"
+        continue
+      fi
+      {
+        echo "onboard: refusing to overwrite $dst"
+        echo "         it already exists and differs from $src"
+        echo "         merge or remove it by hand, then re-run"
+      } >&2
+      exit 1
+    fi
+    cp -p "$src" "$dst" || { echo "onboard: failed to copy $src" >&2; exit 1; }
+    echo "onboard: copied $n -> $dst"
+    copied=$((copied + 1))
+  done
+  echo "onboard: migrated $copied file(s); the originals under $legacy_dir are untouched"
+  echo "onboard: verify with 'bash scripts/metrics-summary.sh' before repointing any symlink"
+  exit 0
+fi
 
 interactive=0
 [[ "${DELEGATE_ONBOARD_ASSUME_TTY:-}" == "1" || -t 0 ]] && interactive=1

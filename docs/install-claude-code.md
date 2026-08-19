@@ -36,7 +36,7 @@ Standalone asks ("summarise this log") fire the skill reliably, but a commit mes
 Different machines have different installed model sets. To override `pick-model.sh` on this host without forking the repo:
 
 ```bash
-bash ~/.claude/skills/delegate-local/scripts/init.sh > ~/.claude/skills/delegate-local/config.sh
+bash ~/.claude/skills/delegate-local/scripts/init.sh > ~/.local/share/delegate-local/config.sh
 ```
 
 `init.sh` is read-only and prints a starter override based on what `ollama list` currently reports — review and edit before saving. The override is sourced after the shipped defaults so any tier it touches wins; untouched tiers fall through. See [`README.md`](../README.md#personalising-routing-optional) for the full pattern.
@@ -47,4 +47,4 @@ bash ~/.claude/skills/delegate-local/scripts/init.sh > ~/.claude/skills/delegate
 rm -rf ~/.claude/skills/delegate-local
 ```
 
-The metrics file at `~/.claude/skills/delegate-local/metrics.jsonl` is per-user telemetry — delete it manually if you want to clear the local history.
+The metrics file at `~/.local/share/delegate-local/metrics.jsonl` is per-user telemetry — delete it manually if you want to clear the local history.

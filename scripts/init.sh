@@ -3,7 +3,8 @@
 # running providers serve right now. Read-only — prints to stdout and
 # never writes. Redirect to your override path if you like the result:
 #
-#   bash scripts/init.sh > ~/.claude/skills/delegate-local/config.sh
+#   mkdir -p ~/.local/share/delegate-local
+#   bash scripts/init.sh > ~/.local/share/delegate-local/config.sh
 #
 # After that, pick-model.sh sources the override after the shipped defaults
 # and uses the adjusted preference order. The shipped defaults remain the

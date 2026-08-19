@@ -5,7 +5,7 @@
 # maintainer's personal taste, which lives in the maintainer's own profile.sh
 # like any other user's ("the maintainer becomes just another profile").
 # Run scripts/onboard.sh (or derive-flavor.sh) to derive yours from your own
-# git history; a per-user ~/.claude/skills/delegate-local/profile.sh overrides
+# git history; a per-user ~/.local/share/delegate-local/profile.sh overrides
 # any of these. T4-measured 2026-06-11: the standard list scores identically
 # to the previous curated subset (15/18 MLX prose, same residual).
 #

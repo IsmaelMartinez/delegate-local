@@ -24,8 +24,10 @@
 #
 # Env (shared names with sync-metrics-to-loki.sh so one tuning applies to both):
 #   DELEGATE_LOKI_URL              Loki base URL. Default http://localhost:3100.
+#   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
+#                               (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE          metrics JSONL. Default
-#                                  ~/.claude/skills/delegate-local/metrics.jsonl.
+#                                  ~/.local/share/delegate-local/metrics.jsonl.
 #   DELEGATE_GRAFANA_URL           Grafana base URL. Default http://localhost:3001.
 #   DELEGATE_TEMPO_URL             Tempo query API.  Default http://localhost:3200.
 #   DELEGATE_COMPOSE_FILE          compose file. Default <repo>/observability/docker-compose.yml.
@@ -41,7 +43,7 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 loki_url="${DELEGATE_LOKI_URL:-http://localhost:3100}"
-metrics_file="${DELEGATE_METRICS_FILE:-$HOME/.claude/skills/delegate-local/metrics.jsonl}"
+metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 grafana_url="${DELEGATE_GRAFANA_URL:-http://localhost:3001}"
 tempo_url="${DELEGATE_TEMPO_URL:-http://localhost:3200}"
 compose_file="${DELEGATE_COMPOSE_FILE:-$REPO/observability/docker-compose.yml}"
