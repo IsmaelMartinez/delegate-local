@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.10](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.9...v0.27.10) (2026-08-19)
+
+
+### Documentation
+
+* record the user-data path outcome ([#406](https://github.com/IsmaelMartinez/delegate-local/issues/406)) ([6046210](https://github.com/IsmaelMartinez/delegate-local/commit/6046210d2d3a0377f8c770b16986f4576f940f1c))
+
 ## [0.27.9](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.8...v0.27.9) (2026-08-19)
 
 
