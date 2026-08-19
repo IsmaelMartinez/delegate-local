@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.9](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.8...v0.27.9) (2026-08-19)
+
+
+### Bug Fixes
+
+* default user data outside the installer-owned skill directory ([#404](https://github.com/IsmaelMartinez/delegate-local/issues/404)) ([4823d42](https://github.com/IsmaelMartinez/delegate-local/commit/4823d42b6712a0b2fd5693586189c8aa705daaa2))
+
 ## [0.27.8](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.7...v0.27.8) (2026-08-19)
 
 
