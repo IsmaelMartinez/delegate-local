@@ -30,7 +30,7 @@ sites. No new file, no sourcing dependency, no existence checks. The
 file-specific overrides keep their names and precedence exactly, including the
 `DELEGATE_TO_OLLAMA_CONFIG` legacy alias.
 
-Two earlier designs were reviewed and rejected. Both rejections are recorded
+Three earlier designs were reviewed and rejected. Each rejection is recorded
 because each looked obviously right beforehand.
 
 ### Rejected: a shared `scripts/lib/paths.sh`
