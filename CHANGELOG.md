@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.7](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.6...v0.27.7) (2026-08-19)
+
+
+### Documentation
+
+* correct the corpus numbers behind the no_padding_tail anchor ([#400](https://github.com/IsmaelMartinez/delegate-local/issues/400)) ([5d35e48](https://github.com/IsmaelMartinez/delegate-local/commit/5d35e48ffb0f52b54404aae5da31bb61d4daf670))
+
 ## [0.27.6](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.5...v0.27.6) (2026-08-19)
 
 
