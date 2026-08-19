@@ -714,6 +714,16 @@ payload "cd $gitroot/repo-b && gh issue comment 1 --repo owner/repo-c --body x" 
 assert_eq repo-b "$(jq -r .project <<<"$(last_row)")" "cd + --repo: cd target owns the recorded project"
 assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "cd + --repo: cd target still matches the lookup"
 
+# 49b. GitLab's three-part path must keep working. `glab --repo` accepts
+# "OWNER/REPO or GROUP/NAMESPACE/REPO" per its own --help, and the hook
+# classifies glab boundaries, so the value regex deliberately allows more than
+# one slash and the project is the FINAL segment. Do not tighten this to a
+# single slash: it would silently drop GitLab support.
+: > "$METRICS"; seed_delegation repo-b maintainer-reply
+payload "glab mr note 1 --repo group/namespace/repo-b --message x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "--repo: glab GROUP/NAMESPACE/REPO resolves to the final segment"
+
 # 50. A delegate row carrying no project at all must not match a boundary whose
 # --repo candidate is empty. Three such rows exist in the real metrics file; an
 # unguarded `(.project // "") == $proj3` would let each of them mark every
