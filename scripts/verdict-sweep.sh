@@ -104,7 +104,10 @@ cutoff_iso=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime
 # crashing jq with "Cannot use null as object key". A jq failure on a corrupt
 # file surfaces as exit 2 rather than a silent "nothing to sweep".
 if (( calibrate )); then
-  # Eligible = the agent's LAST verdict is a hit, and no human has judged it.
+  # Eligible = the agent LAST verdict by TIMESTAMP is a hit, and no human has
+  # judged it. sort_by(.ts) before the reduce is load-bearing: the file is not
+  # strictly chronological, and 3 delegations in the live history have a
+  # different last verdict by file order than by time.
   # Restricted to hits deliberately: the bias under test is "I used it, so it
   # was good", which is only observable where the agent claimed a hit. An
   # unrestricted recent sample measured 20% agent-hit against 73% lifetime, so
@@ -116,9 +119,11 @@ if (( calibrate )); then
   rows=$(jq -rs --arg cutoff "$cutoff_iso" --argjson sample "$sample" '
     def src: .source // "delegate";
     def fbv: if (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
-    (reduce (.[] | select(src == "feedback" and .ref_ts != null and (.verdict_source // "") == "agent")) as $f
+    (reduce ([.[] | select(src == "feedback" and .ref_ts != null and (.verdict_source // "") == "agent")]
+             | sort_by(.ts) | .[]) as $f
        ({}; .[$f.ref_ts] = {v: ($f | fbv), r: ($f.reason // "")})) as $agent
-    | (reduce (.[] | select(src == "feedback" and .ref_ts != null and (.verdict_source // "") != "agent")) as $f
+    | (reduce ([.[] | select(src == "feedback" and .ref_ts != null and (.verdict_source // "") != "agent")]
+               | sort_by(.ts) | .[]) as $f
        ({}; .[$f.ref_ts] = true)) as $human
     | map(select(src == "delegate"
           and (.ts != null)

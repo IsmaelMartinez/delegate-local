@@ -221,6 +221,35 @@ assert_contains "3 delegation(s) the agent graded" "$out" "T14: --sample 0 means
 ec=0; bash "$SCRIPT" --calibrate --sample abc --file "$cal4" >/dev/null 2>&1 || ec=$?
 assert_eq "2" "$ec" "T14: a non-numeric --sample exits 2"
 
+# --- T15: "last verdict" means last by TIMESTAMP, not by file order ---------
+# The metrics file is not strictly chronological, and 3 delegations in the live
+# history have a different last verdict by file order than by time. Written
+# here so file order says MISS (not eligible) while time order says HIT
+# (eligible): without sort_by(.ts) before the reduce this row is skipped.
+cal5="$tmp/cal5.jsonl"
+D=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 3600))')
+T_LATE=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 120))')
+T_EARLY=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 600))')
+{
+  printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"m","exit_status":0}\n' "$D"
+  # HIT carries the LATER ts but is written FIRST.
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":true,"verdict_source":"agent"}\n' "$T_LATE" "$D"
+  # MISS carries the EARLIER ts but is written LAST.
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":false,"verdict_source":"agent"}\n' "$T_EARLY" "$D"
+} > "$cal5"
+out=$(printf 'q\n' | DELEGATE_SWEEP_ASSUME_TTY=1 bash "$SCRIPT" --calibrate --file "$cal5" 2>&1)
+assert_contains "$D" "$out" "T15: last-verdict is resolved by ts, not file order"
+
+# ...and the mirror: file order says HIT, time order says MISS -> not eligible.
+cal6="$tmp/cal6.jsonl"
+{
+  printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"m","exit_status":0}\n' "$D"
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":false,"verdict_source":"agent"}\n' "$T_LATE" "$D"
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":true,"verdict_source":"agent"}\n' "$T_EARLY" "$D"
+} > "$cal6"
+out=$(printf 'q\n' | DELEGATE_SWEEP_ASSUME_TTY=1 bash "$SCRIPT" --calibrate --file "$cal6" 2>&1)
+assert_contains "no agent-hit delegations" "$out" "T15: a superseded HIT is not re-offered"
+
 echo
 echo "$pass passed, $fail failed"
 if [[ "$fail" -gt 0 ]]; then exit 1; fi
