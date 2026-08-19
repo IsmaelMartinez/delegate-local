@@ -1386,13 +1386,17 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
   # mirrors the proven matcher in experiments/score-t4.sh (`[a-z]{3,}ing`, whose
   # {3,} floor carries the same trade-off, documented there). The participial arm
   # is anchored to the end of the line: the check is named for a TAIL, and an
-  # unanchored arm flagged load-bearing mid-sentence clauses as padding. Measured
-  # 2026-08-19 over the last PROSE line of 301 commits with a real body (git
-  # trailers stripped first — an earlier count of "297 bodies" was 93% trailers,
-  # because bash `case` is case-sensitive and missed GitHub's squash-merge
-  # `Co-authored-by:`), the unanchored form raised 12 flags of which 7 were false
-  # positives, and this one raises 4, all of them genuine padding tails. Three details are load-
-  # bearing and each was measured, so do not "simplify" them away:
+  # unanchored arm flagged load-bearing mid-sentence clauses as padding.
+  #
+  # Measured 2026-08-19 over the last PROSE line of 301 commits that have a real
+  # body: the unanchored form raises 12 flags, of which 7 are false positives,
+  # and this arm raises 4 flags, all of them genuine padding tails. Git trailers
+  # are stripped before taking that line; an earlier count of "297 bodies" was
+  # 93% trailers, because bash `case` is case-sensitive and so missed GitHub's
+  # squash-merge `Co-authored-by:`.
+  #
+  # Three details below are load-bearing and each was measured, so do not
+  # "simplify" them away:
   #   - the `([[:space:]]…)?` keeps `ing` a WORD ending. Dropping it makes
   #     `[a-z]{3,}ing` a prefix match and every `-ings` plural (settings,
   #     warnings, findings, strings, mappings) becomes a false positive.
