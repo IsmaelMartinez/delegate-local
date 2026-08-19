@@ -81,6 +81,16 @@ jobs:
       - name: Prompts-library tests
         run: bash tests/test-prompts-library.sh
 
+      - name: Install pytest
+        # The two suites below assert on real pytest runs, not mocks.
+        run: python3 -m pip install --quiet pytest
+
+      - name: Patch oracle
+        run: bash tests/test-apply-and-test.sh
+
+      - name: fix-with-test fixture integrity
+        run: bash tests/test-fix-with-test-fixtures.sh
+
       - name: Eval-skill-triggers tests
         run: bash tests/test-eval-skill-triggers.sh
 
