@@ -30,7 +30,7 @@ The dashboards chart LogQL over the delegate metrics JSONL, not Tempo traces, so
 bash scripts/sync-metrics-to-loki.sh
 ```
 
-It reads `~/.claude/skills/delegate-local/metrics.jsonl` (override with `--metrics-file` or `DELEGATE_METRICS_FILE`), pushes one log line per row stamped at the row's own `ts`, and records a line-offset watermark next to the file so re-runs only push rows appended since last time. That makes it safe to schedule for ongoing freshness — for example a `launchd` agent or a cron entry every few minutes:
+It reads `~/.local/share/delegate-local/metrics.jsonl` (override with `--metrics-file` or `DELEGATE_METRICS_FILE`), pushes one log line per row stamped at the row's own `ts`, and records a line-offset watermark next to the file so re-runs only push rows appended since last time. That makes it safe to schedule for ongoing freshness — for example a `launchd` agent or a cron entry every few minutes:
 
 ```bash
 */5 * * * * /bin/bash /path/to/repo/scripts/sync-metrics-to-loki.sh >/dev/null 2>&1

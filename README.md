@@ -106,12 +106,12 @@ bash <install-path>/scripts/audit-models.sh
 
 ### Personalising routing (recommended)
 
-The shipped `pick-model.sh` is one preference list for everyone. To override the order on a specific machine without forking the repo, drop a bash file at `~/.claude/skills/delegate-local/config.sh`. `pick-model.sh` sources it after the shipped defaults are set, so any tier the file touches wins. Untouched tiers fall through to shipped defaults; an absent file changes nothing.
+The shipped `pick-model.sh` is one preference list for everyone. To override the order on a specific machine without forking the repo, drop a bash file at `~/.local/share/delegate-local/config.sh`. `pick-model.sh` sources it after the shipped defaults are set, so any tier the file touches wins. Untouched tiers fall through to shipped defaults; an absent file changes nothing.
 
 > **Trust note:** `config.sh` is sourced as bash by `pick-model.sh` (and `profile.sh` by `load-flavor.sh`), meaning their contents execute with your environment and privileges. This is arbitrary code execution by design, similar to `~/.aiderrc` or `~/.claude/settings.local.json`. Only place a `config.sh` or `profile.sh` you wrote yourself or fully trust at those paths; never paste one from an untrusted source. `load-flavor.sh` additionally skips a profile that isn't owned by you or is group/world-writable. See [SECURITY.md](SECURITY.md) for the full trust model.
 
 ```bash
-# ~/.claude/skills/delegate-local/config.sh
+# ~/.local/share/delegate-local/config.sh
 case "$tier" in
   prose) prefs=("gemma4" "qwen3.6" "qwen3-next") ;;
 esac
@@ -126,11 +126,56 @@ bash <install-path>/scripts/onboard.sh
 Without a terminal it degrades to print-only and writes nothing. The two probes also work standalone — each is read-only and prints to stdout, never auto-writes:
 
 ```bash
-bash <install-path>/scripts/init.sh > ~/.claude/skills/delegate-local/config.sh
-bash <install-path>/scripts/derive-flavor.sh > ~/.claude/skills/delegate-local/profile.sh
+bash <install-path>/scripts/init.sh > ~/.local/share/delegate-local/config.sh
+bash <install-path>/scripts/derive-flavor.sh > ~/.local/share/delegate-local/profile.sh
 ```
 
 Set `DELEGATE_LOCAL_CONFIG=/some/other/path.sh` to redirect the routing-override path, and `DELEGATE_LOCAL_PROFILE=/some/other/profile.sh` to redirect the flavor-profile path (useful for testing or per-project overrides — `onboard.sh`, `pick-model.sh`, and `load-flavor.sh` all honour them).
+
+## Where per-user data lives
+
+Metrics, the routing override and the flavour profile live in a data directory,
+not inside the installed skill:
+
+```
+~/.local/share/delegate-local/
+  metrics.jsonl        every call, one JSON line
+  metrics.loki-sync    Loki watermark, if you use the sync job
+  config.sh            routing override
+  profile.sh           flavour profile
+```
+
+They used to default to `~/.claude/skills/delegate-local/`, which is the
+directory the skill installer owns, so `npx skills add ... update` could delete
+your accumulated calibration history.
+
+Resolution per file, highest first: the file-specific variable
+(`DELEGATE_METRICS_FILE`, `DELEGATE_LOCAL_CONFIG`, `DELEGATE_LOCAL_PROFILE`),
+then `DELEGATE_LOCAL_DATA_DIR`, then the default above. `XDG_DATA_HOME` is
+deliberately not consulted: it is commonly set in a shell rc file and absent in
+GUI-launched processes, so honouring it would make a verdict recorded in your
+terminal attach to a different metrics file than one recorded by an agent.
+
+### Moving an existing install
+
+```bash
+bash <install-path>/scripts/onboard.sh --migrate-data
+```
+
+It copies, never moves, so it cannot destroy anything, and it refuses to
+overwrite a target that already exists with different content.
+
+If you also plan to stop symlinking the skill at a dev checkout, the order
+matters and the wrong one fails silently:
+
+1. migrate the data
+2. verify with `metrics-summary.sh` that the totals match
+3. prune any stale git worktrees holding older copies of the scripts
+4. repoint the skill symlink **last**
+
+Repointing before migrating leaves the history stranded where nothing can read
+it, and the migration then reports success having copied nothing.
+
 
 ## Forking / adopting this skill
 
@@ -148,7 +193,7 @@ The mechanisms are fork-friendly out of the box — routing, metrics, and the fe
    |----------|---------|------------------|
    | `DELEGATE_GITHUB_REPO` | `IsmaelMartinez/delegate-local` | Repo targeted by the drafted `gh issue create` command (`delegate-feedback.sh`) |
    | `DELEGATE_CONTENT_ALLOW_ORG` | `IsmaelMartinez` | GitHub org/user allowed by the content-scan URL allowlist (`validate-skill-content.sh`) |
-   | `DELEGATE_METRICS_FILE` | `~/.claude/skills/delegate-local/metrics.jsonl` | Metrics JSONL location |
+   | `DELEGATE_METRICS_FILE` | `~/.local/share/delegate-local/metrics.jsonl` | Metrics JSONL location |
    | `DELEGATE_PROMPTS_DIR` | `<install-path>/prompts` | Recipe directory |
    | `OLLAMA_HOST` / `MLX_HOST` | `http://localhost:11434` / `http://localhost:8080` | Backend endpoints |
 
@@ -169,7 +214,7 @@ The mechanisms are fork-friendly out of the box — routing, metrics, and the fe
 ## Files
 
 - `SKILL.md` — triggering description and usage patterns the agent reads.
-- `scripts/delegate.sh <tier> "<prompt>"` — wraps `pick-model.sh` + the backend's HTTP API (Ollama or MLX, auto-selected) with `think:false` and `temperature:0` defaults. Appends one JSON line per call to `~/.claude/skills/delegate-local/metrics.jsonl`. Use this instead of bare `ollama run` or hand-rolled `curl` calls.
+- `scripts/delegate.sh <tier> "<prompt>"` — wraps `pick-model.sh` + the backend's HTTP API (Ollama or MLX, auto-selected) with `think:false` and `temperature:0` defaults. Appends one JSON line per call to `~/.local/share/delegate-local/metrics.jsonl`. Use this instead of bare `ollama run` or hand-rolled `curl` calls.
 - `scripts/pick-model.sh <tier>` — resolves a tier to the best installed model via substring preference lists. Tiers are `code`, `prose`, `reasoning`, and `long-context` (active), plus `vision`, `embedding`, `premium-general`, and `reasoning-vision` (scaffolded). Edit this file (not the skill body) when your installed set changes.
 - `scripts/audit-models.sh` — prints installed models, tier routing, and llmfit-driven upgrade suggestions filtered to first-party providers. Read-only; never pulls.
 - `scripts/metrics-summary.sh` — reads the metrics JSONL and prints volume per tier, p50/p95 latency, total tokens-avoided, top models by frequency, and per-project / per-recipe hit-rate. Pass `--since YYYY-MM-DD` or `--days N` to window every section to recent rows. Read-only.

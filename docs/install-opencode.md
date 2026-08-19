@@ -45,4 +45,4 @@ The default config path is the Claude Code one (`~/.claude/skills/...`). On an O
 rm -rf ~/.config/opencode/skills/delegate-local
 ```
 
-The metrics file written by `delegate.sh` defaults to `~/.claude/skills/delegate-local/metrics.jsonl` regardless of which agent invoked it. To redirect it, set `DELEGATE_METRICS_FILE=~/.config/opencode/skills/delegate-local/metrics.jsonl` in the shell that runs OpenCode.
+The metrics file written by `delegate.sh` defaults to `~/.local/share/delegate-local/metrics.jsonl` regardless of which agent invoked it. To redirect it, set `DELEGATE_METRICS_FILE=~/.config/opencode/skills/delegate-local/metrics.jsonl` in the shell that runs OpenCode.

@@ -21,7 +21,7 @@ Distinct from `bulk-classify.md`, which assigns each item to one category from a
 # For the delegate-local calibration use case, pull recent MISS reasons from
 # the metrics log over a rolling window:
 jq -r 'select(.source=="feedback" and .kept==false) | .reason // empty' \
-  ~/.claude/skills/delegate-local/metrics.jsonl \
+  ~/.local/share/delegate-local/metrics.jsonl \
   | tail -40 > "$CLAUDE_JOB_DIR/tmp/miss-reasons.txt"
 ```
 
@@ -55,7 +55,7 @@ Correct: The dominant theme is output-shape drift, for example "bulleted output 
 
 ```bash
 jq -r 'select(.source=="feedback" and .kept==false) | .reason // empty' \
-  ~/.claude/skills/delegate-local/metrics.jsonl | tail -40 \
+  ~/.local/share/delegate-local/metrics.jsonl | tail -40 \
   | bash scripts/delegate.sh --recipe miss-theme-cluster \
       reasoning "3-5 themes, most frequent first, one verbatim quote each. Every theme needs at least two supporting reasons. Flat prose, no bullets, invent nothing."
 ```
