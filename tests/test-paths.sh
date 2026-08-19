@@ -84,11 +84,19 @@ got=$(env -i PATH="$SAFE_PATH" HOME="$H" bash "$REPO/scripts/sync-metrics-to-lok
 assert_eq "$H/.local/share/delegate-local/metrics.jsonl" "$got" "sync-metrics-to-loki: same default"
 
 echo "--- config.sh and profile.sh ---"
+# The profile candidate prints unconditionally, so it can be probed for real.
+# The config candidate only prints when the environment probe finds installed
+# models, which is false on a CI runner, so asserting on it here would pass
+# locally and fail in CI. It is covered structurally instead, and behaviourally
+# by tests/test-onboard.sh, which mocks the provider endpoint.
 onb=$(env -i PATH="$SAFE_PATH" HOME="$H" bash "$REPO/scripts/onboard.sh" 2>&1 || true)
-assert_contains "$H/.local/share/delegate-local/config.sh" "$onb" \
-  "onboard: config.sh target under the data dir"
 assert_contains "$H/.local/share/delegate-local/profile.sh" "$onb" \
   "onboard: profile.sh target under the data dir"
+for f in onboard pick-model; do
+  if grep -q 'DELEGATE_TO_OLLAMA_CONFIG:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/config.sh' "$REPO/scripts/$f.sh"; then
+    echo "  PASS  $f: config.sh resolves through the data dir"; pass=$((pass+1))
+  else echo "  FAIL  $f: config.sh default not on the data dir"; fail=$((fail+1)); fi
+done
 
 echo "--- no script still DEFAULTS to the legacy data path ---"
 # Matches only a `:-` default expansion. Two scripts reference the legacy path
