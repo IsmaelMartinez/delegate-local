@@ -1387,9 +1387,11 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
   # {3,} floor carries the same trade-off, documented there). The participial arm
   # is anchored to the end of the line: the check is named for a TAIL, and an
   # unanchored arm flagged load-bearing mid-sentence clauses as padding. Measured
-  # 2026-08-18 over the last line of 297 hand-written commit bodies, the
-  # unanchored form raised 2 false positives and this one raises 0, with recall
-  # unchanged on the recipes' own `Wrong:` examples. Three details are load-
+  # 2026-08-19 over the last PROSE line of 301 commits with a real body (git
+  # trailers stripped first — an earlier count of "297 bodies" was 93% trailers,
+  # because bash `case` is case-sensitive and missed GitHub's squash-merge
+  # `Co-authored-by:`), the unanchored form raised 12 flags of which 7 were false
+  # positives, and this one raises 4, all of them genuine padding tails. Three details are load-
   # bearing and each was measured, so do not "simplify" them away:
   #   - the `([[:space:]]…)?` keeps `ing` a WORD ending. Dropping it makes
   #     `[a-z]{3,}ing` a prefix match and every `-ings` plural (settings,
@@ -1401,10 +1403,15 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
   #     class makes each comma position rescan the rest of the line: GNU grep in
   #     a UTF-8 locale (what CI and the Docker image run) measured 6336ms on a
   #     72KB line against 3ms for the bounded form.
-  # KNOWN GAP: a tail containing a non-terminal full stop (`, ensuring parity
-  # with Node.js consumers.`, a version number, a dotted filename) is no longer
-  # detected. Recovering it needs an alternation inside a star, the shape this
-  # repo bans for ReDoS, so it is tracked as issue #390 rather than bolted on here.
+  # ACCEPTED GAP: a tail containing a non-terminal full stop (`, ensuring parity
+  # with Node.js consumers.`, a version number, a dotted filename) is not
+  # detected. #390 proposed recovering it and was measured and DECLINED: on the
+  # no-match path production actually takes, the candidate ran 41ms to 6881ms as
+  # the line grew 5KB to 83KB (quadratic), dropping the {0,200} bound would have
+  # silently auto-stripped filler tails over 200 chars, and the recovered shapes
+  # can never be auto-fixed anyway because the perl strip's own [^,.!?]* cannot
+  # cross a dot either. Roughly 1 body in 300 carries the shape. Do not retry
+  # without reading #390 first.
   # The This-X arm stays enumerated to bound false positives
   # but is extended with the gap verbs the same analysis surfaced (prevents,
   # avoids, serves). Warn-only framing keeps any false positive cheap.
