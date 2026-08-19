@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.6](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.5...v0.27.6) (2026-08-19)
+
+
+### Bug Fixes
+
+* match a delegation for a boundary that names its repo ([#397](https://github.com/IsmaelMartinez/delegate-local/issues/397)) ([f84a9b7](https://github.com/IsmaelMartinez/delegate-local/commit/f84a9b7d5a6f9115c67574d51e5241308a1c8d80))
+
 ## [0.27.5](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.4...v0.27.5) (2026-08-18)
 
 
