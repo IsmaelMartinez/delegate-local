@@ -105,9 +105,10 @@ cutoff_iso=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime
 # file surfaces as exit 2 rather than a silent "nothing to sweep".
 if (( calibrate )); then
   # Eligible = the agent LAST verdict by TIMESTAMP is a hit, and no human has
-  # judged it. sort_by(.ts) before the reduce is load-bearing: the file is not
-  # strictly chronological, and 3 delegations in the live history have a
-  # different last verdict by file order than by time.
+  # judged it. sort_by(.ts) before the reduce is a guard, not a correction: the
+  # feedback rows measured were chronological, so it changed no verdict there.
+  # It is kept because nothing enforces that: a concurrent or backfilled
+  # append would otherwise make "latest" mean last-written rather than latest.
   # Restricted to hits deliberately: the bias under test is "I used it, so it
   # was good", which is only observable where the agent claimed a hit. An
   # unrestricted recent sample measured 20% agent-hit against 73% lifetime, so
