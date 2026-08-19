@@ -37,7 +37,9 @@
 #   6  USAGE    bad invocation
 #
 # Output:
-#   Always prints `VERDICT: <PASS|FAIL|PARSE|APPLY|TIMEOUT|REFUSE>` on stdout.
+#   Prints `VERDICT: <PASS|FAIL|PARSE|APPLY|TIMEOUT|REFUSE>` on stdout for every
+#   exit except USAGE (6) — a bad invocation or an unusable interpreter writes to
+#   stderr and emits no verdict, because there was no run to report a verdict on.
 #   On non-PASS: prints `DETAIL: <one-line context>` on stdout.
 #   On FAIL/TIMEOUT: pytest's last line is included in DETAIL.
 #
