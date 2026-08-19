@@ -37,6 +37,8 @@
 #                                   per-row progress line shows ERROR
 #                                   regardless; this just adds the curl
 #                                   reason).
+#   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
+#                               (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE           overridden by --metrics-file. Default
 #                                   ~/.claude/skills/delegate-local/
 #                                   metrics.jsonl.

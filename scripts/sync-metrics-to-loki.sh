@@ -19,6 +19,8 @@
 #
 # Env (overridden by the matching flags):
 #   DELEGATE_LOKI_URL        Loki base URL. Default http://localhost:3100.
+#   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
+#                               (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE    metrics JSONL. Default
 #                            ~/.local/share/delegate-local/metrics.jsonl.
 #   DELEGATE_LOKI_STATE      watermark file. Default <metrics-file>.loki-sync.

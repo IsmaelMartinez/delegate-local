@@ -8,6 +8,8 @@
 # dispatcher never executes user bash in its own shell.
 #
 # Env:
+#   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
+#                               (default ~/.local/share/delegate-local)
 #   DELEGATE_LOCAL_PROFILE   override profile path
 #                            (default ~/.local/share/delegate-local/profile.sh)
 set -uo pipefail

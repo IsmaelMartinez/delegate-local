@@ -162,6 +162,18 @@ assert_contains "unknown arg" "$out" "T12: names the bad flag"
 out=$(run_onboard '\n\ny' "$tmp/t13p.sh" "$tmp/t13c.sh")
 assert_contains 'case "$tier" in' "$(cat "$tmp/t13c.sh")" "T13: config written from an unterminated trailing y"
 
+# --- M0: the data directory may not exist yet (#360) ------------------------
+# The old default lived inside the installed skill directory, which always
+# existed. The data directory does not, so writing has to create it. Nothing
+# exercised a missing parent before.
+deep="$tmp/fresh/.local/share/delegate-local"
+out=$(run_onboard '\n\ny' "$deep/profile.sh" "$deep/config.sh")
+if [[ -f "$deep/profile.sh" ]]; then
+  echo "  PASS  M0: writes into a data directory that did not exist"; pass=$((pass+1))
+else
+  echo "  FAIL  M0: did not create the missing data directory"; fail=$((fail+1))
+fi
+
 # --- --migrate-data (#360) --------------------------------------------------
 # User data used to default inside the installer-owned skill directory, where
 # `skills update` could delete it. These pin the move across.

@@ -11,6 +11,8 @@
 #
 # Usage:  delegate-feedback.sh [--ts <iso8601>] hit|miss [reason words...]
 # Env:
+#   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
+#                               (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE                 override default metrics path
 #   DELEGATE_FEEDBACK_STALE_SECONDS       max age of the implicit "most recent
 #                                         delegate row" before this script

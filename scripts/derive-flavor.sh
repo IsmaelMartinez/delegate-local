@@ -3,6 +3,7 @@
 # and print it as a profile.sh fragment. Read-only — prints to stdout, never
 # writes. Redirect to install:
 #
+#   mkdir -p ~/.local/share/delegate-local
 #   bash scripts/derive-flavor.sh > ~/.local/share/delegate-local/profile.sh
 #
 # This is the "analyse my own corpus" step of the portable-recipes design

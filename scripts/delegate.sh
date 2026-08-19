@@ -179,6 +179,8 @@
 #                                           #   how much we kept local." Off-
 #                                           #   by-default; opt out for clean
 #                                           #   stderr in batch runs.
+#   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
+#                               (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE=<path>            # override metrics destination
 #   DELEGATE_PROJECT=<name>                 # state the project the delegation
 #                                           #   is FOR, instead of deriving it

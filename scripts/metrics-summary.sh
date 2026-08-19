@@ -10,6 +10,9 @@
 #         --since / --days restrict every section to rows at or after the cutoff
 #         (a windowed view of recent activity; --days N == "the last N days").
 # Env:    DELEGATE_METRICS_FILE   override default metrics path
+#         DELEGATE_LOCAL_DATA_DIR where per-user data lives
+#                                 (default ~/.local/share/delegate-local);
+#                                 DELEGATE_METRICS_FILE takes precedence
 # Exit:   0 OK, 1 file missing, 2 usage error.
 
 set -uo pipefail

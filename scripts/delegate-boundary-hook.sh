@@ -46,6 +46,8 @@
 # Env:
 #   DELEGATE_BOUNDARY_MODE        warn (default) | enforce | off
 #   DELEGATE_BOUNDARY_WINDOW_MIN  look-back window for a prior delegation (default 10)
+#   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
+#                               (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE         metrics path (shared with delegate.sh)
 #   DELEGATE_LOCAL_NO_METRICS=1   skip writing the opportunity row
 

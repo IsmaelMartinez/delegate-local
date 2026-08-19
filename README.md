@@ -126,6 +126,7 @@ bash <install-path>/scripts/onboard.sh
 Without a terminal it degrades to print-only and writes nothing. The two probes also work standalone — each is read-only and prints to stdout, never auto-writes:
 
 ```bash
+mkdir -p ~/.local/share/delegate-local
 bash <install-path>/scripts/init.sh > ~/.local/share/delegate-local/config.sh
 bash <install-path>/scripts/derive-flavor.sh > ~/.local/share/delegate-local/profile.sh
 ```
