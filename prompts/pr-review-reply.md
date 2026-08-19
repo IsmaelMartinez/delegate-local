@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   hash: string
   verdict: string
@@ -69,7 +70,7 @@ bash scripts/delegate.sh --recipe pr-review-reply \
   --var verdict="applied" \
   --var comment="This check false-positives when a substituted value happens to contain braces." \
   --var fix_summary="Switched the unsubstituted-placeholder check to compare against the original-template placeholder set so substituted values containing {{...}} no longer false-positive." \
-  prose "Adhere to the opener rules exactly. One sentence only."
+  "Adhere to the opener rules exactly. One sentence only."
 ```
 
 ## Anti-hallucination guards (each line addresses a recurring miss-mode)

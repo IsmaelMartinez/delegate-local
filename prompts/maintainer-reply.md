@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   stdin: string
   ask: string
@@ -99,7 +100,7 @@ echo "The token drop is on Teams' side, in its MSAL cache, not in teams-for-linu
       --var ask="whether the token survives a cold start of the app" \
       --var recipient="nneul" \
       --var signoff="Thanks again!" \
-      prose "Two sentences: state the cause, then ask the reader a direct question. Do not echo any instruction."
+      "Two sentences: state the cause, then ask the reader a direct question. Do not echo any instruction."
 ```
 
 ## Anti-hallucination guards (each line addresses a recurring miss-mode)

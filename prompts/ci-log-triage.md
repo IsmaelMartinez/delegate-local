@@ -1,4 +1,5 @@
 ---
+tier: reasoning
 inputs:
   stdin: string
 ---
@@ -63,7 +64,7 @@ Rules:
 ```bash
 gh run view <run-id> --log-failed \
   | bash scripts/delegate.sh --recipe ci-log-triage \
-      reasoning "Output exactly the five fields in order. ROOT_CAUSE must be verbatim text from the log."
+      "Output exactly the five fields in order. ROOT_CAUSE must be verbatim text from the log."
 ```
 
 For a large `--log-failed` output on a 35B-class prose-tier host (see issue #110), narrow with grep first:
@@ -73,7 +74,7 @@ gh run view <run-id> --log-failed \
   | grep -B 2 -A 20 -iE '##\[error\]|FAIL|error:|panic|fatal' \
   | tail -300 \
   | bash scripts/delegate.sh --recipe ci-log-triage \
-      reasoning "Output exactly the five fields in order. ROOT_CAUSE must be verbatim text from the log."
+      "Output exactly the five fields in order. ROOT_CAUSE must be verbatim text from the log."
 ```
 
 After the call, verify (see Expected output shape) and record the verdict:

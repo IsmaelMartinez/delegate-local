@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   title: string
   number: integer
@@ -99,7 +100,7 @@ bash scripts/delegate.sh --recipe release-note \
   --var number=80 \
   --var body="<the PR body>" \
   --var anchor="<one or two existing CHANGELOG bullets>" \
-  prose "Adhere to the bullet shape exactly. One sentence, ≤ 200 chars."
+  "Adhere to the bullet shape exactly. One sentence, ≤ 200 chars."
 ```
 
 ## Anti-hallucination guards (each line addresses a recurring miss-mode)

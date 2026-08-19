@@ -1,4 +1,5 @@
 ---
+tier: reasoning
 inputs:
   stdin: string
   categories: string
@@ -61,7 +62,7 @@ Rules:
 bash scripts/delegate.sh --recipe bulk-classify \
   --var categories="display-session-media, auth-network-edge, tray-notifications, packaging, configuration-cli, enhancement, other" \
   --var output_format='NUMBER | CATEGORY | one-sentence summary' \
-  reasoning "One line per item, in order. Category must be one of the listed set verbatim. No headers, no commentary." \
+  "One line per item, in order. Category must be one of the listed set verbatim. No headers, no commentary." \
   < "$CLAUDE_JOB_DIR/tmp/items.txt"
 ```
 

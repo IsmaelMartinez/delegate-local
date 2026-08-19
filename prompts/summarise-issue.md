@@ -1,4 +1,5 @@
 ---
+tier: reasoning
 inputs:
   kind: string
   N_FACTS: integer
@@ -87,7 +88,7 @@ gh issue view 75 --json title,body,comments \
   | bash scripts/delegate.sh --recipe summarise-issue \
       --var kind="issue" \
       --var N_FACTS=5 \
-      reasoning "Adhere to the section order exactly. Omit empty sections."
+      "Adhere to the section order exactly. Omit empty sections."
 ```
 
 For a CI log:
@@ -97,7 +98,7 @@ gh run view <run-id> --log-failed \
   | bash scripts/delegate.sh --recipe summarise-issue \
       --var kind="CI log" \
       --var N_FACTS=5 \
-      reasoning "List only the failure events. Omit 'What's blocking' if the log already names the cause."
+      "List only the failure events. Omit 'What's blocking' if the log already names the cause."
 ```
 
 ## Anti-hallucination guards (each line addresses a recurring miss-mode)

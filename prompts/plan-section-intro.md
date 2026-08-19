@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   style_anchor: string
   phase_facts: string
@@ -157,7 +158,7 @@ Run the anchor `awk` above as its own step and author the fact list yourself, th
 bash scripts/delegate.sh --recipe plan-section-intro \
   --var style_anchor="<the existing phase intro, verbatim, heading and framing paragraphs>" \
   --var phase_facts="<the structured fact list you authored>" \
-  prose "Match the STYLE ANCHOR's voice and shape only. Do NOT echo its sentences. Produce a NEW intro for the phase named in FACTS."
+  "Match the STYLE ANCHOR's voice and shape only. Do NOT echo its sentences. Produce a NEW intro for the phase named in FACTS."
 ```
 
 The trailing prompt arg reinforces the highest-signal rule — the anti-echo directive — because that was the failure mode that triggered this recipe. The recipe template carries the structural directives and the anti-padding guard.

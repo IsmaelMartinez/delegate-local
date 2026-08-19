@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   recent_commits: string
   diff_stat: string
@@ -145,7 +146,7 @@ bash scripts/delegate.sh --recipe commit-message \
   --var diff_stat="<the git diff --cached --stat output>" \
   --var why="<one or two sentences>" \
   --var type=feat \
-  prose "Match the example commit messages exactly in shape and tone. Keep subject ≤ 72 chars. Use the feat: prefix."
+  "Match the example commit messages exactly in shape and tone. Keep subject ≤ 72 chars. Use the feat: prefix."
 ```
 
 The trailing prompt arg is the reinforcement instruction; the recipe template carries the structural directives. When you already know the type, pass it as `--var type=<type>` — the template substitutes it as a highest-priority override that short-circuits the priority-list reasoning entirely, which is the most reliable lever because the model copies a literal token rather than inferring a rule (see the 2026-06-04 calibration entry). Leave `--var type` off to let the priority list choose. The `Use the <type>: prefix.` suffix is the call-site reinforcement for the no-explicit-type case — walk the TYPE-selection priority list in the template body top to bottom, take the first matching rule's type, and substitute it literally into the trailing prompt. (The mapping is intentionally not re-enumerated here so it cannot drift out of sync with the list above.) The 2026-05-23 calibration entry below documents why this hint is part of the recipe rather than a workaround.

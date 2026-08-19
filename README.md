@@ -215,7 +215,7 @@ The mechanisms are fork-friendly out of the box — routing, metrics, and the fe
 ## Files
 
 - `SKILL.md` — triggering description and usage patterns the agent reads.
-- `scripts/delegate.sh <tier> "<prompt>"` — wraps `pick-model.sh` + the backend's HTTP API (Ollama or MLX, auto-selected) with `think:false` and `temperature:0` defaults. Appends one JSON line per call to `~/.local/share/delegate-local/metrics.jsonl`. Use this instead of bare `ollama run` or hand-rolled `curl` calls.
+- `scripts/delegate.sh <tier> "<prompt>"` (or `--recipe NAME ["<prompt>"]`, which takes its tier from the recipe and makes the prompt optional) — wraps `pick-model.sh` + the backend's HTTP API (Ollama or MLX, auto-selected) with `think:false` and `temperature:0` defaults. Appends one JSON line per call to `~/.local/share/delegate-local/metrics.jsonl`. Use this instead of bare `ollama run` or hand-rolled `curl` calls.
 - `scripts/pick-model.sh <tier>` — resolves a tier to the best installed model via substring preference lists. Tiers are `code`, `prose`, `reasoning`, and `long-context` (active), plus `vision`, `embedding`, `premium-general`, and `reasoning-vision` (scaffolded). Edit this file (not the skill body) when your installed set changes.
 - `scripts/audit-models.sh` — prints installed models, tier routing, and llmfit-driven upgrade suggestions filtered to first-party providers. Read-only; never pulls.
 - `scripts/metrics-summary.sh` — reads the metrics JSONL and prints volume per tier, p50/p95 latency, total tokens-avoided, top models by frequency, and per-project / per-recipe hit-rate. Pass `--since YYYY-MM-DD` or `--days N` to window every section to recent rows. Read-only.

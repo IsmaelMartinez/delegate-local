@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   stdin: string
   version: string?
@@ -65,7 +66,7 @@ Correct: This release focuses on stability: the sync crash (#812) and the slow c
 ```bash
 bash scripts/delegate.sh --recipe release-announcement \
   --var version="teams-for-linux v2.10.0" \
-  prose "Two short paragraphs, warm and grounded, no puffery, no em dashes, no exclamation marks. Refer to themes by name, keep the #NNN numbers, invent nothing." \
+  "Two short paragraphs, warm and grounded, no puffery, no em dashes, no exclamation marks. Refer to themes by name, keep the #NNN numbers, invent nothing." \
   < "$CLAUDE_JOB_DIR/tmp/highlights.md"
 ```
 

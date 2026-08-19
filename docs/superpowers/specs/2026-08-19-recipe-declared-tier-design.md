@@ -166,12 +166,30 @@ More guessing, with less information than the recipe already has.
 
 ## Scope, split across two PRs
 
-**PR A** — `--tier` flag, the line 1037 and ADR 0012 corrections, unknown-flag
-rejection with its metrics row, `--` documented and tested. Self-contained, and
-a prerequisite for PR B's documentation.
+**PR A** (#413, merged as 28f69de) — `--tier` flag; line 1037 and ADR 0012
+become correct rather than needing edits; an unknown flag in the tier slot is
+diagnosed as a mistyped flag while still writing its metrics row.
 
-**PR B** — `tier:` frontmatter for 20 recipes, the lone-positional
-disambiguation, and the documentation sweep above.
+Rejecting every unknown `-` token was dropped after measurement: a dash-leading
+prompt works today without `--` (`delegate.sh prose "-not a flag"` succeeds,
+because the prompt is the second positional and never reaches the option
+parser), `--` appears in zero tests and zero docs, and erroring inside the
+argument loop writes no metrics row at all since parsing ends at line 355 and
+`log_metric` is not defined until 459. A regression test now pins the
+dash-leading prompt.
+
+**PR B** — `tier:` frontmatter for the 20 dispatchable recipes, the
+lone-positional disambiguation, and the documentation sweep above.
+
+Positional resolution moves from beside the argument loop to just after `pick=`
+is set, because the tier vocabulary is read from `pick-model.sh`'s own `TIERS=`
+line rather than duplicated. The review confirmed nothing between the two points
+reads `$tier` or `$prompt`.
+
+The boundary hook's nudge drops its tier too, and the test that asserted it
+"names a concrete tier" is inverted rather than deleted: the nudge used to emit
+one so the agent did not have to guess at a `<tier>` stand-in, and that slot is
+exactly where 39 of the 44 bad-tier calls came from.
 
 Recipes served from `DELEGATE_PROMPTS_DIR` (`ground-check` and six
 `_experiments` variants have no file in `prompts/`) declare no tier and keep the

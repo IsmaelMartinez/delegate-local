@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   file_path: string
   stdin: string
@@ -32,7 +33,7 @@ bash scripts/semantic-search.sh --top 10 "where is the auth middleware" src/**/*
   | while read -r f; do
       printf '%s — ' "$f"
       cat "$f" | bash scripts/delegate.sh --recipe bulk-file-summary \
-        --var file_path="$f" prose "One line only."
+        --var file_path="$f" "One line only."
     done
 ```
 
@@ -74,7 +75,7 @@ Single-file form (one delegation, one summary):
 ```bash
 cat src/auth/middleware.ts | bash scripts/delegate.sh --recipe bulk-file-summary \
   --var file_path=src/auth/middleware.ts \
-  prose "One line only. Describe this file's primary purpose."
+  "One line only. Describe this file's primary purpose."
 ```
 
 Batch over a glob (recommended — each call stays independently small, fits the prose-tier ceiling per issue #110). This loop is for an interactive shell; a sandboxed agent harness refuses `for` loops for the same reason it refuses command substitution, so from an agent session issue one call per file instead:
@@ -84,7 +85,7 @@ for f in prompts/*.md; do
   printf '%s — ' "$f"
   cat "$f" | bash scripts/delegate.sh --recipe bulk-file-summary \
     --var file_path="$f" \
-    prose "One line only. Describe this file's primary purpose."
+    "One line only. Describe this file's primary purpose."
 done
 ```
 

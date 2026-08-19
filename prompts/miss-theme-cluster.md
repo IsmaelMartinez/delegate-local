@@ -1,4 +1,5 @@
 ---
+tier: reasoning
 inputs:
   stdin: string
 checks:
@@ -57,7 +58,7 @@ Correct: The dominant theme is output-shape drift, for example "bulleted output 
 jq -r 'select(.source=="feedback" and .kept==false) | .reason // empty' \
   ~/.local/share/delegate-local/metrics.jsonl | tail -40 \
   | bash scripts/delegate.sh --recipe miss-theme-cluster \
-      reasoning "3-5 themes, most frequent first, one verbatim quote each. Every theme needs at least two supporting reasons. Flat prose, no bullets, invent nothing."
+      "3-5 themes, most frequent first, one verbatim quote each. Every theme needs at least two supporting reasons. Flat prose, no bullets, invent nothing."
 ```
 
 After the call, verify (see Expected output shape) and record the verdict:
