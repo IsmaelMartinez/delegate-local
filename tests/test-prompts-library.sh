@@ -348,12 +348,22 @@ assert_contains "TEST-PLAN-EVIDENCE" "$pr_description_guards" \
 # README.md has no frontmatter, and semantic-search.md says in its own body that
 # "there is no `delegate.sh --recipe` call because the wrapper assumes text-in /
 # text-out" — it is a shell-pipeline recipe, not a model prompt.
-VALID_TIERS="code prose reasoning long-context vision embedding premium-general reasoning-vision"
+# Read the vocabulary from pick-model.sh's own TIERS line rather than restating
+# it, so this test cannot drift from the source of truth the wrapper uses.
+VALID_TIERS=$(sed -n 's/^TIERS="\(.*\)"$/\1/p' "$REPO/scripts/pick-model.sh" | tr '|' ' ')
+if [[ -z "$VALID_TIERS" ]]; then
+  echo "  FAIL  could not read TIERS from scripts/pick-model.sh"; fail=$((fail+1))
+fi
 for recipe_file in "$PROMPTS_DIR"/*.md; do
   base=$(basename "$recipe_file" .md)
   [[ "$base" == "README" ]] && continue
   [[ "$base" == "semantic-search" ]] && continue
-  [[ "$(head -1 "$recipe_file")" == "---" ]] || continue
+  if [[ "$(head -1 "$recipe_file")" != "---" ]]; then
+    if grep -q '^## Prompt template' "$recipe_file"; then
+      echo "  FAIL  $base.md is dispatchable but has no frontmatter to declare tier: in"; fail=$((fail+1))
+    fi
+    continue
+  fi
   declared=$(awk '
     NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
     in_fm && /^---[[:space:]]*$/ { exit }
@@ -378,7 +388,8 @@ for recipe_file in "$PROMPTS_DIR"/*.md; do
   base=$(basename "$recipe_file" .md)
   inv=$(awk '/delegate\.sh --recipe/{p=1} p{print; if($0 !~ /\\$/) exit}' "$recipe_file" | tr '\n' ' ')
   [[ -z "$inv" ]] && continue
-  if printf '%s' "$inv" | grep -qE '(^|[[:space:]])(prose|code|reasoning|long-context)([[:space:]]|$)'; then
+  tier_alt=$(printf '%s' "$VALID_TIERS" | tr ' ' '|' | sed 's/^|//; s/|$//')
+  if printf '%s' "$inv" | grep -qE "(^|[[:space:]])($tier_alt)([[:space:]]|\$)"; then
     echo "  FAIL  $base.md invocation still passes a tier"; fail=$((fail+1))
   else
     echo "  PASS  $base.md invocation passes no tier"; pass=$((pass+1))

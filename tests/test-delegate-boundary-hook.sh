@@ -494,7 +494,7 @@ fi
 if [[ "$out" != *' prose'* && "$out" != *' code'* && "$out" != *' reasoning'* ]]; then
   echo "  PASS  nudge: names no tier (the recipe declares it)"; pass=$((pass+1))
 else
-  echo "  FAIL  nudge: names no tier (the recipe declares it)"; fail=$((fail+1))
+  echo "  FAIL  nudge: still names a tier — the recipe declares it now"; fail=$((fail+1))
 fi
 if [[ "$out" != *'<tier>'* ]]; then
   echo "  PASS  nudge: no unreplaced <tier> stand-in"; pass=$((pass+1))
