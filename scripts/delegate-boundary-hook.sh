@@ -261,6 +261,37 @@ if [[ "$cmd" =~ $_cd_sq ]] || [[ "$cmd" =~ $_cd_dq ]] || [[ "$cmd" =~ $_cd_bare 
 fi
 project="${cd_project:-$cwd_project}"
 
+# --- a boundary that names its repo explicitly (#393 follow-up) ------------
+# `gh issue comment --repo owner/name` carries no `cd`, so it is filed under the
+# session cwd. This candidate widens the delegation LOOKUP only and never sets
+# the recorded project: replaying the whole metrics file showed recording it buys
+# no extra recall, because the either-match set is identical, while adding four
+# `rate=0%` project keys and moving 22 rows off two real projects. The driver is
+# hub-repo sweeps (`gh pr comment N --repo IsmaelMartinez/<other> --body
+# "@dependabot rebase"`), 13 of the 34 affected rows.
+#
+# Parsed off $matched_seg, NOT the raw $cmd, which is the opposite trade-off
+# from the `cd` block above: the scan surface blanks quoted spans, so a `--repo`
+# inside a quoted body cannot reach here (good), but a legitimately quoted
+# `--repo "owner/name"` is blanked too and falls back silently (6 of 534 real
+# invocations, and it fails safe).
+#
+# The charset test is security work, not tidiness. It is the only thing
+# rejecting `--repo IsmaelMartinez/$1`, `--repo $R` and `` --repo `whoami`/name ``
+# — shell-variable values are 11 of 534 real invocations — and it validates the
+# WHOLE value, because a last-segment-only check accepts all three.
+repo_project=""
+_repo_flag_re="(^|[[:space:]])(--repo[[:space:]]+|--repo=|-R[[:space:]]+)([^[:space:]]+)"
+_repo_val_re="^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
+if [[ "$matched_seg" =~ $_repo_flag_re ]]; then
+  repo_val="${BASH_REMATCH[3]}"
+  repo_val="${repo_val%/}"
+  repo_val="${repo_val%.git}"
+  if [[ "$repo_val" =~ $_repo_val_re ]]; then
+    repo_project="${repo_val##*/}"
+  fi
+fi
+
 # --- was the body drafted earlier, into a file? (#349) --------------------
 # `--body-file` / `-F` / `--notes-file` / `--file` pointing at a file that
 # already exists means the drafting moment has passed: the text was authored at
@@ -328,10 +359,18 @@ delegated=false
 if [[ -f "$metrics_file" ]]; then
   # Only the recent tail can fall inside the look-back window, so cap the read
   # instead of slurping the whole (ever-growing) metrics file on each boundary.
-  recent=$(tail -n 500 "$metrics_file" 2>/dev/null | jq -s --argjson win "$((window_min * 60))" --arg proj "$project" --arg proj2 "$cwd_project" --arg recipe "$recipe" --argjson now "$now_epoch" '
+  recent=$(tail -n 500 "$metrics_file" 2>/dev/null | jq -s --argjson win "$((window_min * 60))" --arg proj "$project" --arg proj2 "$cwd_project" --arg proj3 "$repo_project" --arg recipe "$recipe" --argjson now "$now_epoch" '
     [ .[]
       | select((.source // "delegate") == "delegate")
-      | select((.project // "") == $proj or (.project // "") == $proj2)
+      # Any of the three candidates counts. With no `cd`, $proj and $proj2 are
+      # equal, so $proj3 is load-bearing rather than decorative. $proj3 is the
+      # only candidate that can be empty, and it is guarded: 3 delegate rows in
+      # the current file carry no project at all, and an unguarded `== ""` would
+      # let them match every boundary. They are saved today only by the recipe
+      # predicate also failing, which is an accident, not a design.
+      | select((.project // "") == $proj
+               or (.project // "") == $proj2
+               or ($proj3 != "" and (.project // "") == $proj3))
       | select((.recipe // "") == $recipe)
       | ((.ts | fromdateiso8601?) // 0)
       | select(. > ($now - $win)) ] | length' 2>/dev/null) || recent=0
