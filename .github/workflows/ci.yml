@@ -28,6 +28,7 @@ jobs:
           jq --version
           perl --version | head -2
           bash --version | head -1
+          python3 --version
 
       - name: Validate frontmatter
         run: bash scripts/validate-frontmatter.sh SKILL.md
@@ -88,6 +89,18 @@ jobs:
 
       - name: Boundary-hook tests
         run: bash tests/test-delegate-boundary-hook.sh
+
+      - name: Verdict-sweep tests
+        run: bash tests/test-verdict-sweep.sh
+
+      - name: Verdict stop-hook tests
+        run: bash tests/test-delegate-verdict-stop-hook.sh
+
+      - name: Quality-report tests
+        run: bash tests/test-quality-report.sh
+
+      - name: Quality-trend tests
+        run: bash tests/test-quality-trend.sh
 
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh
