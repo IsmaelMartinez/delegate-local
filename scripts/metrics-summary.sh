@@ -308,9 +308,11 @@ if (( n_feedback > 0 )); then
     # each tier wins independently (verdict revision). A delegation can carry
     # both a human and an agent verdict — they count in separate columns, never
     # merged, so the human hit-rate cannot be inflated by the agent tier.
-    # sort_by(.ts): the file is not strictly chronological, and 3 delegations
-    # have a different last verdict by file order than by time. "Latest wins"
-    # has to mean latest in time or the tiers disagree with verdict-sweep.
+    # sort_by(.ts) is a guard, not a correction: the 994 feedback rows in the
+    # corpus this was written against were perfectly chronological, so it moved
+    # no number there. Nothing enforces that ordering: delegate-feedback.sh
+    # appends without checking, so a concurrent or backfilled write breaks
+    # "latest wins" unless it means latest in time.
     (reduce ([.[] | select(src == "feedback" and (.verdict_source // "human") == "human")] | sort_by(.ts) | .[]) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $hmap
     | (reduce ([.[] | select(src == "feedback" and (.verdict_source // "human") == "agent")] | sort_by(.ts) | .[]) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $amap
     | (map(select(src == "delegate" and (.exit_status // 0) == 0) | {recipe, tier, h: $hmap[.ts], a: $amap[.ts]})) as $d
