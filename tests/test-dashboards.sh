@@ -14,7 +14,7 @@
 # 4. Every JSONL field referenced by a LogQL `unwrap X` / `| json | X` clause
 #    is in the known JSONL field allowlist, so a dashboard cannot chart a
 #    field the exporter never writes.
-# 5. The calibration dashboard keeps a per-recipe HIT-rate panel (`by (recipe)`).
+# 5. The calibration dashboard keeps a per-recipe adoption-rate panel (`by (recipe)`).
 # 6. The Langfuse README (no-portable-JSON backend) still exists.
 #
 # bash-3.2 portable: no associative arrays, no `grep -P`.
@@ -155,23 +155,26 @@ else
   echo "  PASS  dashboards/grafana/ contains $dash_count dashboard(s)"; pass=$((pass+1))
 fi
 
-# 5. The calibration dashboard keeps a per-recipe rate panel. Per-recipe rate is
-#    the load-bearing calibration signal (#187); the sync script
-#    enriches feedback rows with the parent recipe so this is a LogQL
-#    `by (recipe)` group-by. Pin it so a future edit cannot silently drop it.
+# 5. The calibration dashboard keeps a per-recipe adoption-rate panel. Per-recipe
+#    breakdown is the load-bearing shape (#187) — it is what makes a bad recipe
+#    visible rather than averaged away; the sync script enriches feedback rows
+#    with the parent recipe so this is a LogQL `by (recipe)` group-by. Pin it so
+#    a future edit cannot silently drop it. Note this measures ADOPTION, not
+#    quality: per ADR 0015 only a human verdict carries a quality judgment, and
+#    assertion 5e is what keeps the two apart.
 CALIBRATION="$DASHBOARDS/grafana/delegate-calibration.json"
 if [[ -f "$CALIBRATION" ]]; then
   per_recipe=$(jq -r '[.panels[] | select((.targets // []) | map(.expr // "") | join(" ") | (contains("by (recipe)") and contains("kept=")))] | length' "$CALIBRATION" 2>/dev/null)
   if [[ "$per_recipe" -ge 1 ]]; then
-    echo "  PASS  delegate-calibration.json: per-recipe HIT-rate panel present"; pass=$((pass+1))
+    echo "  PASS  delegate-calibration.json: per-recipe adoption-rate panel present"; pass=$((pass+1))
   else
-    echo "  FAIL  delegate-calibration.json: no per-recipe (by (recipe)) HIT-rate panel"; fail=$((fail+1))
+    echo "  FAIL  delegate-calibration.json: no per-recipe (by (recipe)) adoption-rate panel"; fail=$((fail+1))
   fi
 else
   echo "  FAIL  delegate-calibration.json missing"; fail=$((fail+1))
 fi
 
-# 5c. The per-recipe HIT-rate panel is a percentunit ratio time series. Its
+# 5c. The per-recipe adoption-rate panel is a percentunit ratio time series. Its
 #     legend reduce MUST NOT be `sum`: summing a fractional per-step ratio over
 #     every step in the range adds the steps together and the percentunit unit
 #     then multiplies by 100, surfacing impossible values like 5955%. A ratio
@@ -181,9 +184,9 @@ fi
 if [[ -f "$CALIBRATION" ]]; then
   recipe_sum_calc=$(jq -r '[.. | objects | select((.targets // []) | map(.expr // "") | join(" ") | (contains("by (recipe)") and contains("kept="))) | .options.legend.calcs // [] | index("sum")] | map(select(. != null)) | length' "$CALIBRATION" 2>/dev/null)
   if [[ "$recipe_sum_calc" == "0" ]]; then
-    echo "  PASS  delegate-calibration.json: per-recipe HIT-rate legend reduce is not sum (no step-sum inflation)"; pass=$((pass+1))
+    echo "  PASS  delegate-calibration.json: per-recipe adoption-rate legend reduce is not sum (no step-sum inflation)"; pass=$((pass+1))
   else
-    echo "  FAIL  delegate-calibration.json: per-recipe HIT-rate panel legend uses sum (5955%-style step-sum inflation on a ratio)"; fail=$((fail+1))
+    echo "  FAIL  delegate-calibration.json: per-recipe adoption-rate panel legend uses sum (5955%-style step-sum inflation on a ratio)"; fail=$((fail+1))
   fi
 fi
 
