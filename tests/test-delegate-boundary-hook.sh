@@ -638,6 +638,102 @@ cd $gitroot/repo-b && git commit -m x
 EOF" "$gitroot/repo-a" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq repo-a "$(jq -r .project <<<"$(last_row)")" "heredoc mentioning cd: not retargeted"
 
+# --- an explicit --repo widens the LOOKUP only ------------------------------
+# `gh issue comment --repo owner/other` carries no cd, so the boundary is filed
+# under the session cwd. Replaying the whole metrics file showed that also
+# RECORDING the --repo name buys no extra recall (the either-match set is the
+# same) while adding four `rate=0%` project keys and moving 22 rows off two real
+# projects, mostly from hub-repo sweeps of the form
+# `gh pr comment N --repo IsmaelMartinez/<other> --body "@dependabot rebase"`.
+# So the candidate joins the lookup and never touches `project`.
+
+# 42. A delegation recorded under the repo the command names is matched, while
+# the recorded project stays the session cwd.
+: > "$METRICS"; seed_delegation repo-b maintainer-reply
+payload "gh issue comment 1 --repo owner/repo-b --body x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "--repo: delegation under the named repo matches"
+assert_eq repo-a "$(jq -r .project <<<"$(last_row)")" "--repo: recorded project stays the cwd"
+
+# 43. `--repo=owner/name` and `-R owner/name` are the same flag.
+for form in "--repo=owner/repo-b" "-R owner/repo-b"; do
+  : > "$METRICS"; seed_delegation repo-b maintainer-reply
+  payload "gh issue comment 1 $form --body x" "$gitroot/repo-a" \
+    | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+  assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "--repo: $form form matches"
+done
+
+# 44. A shell variable in the value must be REJECTED, not used. This is the
+# validation's security job: 11 of 534 real invocations carry one, and a
+# last-segment-only check would happily accept `IsmaelMartinez/$1`.
+for bad in 'IsmaelMartinez/$1' '$R' 'owner/`whoami`' 'owner/../../etc' 'noslash'; do
+  : > "$METRICS"; seed_delegation repo-b maintainer-reply
+  payload "gh issue comment 1 --repo $bad --body x" "$gitroot/repo-a" \
+    | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+  assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "--repo: rejects '$bad'"
+done
+
+# 45. A bare --repo with no value, and --repo followed by another flag, fall
+# back cleanly rather than consuming the flag as a repo name.
+: > "$METRICS"; seed_delegation repo-b maintainer-reply
+payload "gh issue comment 1 --body x --repo" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "--repo: bare flag falls back"
+: > "$METRICS"; seed_delegation repo-b maintainer-reply
+payload "gh issue comment 1 --repo --body x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "--repo: does not consume a following flag"
+
+# 46. A trailing slash and a .git suffix are trimmed.
+for form in "owner/repo-b/" "owner/repo-b.git"; do
+  : > "$METRICS"; seed_delegation repo-b maintainer-reply
+  payload "gh issue comment 1 --repo $form --body x" "$gitroot/repo-a" \
+    | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+  assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "--repo: trims '$form'"
+done
+
+# 47. A quoted value is blanked by the scan surface and falls back. This is the
+# opposite trade-off from the cd block, which reads the raw command precisely so
+# it can parse quoted paths. 6 of 534 real invocations; it fails safe.
+: > "$METRICS"; seed_delegation repo-b maintainer-reply
+payload 'gh issue comment 1 --repo "owner/repo-b" --body x' "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "--repo: quoted value falls back (known trade-off)"
+
+# 48. A --repo inside the quoted body cannot reach the parse.
+: > "$METRICS"; seed_delegation repo-b maintainer-reply
+payload 'gh issue comment 1 --repo owner/repo-c --body "see --repo owner/repo-b"' "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "--repo: value inside a quoted body is not parsed"
+
+# 49. Precedence when both a leading cd and a --repo are present: the cd target
+# owns the RECORDED project, and both are candidates for the lookup.
+: > "$METRICS"; seed_delegation repo-b maintainer-reply
+payload "cd $gitroot/repo-b && gh issue comment 1 --repo owner/repo-c --body x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq repo-b "$(jq -r .project <<<"$(last_row)")" "cd + --repo: cd target owns the recorded project"
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "cd + --repo: cd target still matches the lookup"
+
+# 49b. GitLab's three-part path must keep working. `glab --repo` accepts
+# "OWNER/REPO or GROUP/NAMESPACE/REPO" per its own --help, and the hook
+# classifies glab boundaries, so the value regex deliberately allows more than
+# one slash and the project is the FINAL segment. Do not tighten this to a
+# single slash: it would silently drop GitLab support.
+: > "$METRICS"; seed_delegation repo-b maintainer-reply
+payload "glab mr note 1 --repo group/namespace/repo-b --message x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "--repo: glab GROUP/NAMESPACE/REPO resolves to the final segment"
+
+# 50. A delegate row carrying no project at all must not match a boundary whose
+# --repo candidate is empty. Three such rows exist in the real metrics file; an
+# unguarded `(.project // "") == $proj3` would let each of them mark every
+# boundary in its window as delegated.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" '{ts:$ts, source:"delegate", tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+payload 'git commit -m x' "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "projectless delegate row does not match an empty --repo candidate"
+
 ( cd "$gitroot/repo-b" && git worktree remove --force "$gitroot/wt-x" ) >/dev/null 2>&1
 rm -rf "$gitroot"
 
