@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   source_text: string
   sentence_count: integer
@@ -65,7 +66,7 @@ Output: "Migrate the legacy users table to a partitioned schema. Add a backfill 
 bash scripts/delegate.sh --recipe jira-ticket-description \
   --var sentence_count=3 \
   --var source_text="Phase 3: route api.example.com and admin.example.com via a wildcard ACM certificate, and consolidate per-service CloudFront distributions into one distribution with path-based routing." \
-  prose "2-3 sentence Jira ticket description. UK English. Preserve every technical object distinctly."
+  "2-3 sentence Jira ticket description. UK English. Preserve every technical object distinctly."
 ```
 
 The trailing prompt arg is the voice + reinforcement reminder; the recipe template carries the structural directives.

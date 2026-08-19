@@ -36,7 +36,7 @@ One bullet per `{{name}}` placeholder, naming the source command or the
 shape of agent-authored content the value should hold.
 
 ## Invocation
-A `bash scripts/delegate.sh --recipe <name> --var k=v ... <tier> "<prompt>"`
+A `bash scripts/delegate.sh --recipe <name> --var k=v ... "<prompt>"`
 example. Pass every `--var` as a literal value — the caller ran the gathering
 commands as its own earlier step and already holds the output, and sandboxed
 shells refuse command substitution (see SKILL.md). The gathering commands
@@ -58,7 +58,7 @@ guards added when a follow-up MISS surfaces a new failure mode.
 
 ## How `--recipe` and `--var` work
 
-`scripts/delegate.sh --recipe NAME [--var key=value ...] <tier> "<prompt>"` loads `prompts/<NAME>.md`, extracts the first fenced code block under `## Prompt template`, substitutes each `{{key}}` placeholder with the matching `--var` value, then sends the result to the model exactly like a hand-assembled prompt. The `{{stdin}}` placeholder is auto-substituted with piped stdin when present, so a recipe can fold a single large input (a diff, a log) into a fixed slot without forcing the agent to escape it through `--var`. Unsubstituted placeholders are a hard error rather than silently passing through — the recipe authors put the guard there because a partly-substituted template usually means a missed input rather than a deliberate omission, and producing a low-quality answer is worse than failing fast. The trailing prompt arg becomes optional when `--recipe` is set; in practice it is the one-line "match the example shape and tone" reinforcement that the recipe's invocation example demonstrates.
+`scripts/delegate.sh --recipe NAME [--var key=value ...] "<prompt>"` loads `prompts/<NAME>.md`, extracts the first fenced code block under `## Prompt template`, substitutes each `{{key}}` placeholder with the matching `--var` value, then sends the result to the model exactly like a hand-assembled prompt. The `{{stdin}}` placeholder is auto-substituted with piped stdin when present, so a recipe can fold a single large input (a diff, a log) into a fixed slot without forcing the agent to escape it through `--var`. Unsubstituted placeholders are a hard error rather than silently passing through — the recipe authors put the guard there because a partly-substituted template usually means a missed input rather than a deliberate omission, and producing a low-quality answer is worse than failing fast. Every recipe declares a frontmatter `tier:` and the caller does not pass one; `--tier <name>` overrides it for a deliberate re-route. The trailing prompt arg becomes optional when `--recipe` is set; in practice it is the one-line "match the example shape and tone" reinforcement that the recipe's invocation example demonstrates.
 
 ## How to add a new recipe
 

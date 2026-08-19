@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   topic: string
   facts: string

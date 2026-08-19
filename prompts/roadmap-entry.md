@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   style_anchor: string
   facts: string
@@ -87,7 +88,7 @@ Run the anchor `awk` above as its own step and author the fact list yourself, th
 bash scripts/delegate.sh --recipe roadmap-entry \
   --var style_anchor="<the most recent shipped entry, verbatim, heading and prose>" \
   --var facts="<the structured fact list you authored>" \
-  prose "Match the STYLE ANCHOR exactly in spelling variant and prose-vs-bullets balance. Preserve every PR number, hash, and date verbatim."
+  "Match the STYLE ANCHOR exactly in spelling variant and prose-vs-bullets balance. Preserve every PR number, hash, and date verbatim."
 ```
 
 The trailing prompt arg reinforces the two highest-signal rules (spelling mirror, ID preservation); the recipe template carries the structural directives and the anti-padding guard.

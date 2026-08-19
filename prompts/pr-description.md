@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   recent_prs: string
   diff_stat: string

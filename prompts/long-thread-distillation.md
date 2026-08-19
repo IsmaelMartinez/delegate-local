@@ -1,4 +1,5 @@
 ---
+tier: reasoning
 inputs:
   kind: string
   stdin: string
@@ -90,7 +91,7 @@ gh pr view 196 --json title,body,comments,reviews \
   --jq '{title, body, reviews: [.reviews[] | {author: .author.login, state, body: .body, submittedAt: .submittedAt}], comments: [.comments[] | {author: .author.login, body: .body, createdAt: .createdAt}]}' \
   | bash scripts/delegate.sh --recipe long-thread-distillation \
       --var kind="PR thread" \
-      reasoning "Distil into the three sections in order. Omit any empty section entirely."
+      "Distil into the three sections in order. Omit any empty section entirely."
 ```
 
 For an issue thread:
@@ -100,7 +101,7 @@ gh issue view 159 --json title,body,comments \
   --jq '{title, body, comments: [.comments[] | {author: .author.login, body: .body, createdAt: .createdAt}]}' \
   | bash scripts/delegate.sh --recipe long-thread-distillation \
       --var kind="issue thread" \
-      reasoning "Distil into the three sections in order. Omit any empty section entirely."
+      "Distil into the three sections in order. Omit any empty section entirely."
 ```
 
 After the call, verify (see Expected output shape) and record the verdict:

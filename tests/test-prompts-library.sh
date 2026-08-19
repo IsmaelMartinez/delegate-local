@@ -341,6 +341,50 @@ assert_contains "SHAPE — the examples govern" "$pr_description_guards" \
 assert_contains "TEST-PLAN-EVIDENCE" "$pr_description_guards" \
   "pr-description.md '## Anti-hallucination guards' names TEST-PLAN-EVIDENCE"
 
+# Every dispatchable recipe declares a frontmatter `tier:` (#411). 39 of the 44
+# recorded bad-tier calls supplied a --recipe, so the tier left the documented
+# invocation entirely; a recipe without one puts the guess back and fails at
+# call time instead. Scoped to files that delegate.sh can actually dispatch:
+# README.md has no frontmatter, and semantic-search.md says in its own body that
+# "there is no `delegate.sh --recipe` call because the wrapper assumes text-in /
+# text-out" — it is a shell-pipeline recipe, not a model prompt.
+VALID_TIERS="code prose reasoning long-context vision embedding premium-general reasoning-vision"
+for recipe_file in "$PROMPTS_DIR"/*.md; do
+  base=$(basename "$recipe_file" .md)
+  [[ "$base" == "README" ]] && continue
+  [[ "$base" == "semantic-search" ]] && continue
+  [[ "$(head -1 "$recipe_file")" == "---" ]] || continue
+  declared=$(awk '
+    NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
+    in_fm && /^---[[:space:]]*$/ { exit }
+    in_fm && /^tier:[[:space:]]*[a-z-]+[[:space:]]*$/ {
+      sub(/^tier:[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print; exit
+    }
+  ' "$recipe_file")
+  if [[ -z "$declared" ]]; then
+    echo "  FAIL  $base.md declares no frontmatter tier:"; fail=$((fail+1)); continue
+  fi
+  ok=0
+  for t in $VALID_TIERS; do [[ "$t" == "$declared" ]] && ok=1; done
+  if [[ "$ok" == "1" ]]; then
+    echo "  PASS  $base.md declares tier: $declared"; pass=$((pass+1))
+  else
+    echo "  FAIL  $base.md declares an unknown tier: $declared"; fail=$((fail+1))
+  fi
+done
+
+# The tier left the documented invocation, so no recipe may still show one.
+for recipe_file in "$PROMPTS_DIR"/*.md; do
+  base=$(basename "$recipe_file" .md)
+  inv=$(awk '/delegate\.sh --recipe/{p=1} p{print; if($0 !~ /\\$/) exit}' "$recipe_file" | tr '\n' ' ')
+  [[ -z "$inv" ]] && continue
+  if printf '%s' "$inv" | grep -qE '(^|[[:space:]])(prose|code|reasoning|long-context)([[:space:]]|$)'; then
+    echo "  FAIL  $base.md invocation still passes a tier"; fail=$((fail+1))
+  else
+    echo "  PASS  $base.md invocation passes no tier"; pass=$((pass+1))
+  fi
+done
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

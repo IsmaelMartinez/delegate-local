@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   style_anchor: string
   facts: string
@@ -82,7 +83,7 @@ Run the anchor `awk` above as its own step and author the fact list yourself, th
 bash scripts/delegate.sh --recipe roadmap-status \
   --var style_anchor="<the existing Next Up paragraph, verbatim>" \
   --var facts="<the structured fact list you authored, in your chosen order>" \
-  prose "Match the STYLE ANCHOR exactly in spelling variant and prose-vs-bullets balance. Forward-looking only — no past-tense 'shipped' sentences. Preserve every item in order; do not merge two into one."
+  "Match the STYLE ANCHOR exactly in spelling variant and prose-vs-bullets balance. Forward-looking only — no past-tense 'shipped' sentences. Preserve every item in order; do not merge two into one."
 ```
 
 The trailing prompt arg reinforces the three highest-signal rules (spelling mirror, forward-looking tense, no-merge). The recipe template carries the structural directives and the anti-padding guard.

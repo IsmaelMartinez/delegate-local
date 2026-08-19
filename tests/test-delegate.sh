@@ -5005,6 +5005,95 @@ rm -rf "$tmp" "$metrics"
 out=$(bash "$SCRIPT" </dev/null 2>&1) || true
 assert_contains "tier NAME is equivalent" "$out" "usage advertises --tier"
 
+# 47. Recipe-declared tier (#411). 39 of the 44 recorded bad-tier calls supplied
+# a --recipe, and every recipe routes to one dominant tier in production, so the
+# caller was being asked for a value the recipe already implies.
+mk_recipe() {  # mk_recipe <dir> <name> [tier]
+  local dir="$1" name="$2" tier="${3:-}"
+  { printf -- '---\n'
+    [[ -n "$tier" ]] && printf 'tier: %s\n' "$tier"
+    printf -- 'inputs:\n  note: string?\n---\n# %s\n\n## Prompt template\n\n```\nSay OK.\n```\n' "$name"
+  } > "$dir/$name.md"
+}
+
+for pair in "prose r_prose" "reasoning r_reason" "code r_code"; do
+  set -- $pair
+  want="$1"; rname="$2"
+  tmp=$(mktemp -d); pdir=$(mktemp -d); metrics=$(mktemp)
+  make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+  mk_recipe "$pdir" "$rname" "$want"
+  env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_PROMPTS_DIR="$pdir" \
+    DELEGATE_METRICS_FILE="$metrics" \
+    bash "$SCRIPT" --recipe "$rname" </dev/null >/dev/null 2>&1 || true
+  assert_contains "\"tier\":\"$want\"" "$(cat "$metrics")" "recipe declaring '$want' resolves it with no positional"
+  rm -rf "$tmp" "$pdir" "$metrics"
+done
+
+# The blocker that killed the first design: 17 of 20 recipes pass a trailing
+# reinforcement prompt. A lone positional that is a sentence must be the PROMPT,
+# not the tier, or every documented recipe call fails with "unknown tier: Match
+# the example messages...".
+tmp=$(mktemp -d); pdir=$(mktemp -d); metrics=$(mktemp)
+make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+mk_recipe "$pdir" "r_prose" "prose"
+EC=0
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_PROMPTS_DIR="$pdir" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" --recipe r_prose "Match the example messages exactly in shape and tone." </dev/null >/dev/null 2>&1 || EC=$?
+assert_eq 0 "$EC" "a lone sentence positional is the prompt, not the tier"
+assert_contains '"tier":"prose"' "$(cat "$metrics")" "lone sentence positional keeps the declared tier"
+assert_contains "Match the example messages" "$(cat "$tmp/payload.json")" "lone sentence positional reaches the model as the prompt"
+rm -rf "$tmp" "$pdir" "$metrics"
+
+# ...but a lone positional that IS a tier name still means the tier, so the
+# historical single-positional recipe form is unchanged.
+tmp=$(mktemp -d); pdir=$(mktemp -d); metrics=$(mktemp)
+make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+mk_recipe "$pdir" "r_reason" "reasoning"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_PROMPTS_DIR="$pdir" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" --recipe r_reason prose </dev/null >/dev/null 2>&1 || true
+assert_contains '"tier":"prose"' "$(cat "$metrics")" "a lone positional matching a tier name is still the tier"
+rm -rf "$tmp" "$pdir" "$metrics"
+
+# An explicit tier wins over the declared one — this is what keeps the
+# deliberate commit-message-on-code runs (9 rows, latest 2026-08-14) working.
+tmp=$(mktemp -d); pdir=$(mktemp -d); metrics=$(mktemp)
+make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+mk_recipe "$pdir" "r_prose" "prose"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_PROMPTS_DIR="$pdir" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" --recipe r_prose --tier code </dev/null >/dev/null 2>&1 || true
+assert_contains '"tier":"code"' "$(cat "$metrics")" "--tier overrides the recipe's declared tier"
+rm -rf "$tmp" "$pdir" "$metrics"
+
+# A recipe with no declared tier and no positional names both remedies rather
+# than failing opaquely. External recipes via DELEGATE_PROMPTS_DIR are exactly
+# this case.
+tmp=$(mktemp -d); pdir=$(mktemp -d)
+mk_recipe "$pdir" "r_none"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_PROMPTS_DIR="$pdir" \
+  DELEGATE_LOCAL_NO_METRICS=1 \
+  bash "$SCRIPT" --recipe r_none </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "recipe with no declared tier and no positional -> exit 2"
+assert_contains "declares no tier" "$out" "no-tier recipe error says so"
+assert_contains "tier: <name>" "$out" "no-tier recipe error names the frontmatter remedy"
+assert_contains "tier <name> ..." "$out" "no-tier recipe error names the flag remedy"
+rm -rf "$tmp" "$pdir"
+
+# Without a recipe the tier stays required, exactly as before.
+tmp=$(mktemp -d)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOCAL_NO_METRICS=1 \
+  bash "$SCRIPT" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "no recipe and no tier still exits 2"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOCAL_NO_METRICS=1 \
+  bash "$SCRIPT" prose </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "no recipe and no prompt still exits 2"
+rm -rf "$tmp"
+
 
 echo
 echo "$pass passed, $fail failed"

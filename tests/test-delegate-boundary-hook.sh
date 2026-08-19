@@ -486,8 +486,16 @@ if [[ "$out" != *'--var type='* ]]; then
 else
   echo "  FAIL  nudge: omits optional input 'type'"; fail=$((fail+1))
 fi
-# The tier is a real tier, not the old `<tier>` stand-in the agent had to guess.
-assert_contains ' prose' "$out" "nudge: names a concrete tier"
+# The nudge names NO tier (#411). It used to emit a concrete one so the agent
+# did not have to guess at the `<tier>` stand-in, but the recipe now declares its
+# own in frontmatter, so a tier here would re-teach a slot that no longer exists
+# in the documented invocation — and 39 of the 44 recorded bad-tier calls came
+# from exactly that slot.
+if [[ "$out" != *' prose'* && "$out" != *' code'* && "$out" != *' reasoning'* ]]; then
+  echo "  PASS  nudge: names no tier (the recipe declares it)"; pass=$((pass+1))
+else
+  echo "  FAIL  nudge: names no tier (the recipe declares it)"; fail=$((fail+1))
+fi
 if [[ "$out" != *'<tier>'* ]]; then
   echo "  PASS  nudge: no unreplaced <tier> stand-in"; pass=$((pass+1))
 else

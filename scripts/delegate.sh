@@ -7,9 +7,10 @@
 # Usage:
 #   delegate.sh <tier> "<prompt>"                            # context comes from stdin
 #   echo "..." | delegate.sh prose "..."                     # explicit pipe
-#   delegate.sh --recipe NAME [--var k=v ...] [--tier NAME] <tier> ["<prompt>"]
-#                                                            # prepend prompts/NAME.md
-#                                                            # template with {{k}} subs
+#   delegate.sh --recipe NAME [--var k=v ...] ["<prompt>"]
+#                                # prepend prompts/NAME.md template with {{k}} subs.
+#                                # The tier comes from the recipe's frontmatter
+#                                # `tier:`; pass --tier NAME to override it.
 #
 # Tiers: code | prose | reasoning | long-context | vision | embedding |
 #        premium-general | reasoning-vision  (scripts/pick-model.sh is the source
@@ -30,8 +31,11 @@
 #                            Values may contain newlines and special chars.
 #                            A {{stdin}} placeholder is auto-substituted with
 #                            stdin content when stdin is piped in.
-#   The trailing positional <tier> stays required; <prompt> becomes optional
-#   when --recipe is set (the recipe carries the instruction).
+#   Without --recipe both positionals are required. With one, the tier comes
+#   from the recipe's frontmatter `tier:` and <prompt> is optional (the recipe
+#   carries the instruction). A lone positional on a recipe call is read as the
+#   tier only when it exactly matches a known tier name, otherwise as the
+#   prompt — 17 of 20 recipes pass a trailing reinforcement prompt (#411).
 #
 #   Optional frontmatter `inputs:` block (Phase 12 Track B, issue #161) lets
 #   a recipe declare flat `key: type` pairs that get validated pre-flight.
@@ -380,20 +384,6 @@ while (($# > 0)); do
   esac
 done
 
-# With --tier supplying the tier, the first positional is the prompt; without
-# it the historical `<tier> ["<prompt>"]` order is unchanged, so every existing
-# invocation keeps its exact meaning.
-if [[ -n "$tier_flag" ]]; then
-  tier="$tier_flag"
-  prompt="${positional[0]:-}"
-else
-  tier="${positional[0]:-}"
-  prompt="${positional[1]:-}"
-fi
-if [[ -z "$tier" ]] || { [[ -z "$prompt" ]] && [[ -z "$recipe" ]]; }; then
-  usage; exit 2
-fi
-
 # Backwards compat: old env var names (rename delegate-to-ollama → delegate-local).
 DELEGATE_LOCAL_NO_METRICS="${DELEGATE_LOCAL_NO_METRICS:-${DELEGATE_TO_OLLAMA_NO_METRICS:-}}"
 DELEGATE_LOCAL_NO_VERDICT_NUDGE="${DELEGATE_LOCAL_NO_VERDICT_NUDGE:-${DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE:-}}"
@@ -448,6 +438,44 @@ done
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
+
+# Positional resolution runs here rather than beside the argument loop because
+# it needs $pick: the tier vocabulary is read from pick-model.sh's own TIERS
+# line so there is exactly one source of truth for it. Nothing between the loop
+# and this point reads $tier or $prompt.
+#
+# The grammar is `[<tier>] ["<prompt>"]` and both are optional, which is
+# ambiguous for a lone positional. 17 of the 20 recipes carry a trailing
+# reinforcement prompt (commit-message.md calls it load-bearing), so reading a
+# lone positional as the tier would make every documented recipe call fail with
+# "unknown tier: Match the example messages...". A lone positional is therefore
+# the tier only when it EXACTLY matches a known tier name; otherwise it is the
+# prompt and the tier comes from the recipe's frontmatter. Two positionals keep
+# the historical order, so every existing invocation is unchanged.
+known_tiers=$(sed -n 's/^TIERS="\(.*\)"$/\1/p' "$pick" 2>/dev/null | tr '|' ' ')
+is_known_tier() {
+  local candidate="$1" t
+  [[ -z "$known_tiers" ]] && return 1
+  for t in $known_tiers; do [[ "$t" == "$candidate" ]] && return 0; done
+  return 1
+}
+
+if [[ -n "$tier_flag" ]]; then
+  tier="$tier_flag"
+  prompt="${positional[0]:-}"
+elif [[ -n "$recipe" && ${#positional[@]} -eq 1 ]] && ! is_known_tier "${positional[0]}"; then
+  tier=""
+  prompt="${positional[0]}"
+else
+  tier="${positional[0]:-}"
+  prompt="${positional[1]:-}"
+fi
+
+# Without a recipe both are still required. With one, an absent tier is resolved
+# from the recipe frontmatter further down, once the recipe file is known.
+if [[ -z "$recipe" ]] && { [[ -z "$tier" ]] || [[ -z "$prompt" ]]; }; then
+  usage; exit 2
+fi
 
 metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 # delegate_project is derived after lib/otel.sh is sourced (it provides
@@ -665,6 +693,32 @@ if [[ -n "$recipe" ]]; then
   if [[ ! -f "$recipe_file" ]]; then
     echo "delegate: recipe '$recipe' not found at $recipe_file" >&2
     exit 2
+  fi
+
+  # Optional frontmatter `tier:` (#411). 39 of the 44 recorded bad-tier calls
+  # supplied a --recipe, and every recipe's production traffic routes to one
+  # dominant tier, so the caller was being asked for a value the recipe already
+  # implies. An explicit tier — positional or --tier — still wins, which is what
+  # keeps the deliberate `commit-message` on `code` runs working. Read with the
+  # same independent single-key awk scan as inputs:/checks:/flaky_on_models:,
+  # so it cannot disturb them and recipes without it still work.
+  if [[ -z "$tier" ]]; then
+    tier=$(awk '
+      BEGIN { in_fm=0 }
+      NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
+      in_fm && /^---[[:space:]]*$/ { exit }
+      in_fm && /^tier:[[:space:]]*[a-z-]+[[:space:]]*$/ {
+        sub(/^tier:[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print; exit
+      }
+    ' "$recipe_file")
+    if [[ -z "$tier" ]]; then
+      {
+        echo "delegate: recipe '$recipe' declares no tier and none was given"
+        echo "         add a frontmatter 'tier: <name>' to $recipe_file,"
+        echo "         or pass one: delegate.sh --recipe $recipe --tier <name> ..."
+      } >&2
+      exit 2
+    fi
   fi
 
   # Optional frontmatter `inputs:` block (Phase 12 Track B, issue #161).

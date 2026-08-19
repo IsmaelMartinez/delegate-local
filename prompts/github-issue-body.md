@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   stdin: string
   sections: string

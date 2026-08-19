@@ -1,4 +1,5 @@
 ---
+tier: code
 inputs:
   goal: string
   scope: string
@@ -84,7 +85,7 @@ sed -n '40,80p' src/widget.py | bash scripts/delegate.sh --recipe code-draft \
   --var scope="the parse_duration function in src/widget.py (do not touch callers)" \
   --var constraints="stdlib only; raise ValueError on malformed input" \
   --var verification="python -m pytest tests/test_widget.py::test_parse_duration must pass" \
-  code "Output only the function body as a focused snippet."
+  "Output only the function body as a focused snippet."
 ```
 
 After the call, apply the snippet yourself, run the named VERIFICATION, and

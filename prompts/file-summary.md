@@ -1,4 +1,5 @@
 ---
+tier: prose
 inputs:
   stdin: string
 ---
@@ -17,7 +18,7 @@ Not for: multi-file summaries (split per file and stitch yourself), summaries th
 cat path/to/adr-0007-something.md
 # Or for a batch loop:
 for f in docs/adr/*.md; do
-  cat "$f" | bash scripts/delegate.sh --recipe file-summary prose "..."
+  cat "$f" | bash scripts/delegate.sh --recipe file-summary "..."
 done
 ```
 
@@ -52,7 +53,7 @@ Correct: The 3-axis grid surfaces one new regime cell missed by the 2-axis grid 
 
 ```bash
 cat docs/adr/0007-something.md | bash scripts/delegate.sh --recipe file-summary \
-  prose "One sentence only. Include the subject and the mechanism."
+  "One sentence only. Include the subject and the mechanism."
 ```
 
 Batch over a directory. This loop is for an interactive shell — a sandboxed
@@ -63,7 +64,7 @@ substitution, so from an agent session issue one call per file instead:
 for f in docs/adr/*.md; do
   printf '%s — ' "$f"
   cat "$f" | bash scripts/delegate.sh --recipe file-summary \
-    prose "One sentence only. Include the subject and the mechanism."
+    "One sentence only. Include the subject and the mechanism."
 done
 ```
 
