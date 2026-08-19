@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.8](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.7...v0.27.8) (2026-08-19)
+
+
+### Documentation
+
+* record the padding-recall and --repo attribution outcome ([#402](https://github.com/IsmaelMartinez/delegate-local/issues/402)) ([8681476](https://github.com/IsmaelMartinez/delegate-local/commit/868147648f1b88eb474ddd3999a5d12481d13111))
+
 ## [0.27.7](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.6...v0.27.7) (2026-08-19)
 
 
