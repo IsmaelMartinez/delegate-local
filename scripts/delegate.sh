@@ -7,11 +7,14 @@
 # Usage:
 #   delegate.sh <tier> "<prompt>"                            # context comes from stdin
 #   echo "..." | delegate.sh prose "..."                     # explicit pipe
-#   delegate.sh --recipe NAME [--var k=v ...] <tier> ["<prompt>"]
+#   delegate.sh --recipe NAME [--var k=v ...] [--tier NAME] <tier> ["<prompt>"]
 #                                                            # prepend prompts/NAME.md
 #                                                            # template with {{k}} subs
 #
-# Tiers: code | prose | reasoning | long-context (see scripts/pick-model.sh)
+# Tiers: code | prose | reasoning | long-context | vision | embedding |
+#        premium-general | reasoning-vision  (scripts/pick-model.sh is the source
+#        of truth — this list was four names short, so a valid --tier value looked
+#        invalid to anyone reading the header)
 #
 # Recipe flag (layer 2 of the training-loop initiative):
 #   --recipe NAME            load prompts/<NAME>.md, extract its '## Prompt
@@ -315,12 +318,15 @@
 set -uo pipefail
 
 usage() {
-  echo 'usage: delegate.sh [--recipe NAME [--var key=value ...]] [--project NAME] <tier> ["<prompt>"]' >&2
+  echo 'usage: delegate.sh [--recipe NAME [--var key=value ...]] [--project NAME] [--tier NAME] <tier> ["<prompt>"]' >&2
   echo '       (context piped via stdin; prompt optional when --recipe is set)' >&2
+  echo '       --tier NAME is equivalent to the positional <tier> and wins over it;' >&2
+  echo '       with --tier the first positional is the prompt.' >&2
 }
 
 recipe=""
 project_override=""
+tier_flag=""
 recipe_vars=()
 positional=()
 while (($# > 0)); do
@@ -351,6 +357,18 @@ while (($# > 0)); do
       project_override="$2"; shift 2;;
     --project=*)
       project_override="${1#--project=}"; shift;;
+    # `--tier` is not a new spelling invented here: the flaky-gate refusal below
+    # already tells callers to "route to a different tier (e.g. --tier code)",
+    # as does ADR 0012, and the argument catch-all was swallowing it as the
+    # positional tier — one live metrics row is literally `tier="--tier"`. Same
+    # following-flag guard as the options above.
+    --tier)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo 'delegate: --tier requires a value' >&2; exit 2
+      fi
+      tier_flag="$2"; shift 2;;
+    --tier=*)
+      tier_flag="${1#--tier=}"; shift;;
     --)
       shift
       while (($# > 0)); do positional+=("$1"); shift; done
@@ -362,8 +380,16 @@ while (($# > 0)); do
   esac
 done
 
-tier="${positional[0]:-}"
-prompt="${positional[1]:-}"
+# With --tier supplying the tier, the first positional is the prompt; without
+# it the historical `<tier> ["<prompt>"]` order is unchanged, so every existing
+# invocation keeps its exact meaning.
+if [[ -n "$tier_flag" ]]; then
+  tier="$tier_flag"
+  prompt="${positional[0]:-}"
+else
+  tier="${positional[0]:-}"
+  prompt="${positional[1]:-}"
+fi
 if [[ -z "$tier" ]] || { [[ -z "$prompt" ]] && [[ -z "$recipe" ]]; }; then
   usage; exit 2
 fi
@@ -972,7 +998,12 @@ if [[ $pick_rc -ne 0 ]]; then
     emit_failure 2 "(none)"
     {
       echo "delegate: ${pick_msg:-unknown tier: $tier}"
-      echo "         '$tier' is not a tier — pick one from the valid list above."
+      if [[ "$tier" == -* ]]; then
+        echo "         '$tier' is not a flag delegate.sh knows, so it was read as the positional tier."
+        echo "         the tier is positional: delegate.sh [options] <tier> [\"<prompt>\"] — or pass --tier $tier."
+      else
+        echo "         '$tier' is not a tier — pick one from the valid list above."
+      fi
       echo "         tiers name the TASK, not the model size: there is no small/fast/medium/light/standard tier."
       echo "         prose = commit messages, PR descriptions, replies, summaries; code = code drafts;"
       echo "         long-context = big logs and many-file diffs; reasoning = genuine multi-step reasoning."

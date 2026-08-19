@@ -4918,6 +4918,93 @@ esac
 assert_contains '"exit_status":100' "$(cat "$metrics")" "empty answer is visible in the metrics row"
 rm -rf "$tmp" "$metrics"
 
+# 46. `--tier NAME` (#411). The flaky-gate refusal at delegate.sh:1037 and
+# ADR 0012 both advise "--tier code", but the argument catch-all swallowed it as
+# the positional tier — one live metrics row is literally tier="--tier". The
+# flag now exists, wins over the positional, and moves the prompt to the first
+# positional. The historical `<tier> ["<prompt>"]` order is untouched.
+tmp=$(mktemp -d); metrics=$(mktemp)
+make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" --tier prose "Summarise this" </dev/null >/dev/null 2>&1 || true
+assert_contains '"tier":"prose"' "$(cat "$metrics")" "--tier sets the tier"
+assert_contains "Summarise this" "$(cat "$tmp/payload.json")" "--tier moves the prompt to the first positional"
+rm -rf "$tmp" "$metrics"
+
+# --tier wins over a positional tier. `code` is deliberately unresolvable with
+# this mock's single prose model, so a pass proves the flag won rather than
+# merely agreeing with the positional.
+tmp=$(mktemp -d); metrics=$(mktemp)
+make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+EC=0
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" --tier prose code "Summarise" </dev/null >/dev/null 2>&1 || EC=$?
+assert_eq 0 "$EC" "--tier overrides the positional tier"
+assert_contains '"tier":"prose"' "$(cat "$metrics")" "--tier overrides the positional tier in metrics"
+rm -rf "$tmp" "$metrics"
+
+# --tier=NAME is accepted alongside the two-token form, as --recipe/--project are.
+tmp=$(mktemp -d); metrics=$(mktemp)
+make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" --tier=prose "Summarise" </dev/null >/dev/null 2>&1 || true
+assert_contains '"tier":"prose"' "$(cat "$metrics")" "--tier=NAME sets the tier"
+rm -rf "$tmp" "$metrics"
+
+# A following flag is the next option, not the value — same guard as --recipe,
+# --var and --project.
+tmp=$(mktemp -d)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOCAL_NO_METRICS=1 \
+  bash "$SCRIPT" --tier --recipe commit-message prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "--tier followed by a flag -> exit 2"
+assert_contains "--tier requires a value" "$out" "--tier followed by a flag: informative stderr"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOCAL_NO_METRICS=1 \
+  bash "$SCRIPT" --tier </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "--tier without a value -> exit 2"
+rm -rf "$tmp"
+
+# An unrecognised flag still lands in the tier slot, but is now diagnosed as a
+# mistyped flag rather than reported as an invented tier name. The metrics row
+# is deliberately unchanged: it is the only telemetry that surfaced this bug.
+tmp=$(mktemp -d); metrics=$(mktemp)
+make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" --file "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "an unknown flag in the tier slot -> exit 2"
+assert_contains "is not a flag delegate.sh knows" "$out" "unknown flag is diagnosed as a flag, not a tier"
+assert_contains "--tier --file" "$out" "unknown flag names --tier as the alternative"
+assert_contains '"tier":"--file"' "$(cat "$metrics")" "unknown flag still writes its metrics row"
+rm -rf "$tmp" "$metrics"
+
+# Regression guard: a prompt that begins with a dash works today WITHOUT `--`,
+# because it is the second positional and never reaches the option parser. An
+# earlier draft of #411 rejected every unknown dash token and would have broken
+# this silently.
+tmp=$(mktemp -d); metrics=$(mktemp)
+make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+EC=0
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "-not a flag" </dev/null >/dev/null 2>&1 || EC=$?
+assert_eq 0 "$EC" "a dash-leading prompt still works without --"
+assert_contains "-not a flag" "$(cat "$tmp/payload.json")" "a dash-leading prompt reaches the model intact"
+rm -rf "$tmp" "$metrics"
+
+# The historical positional order is untouched.
+tmp=$(mktemp -d); metrics=$(mktemp)
+make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise this" </dev/null >/dev/null 2>&1 || true
+assert_contains '"tier":"prose"' "$(cat "$metrics")" "positional tier still works"
+assert_contains "Summarise this" "$(cat "$tmp/payload.json")" "positional prompt still works"
+rm -rf "$tmp" "$metrics"
+
+# usage() advertises the flag, so a caller reading the error learns it exists.
+out=$(bash "$SCRIPT" </dev/null 2>&1) || true
+assert_contains "tier NAME is equivalent" "$out" "usage advertises --tier"
+
 
 echo
 echo "$pass passed, $fail failed"
