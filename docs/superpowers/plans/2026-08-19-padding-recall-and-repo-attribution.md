@@ -83,7 +83,7 @@ showed identical recall either way, with the recorded-project variant adding fou
 
 ## Task C: re-measure #384
 
-- [x] Not yet. Four post-#387 rows exist. Revisit when there are enough to
+- [ ] Not yet. Four post-#387 rows exist. Revisit when there are enough to
   recompute the kept-rate split, and record the new n and p on the issue.
 
 ---
