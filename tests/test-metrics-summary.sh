@@ -576,6 +576,90 @@ assert_contains "Recipe delegations (calibration signal): n=2  hits=1  misses=0 
 assert_contains "Agent-observed (usage, not quality): n=1  used=0  rewrote=0  scaffold=1  usage_rate=0%" "$out" "agent-scaffold: Agent-observed line reports scaffold count"
 rm -f "$agentscaf"
 
+# Tokens-avoided decomposition (#412). estimated_tokens_avoided is written on
+# every row including failures and rewritten drafts, so the bare headline reads
+# as a saving when much of it is not. The headline itself is deliberately
+# unchanged (the cross-source assertion above pins that); the qualification is
+# printed beneath it.
+decomp=$(mktemp)
+cat > "$decomp" <<'EOF'
+{"ts":"2026-04-29T08:00:00Z","source":"delegate","tier":"prose","exit_status":0,"estimated_tokens_avoided":1000}
+{"ts":"2026-04-29T08:01:00Z","source":"delegate","tier":"prose","exit_status":0,"estimated_tokens_avoided":200}
+{"ts":"2026-04-29T08:02:00Z","source":"delegate","tier":"prose","exit_status":0,"estimated_tokens_avoided":300}
+{"ts":"2026-04-29T08:03:00Z","source":"delegate","tier":"prose","exit_status":0,"estimated_tokens_avoided":400}
+{"ts":"2026-04-29T08:04:00Z","source":"delegate","tier":"prose","exit_status":3,"estimated_tokens_avoided":77}
+{"ts":"2026-04-29T08:05:00Z","source":"experiment","session":"s1","estimated_tokens_avoided":55}
+{"ts":"2026-04-29T09:00:00Z","source":"feedback","ref_ts":"2026-04-29T08:00:00Z","kept":true,"verdict_source":"agent"}
+{"ts":"2026-04-29T09:01:00Z","source":"feedback","ref_ts":"2026-04-29T08:01:00Z","kept":false,"verdict_source":"agent"}
+{"ts":"2026-04-29T09:02:00Z","source":"feedback","ref_ts":"2026-04-29T08:02:00Z","kept":false,"scaffold":true,"verdict_source":"agent"}
+{"ts":"2026-04-29T09:03:00Z","source":"feedback","ref_ts":"2026-04-29T08:03:00Z","kept":true}
+EOF
+out=$(bash "$SCRIPT" --file "$decomp" 2>&1)
+# 1000+200+300+400+77+55 = 2032, unchanged and still cross-source.
+assert_contains "Tokens avoided (≈):  2032" "$out" "decomposition: headline is unchanged and still cross-source"
+assert_contains "excluded: experiment rows       tokens≈55  n=1" "$out" "decomposition: experiment rows excluded"
+assert_contains "excluded: failed delegations    tokens≈77  n=1" "$out" "decomposition: failed calls excluded"
+assert_contains "successful delegations          tokens≈1900  n=4" "$out" "decomposition: successful subtotal"
+# 55 + 77 + 1900 = 2032: the sub-lines reconcile to the headline exactly.
+# 1000 (agent hit) + 400 (human hit, no agent verdict) — verdicts pool
+# agent-first then human, so a human-only verdict lands in a real bucket.
+assert_contains "shipped as-is     tokens≈1400  73.7%  n=2" "$out" "decomposition: agent and human hits both count as shipped"
+assert_contains "rewritten         tokens≈200  10.5%  n=1" "$out" "decomposition: agent miss is rewritten"
+assert_contains "used as scaffold  tokens≈300  15.8%  n=1" "$out" "decomposition: scaffold is its own bucket"
+# The 400-token row carries a HUMAN verdict and no agent one. Filing it under
+# "no verdict" would be the exact mislabel this section exists to remove.
+assert_contains "no verdict        tokens≈0  0.0%  n=0" "$out" "decomposition: a human-only verdict is not 'no verdict'"
+rm -f "$decomp"
+
+# A delegation carrying several verdicts is counted once, under its LAST.
+# Iterating feedback rows instead would add the parent's tokens per verdict.
+multi=$(mktemp)
+cat > "$multi" <<'EOF'
+{"ts":"2026-04-29T08:00:00Z","source":"delegate","tier":"prose","exit_status":0,"estimated_tokens_avoided":500}
+{"ts":"2026-04-29T09:00:00Z","source":"feedback","ref_ts":"2026-04-29T08:00:00Z","kept":true,"verdict_source":"agent"}
+{"ts":"2026-04-29T09:01:00Z","source":"feedback","ref_ts":"2026-04-29T08:00:00Z","kept":false,"verdict_source":"agent"}
+EOF
+out=$(bash "$SCRIPT" --file "$multi" 2>&1)
+assert_contains "successful delegations          tokens≈500  n=1" "$out" "multi-verdict: delegation counted once"
+assert_contains "rewritten         tokens≈500  100.0%  n=1" "$out" "multi-verdict: last verdict wins"
+assert_contains "shipped as-is     tokens≈0  0.0%  n=0" "$out" "multi-verdict: superseded verdict does not double-count"
+rm -f "$multi"
+
+# A row with no `source` field is a delegation (metrics-summary treats a missing
+# source as delegate); filtering on .source=="delegate" would drop it and the
+# buckets would stop reconciling with the headline.
+nosrc=$(mktemp)
+printf '%s\n' '{"ts":"2026-04-29T08:00:00Z","tier":"prose","exit_status":0,"estimated_tokens_avoided":640}' > "$nosrc"
+out=$(bash "$SCRIPT" --file "$nosrc" 2>&1)
+assert_contains "successful delegations          tokens≈640  n=1" "$out" "sourceless row counts as a delegation"
+rm -f "$nosrc"
+
+# No feedback at all: the whole successful total is unverdicted rather than the
+# section vanishing. The existing feedback rollup sits inside `if n_feedback > 0`,
+# which is why this block needs its own pass.
+nofb=$(mktemp)
+printf '%s\n' '{"ts":"2026-04-29T08:00:00Z","source":"delegate","tier":"prose","exit_status":0,"estimated_tokens_avoided":800}' > "$nofb"
+out=$(bash "$SCRIPT" --file "$nofb" 2>&1)
+assert_contains "no verdict        tokens≈800  100.0%  n=1" "$out" "no feedback: all tokens report as unverdicted"
+rm -f "$nofb"
+
+# Every delegation failed: jq's `[] | add` is null and `n / 0` aborts the whole
+# program with exit 5, so both are guarded.
+allfail=$(mktemp)
+printf '%s\n' '{"ts":"2026-04-29T08:00:00Z","source":"delegate","tier":"prose","exit_status":3,"estimated_tokens_avoided":90}' > "$allfail"
+EC=0
+out=$(bash "$SCRIPT" --file "$allfail" 2>&1) || EC=$?
+assert_eq 0 "$EC" "all-failed file: exits 0"
+assert_contains "successful delegations          tokens≈0  n=0" "$out" "all-failed file: reports 0, not null"
+# Scoped to this block's own lines: `p50=nullms` in Per-source is a pre-existing
+# null of the same class in a different section, out of scope here.
+decomp_lines=$(printf '%s\n' "$out" | grep -E '^  (excluded|successful)|^    ' || true)
+case "$decomp_lines" in
+  *null*) assert_eq "no null" "null printed" "all-failed file: no null in the decomposition" ;;
+  *)      assert_eq "no null" "no null" "all-failed file: no null in the decomposition" ;;
+esac
+rm -f "$allfail"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

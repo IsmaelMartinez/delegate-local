@@ -124,6 +124,63 @@ echo "Time range:          $ts_first  →  $ts_last"
 echo "Total invocations:   $total  (delegate=$n_delegate, experiment=$n_experiment)"
 echo "Errors (non-zero):   $errors"
 echo "Tokens avoided (≈):  $total_avoided"
+
+# What that total actually avoided (#412). estimated_tokens_avoided is written
+# on EVERY row — including calls that failed and drafts the agent then rewrote —
+# so the bare total reads as a saving when roughly half of it is not. The
+# headline itself is deliberately unchanged: it is the gross local-processing
+# figure across all sources, the Per-source block below sums to it, and
+# tests/test-metrics-summary.sh pins that cross-source contract. The
+# qualification goes underneath instead of redefining the number.
+#
+# The split is USAGE-derived, not audited quality. Verdicts pool agent-first
+# then human: ADR 0015 assigns usage to the agent tier and quality to the human
+# one, and "were tokens avoided" is a usage question — a rewritten draft cost
+# the frontier model the same work whatever a maintainer would have thought of
+# it. The human fallback matters: 18 delegations carry a human verdict and no
+# agent one, and filing those under "no verdict" would be exactly the mislabel
+# this section exists to remove. ADR 0015's own caveat applies to the top
+# bucket — the producing agent grading itself skews toward "I used it, so it
+# was good" — hence "shipped as-is" rather than any word implying an audit.
+#
+# Its own pass, deliberately: the feedback rollup further down sits inside an
+# `if (( n_feedback > 0 ))` guard, and a file with no verdicts still needs to
+# see where its tokens went. Every sum takes `// 0` (jq's `[] | add` is null)
+# and every percentage is guarded on a non-zero denominator (jq aborts the whole
+# program on divide-by-zero, which under `set -uo pipefail` would silently drop
+# the section and still exit 0).
+jq -rs '
+  def src: .source // "delegate";
+  def fbv: if (.scaffold // false) then "scaffold" elif .kept then "kept" else "rewritten" end;
+  # One decimal always, so the column does not go ragged on a whole number.
+  def pct($n; $d):
+    if $d > 0 then ((($n * 1000 / $d) | round) as $t | "\($t / 10 | floor).\($t % 10)")
+    else "0.0" end;
+  (reduce (.[] | select(src == "feedback" and .ref_ts != null and .verdict_source == "agent")) as $i
+     ({}; .[$i.ref_ts] = ($i | fbv))) as $amap
+  | (reduce (.[] | select(src == "feedback" and .ref_ts != null and (.verdict_source // "human") == "human")) as $i
+     ({}; .[$i.ref_ts] = ($i | fbv))) as $hmap
+  | (map(select(src == "experiment")) | map(.estimated_tokens_avoided // 0) | add // 0) as $exp_tok
+  | (map(select(src == "experiment")) | length) as $exp_n
+  | (map(select(src == "delegate"))) as $dl
+  | ($dl | map(select((.exit_status // 0) != 0))) as $bad
+  | ($dl | map(select((.exit_status // 0) == 0))
+        | map({t: (.estimated_tokens_avoided // 0), v: ($amap[.ts] // $hmap[.ts] // "none")})) as $ok
+  | ($ok | map(.t) | add // 0) as $ok_tok
+  | (def bucket($k): ($ok | map(select(.v == $k)));
+     [ ["shipped as-is",   "kept"],
+       ["rewritten",       "rewritten"],
+       ["used as scaffold","scaffold"],
+       ["no verdict",      "none"] ]
+     | map(. as [$label, $key]
+           | (bucket($key)) as $b
+           | "    \($label + (" " * (18 - ($label | length))))tokens≈\($b | map(.t) | add // 0)  \(pct(($b | map(.t) | add // 0); $ok_tok))%  n=\($b | length)")) as $lines
+  | ([ (if $exp_n > 0 then "  excluded: experiment rows       tokens≈\($exp_tok)  n=\($exp_n)" else empty end),
+       (if ($bad | length) > 0 then "  excluded: failed delegations    tokens≈\($bad | map(.estimated_tokens_avoided // 0) | add // 0)  n=\($bad | length)" else empty end),
+       "  successful delegations          tokens≈\($ok_tok)  n=\($ok | length)"
+     ] + (if ($ok | length) > 0 then $lines else [] end))
+  | .[]
+' "$metrics_file"
 echo
 
 # Per-source breakdown: count, tokens avoided, p50/p95 latency. Feedback and
