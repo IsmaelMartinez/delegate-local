@@ -39,3 +39,9 @@ evals/results/*.jsonl
 # scripts/sync-metrics-to-loki.sh. The metrics.jsonl.* pattern above does not
 # match it.
 metrics.loki-sync
+
+# Verdict stop-hook session markers. They live next to metrics.jsonl, which is
+# now under ~/.local/share/delegate-local — but a checkout that points
+# DELEGATE_METRICS_FILE back here would recreate them, and they are per-session
+# scratch, never content.
+.verdict-stop-markers/
