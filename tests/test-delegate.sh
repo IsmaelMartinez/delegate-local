@@ -4092,6 +4092,14 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_contains "check 'subject_max' FAILED" "$out" "checks: subject_max failure reported on stderr"
 assert_contains "check 'no_padding_tail' FAILED" "$out" "checks: no_padding_tail failure reported on stderr"
 assert_contains "checks_failed=2" "$out" "checks: failure count rides the delegate-meta line"
+# 32a-i. The metrics row names WHICH checks failed, not just how many. The
+# count alone left the corpus's one objective quality signal undiagnosable:
+# 57 of 63 archived check failures were commit-message, with no way to tell a
+# style nit (no_padding_tail, warn-only and often auto-stripped) from a
+# capability failure. Order follows the order the checks run in.
+row=$(tail -1 "$metrics")
+assert_contains '"checks_failed_names":["subject_max","no_padding_tail"]' "$row" \
+  "checks: metrics row names both failed checks in run order"
 # 32b. Clean output -> no FAILED warnings, no checks_failed field.
 make_mock_curl_think "$tmp" 'short\n\nthe body returns a structured response and stops'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
