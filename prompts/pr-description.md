@@ -11,7 +11,7 @@ inputs:
 
 ## When to use
 
-The user has a branch with one or more commits and wants a GitHub PR description ready to paste into `gh pr create --body "..."`. Standard project shape: `## Summary` bullet list at the top, optional narrative subsections in flowing prose, `## Test plan` checkbox list at the end.
+The user has a branch with one or more commits and wants a GitHub PR description ready to paste into `gh pr create --body "..."`. There is no standard shape: the merged-PR examples you pass in are the shape authority, and they range from a two-sentence body to a full `## Description` / `## Type of change` / `## Verification` template. Pass real examples from the target repo; the recipe has no sensible default without them.
 
 ## Context to gather first
 
@@ -34,16 +34,22 @@ The `<<<EXAMPLE_BEGIN ... EXAMPLE_END>>>` envelope around each example is intent
 ```
 Draft a GitHub PR description matching the SHAPE of the recent merged-PR examples below.
 
-SHAPE — the examples govern, non-negotiable:
+EVIDENCE — outranks SHAPE, non-negotiable:
+Copy the examples' STRUCTURE, never their FACTS. Headings, section order, bullet style and checkbox lists are structure: reproduce them exactly as the examples use them. The VALUES inside them are evidence and are yours to source, never to copy. An example that pastes a command and its output, quotes a pass count or a timing, or ticks a verification box is showing you its LAYOUT, not facts about this PR. You ran nothing. Every factual claim you write MUST come from the Context below.
+1. NEVER write a command's output, a pass/fail count, or a timing. If the Context does not state it, it did not happen.
+2. NEVER tick a box that asserts a verification ('- [x] Tests pass', '- [x] Verified'). Leave those as '- [ ]'.
+3. A box that CLASSIFIES the change ('- [x] Bug fix', '- [x] Documentation') states intent, not a result — tick it when the diff supports it.
+4. If the Context names no verification: where the examples carry a verification section, keep that heading and say plainly the checks have not been run; where they carry none (or there are no examples), add nothing. Never introduce a heading to hold a verification the examples did not ask for, and never fill one.
+Wrong (the example pasted a pytest log; the Context said nothing about running tests): ## Verification\n```\n$ pytest -q\n24 passed in 1.12s\n```
+Correct (same example, same silent Context): ## Verification\n- [ ] Run `pytest tests/unittest/test_token_handler.py` (not run yet)
+
+SHAPE — the examples govern structure, non-negotiable (EVIDENCE above outranks this):
 The recent merged-PR examples are the shape authority. Match their length, their section structure, and their register. If those examples are short — a sentence or two of plain prose with no headings — then produce a sentence or two of plain prose with no headings. Do NOT add '## Summary', '## Test plan', or any heading that the examples themselves do not use. Only when the examples DO carry sections should you use them, and then in this order: '## Summary' (3-bullet list of what the PR does), then ANY narrative sections you want (use ### subheaders, flowing prose paragraphs), then '## Test plan' as a checkbox list at the end.
 Wrong (examples were two sentences of prose): ## Summary\n- Adds X\n- Refactors Y\n\n### Rationale\n...\n\n## Test plan\n- [ ] Run the suite
 Correct (examples were two sentences of prose): Adds X so that Y no longer needs Z. The behaviour is unchanged for existing callers.
 
-TEST-PLAN-EVIDENCE — first match wins, non-negotiable:
-This rule applies only when the examples use a test plan at all.
-1. Every test-plan item MUST correspond to something stated in the Context below. If the Context does not mention it, do NOT write it.
-2. NEVER emit a pre-checked box. Write '- [ ]', never '- [x]'. You did not run anything; a checked box asserts a verification that did not happen.
-3. If the Context names no verifiable checks, omit the test-plan section entirely rather than inventing items to fill it.
+TEST-PLAN SOURCING — applies only when the examples use a test plan:
+Every test-plan item MUST correspond to something stated in the Context. If the Context names no verifiable checks, omit the section rather than inventing items to fill it.
 Wrong: - [x] Verified incremental sync still works (nothing in the Context says this was run)
 Correct: - [ ] Run `bash tests/run-tests.sh` (the Context states the suite covers this)
 
@@ -86,6 +92,7 @@ BODY:
 
 ## Anti-hallucination guards (each line addresses a real past MISS)
 
+- "EVIDENCE — outranks SHAPE" — added 2026-08-21 after a reproducible fabrication. Anchored on a real pr-agent merged PR (whose template carries `## Type of change` with a ticked box and a `## Verification` section quoting a pytest run), and given a Context that said nothing about testing, the recipe emitted `- [x] Bug fix` *and* a fabricated log: "$ python3 -m pytest ... 24 passed in 1.12s". Deterministic, 3/3 reps. The old wording could not stop it: SHAPE was declared "non-negotiable" and came first, while the evidence rule scoped itself out with "applies only when the examples use a test plan at all" — this example had a *Verification* section, not a test plan. The fix separates structure from values (headings and checkbox lists are copied, the values inside them are sourced), distinguishes a CLASSIFYING box ("- [x] Bug fix" states intent, legitimate) from an ASSERTING one ("- [x] Tests pass" claims a result, forbidden), and states the precedence in the heading. Verified: the fabricated log is gone in every configuration tested, while the sectioned shape and the classification box survive.
 - "SHAPE — the examples govern" — observed 2026-07/08 across three MISS rows: the recipe emitted a multi-section `Summary` / `Rationale` / `Test plan` body into projects whose house style (and whose own recent merged PRs) is a one-or-two-sentence summary. The old wording mandated those sections unconditionally, which silently overrode the "match the SHAPE of the examples" instruction directly above it — the model was obeying the recipe, so the recipe was the bug. Ordering is now conditional on the examples actually using sections.
 - "3-bullet list" — caps summary length; without it, summary expands into 8 bullets that duplicate the narrative section. Applies only when the examples use a Summary section.
 - "TEST-PLAN-EVIDENCE" — observed 2026-07: prose sections graded A and accurate, but the test plan fabricated *pre-checked* `- [x]` items for runs that never happened (a bare "incremental sync still works" check, and a ">2 MB payload" claim phrased as separately executed). The model anchors on the example PR's test-plan shape and fills it with plausible checks rather than restricting itself to the Context var. This is the recipe's most serious failure mode because a checked box asserts a verification to a human reviewer; the three numbered rules bind items to supplied facts, ban the checked box outright, and permit omitting the section rather than padding it.
@@ -227,3 +234,15 @@ Separately, three of the ten rewrites in the window were not quality failures at
 Both new directives are pinned in `tests/test-prompts-library.sh`. Re-measure across ~10 real PRs before trusting; if the keep rate does not clear the library floor on MLX, retiring the recipe is the reasonable next step, since the shape it produces is cheap to hand-write.
 
 Provenance also lives in the `feedback_delegate_prose_prompt_anchoring.md` memory file.
+
+### 2026-08-21 — fabricated verification evidence, and what is still open
+
+Found while investigating three `pr-description` verdicts in the post-reset corpus, none of which were clean. The recorded complaint was "recipe emits multi-section PR body with a test-plan checklist; house style is 1-2 sentences plus Refs". Investigation showed that complaint was the recipe working as designed: the caller's own merged-PR examples (pr-agent upstream) genuinely use a sectioned template, and with short examples the SHAPE guard produces two sentences of prose correctly, verified directly.
+
+The real defect was underneath it. Anchored on a real pr-agent merged PR and given a Context silent about testing, the recipe fabricated verification: a ticked `- [x]` box and a pasted `24 passed in 1.12s` pytest log for a run that never happened. Deterministic across reps. Fixed by the EVIDENCE block; see the guard entry above.
+
+Two things are deliberately NOT fixed, with evidence, rather than left unsaid:
+
+**Reference trailers still invent identifiers.** When the examples end in `Refs: AI-812` / `Refs: AI-806` and the Context names no ticket, the model emits `Refs: AI-813`, continuing the numbering. This is the same failure `commit-message` had with `(#NN)`. Four prompt-side attempts were made and reverted: a numbered rule, a promoted block, and two contrastive one-shots. One of them made things worse in an instructive way — the Wrong example contained a literal `AI-815`, and the model then emitted exactly `AI-815`, copying the value out of the prohibition. The baseline is no better (it emits `Refs: <branch-name>`), but its output is obviously wrong to a reviewer while the invented ticket looks real, so shipping the stronger-looking guard would have traded a visible failure for a deceptive one. This needs a deterministic post-generation check, not more prompt text: a trailer whose identifier does not appear in the inputs should be stripped or fail the call, in the manner of the ADR 0014 checks.
+
+**With an empty `recent_prs` the output shape is undefined.** The pre-fix template guessed short prose, this one guesses a sectioned body. Neither is grounded, because with no examples there is no shape to match. The recipe requires examples; passing none is caller misuse.

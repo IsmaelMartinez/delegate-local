@@ -311,26 +311,35 @@ assert_contains "MULTI-ASK-SPLIT" "$maintainer_reply_guards" \
 assert_contains "NO-FACT-DROP" "$maintainer_reply_guards" \
   "maintainer-reply.md '## Anti-hallucination guards' names NO-FACT-DROP"
 
-# pr-description.md — SHAPE deference and TEST-PLAN-EVIDENCE. Pinned after the
-# 2026-08-03 sweep put the recipe at 0 keeps out of 10 in the window and 7% on
-# MLX (the default backend) against 45% on Ollama. Two distinct causes: the old
-# "Required sections in this order" line mandated a multi-section body
-# unconditionally and overrode the "match the SHAPE of the examples"
-# instruction directly above it, and the test plan fabricated pre-checked
-# `- [x]` items asserting runs that never happened. The checked-box ban is the
-# load-bearing half — a checked box asserts a verification to a human reviewer.
+# pr-description.md — EVIDENCE precedence, SHAPE deference, test-plan sourcing.
+# Pinned after the 2026-08-03 sweep put the recipe at 0 keeps out of 10 in the
+# window, and re-pinned 2026-08-21 after a reproducible fabrication: anchored on
+# a merged PR whose template quotes a pytest run, and given a Context silent
+# about testing, the recipe emitted a ticked box and an invented "24 passed in
+# 1.12s" log. The old guard could not stop it — SHAPE was "non-negotiable" and
+# came first, while the evidence rule scoped itself out with "applies only when
+# the examples use a test plan", and that example had a Verification section,
+# not a test plan. EVIDENCE now outranks SHAPE explicitly, and the ban is on
+# boxes that ASSERT a verification, not on every `- [x]`: a box that classifies
+# the change ("- [x] Bug fix") states intent and is legitimate in templates that
+# use one. Assert the precedence, or a future edit silently restores the
+# fabrication.
 pr_description_template=$(awk '
   /^## Prompt template[[:space:]]*$/ { in_section=1; next }
   in_section && /^```/ { in_block = !in_block; print; next }
   in_section && !in_block && /^## / { exit }
   in_section { print }
 ' "$PROMPTS_DIR/pr-description.md")
-assert_contains "SHAPE — the examples govern, non-negotiable" "$pr_description_template" \
+assert_contains "SHAPE — the examples govern structure, non-negotiable" "$pr_description_template" \
   "pr-description.md prompt template names SHAPE-defers-to-examples directive"
-assert_contains "TEST-PLAN-EVIDENCE — first match wins, non-negotiable" "$pr_description_template" \
-  "pr-description.md prompt template names TEST-PLAN-EVIDENCE first-match-wins directive"
-assert_contains "NEVER emit a pre-checked box" "$pr_description_template" \
-  "pr-description.md prompt template bans the pre-checked test-plan box"
+assert_contains "EVIDENCE — outranks SHAPE, non-negotiable" "$pr_description_template" \
+  "pr-description.md prompt template names the EVIDENCE-outranks-SHAPE precedence"
+assert_contains "TEST-PLAN SOURCING — applies only when the examples use a test plan" "$pr_description_template" \
+  "pr-description.md prompt template names the test-plan sourcing directive"
+assert_contains "NEVER tick a box that asserts a verification" "$pr_description_template" \
+  "pr-description.md prompt template bans the verification-asserting checked box"
+assert_contains "NEVER write a command's output, a pass/fail count, or a timing" "$pr_description_template" \
+  "pr-description.md prompt template bans fabricated command output"
 pr_description_guards=$(awk '
   /^## Anti-hallucination guards/ { in_section=1; next }
   /^## / && in_section { in_section=0 }
@@ -338,8 +347,8 @@ pr_description_guards=$(awk '
 ' "$PROMPTS_DIR/pr-description.md")
 assert_contains "SHAPE — the examples govern" "$pr_description_guards" \
   "pr-description.md '## Anti-hallucination guards' names SHAPE directive"
-assert_contains "TEST-PLAN-EVIDENCE" "$pr_description_guards" \
-  "pr-description.md '## Anti-hallucination guards' names TEST-PLAN-EVIDENCE"
+assert_contains "EVIDENCE — outranks SHAPE" "$pr_description_guards" \
+  "pr-description.md '## Anti-hallucination guards' names the EVIDENCE precedence guard"
 
 # Every dispatchable recipe declares a frontmatter `tier:` (#411). 39 of the 44
 # recorded bad-tier calls supplied a --recipe, so the tier left the documented
