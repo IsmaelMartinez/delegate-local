@@ -393,11 +393,44 @@ for recipe_file in "$PROMPTS_DIR"/*.md; do
 done
 
 # The tier left the documented invocation, so no recipe may still show one.
+# The section-end check is gated on being OUTSIDE the fence: a --var value may
+# legitimately contain markdown headings (github-issue-body.md passes a
+# `--var sections` listing '## Summary' and friends), and exiting on those
+# reintroduced the same silent truncation one level down.
+# Scan the whole fenced block under '## Invocation', not backslash-continued
+# lines: the earlier `exit`-on-first-line-without-a-trailing-backslash stopped
+# at the first multi-line --var value, so pr-description.md — whose recent_prs
+# example spans lines — was scanned two lines deep and passed while still
+# documenting a positional `prose` tier. A silent skip in an invariant is worse
+# than no invariant, because the PASS line asserts coverage that did not happen.
 for recipe_file in "$PROMPTS_DIR"/*.md; do
   base=$(basename "$recipe_file" .md)
-  inv=$(awk '/delegate\.sh --recipe/{p=1} p{print; if($0 !~ /\\$/) exit}' "$recipe_file" | tr '\n' ' ')
+  inv=$(awk '
+    /^## Invocation[[:space:]]*$/ { in_sec=1; next }
+    in_sec && !in_block && /^## / { exit }
+    in_sec && /^```/ { if (in_block) exit; in_block=1; next }
+    in_sec && in_block { print }
+  ' "$recipe_file" | tr '\n' ' ')
   [[ -z "$inv" ]] && continue
   tier_alt=$(printf '%s' "$VALID_TIERS" | tr ' ' '|' | sed 's/^|//; s/|$//')
+  # Pin both truncation bugs. pr-description.md's first --var spans lines, so a
+  # scanner that stops at the first line without a trailing backslash never
+  # reaches the trailing prompt. github-issue-body.md's --var sections contains
+  # '## ' headings, so a scanner that treats any '## ' as the section end stops
+  # just as early. Both shipped as green PASS lines. If either assertion fails,
+  # the scan narrowed again and every FAIL below became unreachable.
+  case "$base" in
+    pr-description)    sentinel='NO invented example output' ;;
+    github-issue-body) sentinel='No title line, no closing summary' ;;
+    *)                 sentinel='' ;;
+  esac
+  if [[ -n "$sentinel" ]]; then
+    if printf '%s' "$inv" | grep -qF "$sentinel"; then
+      echo "  PASS  $base.md invocation scan reaches the trailing prompt"; pass=$((pass+1))
+    else
+      echo "  FAIL  $base.md invocation scan truncated before the trailing prompt"; fail=$((fail+1))
+    fi
+  fi
   if printf '%s' "$inv" | grep -qE "(^|[[:space:]])($tier_alt)([[:space:]]|\$)"; then
     echo "  FAIL  $base.md invocation still passes a tier"; fail=$((fail+1))
   else
