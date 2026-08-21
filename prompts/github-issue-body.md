@@ -79,7 +79,7 @@ bash scripts/delegate.sh --recipe github-issue-body \
 (content: one paragraph on the impact)
 ## Suggested fix
 (content: the proposed change, one paragraph per option)" \
-  prose "Use exactly the listed headings in order. British spelling. Invent nothing beyond the facts. No title line, no closing summary." \
+  "Use exactly the listed headings in order. British spelling. Invent nothing beyond the facts. No title line, no closing summary." \
   < "$CLAUDE_JOB_DIR/tmp/issue-facts.md"
 ```
 
