@@ -513,7 +513,7 @@ log_metric() {
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
     s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}" \
-    checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}"
+    checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}" checks_failed_names="${22:-}"
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$ochars")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -558,6 +558,7 @@ log_metric() {
     --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
     --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
     --arg crun "$checks_run" --arg cfail "$checks_failed" --arg cfix "$checks_autofixed" \
+    --arg cnames "$checks_failed_names" \
     '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
      + (if $recipe != "" then {recipe:$recipe} else {} end)
      + (if $project != "" then {project:$project} else {} end)
@@ -567,7 +568,8 @@ log_metric() {
      + (if $s_top_p != "" then {sampling_top_p:($s_top_p|tonumber)} else {} end)
      + (if $s_top_k != "" then {sampling_top_k:($s_top_k|tonumber)} else {} end)
      + (if $s_pp != "" then {sampling_presence_penalty:($s_pp|tonumber)} else {} end)
-     + (if ($crun != "" and ($crun|tonumber) > 0) then {checks_run:($crun|tonumber), checks_failed:($cfail|tonumber), checks_autofixed:($cfix|tonumber)} else {} end)' \
+     + (if ($crun != "" and ($crun|tonumber) > 0) then {checks_run:($crun|tonumber), checks_failed:($cfail|tonumber), checks_autofixed:($cfix|tonumber)} else {} end)
+     + (if $cnames != "" then {checks_failed_names:($cnames|split(","))} else {} end)' \
     >> "$metrics_file" 2>/dev/null || true
 }
 
@@ -1459,6 +1461,7 @@ run_output_checks() {
 # deliberately NOT local: they are the function's outputs.
 local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines
 checks_failed=0
+checks_failed_names=""
 checks_run=0
 checks_autofixed=0
 capability_failed=0
@@ -1535,6 +1538,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
           if (( ${#check_first_line} > cval )); then
             echo "delegate: check 'subject_max' FAILED — first line is ${#check_first_line} chars (> $cval)" >&2
             checks_failed=$((checks_failed + 1))
+            checks_failed_names="${checks_failed_names:+$checks_failed_names,}subject_max"
             capability_failed=$((capability_failed + 1))
           fi
         fi
@@ -1584,6 +1588,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             else
               echo "delegate: check 'no_padding_tail' FAILED — output ends on a padding/restating clause" >&2
               checks_failed=$((checks_failed + 1))
+              checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_padding_tail"
             fi
           fi
         fi
@@ -1607,6 +1612,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
           if [[ "$check_first_line" != *:* || "$subj_type" != "$cval" ]]; then
             echo "delegate: check 'subject_type' FAILED — subject does not start with '$cval:' (got '${check_first_line%%:*}:')" >&2
             checks_failed=$((checks_failed + 1))
+            checks_failed_names="${checks_failed_names:+$checks_failed_names,}subject_type"
             capability_failed=$((capability_failed + 1))
           fi
         fi
@@ -1626,6 +1632,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
           if (( body_lines < 2 )); then
             echo "delegate: check 'body_required' FAILED — output is subject-only ($body_lines non-empty line(s), need >= 2)" >&2
             checks_failed=$((checks_failed + 1))
+            checks_failed_names="${checks_failed_names:+$checks_failed_names,}body_required"
             capability_failed=$((capability_failed + 1))
           fi
         fi
@@ -1674,7 +1681,7 @@ context_chars=${#context}
 output_chars=${#output}
 tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$output_chars")
 
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed"
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names"
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to
