@@ -393,11 +393,33 @@ for recipe_file in "$PROMPTS_DIR"/*.md; do
 done
 
 # The tier left the documented invocation, so no recipe may still show one.
+# Scan the whole fenced block under '## Invocation', not backslash-continued
+# lines: the earlier `exit`-on-first-line-without-a-trailing-backslash stopped
+# at the first multi-line --var value, so pr-description.md — whose recent_prs
+# example spans lines — was scanned two lines deep and passed while still
+# documenting a positional `prose` tier. A silent skip in an invariant is worse
+# than no invariant, because the PASS line asserts coverage that did not happen.
 for recipe_file in "$PROMPTS_DIR"/*.md; do
   base=$(basename "$recipe_file" .md)
-  inv=$(awk '/delegate\.sh --recipe/{p=1} p{print; if($0 !~ /\\$/) exit}' "$recipe_file" | tr '\n' ' ')
+  inv=$(awk '
+    /^## Invocation[[:space:]]*$/ { in_sec=1; next }
+    in_sec && /^## / { exit }
+    in_sec && /^```/ { if (in_block) exit; in_block=1; next }
+    in_sec && in_block { print }
+  ' "$recipe_file" | tr '\n' ' ')
   [[ -z "$inv" ]] && continue
   tier_alt=$(printf '%s' "$VALID_TIERS" | tr ' ' '|' | sed 's/^|//; s/|$//')
+  # Pin the truncation bug itself: pr-description.md's first --var spans lines,
+  # so a scanner that stops at the first line without a trailing backslash never
+  # reaches the trailing prompt. If this assertion fails the scan silently
+  # narrowed again and every FAIL below became unreachable.
+  if [[ "$base" == "pr-description" ]]; then
+    if printf '%s' "$inv" | grep -q 'NO invented example output'; then
+      echo "  PASS  $base.md invocation scan reaches past a multi-line --var"; pass=$((pass+1))
+    else
+      echo "  FAIL  $base.md invocation scan truncated before the trailing prompt"; fail=$((fail+1))
+    fi
+  fi
   if printf '%s' "$inv" | grep -qE "(^|[[:space:]])($tier_alt)([[:space:]]|\$)"; then
     echo "  FAIL  $base.md invocation still passes a tier"; fail=$((fail+1))
   else

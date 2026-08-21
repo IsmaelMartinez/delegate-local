@@ -87,7 +87,7 @@ BODY:
 <<<EXAMPLE_END>>>" \
   --var diff_stat="<the git diff <base-branch> --stat output>" \
   --var context="<3-5 sentences>" \
-  prose "Match the example PR description exactly in shape and tone. NO invented example output."
+  "Match the example PR description exactly in shape and tone. NO invented example output."
 ```
 
 ## Anti-hallucination guards (each line addresses a real past MISS)
