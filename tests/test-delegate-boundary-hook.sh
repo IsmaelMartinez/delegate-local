@@ -787,6 +787,17 @@ jq -nc --arg ts "$nowts" --arg p "$proj" \
 payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "consumption: other-recipe credit spend does not count"
 
+# 55. Tail depth: a delegate row buried under 600 newer rows must still credit.
+# Truncation drops the oldest rows first, which are the earning delegate rows,
+# while the opportunity rows that spend them survive — so a too-small tail
+# reads as spent > earned and denies credit. Pins the 2000-line read depth.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+jq -nc --arg ts "$nowts" 'range(600) | {ts:$ts, source:"opportunity", boundary:"comment-reply", suggested_recipe:"maintainer-reply", delegated:false, project:"unrelated-filler"}' >> "$METRICS"
+payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "tail depth: delegate row under 600 filler rows still credits"
+
 ( cd "$gitroot/repo-b" && git worktree remove --force "$gitroot/wt-x" ) >/dev/null 2>&1
 rm -rf "$gitroot"
 

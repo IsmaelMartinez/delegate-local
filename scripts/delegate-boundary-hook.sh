@@ -369,10 +369,15 @@ delegated=false
 if [[ -f "$metrics_file" ]]; then
   # Only the recent tail can fall inside the look-back window, so cap the read
   # instead of slurping the whole (ever-growing) metrics file on each boundary.
+  # 2000 lines, not 500: truncation is asymmetric — it drops the OLDEST rows,
+  # which are the earning delegate rows, while keeping the newer opportunity
+  # rows that spent them, so a too-small tail denies credit (and can push the
+  # count negative, which `-gt 0` already reads as uncredited). 2000 rows
+  # covers the 480-minute window unless boundaries exceed ~4/minute all day.
   # `recent` is delegate rows MINUS already-credited posts (delegated:true
   # opportunity rows for the same project+recipe in the same window), so a
   # boundary is credited only while an unspent delegation remains.
-  recent=$(tail -n 500 "$metrics_file" 2>/dev/null | jq -s --argjson win "$((window_min * 60))" --arg proj "$project" --arg proj2 "$cwd_project" --arg proj3 "$repo_project" --arg recipe "$recipe" --argjson now "$now_epoch" '
+  recent=$(tail -n 2000 "$metrics_file" 2>/dev/null | jq -s --argjson win "$((window_min * 60))" --arg proj "$project" --arg proj2 "$cwd_project" --arg proj3 "$repo_project" --arg recipe "$recipe" --argjson now "$now_epoch" '
     # Any of the three candidates counts. With no `cd`, $proj and $proj2 are
     # equal, so $proj3 is load-bearing rather than decorative. $proj3 is the
     # only candidate that can be empty, and it is guarded: 3 delegate rows in
