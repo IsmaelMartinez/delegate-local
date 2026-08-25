@@ -45,7 +45,7 @@
 #
 # Env:
 #   DELEGATE_BOUNDARY_MODE        warn (default) | enforce | off
-#   DELEGATE_BOUNDARY_WINDOW_MIN  look-back window for a prior delegation (default 10)
+#   DELEGATE_BOUNDARY_WINDOW_MIN  look-back window for a prior delegation (default 480)
 #   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
 #                               (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE         metrics path (shared with delegate.sh)
@@ -355,27 +355,51 @@ fi
 # case as delegated:false — removing the sensor's best outcome from both sides
 # of the ratio. delegated:true wins over pre-drafted when both apply.
 metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
-window_min="${DELEGATE_BOUNDARY_WINDOW_MIN:-10}"
+# Default 480 rather than 10: the batch flow delegates a sweep of drafts,
+# waits for human approval, and posts hours later. Measured 2026-08-25, a
+# 12-reply sweep delegated at 11:13 had still not posted four hours on, so a
+# 10-minute window would have recorded every one of those posts as a missed
+# delegation and fired 12 spurious nudges at the compliant session. The wide
+# window is safe because credits are CONSUMED below: each delegated:true
+# opportunity row spends one delegate row, so one morning delegation credits
+# one post rather than silencing the nudge for the whole afternoon.
+window_min="${DELEGATE_BOUNDARY_WINDOW_MIN:-480}"
 now_epoch=$(date -u +%s)
 delegated=false
 if [[ -f "$metrics_file" ]]; then
   # Only the recent tail can fall inside the look-back window, so cap the read
   # instead of slurping the whole (ever-growing) metrics file on each boundary.
-  recent=$(tail -n 500 "$metrics_file" 2>/dev/null | jq -s --argjson win "$((window_min * 60))" --arg proj "$project" --arg proj2 "$cwd_project" --arg proj3 "$repo_project" --arg recipe "$recipe" --argjson now "$now_epoch" '
-    [ .[]
-      | select((.source // "delegate") == "delegate")
-      # Any of the three candidates counts. With no `cd`, $proj and $proj2 are
-      # equal, so $proj3 is load-bearing rather than decorative. $proj3 is the
-      # only candidate that can be empty, and it is guarded: 3 delegate rows in
-      # the current file carry no project at all, and an unguarded `== ""` would
-      # let them match every boundary. They are saved today only by the recipe
-      # predicate also failing, which is an accident, not a design.
-      | select((.project // "") == $proj
-               or (.project // "") == $proj2
-               or ($proj3 != "" and (.project // "") == $proj3))
-      | select((.recipe // "") == $recipe)
-      | ((.ts | fromdateiso8601?) // 0)
-      | select(. > ($now - $win)) ] | length' 2>/dev/null) || recent=0
+  # 2000 lines, not 500: truncation is asymmetric — it drops the OLDEST rows,
+  # which are the earning delegate rows, while keeping the newer opportunity
+  # rows that spent them, so a too-small tail denies credit (and can push the
+  # count negative, which `-gt 0` already reads as uncredited). 2000 rows
+  # covers the 480-minute window unless boundaries exceed ~4/minute all day.
+  # `recent` is delegate rows MINUS already-credited posts (delegated:true
+  # opportunity rows for the same project+recipe in the same window), so a
+  # boundary is credited only while an unspent delegation remains.
+  recent=$(tail -n 2000 "$metrics_file" 2>/dev/null | jq -s --argjson win "$((window_min * 60))" --arg proj "$project" --arg proj2 "$cwd_project" --arg proj3 "$repo_project" --arg recipe "$recipe" --argjson now "$now_epoch" '
+    # Any of the three candidates counts. With no `cd`, $proj and $proj2 are
+    # equal, so $proj3 is load-bearing rather than decorative. $proj3 is the
+    # only candidate that can be empty, and it is guarded: 3 delegate rows in
+    # the current file carry no project at all, and an unguarded `== ""` would
+    # let them match every boundary. They are saved today only by the recipe
+    # predicate also failing, which is an accident, not a design.
+    def matches_proj: (.project // "") == $proj
+                      or (.project // "") == $proj2
+                      or ($proj3 != "" and (.project // "") == $proj3);
+    def in_window: ((.ts | fromdateiso8601?) // 0) > ($now - $win);
+    ([ .[]
+       | select((.source // "delegate") == "delegate")
+       | select(matches_proj)
+       | select((.recipe // "") == $recipe)
+       | select(in_window) ] | length)
+    -
+    ([ .[]
+       | select((.source // "") == "opportunity")
+       | select(.delegated == true)
+       | select(matches_proj)
+       | select((.suggested_recipe // "") == $recipe)
+       | select(in_window) ] | length)' 2>/dev/null) || recent=0
   [[ "${recent:-0}" -gt 0 ]] && delegated=true
 fi
 # A delegated boundary is a counted success, not an excluded row, so the
