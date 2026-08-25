@@ -742,6 +742,51 @@ payload 'git commit -m x' "$gitroot/repo-a" \
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "projectless delegate row does not match an empty --repo candidate"
 
+# 51. Credit consumption: one delegation credits exactly one post. The second
+# post of the same project+recipe finds the credit spent by the first post's
+# delegated:true opportunity row and records a miss, so the wide default
+# window cannot silence an afternoon of nudges off one morning delegation.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "consumption: first post spends the credit"
+payload 'git commit -m "y"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "consumption: second post finds no credit left"
+
+# 52. Batch flow: three delegations credit three posts, the fourth misses.
+: > "$METRICS"
+for i in 1 2 3; do
+  jq -nc --arg ts "$nowts" --arg p "$proj" \
+    '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+done
+for i in 1 2 3; do
+  payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+  assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "batch: post $i of 3 credited"
+done
+payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "batch: post 4 exceeds the 3 credits"
+
+# 53. Wide default window: a 3-hour-old delegation still credits, covering the
+# delegate-then-await-approval batch flow that the old 10-minute default
+# recorded as missed (measured 2026-08-25: a sweep took >4h to post).
+: > "$METRICS"
+threehrs=$(jq -rn --argjson now "$(date -u +%s)" '($now - 10800) | todateiso8601')
+jq -nc --arg ts "$threehrs" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "default window: 3h-old delegation credits"
+
+# 54. Consumption is per project+recipe: a delegated:true row for a different
+# recipe does not spend this recipe's credit.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"opportunity", boundary:"pr-create", suggested_recipe:"pr-description", delegated:true, project:$p}' >> "$METRICS"
+payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "consumption: other-recipe credit spend does not count"
+
 ( cd "$gitroot/repo-b" && git worktree remove --force "$gitroot/wt-x" ) >/dev/null 2>&1
 rm -rf "$gitroot"
 
