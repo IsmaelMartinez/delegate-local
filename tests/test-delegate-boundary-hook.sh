@@ -833,6 +833,14 @@ payload 'gh api repos/o/r/pulls/12/comments -X POST -f body=hello -F in_reply_to
 assert_eq "pr-review-reply" "$(jq -r .suggested_recipe <<<"$(last_row)")" \
   "pr-review-body: the comments endpoint is untouched"
 
+# 57-i. The API form carries the same inline-body requirement as the CLI form.
+# An approval POST with no body= field has no text to intercept, so nudging for
+# one would ask the agent to draft a message it is never going to write.
+: > "$METRICS"
+payload 'gh api repos/o/r/pulls/12/reviews -X POST -f event=APPROVE' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq 0 "$(nrows)" "pr-review-body: a reviews POST with no body= writes no row"
+
 # 58. A short status comment still routes to the closed shape. This is the
 # assertion that stops the fix from simply swallowing the other recipe.
 : > "$METRICS"

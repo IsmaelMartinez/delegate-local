@@ -198,9 +198,14 @@ classify_segment() {
      && ! grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*w|--web)([[:space:]]|$)' <<<"$seg"; then
     boundary="pr-review-body"; recipe="maintainer-review-reply"; return 0
   fi
+  # The API form carries the same inline-body requirement as the CLI form above.
+  # A reviews POST is not necessarily a drafting moment: `-f event=APPROVE` with
+  # no body is an approval with no text to intercept, and firing on it would
+  # nudge for a message that is never written.
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+api([[:space:]]|$)' <<<"$seg" \
      && grep -Eq '/pulls/[0-9]+/reviews' <<<"$seg" \
-     && grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$seg"; then
+     && grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$seg" \
+     && grep -Eq -- '(^|[[:space:]])(-[fF]|--field|--raw-field)([[:space:]]+|=)body=' <<<"$seg"; then
     boundary="pr-review-body"; recipe="maintainer-review-reply"; return 0
   fi
   # Inline PR review-comment reply: `gh api .../pulls/<n>/comments -X POST -f body=...`
