@@ -1854,7 +1854,12 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         # the prompt's own stated contract. Tighten it in profile.sh.
         if [[ "$cval" =~ ^[0-9]+$ ]]; then
           checks_run=$((checks_run + 1))
-          body_words=$(printf '%s\n' "$output" | awk '
+          # tr -d '\r' first, for the same reason body_required does it: a CRLF
+          # blank separator is a lone \r, which some awks do not count as
+          # [[:space:]], and the separator would then never be found so the
+          # body would measure 0 words and always pass. BWK awk (macOS) does
+          # match it and the bug is invisible there; CI runs mawk.
+          body_words=$(printf '%s\n' "$output" | tr -d '\r' | awk '
             BEGIN { s = 0 }
             s { n += NF; next }
             /^[[:space:]]*$/ { s = 1 }

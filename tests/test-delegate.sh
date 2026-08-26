@@ -5637,6 +5637,14 @@ fi
 make_mock_curl_think "$tmp" 'subject\n\none two three four five six\n\nseven eight nine ten eleven twelve'
 assert_contains "body is 12 words" "$(run_bw)" \
   "body_max_words: paragraphs after the first blank line are summed"
+# 42e-i. CRLF output must measure the same as LF. A lone \r is the whole
+# content of a CRLF blank separator, and an awk that does not count it as
+# [[:space:]] would never find the separator, measure the body as 0 words and
+# pass everything. Not reproducible on BWK awk (macOS), which does match it;
+# this runs on CI's mawk too.
+make_mock_curl_think "$tmp" 'subject here\r\n\r\none two three four five six seven eight nine ten eleven twelve'
+assert_contains "body is 12 words (> 10)" "$(run_bw)" \\
+  "body_max_words: CRLF output measures the same as LF"
 # 42f. The limit arrives through the flavor profile, so a project can tighten
 # it without touching the recipe. A non-numeric value is ignored rather than
 # crashing the call.
