@@ -104,6 +104,10 @@ usage: delegate-feedback.sh [--ts <iso8601>] [--source human|agent]
   --source records the verdict tier: human (default, a maintainer taste
   judgment) or agent (the agent's record of whether it used its own
   delegated output). Reporting keeps the two tiers separate.
+  With --source agent, a miss or scaffold REQUIRES a reason: the agent
+  recording its own just-finished delegation always knows why it rewrote
+  the draft, and a rejection with no reason counts in every denominator
+  while telling the loop nothing.
   --final stores the text that ACTUALLY shipped (a file path, or - for
   stdin) beside the captured draft, so a MISS carries the concrete
   (generated, shipped) pair instead of only a prose description of the
@@ -187,6 +191,28 @@ case "$1" in
 esac
 shift
 reason="$*"
+
+# An agent-recorded rejection with no reason is a row that counts in every
+# denominator and tells the loop nothing. Measured 2026-08-26: 12 of the 63
+# rejections in the live corpus carry no reason at all — every one of them
+# `verdict_source: agent`, all written in a single bulk sweep on 2026-08-25, all
+# on the recipe that then sat at the bottom of the per-recipe ranking with no
+# usable evidence behind its position. The loop doc is explicit that a rejection
+# with only a prose reason is already thin; one with none cannot be acted on at
+# all.
+#
+# Scoped to the agent tier on purpose. `verdict-sweep.sh` records reasonless
+# verdicts for a human working retrospectively through old rows, where "I no
+# longer remember why" is honest; the agent recording its own just-finished
+# delegation always knows.
+if [[ "$verdict_source" == "agent" && "$kept" == "false" && -z "${reason// }" ]]; then
+  echo "delegate-feedback: an agent-recorded '$verdict' needs a reason." >&2
+  echo "  It is the only thing that makes the row actionable — the rate it moves" >&2
+  echo "  is computed either way. Name what was wrong with the draft:" >&2
+  echo "    delegate-feedback.sh --source agent $verdict \"dropped every file:line anchor\"" >&2
+  echo "  and on a miss or scaffold add --final <path|-> naming what you shipped." >&2
+  exit 2
+fi
 
 # The migration hint (#360) is repeated here rather than shared, because the
 # only two scripts that need it are this one (the agent's entry point) and
