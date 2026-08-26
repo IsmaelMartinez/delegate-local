@@ -10,6 +10,7 @@ checks:
   subject_max: {{flavor_commit_subject_max}}
   no_padding_tail: true
   body_required: true
+  body_max_words: {{flavor_commit_body_max_words}}
   subject_type: {{type}}
 ---
 # commit-message
@@ -39,7 +40,7 @@ Draft a git commit message in EXACTLY the same shape as these recent examples.
 SHAPE-NOT-CONTENT — non-negotiable, outranks every other instruction about the examples:
 The recent commits below show you the FORM of a message in this project: the type vocabulary, the subject length, the register, whether there is a scope. Their WORDS and their VALUES belong to changes that already happened and are not yours to reuse. Never copy a subject from them. Never carry over a version number, a file path, a PR number, a package name or a count that appears only in them. Every fact in your message must come from the diff and the WHY context; if the examples are the only place a detail appears, it is not a detail about this change.
 Subject ≤ {{flavor_commit_subject_max}} chars starting with '<TYPE>:' ({{flavor_commit_types}}).
-Then a blank line, then 1-2 short flowing-prose paragraphs (NO bullet lists, NO indentation).
+Then a blank line, then 1-2 short flowing-prose paragraphs, {{flavor_commit_body_max_words}} words maximum for the whole body (NO bullet lists, NO indentation).
 
 BODY — mandatory, non-negotiable:
 Every message MUST have a body, not just a subject. After the subject and a blank
@@ -319,3 +320,42 @@ source and to the output, and any future rule has to go there and nowhere else.
 Unmeasured on purpose: this landed 2026-08-26 with no post-change data. The
 prior `commit-message` keep rate is 36% over n=22; re-measure after ~10 more
 calls before treating any movement as real.
+### 2026-08-26 — body length became a check, after the copying fix left it standing
+
+The previous entry closed the copying question and left the length one open.
+This closes it, on the pairs the capture work has since produced.
+
+Eight rejections in the rolling week name an over-long body — "two paragraphs
+against the owner's one-to-two-sentence house style", "three paragraphs", "four
+clauses where the repo convention is one or two sentences" — across four
+projects. Three of them now carry a captured draft/final pair, and the pairs
+separate without overlap: the bodies that shipped came in at 31, 37 and 43
+words, and the drafts they replaced at 76, 104 and 104. Counting the other
+rejected drafts in, everything at 56 words or more was cut and everything at 45
+or fewer shipped, with nothing in between.
+
+Paragraph count was measured first and discarded: no captured draft exceeds two
+body paragraphs, so the "three paragraphs" in the reasons is counting the
+subject and a paragraph cap would not discriminate. Word count does.
+
+This is a check rather than a fourth attempt at the wording. The template has
+said "1-2 short flowing-prose paragraphs" under a heading marked "mandatory,
+non-negotiable" for the whole period the eight rejections cover, which is the
+condition `docs/self-improvement-loop.md` names for escalating from prompt text
+to a deterministic constraint. The prompt now carries the same number the check
+enforces, so the model is not given two different targets.
+
+The limit is `{{flavor_commit_body_max_words}}`, not a constant. How short a
+commit body should be is house style, and the corpus that motivated this is one
+maintainer's four projects, so baking 50 into the shipped default would be
+encoding personal taste as a standard — the thing `scripts/flavor-defaults.sh`
+exists to prevent. The default is 120, which is the prompt's own "1-2 short
+paragraphs" and nothing tighter, and would have flagged none of the drafts
+above. Projects that want the tighter behaviour set
+`FLAVOR_COMMIT_BODY_MAX_WORDS` in their own `profile.sh`; 50 sits in the
+observed gap between 45 and 56.
+
+Unmeasured: landed 2026-08-26 with no post-change data, and inert at the
+shipped default by design. Prior keep rate 34% over n=23. Re-measure after ~10
+more calls on a profile that sets a tighter limit before treating any movement
+as real.

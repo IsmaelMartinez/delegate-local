@@ -1559,7 +1559,7 @@ run_output_checks() {
 # is a function (it ran at top level before the refactor). The result and the
 # counters — output, checks_run/failed/autofixed, capability_failed — are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines echoed_line echo_exemplars _egv _kv
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -1835,6 +1835,34 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             echo "delegate: check 'body_required' FAILED — output is subject-only ($body_lines non-empty line(s), need >= 2)" >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}body_required"
+            capability_failed=$((capability_failed + 1))
+          fi
+        fi
+        ;;
+      body_max_words)
+        # ADR 0014 length check for the BODY (everything after the first blank
+        # line), counted in words. Added 2026-08-26 after eight rejections in a
+        # week named an over-long body and three captured draft/final pairs
+        # separated cleanly: every shipped body came in at 31-45 words, every
+        # draft that had to be cut at 56-104, with nothing in between. The
+        # prompt has asked for "1-2 short flowing-prose paragraphs" under a
+        # "mandatory, non-negotiable" heading the whole time, which is why this
+        # is a check rather than a third rewording of the instruction.
+        #
+        # The limit is a flavor placeholder, not a constant: how long a commit
+        # body should be is house style, and the shipped default only enforces
+        # the prompt's own stated contract. Tighten it in profile.sh.
+        if [[ "$cval" =~ ^[0-9]+$ ]]; then
+          checks_run=$((checks_run + 1))
+          body_words=$(printf '%s\n' "$output" | awk '
+            BEGIN { s = 0 }
+            s { n += NF; next }
+            /^[[:space:]]*$/ { s = 1 }
+            END { print n + 0 }')
+          if [[ "$body_words" =~ ^[0-9]+$ ]] && (( body_words > cval )); then
+            echo "delegate: check 'body_max_words' FAILED — body is $body_words words (> $cval)" >&2
+            checks_failed=$((checks_failed + 1))
+            checks_failed_names="${checks_failed_names:+$checks_failed_names,}body_max_words"
             capability_failed=$((capability_failed + 1))
           fi
         fi

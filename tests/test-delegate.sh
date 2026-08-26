@@ -5567,6 +5567,111 @@ assert_eq "short" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
   "draft-capture: malformed byte cap still captures under the default bound"
 rm -rf "$tmp" "$data"
 
+# ---------------------------------------------------------------------------
+# 42. body_max_words — the BODY length check (everything after the first blank
+# line), with the limit coming from the flavor profile. Added after three
+# captured draft/final pairs separated cleanly: shipped bodies 31/37/43 words,
+# the drafts they replaced 76/104/104.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/bw.md" <<'EOF'
+---
+tier: prose
+checks:
+  body_max_words: 10
+---
+# bw
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+GO
+```
+
+## Calibration notes
+n/a
+EOF
+run_bw() {
+  env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe bw prose "go" </dev/null 2>&1 >/dev/null
+}
+# 42a. Over the limit fails and is named on the row.
+make_mock_curl_think "$tmp" 'subject here\n\none two three four five six seven eight nine ten eleven twelve'
+out=$(run_bw)
+assert_contains "check 'body_max_words' FAILED — body is 12 words (> 10)" "$out" \
+  "body_max_words: over-limit body fails with both counts named"
+assert_contains '"checks_failed_names":["body_max_words"]' "$(tail -1 "$metrics")" \
+  "body_max_words: named on the metrics row"
+# 42b. At the limit passes — the comparison is >, not >=.
+make_mock_curl_think "$tmp" 'subject here\n\none two three four five six seven eight nine ten'
+if [[ "$(run_bw)" == *"body_max_words"* ]]; then
+  echo "  FAIL  body_max_words: a body exactly at the limit must pass"; fail=$((fail+1))
+else
+  echo "  PASS  body_max_words: a body exactly at the limit passes"; pass=$((pass+1))
+fi
+# 42c. The SUBJECT is not part of the body. A long subject with a short body
+# must not fail; subject length is subject_max's job.
+make_mock_curl_think "$tmp" 'a very long subject line with many many many many words indeed\n\ntwo words'
+if [[ "$(run_bw)" == *"body_max_words"* ]]; then
+  echo "  FAIL  body_max_words: the subject line must not be counted"; fail=$((fail+1))
+else
+  echo "  PASS  body_max_words: the subject line is not counted"; pass=$((pass+1))
+fi
+# 42d. A subject-only message has no body to measure, so this check stays
+# silent and leaves the complaint to body_required.
+make_mock_curl_think "$tmp" 'subject here'
+if [[ "$(run_bw)" == *"body_max_words"* ]]; then
+  echo "  FAIL  body_max_words: subject-only output is body_required's business"; fail=$((fail+1))
+else
+  echo "  PASS  body_max_words: subject-only output is left to body_required"; pass=$((pass+1))
+fi
+# 42e. A multi-paragraph body is counted as a whole, not per paragraph.
+# Six words in each paragraph: neither exceeds the limit of 10 on its own,
+# so a per-paragraph implementation would let this through.
+make_mock_curl_think "$tmp" 'subject\n\none two three four five six\n\nseven eight nine ten eleven twelve'
+assert_contains "body is 12 words" "$(run_bw)" \
+  "body_max_words: paragraphs after the first blank line are summed"
+# 42f. The limit arrives through the flavor profile, so a project can tighten
+# it without touching the recipe. A non-numeric value is ignored rather than
+# crashing the call.
+cat > "$prompts/bwf.md" <<'EOF'
+---
+tier: prose
+checks:
+  body_max_words: {{flavor_commit_body_max_words}}
+---
+# bwf
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+GO
+```
+
+## Calibration notes
+n/a
+EOF
+prof="$tmp/profile.sh"
+printf 'FLAVOR_COMMIT_BODY_MAX_WORDS=3\n' > "$prof"
+chmod 600 "$prof"
+make_mock_curl_think "$tmp" 'subject\n\none two three four five'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  DELEGATE_LOCAL_PROFILE="$prof" \
+  bash "$SCRIPT" --recipe bwf prose "go" </dev/null 2>&1 >/dev/null)
+assert_contains "body is 5 words (> 3)" "$out" \
+  "body_max_words: the limit comes from the flavor profile"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
