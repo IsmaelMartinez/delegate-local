@@ -4,6 +4,7 @@ inputs:
   recent_prs: string
   diff_stat: string
   context: string
+echo_guard_vars: recent_prs
 ---
 # pr-description
 
@@ -132,6 +133,21 @@ Adds X so that Y no longer needs Z. The behaviour is unchanged for existing call
 Verify before recording verdict: the output's shape matches the anchor examples' shape (headings only if the examples used headings — a multi-section body against terse examples is a MISS, not a bonus), no `PR #NN` prefix in any heading, no fabricated tool output (any code block claiming to show CLI / metrics output should be cross-checked against the actual format), and — where a test plan is present at all — every item traces to something stated in the Context and no box is pre-checked. A single `- [x]` is an automatic MISS: it asserts a verification that did not happen.
 
 ## Calibration notes
+
+### 2026-08-26 — `recent_prs` declared as an echo-guarded exemplar (issue #428)
+
+No new failure here; this recipe inherits a fix made for `commit-message`,
+where a shape anchor was verifiably copied out as content (a subject lifted
+from a thirteen-day-old commit, carrying the version the change was bumping
+away from). `recent_prs` sits in exactly that role, and the AI-815 leak this
+recipe already carries guards for was the same shape, so the frontmatter now
+declares `echo_guard_vars: recent_prs` and the `no_example_echo` check treats
+lines unique to a single supplied PR example as forbidden output. Lines
+repeated across several examples are exempt, which is what keeps a shared
+trailer or a section heading the description is meant to reproduce from
+flagging. Unmeasured: landed with no post-change data, prior keep rate 42% over
+n=7.
+
 
 > **Chronological log — read top to bottom; not all of it is current.** Any entry dated before 2026-06-28 that recommends hand-writing as the active mitigation, or frames the failure as a parameter-count *generation* stall, is SUPERSEDED by the 2026-06-28 entry — the last dated entry below: the gate was retired and the blocker reclassified as a one-time cold-load. The live operating guidance is the status banner at the top of this file plus that final note; the dated entries below run in date order and are retained as the record of how the conclusion was reached.
 

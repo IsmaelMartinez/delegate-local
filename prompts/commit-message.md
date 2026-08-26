@@ -5,6 +5,7 @@ inputs:
   diff_stat: string
   why: string
   type: string?
+echo_guard_vars: recent_commits
 checks:
   subject_max: {{flavor_commit_subject_max}}
   no_padding_tail: true
@@ -35,6 +36,8 @@ The `--pretty=fuller` flag is load-bearing — the model learns the project's bo
 Draft a git commit message from the staged diff and recent-commit anchors below. Do not invent file paths, PR numbers, or features that are not present in the diff.
 
 Draft a git commit message in EXACTLY the same shape as these recent examples.
+SHAPE-NOT-CONTENT — non-negotiable, outranks every other instruction about the examples:
+The recent commits below show you the FORM of a message in this project: the type vocabulary, the subject length, the register, whether there is a scope. Their WORDS and their VALUES belong to changes that already happened and are not yours to reuse. Never copy a subject from them. Never carry over a version number, a file path, a PR number, a package name or a count that appears only in them. Every fact in your message must come from the diff and the WHY context; if the examples are the only place a detail appears, it is not a detail about this change.
 Subject ≤ {{flavor_commit_subject_max}} chars starting with '<TYPE>:' ({{flavor_commit_types}}).
 Then a blank line, then 1-2 short flowing-prose paragraphs (NO bullet lists, NO indentation).
 
@@ -117,7 +120,7 @@ Wrong: This closes the gap between the documented contract and the wire payload.
 Correct: (sentence ends after the substantive content; no closes/closing-the-gap or -loop tail at all.)
 Output ONLY the commit message itself, nothing else.
 
-=== Recent commit examples to match ===
+=== Recent commit examples (SHAPE ONLY — copy the form, never the words or values) ===
 {{recent_commits}}
 
 === This commit (changes) ===
@@ -270,3 +273,41 @@ picked today would be picked from noise.
 What would settle it: enough `--final` pairs on `commit-message` to see whether
 the rejected bodies share long verbatim runs with their `why` input. If they
 do, the fix is an input-echo check, not a length cap.
+
+### 2026-08-26 — the shape anchors were being copied as content (issue #428)
+
+The question the previous note left open — whether the over-long bodies were a
+length problem or a copying problem — was settled by a case with a checkable
+answer. A `ci` bump on `ismaelmartinez.me.uk` (delegation ts 13:35:37) returned
+the subject `ci: bump codeql-action init and analyze together to v4.37.6`.
+Commit `310a855b` on that repo, thirteen days earlier and sitting in the
+`recent_commits` anchors, reads `chore(deps): bump codeql-action init and
+analyze together to v4.37.6 (#253)`. The words are identical; only the type
+prefix and the PR suffix differ. The change being described was a bump TO
+v4.37.8, so the message named the version it was moving away from, and dropped
+the osv-scanner half of the change entirely. Filed independently as #428, which
+reached the same diagnosis: "the likely mechanism is that `recent_commits`
+reads as an exemplar to copy rather than as background".
+
+That is the `no_example_echo` failure shape (ADR 0029) aimed at a `--var` value
+rather than at the template, where the shipped check could not see it — it
+compares against the pre-substitution template precisely so caller-supplied
+content never flags. The fix generalises the check instead of adding a second
+one: a recipe may declare `echo_guard_vars:` naming the vars whose values are
+exemplars, and those join the forbidden-output pattern set. Two normalisations
+make the real case catchable, both verified against it: the conventional-commit
+type prefix and a trailing ` (#123)` are stripped from both sides, and a line
+appearing in more than one exemplar is dropped from the pattern set, because
+repeated across the anchors means convention rather than content. `pr-description`
+declares `recent_prs` for the same reason — its `recent_prs` sits in the same
+exemplar role, and the AI-815 leak was the same shape.
+
+The template was also at fault and was changed, which is not a reworded length
+rule but a different defect: it said "Draft a git commit message in EXACTLY the
+same shape as these recent examples" under a heading reading "Recent commit
+examples to match". SHAPE-NOT-CONTENT now states the precedence explicitly and
+the heading says shape only.
+
+Unmeasured on purpose: this landed 2026-08-26 with no post-change data. The
+prior `commit-message` keep rate is 36% over n=22; re-measure after ~10 more
+calls before treating any movement as real.
