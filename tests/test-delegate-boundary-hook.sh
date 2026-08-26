@@ -801,6 +801,66 @@ assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "tail depth: delegate row 
 ( cd "$gitroot/repo-b" && git worktree remove --force "$gitroot/wt-x" ) >/dev/null 2>&1
 rm -rf "$gitroot"
 
+# 56. pr-review-body — a maintainer's PR review body routes to
+# maintainer-review-reply, not maintainer-reply. Before 2026-08-26 `gh pr review`
+# cleared the pre-filter and matched no branch at all, so the most common way a
+# maintainer posts a judgement produced no row and no nudge, while
+# maintainer-review-reply sat at n=0 calls behind two rounds of prose routing.
+: > "$METRICS"
+payload 'gh pr review 2822 --comment --body "the rework is right and this is not a regression"' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq "pr-review-body" "$(jq -r .boundary <<<"$(last_row)")" \
+  "pr-review-body: gh pr review --body is a boundary"
+assert_eq "maintainer-review-reply" "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "pr-review-body: it routes to maintainer-review-reply"
+# The nudge has to name the recipe, since naming it is the whole point.
+out=$(payload 'gh pr review 2822 --comment --body "x"' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_contains "--recipe maintainer-review-reply" "$out" \
+  "pr-review-body: the nudge names maintainer-review-reply"
+
+# 57. The reviews ENDPOINT is the same boundary; the comments endpoint is not.
+# `/pulls/<n>/reviews` is a review body, `/pulls/<n>/comments` is an inline
+# reply under someone else's comment, which stays pr-review-reply.
+: > "$METRICS"
+payload 'gh api repos/o/r/pulls/12/reviews -X POST -f body=hello -f event=COMMENT' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq "maintainer-review-reply" "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "pr-review-body: the reviews endpoint routes to maintainer-review-reply"
+: > "$METRICS"
+payload 'gh api repos/o/r/pulls/12/comments -X POST -f body=hello -F in_reply_to=1' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq "pr-review-reply" "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "pr-review-body: the comments endpoint is untouched"
+
+# 57-i. The API form carries the same inline-body requirement as the CLI form.
+# An approval POST with no body= field has no text to intercept, so nudging for
+# one would ask the agent to draft a message it is never going to write.
+: > "$METRICS"
+payload 'gh api repos/o/r/pulls/12/reviews -X POST -f event=APPROVE' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq 0 "$(nrows)" "pr-review-body: a reviews POST with no body= writes no row"
+
+# 58. A short status comment still routes to the closed shape. This is the
+# assertion that stops the fix from simply swallowing the other recipe.
+: > "$METRICS"
+payload 'gh pr comment 2822 --body "thanks, merged"' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq "comment-reply" "$(jq -r .boundary <<<"$(last_row)")" \
+  "pr-review-body: gh pr comment is still comment-reply"
+assert_eq "maintainer-reply" "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "pr-review-body: gh pr comment still routes to maintainer-reply"
+
+# 59. No inline body, no drafting moment. A bare approve or an editor/--web
+# review has nothing to intercept, same reasoning as commit --amend.
+: > "$METRICS"
+payload 'gh pr review 2822 --approve' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq 0 "$(nrows)" "pr-review-body: a bare --approve writes no row"
+payload 'gh pr review 2822 --web' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq 0 "$(nrows)" "pr-review-body: --web writes no row"
+
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
