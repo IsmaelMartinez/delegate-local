@@ -567,7 +567,7 @@ capture_draft() {
   bytes=$(printf '%s' "$text" | wc -c | tr -d '[:space:]')
   # head -c bounds a runaway generation without failing the call. The marker
   # keeps a truncated file from being read later as a complete draft.
-  if [[ "$bytes" =~ ^[0-9]+$ ]] && (( bytes > max )); then
+  if [[ "$bytes" =~ ^[0-9]+$ ]] && (( bytes > 10#$max )); then
     ( umask 077
       { printf '%s' "$text" | head -c "$max"; printf '\n[truncated at %s bytes by DELEGATE_DRAFT_MAX_BYTES]\n' "$max"; } \
         > "$dir/$stem.draft.txt" ) 2>/dev/null || return 0
@@ -579,7 +579,7 @@ capture_draft() {
   # steady state) and self-limiting, so there is no cron dependency for it.
   # 0 disables. -mtime +N is POSIX and behaves the same on BSD and GNU find.
   local keep="${DELEGATE_DRAFT_RETENTION_DAYS:-14}"
-  if [[ "$keep" =~ ^[0-9]+$ ]] && (( keep > 0 )); then
+  if [[ "$keep" =~ ^[0-9]+$ ]] && (( 10#$keep > 0 )); then
     find "$dir" -type f -name '*.txt' -mtime "+$keep" -exec rm -f {} + 2>/dev/null || true
   fi
   printf '%s' "$stem.draft.txt"
@@ -1323,7 +1323,7 @@ preflight_timeout="${DELEGATE_PREFLIGHT_TIMEOUT:-10}"
 if [[ -n "$recipe" ]] \
    && [[ "${DELEGATE_NO_PREFLIGHT:-}" != "1" ]] \
    && [[ "$preflight_timeout" =~ ^[0-9]+$ ]] \
-   && (( preflight_timeout > 0 )); then
+   && (( 10#$preflight_timeout > 0 )); then
   # The canary is a 1-token probe — "did the model respond at all" is the
   # only signal we want. Keep it at temperature:0 / greedy so a single fast
   # deterministic token comes back regardless of the dispatch profile. The
@@ -1537,6 +1537,15 @@ fi
 
 # (reasoning-trace strip now happens inside dispatch_to_model, above)
 
+# Every arithmetic comparison below against a value that came from outside this
+# script — a recipe's frontmatter, a flavor profile, an env var — writes the
+# operand as `10#$var`. Bash reads a leading zero as octal, so a zero-padded but
+# perfectly valid limit aborts the arithmetic with "value too great for base" on
+# the caller's stderr AND takes the wrong branch, which for a check means it
+# silently fails open. Verified 2026-08-26: `subject_max: 08` let a 60-character
+# subject through with no warning and leaked the bash error mid-run. The
+# `^[0-9]+$` guards beside them keep the value numeric; `10#` keeps it decimal.
+#
 # Deterministic output checks (ADR 0014, extended by ADR 0017): a recipe's
 # frontmatter `checks:` block declares constraints that run on the finalised
 # output. Most are warn-only — a failure flags on stderr and never changes the
@@ -1737,7 +1746,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
       subject_max)
         if [[ "$cval" =~ ^[0-9]+$ ]]; then
           checks_run=$((checks_run + 1))
-          if (( ${#check_first_line} > cval )); then
+          if (( ${#check_first_line} > 10#$cval )); then
             echo "delegate: check 'subject_max' FAILED — first line is ${#check_first_line} chars (> $cval)" >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}subject_max"
@@ -1864,7 +1873,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             s { n += NF; next }
             /^[[:space:]]*$/ { s = 1 }
             END { print n + 0 }')
-          if [[ "$body_words" =~ ^[0-9]+$ ]] && (( body_words > cval )); then
+          if [[ "$body_words" =~ ^[0-9]+$ ]] && (( body_words > 10#$cval )); then
             echo "delegate: check 'body_max_words' FAILED — body is $body_words words (> $cval)" >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}body_max_words"

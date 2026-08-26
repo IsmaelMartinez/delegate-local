@@ -5954,6 +5954,81 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
+# ---------------------------------------------------------------------------
+# 46. Zero-padded numeric limits are decimal, not octal. Bash reads a leading
+# zero as octal, so `subject_max: 08` aborted the comparison with "value too
+# great for base" on the caller's stderr and took the wrong branch — a check
+# that silently fails open, which is the worst failure mode a check has.
+# Verified before the fix: a 62-character subject passed a limit of 8.
+# `subject_max` is flavor-substituted, so a profile carrying a padded value
+# would have disabled the subject check for every commit message.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+mk_oct_recipe() {
+  cat > "$prompts/oct.md" <<EOF
+---
+tier: prose
+checks:
+  subject_max: $1
+  body_max_words: $2
+---
+# oct
+
+## When to use
+n/a
+
+## Prompt template
+
+\`\`\`
+GO
+\`\`\`
+
+## Calibration notes
+n/a
+EOF
+}
+run_oct() {
+  env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+    DELEGATE_NO_ECHO_CHECK=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe oct prose "go" </dev/null 2>&1 >/dev/null
+}
+# 46a. A zero-padded subject limit still fires, and leaks no arithmetic error.
+mk_oct_recipe 08 500
+make_mock_curl_think "$tmp" 'a subject line that is definitely longer than eight characters'
+out=$(run_oct)
+assert_contains "check 'subject_max' FAILED" "$out" \
+  "base-10: a zero-padded subject_max still fires"
+if [[ "$out" == *"value too great for base"* ]]; then
+  echo "  FAIL  base-10: subject_max must leak no arithmetic error"; fail=$((fail+1))
+else
+  echo "  PASS  base-10: subject_max leaks no arithmetic error"; pass=$((pass+1))
+fi
+# 46b. Same for the body word cap.
+mk_oct_recipe 500 09
+make_mock_curl_think "$tmp" 'subject\n\none two three four five six seven eight nine ten eleven twelve'
+out=$(run_oct)
+assert_contains "check 'body_max_words' FAILED — body is 12 words (> 09)" "$out" \
+  "base-10: a zero-padded body_max_words still fires"
+if [[ "$out" == *"value too great for base"* ]]; then
+  echo "  FAIL  base-10: body_max_words must leak no arithmetic error"; fail=$((fail+1))
+else
+  echo "  PASS  base-10: body_max_words leaks no arithmetic error"; pass=$((pass+1))
+fi
+# 46c. A padded value under the limit must still pass — 10# must not turn the
+# comparison into a permanent failure.
+mk_oct_recipe 0500 0500
+make_mock_curl_think "$tmp" 'short subject\n\ntwo words'
+out=$(run_oct)
+if [[ "$out" == *"FAILED"* || "$out" == *"value too great for base"* ]]; then
+  echo "  FAIL  base-10: a padded limit above the measured value must pass"; fail=$((fail+1))
+else
+  echo "  PASS  base-10: a padded limit above the measured value passes"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
