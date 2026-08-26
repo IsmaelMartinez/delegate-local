@@ -114,6 +114,39 @@ code change.
    is filed on this repo recording the finding and the exact override command.
    *Verify:* a merged release PR with no admin override, or an issue URL.
 
+**Status: PARTLY DONE** — the general mechanism is established and verified;
+the release-PR case specifically is not, and is filed rather than guessed at.
+
+**Results**
+
+Verified, from PR #434. The gate blocks while any Copilot review thread is
+unresolved, *including threads GitHub itself marks `isOutdated`* because a later
+push already addressed them. #434 sat `BLOCKED` with both suites green, Copilot
+having reviewed the current head sha, and two threads whose GraphQL state was
+`isOutdated: true, isResolved: false`. Resolving both with
+`resolveReviewThread` flipped `mergeStateStatus` from `BLOCKED` to `CLEAN`
+immediately, and the merge went through with no override. Replying to a thread
+does not resolve it; that is the trap, because replying is what the
+address-pr-comments contract asks for.
+
+That also explains #432 and #433, which had zero threads and merged first time.
+
+NOT verified: why #409 blocked. Its shape matches #432/#433 exactly — one
+Copilot review, state `COMMENTED`, on the current head sha `70477019`, and
+`reviewThreads.totalCount` of 0 — and it still refused to merge, at least
+through the four minutes I re-tested before moving on. The one structural
+difference is that #409 is authored by `github-actions[bot]` and its review was
+requested by hand through the API rather than fired by `review_on_push`. The
+plausible mechanism is that the ruleset tracks its own automatic run rather than
+the presence of a review, so a manually requested one never satisfies it. That
+is a hypothesis, not a finding: it was not tested against a second release PR,
+and I did not re-check the state in the ninety minutes before merging under
+`--admin`.
+
+Filed as [#436](https://github.com/IsmaelMartinez/delegate-local/issues/436)
+so the next release measures it instead of re-deriving it. The override, when it
+is needed, is `gh pr merge <n> --squash --admin`.
+
 ---
 
 ## Issue 3 — six stale worktrees holding unmerged branches
@@ -137,6 +170,26 @@ commits survive; the uncommitted change does not.
    *Verify:* its diff is recorded here or committed to its branch.
 3. `git worktree list` shows only the primary checkout.
    *Verify:* `git worktree list | wc -l` prints 1.
+
+**Status: DONE.**
+
+**Results**
+
+1. All six branches map to MERGED PRs. The "commits ahead of main" reading was
+   an artefact, not unmerged work: every one of those PRs was squash-merged,
+   which writes a new commit, so the original branch commits are never
+   ancestors of `main` and `git log main..branch` counts them forever. Nothing
+   was at risk.
+2. One file was genuinely only in a worktree: `docs/delegation-overview.html`,
+   23 KB, last written 2026-06-19, untracked in `npx-install-fix` and present in
+   no branch. Copied to
+   `~/.local/share/delegate-local/archive/2026-08-26-worktree-salvage/` with a
+   README explaining where it came from. Whether it belongs in the repo is not a
+   cleanup decision, so it was not committed.
+3. `git worktree list | wc -l` prints 1.
+
+The six branches themselves still exist locally and were left alone; they cost
+nothing and deleting merged branches was not part of this.
 
 ---
 
@@ -189,12 +242,12 @@ blended rate that reads as a quality number and is not one.
 
 | worktree | branch | commits ahead | dirty | verdict |
 | --- | --- | --- | --- | --- |
-| agent-a4e531689d9d089e2 | `feat/mlx-reasoning-preference` | 2 | no | TBD |
-| agent-a738e3359b282d41f | `docs/phase-18-expansion-research` | 2 | no | TBD |
-| agent-a86add48de6671015 | `docs/expansion-use-cases` | 2 | no | TBD |
-| agent-af21c596344fe9522 | `docs/contributor-readiness` | 3 | no | TBD |
-| grafana-tempo-local | `fix/dashboard-bargauge-instant` | 3 | no | TBD |
-| npx-install-fix | `docs/cheap-first-economics` | 1 | YES | TBD |
+| agent-a4e531689d9d089e2 | `feat/mlx-reasoning-preference` | 2 | no | PR #237 merged — squash artefact, removed |
+| agent-a738e3359b282d41f | `docs/phase-18-expansion-research` | 2 | no | PR #235 merged — squash artefact, removed |
+| agent-a86add48de6671015 | `docs/expansion-use-cases` | 2 | no | PR #240 merged — squash artefact, removed |
+| agent-af21c596344fe9522 | `docs/contributor-readiness` | 3 | no | PR #242 merged — squash artefact, removed |
+| grafana-tempo-local | `fix/dashboard-bargauge-instant` | 3 | no | PR #249 merged — squash artefact, removed |
+| npx-install-fix | `docs/cheap-first-economics` | 1 | untracked file | PR #322 merged; `docs/delegation-overview.html` salvaged to the archive, then removed |
 
 ## Issue 6 — reference trailers invent identifiers
 
