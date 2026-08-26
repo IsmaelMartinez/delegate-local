@@ -5,6 +5,8 @@ inputs:
   diff_stat: string
   context: string
 echo_guard_vars: recent_prs
+checks:
+  no_invented_task_list: recent_prs
 ---
 # pr-description
 
@@ -262,3 +264,33 @@ Two things are deliberately NOT fixed, with evidence, rather than left unsaid:
 **Reference trailers still invent identifiers.** When the examples end in `Refs: AI-812` / `Refs: AI-806` and the Context names no ticket, the model emits `Refs: AI-813`, continuing the numbering. This is the same failure `commit-message` had with `(#NN)`. Four prompt-side attempts were made and reverted: a numbered rule, a promoted block, and two contrastive one-shots. One of them made things worse in an instructive way — the Wrong example contained a literal `AI-815`, and the model then emitted exactly `AI-815`, copying the value out of the prohibition. The baseline is no better (it emits `Refs: <branch-name>`), but its output is obviously wrong to a reviewer while the invented ticket looks real, so shipping the stronger-looking guard would have traded a visible failure for a deceptive one. This needs a deterministic post-generation check, not more prompt text: a trailer whose identifier does not appear in the inputs should be stripped or fail the call, in the manner of the ADR 0014 checks.
 
 **With an empty `recent_prs` the output shape is undefined.** The pre-fix template guessed short prose, this one guesses a sectioned body. Neither is grounded, because with no examples there is no shape to match. The recipe requires examples; passing none is caller misuse.
+
+### 2026-08-26 — the invented test plan became a check, on its third attempt
+
+Asked for the body of PR #433 and given a Context that listed the suites and
+their passing counts in prose, the recipe appended a `## Test plan` section of
+two unchecked items reading "(not run yet)" — contradicting, four lines later,
+a paragraph it had just written naming those same passing counts. The draft is
+kept at `20260826T200251Z-0a3abb42.draft.txt`. The same call also reproduced the
+closing line of the `recent_prs` exemplar verbatim, which `no_example_echo`
+caught; the fabricated task list is the half no guard covered.
+
+This is the third pass at the same failure. TEST-PLAN-EVIDENCE (2026-08-03) tied
+items to the Context var and banned the checked box; the EVIDENCE block
+(2026-08-21) split that into asserting boxes banned and classifying boxes
+expected, after a blanket ban proved wrong for repos whose template asks the
+author to tick a change category. Both are prompt text, and
+`docs/self-improvement-loop.md` is explicit that a defect surviving two
+rewordings gets a check next.
+
+`no_invented_task_list: recent_prs` is that check. It deliberately does not ban
+task lists — the 2026-08-21 finding that a `- [x] Bug fix` category box is
+correct output still holds. It names the `--var` carrying the shape authority
+and fires only when the output has a task list and those examples have none,
+which is the case where the model produced a shape it was not shown. A repo
+whose merged PRs carry a checklist keeps getting one. Warn-only, like every
+declared check except `no_padding_tail`.
+
+Still open and untouched by this: the reference-trailer fabrication recorded in
+the 2026-08-21 entry above, which wants the same treatment and a different
+check.
