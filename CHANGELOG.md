@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.29.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.28.0...v0.29.0) (2026-08-26)
+
+
+### Features
+
+* add maintainer-review-reply boundary for gh pr review --body ([#440](https://github.com/IsmaelMartinez/delegate-local/issues/440)) ([6625860](https://github.com/IsmaelMartinez/delegate-local/commit/66258604f52c95e448aaff01e21ae05a3e42aa81))
+* add no_invented_task_list check to delegate.sh ([#434](https://github.com/IsmaelMartinez/delegate-local/issues/434)) ([fd63cb0](https://github.com/IsmaelMartinez/delegate-local/commit/fd63cb0b491174a56f6139153fad7fe7ab6545a6))
+* check that trailer identifiers are grounded in the caller's inputs ([#438](https://github.com/IsmaelMartinez/delegate-local/issues/438)) ([fafd439](https://github.com/IsmaelMartinez/delegate-local/commit/fafd439928e8173967778474eeed4e0331e8df50))
+* require a reason on agent-recorded miss or scaffold ([#443](https://github.com/IsmaelMartinez/delegate-local/issues/443)) ([74280db](https://github.com/IsmaelMartinez/delegate-local/commit/74280dbcd13b785980b6a8d50d4a7d34281c4858))
+
+
+### Bug Fixes
+
+* derive commit body shape from the word cap to avoid contradiction ([#442](https://github.com/IsmaelMartinez/delegate-local/issues/442)) ([68cbecb](https://github.com/IsmaelMartinez/delegate-local/commit/68cbecb92ba483acb5083d0433ec8100c05c5167))
+* force base-10 arithmetic on external numeric limits ([#444](https://github.com/IsmaelMartinez/delegate-local/issues/444)) ([3e7a75c](https://github.com/IsmaelMartinez/delegate-local/commit/3e7a75cdd828c6f83999bf167817e0f58f173565))
+* split the verdict tiers self-improve.sh was summing ([#439](https://github.com/IsmaelMartinez/delegate-local/issues/439)) ([c31cb1d](https://github.com/IsmaelMartinez/delegate-local/commit/c31cb1dc1bc2cf8e1522e5dcf1e1ac78dfd6d8eb))
+
+
+### Documentation
+
+* close the ten-issue queue with results and carried-forward patterns ([#445](https://github.com/IsmaelMartinez/delegate-local/issues/445)) ([88b9946](https://github.com/IsmaelMartinez/delegate-local/commit/88b99462fce754aed00bdda871b857b52f7d177b))
+* guide callers to pick unrelated exemplars for pr-description ([#441](https://github.com/IsmaelMartinez/delegate-local/issues/441)) ([62cf273](https://github.com/IsmaelMartinez/delegate-local/commit/62cf27300751cb238bcd8076756e981db74ed1a7))
+* record the copilot-gate mechanism and worktree triage outcome ([#437](https://github.com/IsmaelMartinez/delegate-local/issues/437)) ([d50531b](https://github.com/IsmaelMartinez/delegate-local/commit/d50531b10135883d891d303d7bcdc7cce21eeace))
+
 ## [0.28.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.10...v0.28.0) (2026-08-26)
 
 
