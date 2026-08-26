@@ -1900,7 +1900,17 @@ if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] \
   # clean. The two branches keep fd=2 callers simple and only pay the
   # absorption cost on the gotcha-prone redirect path. Pin verified on
   # macOS bash 3.2.57.
-  nudge_msg='delegate: record verdict → bash scripts/delegate-feedback.sh --source agent hit (or miss "<reason>"); drop --source if you are a human recording a taste judgment'
+  # The nudge names the WHOLE contract, because it is the only place most
+  # callers ever read it. It listed two verdicts and no --final until
+  # 2026-08-26, and the corpus showed the cost: of 47 rejections only 2 carried
+  # the text that actually shipped, and 12 carried no reason at all, so the
+  # calibration loop had almost nothing to diff. `scaffold` is here for the
+  # same reason — a draft you edited and shipped is not a miss, and recording
+  # it as one both understates quality and fires the recurrence nudge on a
+  # non-defect.
+  nudge_msg='delegate: record verdict → bash scripts/delegate-feedback.sh --source agent hit | scaffold "<reason>" | miss "<reason>"
+delegate:   on scaffold/miss also pass --final <path|-> naming what you shipped instead. The draft is already saved; the pair is what calibrates the recipe.
+delegate:   scaffold = you edited it and shipped it, miss = you threw it away; drop --source if you are a human recording a taste judgment'
   if (( nudge_fd == 2 )); then
     echo "$nudge_msg" >&2
   else
