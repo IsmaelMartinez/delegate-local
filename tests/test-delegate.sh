@@ -5772,6 +5772,100 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
+# ---------------------------------------------------------------------------
+# 44. no_invented_task_list — a markdown task list the model produced without
+# having been shown one. Deliberately NOT a blanket ban: the 2026-08-21
+# pr-description finding is that a `- [x] Bug fix` category box is correct
+# output for a repo whose PR template asks for one. The frontmatter value names
+# the --var carrying the shape authority, and the check fires only when the
+# output has a task list and those examples have none.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+mk_tl_recipe() {
+  cat > "$prompts/tl.md" <<EOF
+---
+tier: prose
+checks:
+  no_invented_task_list: $1
+---
+# tl
+
+## When to use
+n/a
+
+## Prompt template
+
+\`\`\`
+Examples: {{examples}}
+\`\`\`
+
+## Calibration notes
+n/a
+EOF
+}
+run_tl() {
+  env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+    DELEGATE_NO_ECHO_CHECK=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe tl --var examples="$1" prose "go" </dev/null 2>&1 >/dev/null
+}
+mk_tl_recipe examples
+# 44a. The live regression: a `## Test plan` of unchecked items appended to a
+# body whose own prose had already named the suites and their passing counts.
+make_mock_curl_think "$tmp" 'Suites: 366 passed, 94/94.\n\n## Test plan\n- [ ] Run the prompts suite (not run yet)\n- [ ] Run the unit suite (not run yet)'
+out=$(run_tl $'TITLE: a merged PR\nBODY:\nTwo sentences of prose. No checklist.')
+assert_contains "check 'no_invented_task_list' FAILED" "$out" \
+  "no_invented_task_list: an invented task list fails"
+assert_contains "carries 2 markdown task-list item(s)" "$out" \
+  "no_invented_task_list: the count is named"
+assert_contains '"checks_failed_names":["no_invented_task_list"]' "$(tail -1 "$metrics")" \
+  "no_invented_task_list: named on the metrics row"
+# 44b. The category-box case from the 2026-08-21 calibration entry. When the
+# examples themselves carry a checklist the output is matching the shape it was
+# shown, which is the whole contract of this recipe. Must stay silent.
+if [[ "$(run_tl $'TITLE: a merged PR\nBODY:\n## Type of change\n- [x] Bug fix\n- [ ] New feature')" == *"no_invented_task_list"* ]]; then
+  echo "  FAIL  no_invented_task_list: a task list the examples also carry must pass"; fail=$((fail+1))
+else
+  echo "  PASS  no_invented_task_list: a task list the examples also carry passes"; pass=$((pass+1))
+fi
+# 44c. No task list in the output at all.
+make_mock_curl_think "$tmp" 'Two sentences of prose describing the change.\n\nRefs: AI-100'
+if [[ "$(run_tl $'TITLE: a merged PR\nBODY:\nprose')" == *"no_invented_task_list"* ]]; then
+  echo "  FAIL  no_invented_task_list: output with no task list must pass"; fail=$((fail+1))
+else
+  echo "  PASS  no_invented_task_list: output with no task list passes"; pass=$((pass+1))
+fi
+# 44d. A ticked box is an assertion about work done and counts the same as an
+# unchecked one when the examples show neither.
+make_mock_curl_think "$tmp" 'Body.\n\n- [x] Tests pass'
+assert_contains "check 'no_invented_task_list' FAILED" "$(run_tl $'TITLE: x\nBODY:\nprose')" \
+  "no_invented_task_list: a ticked box counts too"
+# 44e. Markdown allows *, + and - as list markers, and indented items.
+make_mock_curl_think "$tmp" 'Body.\n\n  * [ ] one\n  + [ ] two'
+assert_contains "carries 2 markdown task-list item(s)" "$(run_tl $'TITLE: x\nBODY:\nprose')" \
+  "no_invented_task_list: * and + markers and indentation count"
+# 44f. A bracketed word is not a checkbox. `- [draft] note` is an ordinary
+# bullet and must not be read as a task item.
+make_mock_curl_think "$tmp" 'Body.\n\n- [draft] not a checkbox\n- [WIP] also not'
+if [[ "$(run_tl $'TITLE: x\nBODY:\nprose')" == *"no_invented_task_list"* ]]; then
+  echo "  FAIL  no_invented_task_list: a bracketed word is not a checkbox"; fail=$((fail+1))
+else
+  echo "  PASS  no_invented_task_list: a bracketed word is not a checkbox"; pass=$((pass+1))
+fi
+# 44g. An empty value skips the check WITHOUT tripping the unknown-check
+# warning, so the key can be present and inert.
+mk_tl_recipe ""
+make_mock_curl_think "$tmp" 'Body.\n\n- [ ] one'
+out=$(run_tl $'TITLE: x\nBODY:\nprose')
+if [[ "$out" == *"no_invented_task_list' FAILED"* || "$out" == *"unknown check"* ]]; then
+  echo "  FAIL  no_invented_task_list: an empty value must be inert and quiet"; fail=$((fail+1))
+else
+  echo "  PASS  no_invented_task_list: an empty value is inert and quiet"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

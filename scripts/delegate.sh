@@ -1559,7 +1559,7 @@ run_output_checks() {
 # is a function (it ran at top level before the refactor). The result and the
 # counters — output, checks_run/failed/autofixed, capability_failed — are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks authority
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -1901,6 +1901,51 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_single_item_list"
             capability_failed=$((capability_failed + 1))
+          fi
+        fi
+        ;;
+      no_invented_task_list)
+        # A markdown task list the model made up. Observed 2026-08-26T20:02:51Z:
+        # asked for a PR body, `pr-description` appended a `## Test plan`
+        # section of unchecked items reading "(not run yet)" directly after a
+        # paragraph of its own that named the suites and their passing counts.
+        # Either box state is a claim the model cannot support: an unchecked one
+        # asserts work was not done, a ticked one asserts it was, and neither is
+        # knowable from the input. Both are counted.
+        #
+        # A blanket ban would be wrong. This recipe's shape authority is the
+        # merged-PR examples the caller passes in, and a repo whose PR template
+        # carries "- [ ] I have added tests" SHOULD get that shape back. So the
+        # value of this key names the --var holding those examples, and the
+        # check fires only when the output has a task list and the examples
+        # have none: the model invented the shape rather than matching it.
+        #
+        # Counting is awk rather than `grep -c` because grep exits 1 on no
+        # match, and the `|| echo 0` workaround for that double-emits (it
+        # prints grep's own "0" and then the fallback), which then breaks the
+        # arithmetic compare. awk always exits 0 and prints one number.
+        if [[ -n "$cval" ]]; then
+          checks_run=$((checks_run + 1))
+          # The pattern is the awk PROGRAM, not an -v assignment: awk performs
+          # escape processing on -v values, so `\[` collapses to `[` there and
+          # the bracket expression stops matching `- [ ]` entirely. Verified
+          # against the real captured draft, which the -v form did not flag.
+          task_prog='/^[[:space:]]*[-*+][[:space:]]+\[[ xX]\][[:space:]]/ { n++ } END { print n + 0 }'
+          out_tasks=$(printf '%s\n' "$output" | tr -d '\r' | awk "$task_prog")
+          if [[ "$out_tasks" =~ ^[0-9]+$ ]] && (( out_tasks > 0 )); then
+            authority=""
+            for _kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
+              if [[ "${_kv%%=*}" == "$cval" ]]; then
+                authority="${_kv#*=}"
+              fi
+            done
+            auth_tasks=$(printf '%s\n' "$authority" | tr -d '\r' | awk "$task_prog")
+            if [[ "$auth_tasks" == "0" ]]; then
+              echo "delegate: check 'no_invented_task_list' FAILED — output carries $out_tasks markdown task-list item(s) but the '$cval' examples carry none; the shape was invented, and a task-list box asserts a verification state the model cannot know" >&2
+              checks_failed=$((checks_failed + 1))
+              checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_invented_task_list"
+              capability_failed=$((capability_failed + 1))
+            fi
           fi
         fi
         ;;
