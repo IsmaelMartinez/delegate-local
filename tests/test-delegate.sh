@@ -5643,7 +5643,7 @@ assert_contains "body is 12 words" "$(run_bw)" \
 # pass everything. Not reproducible on BWK awk (macOS), which does match it;
 # this runs on CI's mawk too.
 make_mock_curl_think "$tmp" 'subject here\r\n\r\none two three four five six seven eight nine ten eleven twelve'
-assert_contains "body is 12 words (> 10)" "$(run_bw)" \\
+assert_contains "body is 12 words (> 10)" "$(run_bw)" \
   "body_max_words: CRLF output measures the same as LF"
 # 42f. The limit arrives through the flavor profile, so a project can tighten
 # it without touching the recipe. A non-numeric value is ignored rather than
