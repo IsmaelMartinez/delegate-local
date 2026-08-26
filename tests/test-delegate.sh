@@ -5283,11 +5283,39 @@ else
 fi
 assert_eq "a draft worth keeping around" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
   "draft-capture: file holds the generated output verbatim"
-# The stem is the row ts with the punctuation stripped, so the join back to
-# the metrics row stays mechanical.
+# The name leads with the row ts (so the directory sorts chronologically) and
+# carries a uniquifying suffix, because ts alone is second-precision and
+# parallel delegations share it.
 row_ts=$(printf '%s' "$row" | jq -r '.ts')
-assert_eq "$(printf '%s' "$row_ts" | tr -d ':-').draft.txt" "$draft_name" \
-  "draft-capture: filename stem is the row ts"
+case "$draft_name" in
+  "$(printf '%s' "$row_ts" | tr -d ':-')"-*.draft.txt)
+    echo "  PASS  draft-capture: filename leads with the row ts and is suffixed"; pass=$((pass+1)) ;;
+  *) echo "  FAIL  draft-capture: unexpected draft filename '$draft_name'"; fail=$((fail+1)) ;;
+esac
+# 41a-i. Two delegations landing in the same second must not clobber each
+# other. The archived corpus holds 14 such timestamps, one shared by eight
+# delegations, so this is the case that would have silently destroyed the
+# draft-to-verdict pairing the whole feature rests on.
+before_count=$(ls "$data/drafts" | grep -c '')
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
+after_count=$(ls "$data/drafts" | grep -c '')
+if (( after_count == before_count + 2 )); then
+  echo "  PASS  draft-capture: two same-second delegations write two distinct files"; pass=$((pass+1))
+else
+  echo "  FAIL  draft-capture: same-second delegations collided ($before_count -> $after_count)"; fail=$((fail+1))
+fi
+# Every metrics row must still name a file that exists.
+missing=0
+while IFS= read -r df; do
+  [[ -z "$df" ]] && continue
+  [[ -f "$data/drafts/$df" ]] || missing=$((missing+1))
+done < <(jq -r '.draft_file // empty' "$metrics")
+assert_eq 0 "$missing" "draft-capture: every draft_file on a row exists on disk"
 # 41b. Opt-out.
 rm -rf "$data"; mkdir -p "$data"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_DRAFT_CAPTURE=1 \

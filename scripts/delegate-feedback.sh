@@ -307,7 +307,23 @@ ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 final_file=""
 if [[ -n "$final_src" ]]; then
   drafts_dir="$(dirname "$metrics_file")/drafts"
-  final_stem=$(printf '%s' "$ref_ts" | tr -d ':-')
+  # Name the final after the DRAFT the pinned row actually points at, not after
+  # ref_ts. ref_ts has second precision and parallel delegations share it (the
+  # archived corpus has one second carrying eight of them), so a ts-derived
+  # name would overwrite another delegation's shipped text and silently corrupt
+  # the pair. Reading draft_file off the row also means the two halves are
+  # guaranteed to be the same delegation's. The ts fallback is for rows written
+  # before draft capture existed, or with capture opted out; those cannot
+  # collide with a real draft because the draft-side name always carries a
+  # uniquifying suffix.
+  parent_draft=$(jq -r --arg ts "$ref_ts" \
+    'select((.source // "delegate") == "delegate" and .ts == $ts) | .draft_file // empty' \
+    "$metrics_file" | tail -n 1)
+  if [[ -n "$parent_draft" ]]; then
+    final_stem="${parent_draft%.draft.txt}"
+  else
+    final_stem="$(printf '%s' "$ref_ts" | tr -d ':-')-nodraft"
+  fi
   if mkdir -p "$drafts_dir" 2>/dev/null; then
     if [[ "$final_src" == "-" ]]; then
       if cat > "$drafts_dir/$final_stem.final.txt" 2>/dev/null; then

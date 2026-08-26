@@ -108,6 +108,18 @@ echo "Metrics:    $metrics_file"
 echo "Watermark:  ${prev_ts:-(none — first run, reporting the whole corpus)}"
 echo "Newest row: $newest_ts"
 echo "New delegations since watermark: $new_count"
+
+# INDEX(.ts) keeps one row per key, and delegate timestamps are second-
+# precision, so parallel callers can share one. Where that happens a feedback
+# row's ref_ts cannot say which delegation it scored, and the recipe/project
+# shown below is whichever row INDEX kept. Say so rather than reporting an
+# attribution that might be wrong; the draft/final pair itself stays exact,
+# because it is named after the draft rather than after the timestamp.
+dupe_ts=$(jq -r 'select((.source // "delegate") == "delegate") | .ts' "$metrics_file" 2>/dev/null | sort | uniq -d)
+if [[ -n "$dupe_ts" ]]; then
+  echo "AMBIGUOUS: $(printf '%s\n' "$dupe_ts" | grep -c '') timestamp(s) are shared by more than one delegation;"
+  echo "  recipe and project attribution for verdicts on those is a guess. Captured pairs are unaffected."
+fi
 echo
 
 jq -rs --arg prev "$prev_ts" '
@@ -212,11 +224,18 @@ jq -rs --arg prev "$prev_ts" '
   | map(select(.source == "feedback" and (.kept | not)))
   | map(select($prev == "" or ($d[.ref_ts].ts // "") > $prev))
   | .[]
+  | (.final_file // "") as $fin
   | [ .ref_ts,
       ($d[.ref_ts].project // "-"),
       ($d[.ref_ts].recipe // "(bare)"),
-      ($d[.ref_ts].draft_file // ""),
-      (.final_file // ""),
+      # Prefer the draft the FEEDBACK row names: final_file is derived from
+      # draft_file, so the two halves are provably the same delegation even
+      # when several share a second-precision ts. The $d lookup is the
+      # fallback for rejections recorded without --final.
+      (if $fin != "" and ($fin | endswith(".final.txt"))
+       then ($fin | sub("\\.final\\.txt$"; ".draft.txt"))
+       else ($d[.ref_ts].draft_file // "") end),
+      $fin,
       (if .scaffold then "scaffold" else "rewrote" end),
       ((.reason // "(no reason recorded)") | gsub("[[:cntrl:]]"; " ")) ]
   | join("\u001f")

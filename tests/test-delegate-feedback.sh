@@ -1438,9 +1438,27 @@ out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
 row=$(tail -1 "$tmp/m.jsonl")
 final_name=$(printf '%s' "$row" | jq -r '.final_file // ""')
 stem=$(printf '%s' "$TS_LATEST" | tr -d ':-')
-assert_eq "$stem.final.txt" "$final_name" "--final: row names <ref_ts stem>.final.txt"
+assert_eq "$stem-nodraft.final.txt" "$final_name" \
+  "--final: falls back to a ts stem when the row has no draft_file"
 assert_eq "the reply that actually shipped" "$(cat "$tmp/drafts/$final_name" 2>/dev/null)" \
   "--final: shipped text stored verbatim beside the draft"
+rm -rf "$tmp"
+
+# FN1b: when the delegate row names a draft, the final is named after THAT,
+# not after ref_ts. Timestamps are second-precision and parallel delegations
+# share them, so a ts-derived name would overwrite another delegation's
+# shipped text; naming off draft_file also proves the two halves belong to the
+# same delegation.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+mkdir -p "$tmp/drafts"
+printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"draft_file":"20260826T101206Z-a1b2c3d4.draft.txt"}\n' \
+  "$TS_LATEST" >> "$tmp/m.jsonl"
+printf 'shipped\n' > "$tmp/f.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --final "$tmp/f.txt" miss "r" >/dev/null 2>&1
+assert_eq "20260826T101206Z-a1b2c3d4.final.txt" \
+  "$(tail -1 "$tmp/m.jsonl" | jq -r '.final_file // ""')" \
+  "--final: named after the row's draft_file, not after ref_ts"
 rm -rf "$tmp"
 
 # FN2: - reads the shipped text from stdin.

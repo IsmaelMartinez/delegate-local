@@ -41,6 +41,13 @@ transmitted; opt out per call with `DELEGATE_NO_DRAFT_CAPTURE=1`, skipped
 entirely when metrics are off, size-capped by `DELEGATE_DRAFT_MAX_BYTES`
 (default 64 KiB) and pruned after `DELEGATE_DRAFT_RETENTION_DAYS` (default 14).
 
+The draft filename leads with the row timestamp and carries the call's span id
+as a suffix. The timestamp alone is not safe: it has second precision and
+parallel callers share it — the archived corpus holds 14 timestamps used by
+more than one delegation, one of them by eight — so a ts-derived name would let
+two drafts clobber each other and leave two metrics rows pointing at a single
+file, destroying the pairing this exists to create.
+
 **Capture what shipped.** `delegate-feedback.sh --final <path|->` stores the
 text that actually went out as `<ref_ts>.final.txt` and names it as
 `final_file`. A rejection then carries a concrete (generated, shipped) pair.
@@ -60,6 +67,14 @@ shared lines from colliding; `Wrong:` / `Correct:` labels are stripped before
 comparing so both arms of an anchor pair are covered. Opt out with
 `no_example_echo: false` in a recipe's frontmatter or `DELEGATE_NO_ECHO_CHECK=1`
 for one call.
+
+The shipped text is named after the delegate row's `draft_file`, not after
+`ref_ts`, for the same reason and with the added property that the two halves
+are then provably the same delegation's. Where a second-precision timestamp is
+genuinely shared, a feedback row's `ref_ts` cannot say which delegation it
+scored; `self-improve.sh` reports that ambiguity rather than presenting the
+attribution `INDEX(.ts)` happened to keep, and resolves the draft from the
+feedback row's own `final_file` so the pair stays exact regardless.
 
 `scripts/self-improve.sh` gates the recurring calibration session (exit 10 and
 silence when nothing has happened since its watermark) and emits the evidence

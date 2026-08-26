@@ -537,8 +537,20 @@ capture_draft() {
   dir="$(dirname "$metrics_file")/drafts"
   mkdir -p "$dir" 2>/dev/null || return 0
   # Colons are legal in POSIX filenames but awkward in shell globs and in
-  # Finder; the ts is the join key either way, so store it compacted.
+  # Finder, so the ts goes in compacted — but the ts ALONE is not a safe name.
+  # It has second precision, and parallel callers collide: the archived corpus
+  # holds 14 timestamps shared by more than one delegation, one of them by
+  # eight. Two drafts landing on one filename would clobber each other and
+  # leave two metrics rows pointing at a single artefact, which is exactly the
+  # pairing this capture exists to create. The span id (generated
+  # unconditionally for every call, 16 random hex) makes the name unique; the
+  # ts stays in front so the directory still sorts chronologically.
   stem=$(printf '%s' "$ts" | tr -d ':-')
+  if [[ -n "${otel_span_id:-}" ]]; then
+    stem="$stem-${otel_span_id:0:8}"
+  else
+    stem="$stem-$$"
+  fi
   max="${DELEGATE_DRAFT_MAX_BYTES:-65536}"
   if ! [[ "$max" =~ ^[1-9][0-9]*$ ]]; then
     echo "delegate: DELEGATE_DRAFT_MAX_BYTES='$max' is not a positive integer — using 65536" >&2
