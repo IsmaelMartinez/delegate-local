@@ -91,13 +91,14 @@ EC=0
 out=$(DELEGATE_SELF_IMPROVE_STATE="$STATE" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1) || EC=$?
 assert_eq 0 "$EC" "first run with new delegations exits 0"
 assert_contains "New delegations since watermark: 3" "$out" "first run counts every delegate row"
-assert_contains "kept=1 scaffold=0 rewrote=2" "$out" "verdict tally splits kept from rewritten"
+assert_contains "agent (usage):    n=3  used=1 scaffold=0 rewrote=2" "$out" \
+  "verdict tally splits used from rewritten inside the agent tier"
 
 # 5. The per-recipe section ranks worst keep-rate first.
 recipes=$(printf '%s\n' "$out" | sed -n '/per-recipe outcomes/,/^$/p' | grep -E '^  [a-z]' | head -2)
 assert_contains "maintainer-reply" "$(printf '%s' "$recipes" | head -1)" \
   "per-recipe section puts the 0% recipe first"
-assert_contains "keep=50%" "$out" "per-recipe section computes a keep rate"
+assert_contains "usable=50%" "$out" "per-recipe section computes a usable rate"
 
 # 6. Deterministic check failures are clustered by recipe and name.
 assert_contains "commit-message: no_padding_tail × 1" "$out" "check failures cluster by recipe and check name"
@@ -170,6 +171,57 @@ t=$(iso_ago 300)
 } >> "$tmp/m.jsonl"
 out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
 assert_contains "tab here and newline there" "$out" "control characters in a reason are flattened, not framed"
+rm -rf "$tmp"
+
+# ---------------------------------------------------------------------------
+# ADR 0015 verdict tiers. A human recording their own taste judgment is the
+# quality signal; `--source agent` is the agent saying whether it used its own
+# draft, which is usage. metrics-summary.sh has always kept them apart and this
+# script used to add them together under the word "kept". With a corpus at 100%
+# agent verdicts the blend is invisible, so these assertions seed BOTH tiers.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+t1=$(iso_ago 3600); t2=$(iso_ago 1800); t3=$(iso_ago 900)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$t1","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","duration_ms":1,"exit_status":0,"estimated_tokens_avoided":1}
+{"ts":"$(iso_ago 3590)","source":"feedback","ref_ts":"$t1","kept":true}
+{"ts":"$t2","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","duration_ms":1,"exit_status":0,"estimated_tokens_avoided":1}
+{"ts":"$(iso_ago 1790)","source":"feedback","ref_ts":"$t2","kept":false,"scaffold":true,"reason":"trimmed the body","verdict_source":"agent"}
+{"ts":"$t3","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","duration_ms":1,"exit_status":0,"estimated_tokens_avoided":1}
+{"ts":"$(iso_ago 890)","source":"feedback","ref_ts":"$t3","kept":false,"reason":"discarded","verdict_source":"agent"}
+EOF
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
+assert_contains "human (quality):  n=1" "$out" \
+  "verdict tiers: the human tier is counted on its own"
+assert_contains "agent (usage):    n=2" "$out" \
+  "verdict tiers: the agent tier is counted on its own"
+# The blend this replaces would have printed "kept=1 scaffold=1 rewrote=1" as a
+# single line with no tier named at all.
+if [[ "$out" == *"3 total — kept="* ]]; then
+  echo "  FAIL  verdict tiers: the two tiers must not be summed under one 'kept'"; fail=$((fail+1))
+else
+  echo "  PASS  verdict tiers: the two tiers are not summed under one 'kept'"; pass=$((pass+1))
+fi
+# Ranking is on kept+scaffold. Two of the three commit-message drafts were used
+# (one kept, one edited and shipped), so the row must read 66%, not the 33% a
+# kept-only rate would give.
+assert_contains "usable=66%" "$out" \
+  "verdict tiers: the per-recipe rate counts scaffolded drafts as used"
+assert_contains "h=1" "$out" \
+  "verdict tiers: the per-recipe row says how much of it is human judgment"
+rm -rf "$tmp"
+
+# An all-agent window must say plainly that there is no keep rate to quote,
+# rather than printing a 0% that reads as a quality collapse.
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+t1=$(iso_ago 3600)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$t1","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","duration_ms":1,"exit_status":0,"estimated_tokens_avoided":1}
+{"ts":"$(iso_ago 3590)","source":"feedback","ref_ts":"$t1","kept":false,"reason":"no","verdict_source":"agent"}
+EOF
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
+assert_contains "no human taste judgment in this window" "$out" \
+  "verdict tiers: an all-agent window says there is no keep rate to quote"
 rm -rf "$tmp"
 
 echo
