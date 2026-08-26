@@ -5866,6 +5866,94 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
+# ---------------------------------------------------------------------------
+# 45. no_invented_refs — a trailer identifier grounded in nothing the caller
+# supplied. pr-description's 2026-08-21 entry records four reverted prompt-side
+# attempts, one of which made things worse because its Wrong example carried a
+# literal identifier that the model then emitted. So the grounding set is the
+# caller's --var values and piped context ONLY; the recipe template is excluded
+# on purpose, and 45d is the assertion that pins that.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/rf.md" <<'EOF'
+---
+tier: prose
+checks:
+  no_invented_refs: true
+---
+# rf
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+Examples: {{examples}}
+Never continue a numbering sequence. Wrong: Refs: ZZ-9915
+```
+
+## Calibration notes
+n/a
+EOF
+run_rf() {
+  env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+    DELEGATE_NO_ECHO_CHECK=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe rf --var examples="$1" prose "go" </dev/null 2>&1 >/dev/null
+}
+# 45a. The documented shape: examples end in AI-812 / AI-806, the caller names
+# no ticket, and the model continues the sequence.
+make_mock_curl_think "$tmp" 'A short body describing the change.\n\nRefs: AI-813'
+out=$(run_rf $'TITLE: one\nBODY:\nprose\nRefs: AI-812\n\nTITLE: two\nBODY:\nprose\nRefs: AI-806')
+assert_contains "check 'no_invented_refs' FAILED" "$out" \
+  "no_invented_refs: an ungrounded trailer identifier fails"
+assert_contains "trailer names AI-813" "$out" \
+  "no_invented_refs: the invented identifier is named"
+assert_contains '"checks_failed_names":["no_invented_refs"]' "$(tail -1 "$metrics")" \
+  "no_invented_refs: named on the metrics row"
+# 45b. The same identifier, this time supplied by the caller. Must pass.
+if [[ "$(run_rf $'TITLE: one\nBODY:\nprose for AI-813\nRefs: AI-813')" == *"no_invented_refs"* ]]; then
+  echo "  FAIL  no_invented_refs: an identifier the caller supplied must pass"; fail=$((fail+1))
+else
+  echo "  PASS  no_invented_refs: an identifier the caller supplied passes"; pass=$((pass+1))
+fi
+# 45c. Issue-number references are grounded the same way.
+make_mock_curl_think "$tmp" 'A short body.\n\nCloses: #4271'
+assert_contains "trailer names #4271" "$(run_rf $'TITLE: one\nBODY:\nprose\nCloses: #12')" \
+  "no_invented_refs: an ungrounded issue number fails"
+# 45d. The load-bearing one. The identifier here appears in the recipe's own
+# Wrong example and nowhere in the caller's inputs, which is exactly the 2026-08-21
+# failure where the model copied a value out of the prohibition. Grounding
+# against the template would have licensed that copy, so this must still fail.
+make_mock_curl_think "$tmp" 'A short body.\n\nRefs: ZZ-9915'
+assert_contains "trailer names ZZ-9915" "$(run_rf $'TITLE: one\nBODY:\nprose\nRefs: AI-812')" \
+  "no_invented_refs: an identifier taken from the recipe's own text is not grounded"
+# 45d-i. Grounding is token-for-token, not substring. An input mentioning
+# `#4271` must not ground an output that says `#427` — one digit short of a real
+# reference is exactly the shape that reads as legitimate to a reviewer.
+make_mock_curl_think "$tmp" 'A short body.\n\nCloses: #427'
+assert_contains "trailer names #427" "$(run_rf $'TITLE: one\nBODY:\nfixes #4271 in the parser')" \
+  "no_invented_refs: a prefix of a grounded identifier is not itself grounded"
+# 45e. Prose is not scanned, only trailer-shaped lines. A hyphenated token in a
+# sentence is not an identifier claim.
+make_mock_curl_think "$tmp" 'The parser now reads UTF-8 and rejects ISO-8859 input, per RFC-3629.'
+if [[ "$(run_rf $'TITLE: one\nBODY:\nprose')" == *"no_invented_refs"* ]]; then
+  echo "  FAIL  no_invented_refs: hyphenated tokens in prose must not be scanned"; fail=$((fail+1))
+else
+  echo "  PASS  no_invented_refs: hyphenated tokens in prose are not scanned"; pass=$((pass+1))
+fi
+# 45f. A trailer with no identifier in it at all.
+make_mock_curl_think "$tmp" 'A short body.\n\nSuites: 366 passed, 94/94'
+if [[ "$(run_rf $'TITLE: one\nBODY:\nprose')" == *"no_invented_refs"* ]]; then
+  echo "  FAIL  no_invented_refs: a trailer with no identifier must pass"; fail=$((fail+1))
+else
+  echo "  PASS  no_invented_refs: a trailer with no identifier passes"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
