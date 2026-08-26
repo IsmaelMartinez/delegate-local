@@ -90,7 +90,8 @@ github_repo="${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}"
 
 usage() {
   cat >&2 <<'EOF'
-usage: delegate-feedback.sh [--ts <iso8601>] [--source human|agent] hit|miss|scaffold [reason words...]
+usage: delegate-feedback.sh [--ts <iso8601>] [--source human|agent]
+                           [--final <path>|-] hit|miss|scaffold [reason words...]
   hit = output kept as-is; miss = rewritten/discarded as useless; scaffold =
   discarded but genuinely useful (a divergent or executable draft that improved
   the final result). scaffold is recorded distinct from both and never fires the
@@ -103,6 +104,10 @@ usage: delegate-feedback.sh [--ts <iso8601>] [--source human|agent] hit|miss|sca
   --source records the verdict tier: human (default, a maintainer taste
   judgment) or agent (the agent's record of whether it used its own
   delegated output). Reporting keeps the two tiers separate.
+  --final stores the text that ACTUALLY shipped (a file path, or - for
+  stdin) beside the captured draft, so a MISS carries the concrete
+  (generated, shipped) pair instead of only a prose description of the
+  difference. This is the signal recipe edits are calibrated from.
 EOF
   exit 2
 }
@@ -110,8 +115,20 @@ EOF
 # Argument parsing — flags come first, then verdict, then reason.
 override_ts=""
 verdict_source="human"
+final_src=""
 while (($# > 0)); do
   case "$1" in
+    --final)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo 'delegate-feedback: --final requires a path or -' >&2; exit 2
+      fi
+      final_src="$2"; shift 2;;
+    --final=*)
+      final_src="${1#--final=}"
+      if [[ -z "$final_src" ]]; then
+        echo 'delegate-feedback: --final requires a path or -' >&2; exit 2
+      fi
+      shift;;
     --ts)
       if [[ $# -lt 2 || -z "${2:-}" ]]; then
         echo 'delegate-feedback: --ts requires a value' >&2; exit 2
@@ -149,6 +166,10 @@ case "$verdict_source" in
   human|agent) ;;
   *) echo "delegate-feedback: --source must be 'human' or 'agent' (got '$verdict_source')" >&2; exit 2 ;;
 esac
+
+if [[ -n "$final_src" && "$final_src" != "-" && ! -f "$final_src" ]]; then
+  echo "delegate-feedback: --final file not found: $final_src" >&2; exit 2
+fi
 
 [[ $# -ge 1 ]] || usage
 
@@ -275,6 +296,52 @@ MSG
 fi
 
 ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# --final: persist the text that actually shipped next to the captured draft
+# (delegate.sh writes <stem>.draft.txt; this writes <stem>.final.txt for the
+# same delegation). The pair is what makes a recipe edit evidence-driven: the
+# free-text `reason` says "dropped every load-bearing fact", the pair says
+# WHICH facts and what the model wrote instead. Same locality and sensitivity
+# rules as the draft — local file beside metrics.jsonl, never transmitted.
+# Failure to write is non-fatal: the verdict row still lands, without the field.
+final_file=""
+if [[ -n "$final_src" ]]; then
+  drafts_dir="$(dirname "$metrics_file")/drafts"
+  # Name the final after the DRAFT the pinned row actually points at, not after
+  # ref_ts. ref_ts has second precision and parallel delegations share it (the
+  # archived corpus has one second carrying eight of them), so a ts-derived
+  # name would overwrite another delegation's shipped text and silently corrupt
+  # the pair. Reading draft_file off the row also means the two halves are
+  # guaranteed to be the same delegation's. The ts fallback is for rows written
+  # before draft capture existed, or with capture opted out; those cannot
+  # collide with a real draft because the draft-side name always carries a
+  # uniquifying suffix.
+  parent_draft=$(jq -r --arg ts "$ref_ts" \
+    'select((.source // "delegate") == "delegate" and .ts == $ts) | .draft_file // empty' \
+    "$metrics_file" | tail -n 1)
+  if [[ -n "$parent_draft" ]]; then
+    final_stem="${parent_draft%.draft.txt}"
+  else
+    final_stem="$(printf '%s' "$ref_ts" | tr -d ':-')-nodraft"
+  fi
+  if mkdir -p "$drafts_dir" 2>/dev/null; then
+    # Same sensitivity as the draft it sits beside, and more of it: this is
+    # verbatim what went out, anchors included. 700 on the directory, 600 on
+    # the file, written under `umask 077` so there is no permissive window.
+    chmod 700 "$drafts_dir" 2>/dev/null || true
+    if [[ "$final_src" == "-" ]]; then
+      if ( umask 077; cat > "$drafts_dir/$final_stem.final.txt" ) 2>/dev/null; then
+        final_file="$final_stem.final.txt"
+      fi
+    elif ( umask 077; cat "$final_src" > "$drafts_dir/$final_stem.final.txt" ) 2>/dev/null; then
+      final_file="$final_stem.final.txt"
+    fi
+    [[ -n "$final_file" ]] && chmod 600 "$drafts_dir/$final_file" 2>/dev/null
+  fi
+  if [[ -z "$final_file" ]]; then
+    echo "delegate-feedback: could not store --final text (verdict still recorded)" >&2
+  fi
+fi
 # Main repo basename, even inside a git worktree (delegate_project_name from
 # lib/otel.sh, sourced above) — so a verdict recorded in a worktree attributes
 # to the same repo as the delegation it scores.
@@ -287,8 +354,8 @@ feedback_project=$(delegate_project_name)
 # (default) omits the field, so it is indistinguishable from the legacy rows
 # written before this tier existed, and the reporting partition maps both to
 # human. Only the agent tier carries the marker.
-jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --argjson scaffold "$is_scaffold" --arg reason "${reason:-}" --arg project "$feedback_project" --arg vsource "$verdict_source" \
-  '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + (if $reason != "" then {reason:$reason} else {} end) + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end)' \
+jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --argjson scaffold "$is_scaffold" --arg reason "${reason:-}" --arg project "$feedback_project" --arg vsource "$verdict_source" --arg final "$final_file" \
+  '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + (if $reason != "" then {reason:$reason} else {} end) + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end) + (if $final != "" then {final_file:$final} else {} end)' \
   >> "$metrics_file"
 
 case "$verdict" in

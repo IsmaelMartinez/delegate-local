@@ -509,11 +509,88 @@ compute_tokens_local() {
   echo $(( (pchars + cchars + ochars) / 4 ))
 }
 
+# capture_draft — persist the generated draft next to the metrics row that
+# scores it, and echo the basename for that row's `draft_file` field.
+#
+# Why this exists: until 2026-08-26 the output was never stored, so a MISS
+# recorded only the agent's PROSE DESCRIPTION of what was wrong with a draft
+# nobody could look at again. quality-report.sh says so in its own header —
+# "it does not need the original model output (which is never stored)" — and
+# that is precisely the ceiling on the calibration loop: you cannot fix a
+# recipe from "dropped every load-bearing fact" without seeing which facts and
+# what the draft said instead. With the draft on disk, and the shipped text
+# captured by `delegate-feedback.sh --final`, a MISS becomes a concrete
+# (generated, shipped) pair — the one artefact that makes a recipe edit
+# evidence-driven rather than a guess.
+#
+# Local-only by construction: the files sit beside metrics.jsonl under
+# DELEGATE_LOCAL_DATA_DIR, outside the repo, and nothing ships them anywhere.
+# They hold whatever the model was given, so they inherit the sensitivity of
+# the context you piped in. Opt out per call with DELEGATE_NO_DRAFT_CAPTURE=1;
+# capture is skipped entirely when metrics are off, because without the row
+# there is nothing to join the file to.
+capture_draft() {
+  local text="$1" ts="$2" stem dir max bytes
+  [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
+  [[ "${DELEGATE_NO_DRAFT_CAPTURE:-}" == "1" ]] && return 0
+  [[ -n "$text" ]] || return 0
+  dir="$(dirname "$metrics_file")/drafts"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  # A draft is the model's rendering of whatever context was piped in, so the
+  # directory inherits that content's sensitivity and must not inherit a
+  # permissive umask. 700 on the directory, 600 on the files, and the writes
+  # happen under `umask 077` so there is no window between create and chmod.
+  chmod 700 "$dir" 2>/dev/null || true
+  # Colons are legal in POSIX filenames but awkward in shell globs and in
+  # Finder, so the ts goes in compacted — but the ts ALONE is not a safe name.
+  # It has second precision, and parallel callers collide: the archived corpus
+  # holds 14 timestamps shared by more than one delegation, one of them by
+  # eight. Two drafts landing on one filename would clobber each other and
+  # leave two metrics rows pointing at a single artefact, which is exactly the
+  # pairing this capture exists to create. The span id (generated
+  # unconditionally for every call, 16 random hex) makes the name unique; the
+  # ts stays in front so the directory still sorts chronologically.
+  stem=$(printf '%s' "$ts" | tr -d ':-')
+  if [[ -n "${otel_span_id:-}" ]]; then
+    stem="$stem-${otel_span_id:0:8}"
+  else
+    stem="$stem-$$"
+  fi
+  max="${DELEGATE_DRAFT_MAX_BYTES:-65536}"
+  if ! [[ "$max" =~ ^[1-9][0-9]*$ ]]; then
+    echo "delegate: DELEGATE_DRAFT_MAX_BYTES='$max' is not a positive integer — using 65536" >&2
+    max=65536
+  fi
+  # Measured in bytes, because the cap is in bytes: ${#text} counts CHARACTERS
+  # under a UTF-8 locale, so a draft of multi-byte text could sail past a byte
+  # cap it had already exceeded several times over.
+  bytes=$(printf '%s' "$text" | wc -c | tr -d '[:space:]')
+  # head -c bounds a runaway generation without failing the call. The marker
+  # keeps a truncated file from being read later as a complete draft.
+  if [[ "$bytes" =~ ^[0-9]+$ ]] && (( bytes > max )); then
+    ( umask 077
+      { printf '%s' "$text" | head -c "$max"; printf '\n[truncated at %s bytes by DELEGATE_DRAFT_MAX_BYTES]\n' "$max"; } \
+        > "$dir/$stem.draft.txt" ) 2>/dev/null || return 0
+  else
+    ( umask 077; printf '%s' "$text" > "$dir/$stem.draft.txt" ) 2>/dev/null || return 0
+  fi
+  chmod 600 "$dir/$stem.draft.txt" 2>/dev/null || true
+  # Retention prune. Cheap enough to run inline (a few hundred small files at
+  # steady state) and self-limiting, so there is no cron dependency for it.
+  # 0 disables. -mtime +N is POSIX and behaves the same on BSD and GNU find.
+  local keep="${DELEGATE_DRAFT_RETENTION_DAYS:-14}"
+  if [[ "$keep" =~ ^[0-9]+$ ]] && (( keep > 0 )); then
+    find "$dir" -type f -name '*.txt' -mtime "+$keep" -exec rm -f {} + 2>/dev/null || true
+  fi
+  printf '%s' "$stem.draft.txt"
+}
+
 log_metric() {
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
     s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}" \
-    checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}" checks_failed_names="${22:-}"
+    checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}" checks_failed_names="${22:-}" \
+    draft_file="${23:-}"
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$ochars")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -558,7 +635,7 @@ log_metric() {
     --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
     --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
     --arg crun "$checks_run" --arg cfail "$checks_failed" --arg cfix "$checks_autofixed" \
-    --arg cnames "$checks_failed_names" \
+    --arg cnames "$checks_failed_names" --arg draft "$draft_file" \
     '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
      + (if $recipe != "" then {recipe:$recipe} else {} end)
      + (if $project != "" then {project:$project} else {} end)
@@ -569,7 +646,8 @@ log_metric() {
      + (if $s_top_k != "" then {sampling_top_k:($s_top_k|tonumber)} else {} end)
      + (if $s_pp != "" then {sampling_presence_penalty:($s_pp|tonumber)} else {} end)
      + (if ($crun != "" and ($crun|tonumber) > 0) then {checks_run:($crun|tonumber), checks_failed:($cfail|tonumber), checks_autofixed:($cfix|tonumber)} else {} end)
-     + (if $cnames != "" then {checks_failed_names:($cnames|split(","))} else {} end)' \
+     + (if $cnames != "" then {checks_failed_names:($cnames|split(","))} else {} end)
+     + (if $draft != "" then {draft_file:$draft} else {} end)' \
     >> "$metrics_file" 2>/dev/null || true
 }
 
@@ -892,6 +970,13 @@ if [[ -n "$recipe" ]]; then
     echo "delegate: recipe '$recipe' has empty or missing '## Prompt template' fenced block" >&2
     exit 2
   fi
+  # Keep the PRE-substitution template. Every later assignment to
+  # $recipe_template folds caller-supplied values into it ({{stdin}}, each
+  # --var, the flavor keys), so by check time it contains the user's own
+  # context and is useless as an "is this line recipe-authored?" oracle. The
+  # raw copy contains only text the recipe author wrote, which is exactly what
+  # the no_example_echo check needs to compare against.
+  recipe_template_raw="$recipe_template"
 
   # Optional frontmatter `checks:` block (ADR 0014, deterministic output
   # constraints). Each indented `name: value` line declares a check that runs
@@ -1459,12 +1544,67 @@ run_output_checks() {
 # is a function (it ran at top level before the refactor). The result and the
 # counters — output, checks_run/failed/autofixed, capability_failed — are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines echoed_line
 checks_failed=0
 checks_failed_names=""
 checks_run=0
 checks_autofixed=0
 capability_failed=0
+
+# no_example_echo — the one check that is ON by default for every recipe call
+# rather than declared per-recipe, because "the model copied a line out of the
+# prompt instead of writing one" is never a correct outcome for any recipe.
+# Measured 2026-08-26: two `maintainer-reply` calls carrying 7.7k and 7.3k
+# chars of piped context each returned 96 characters, byte-identical, and
+# 96 characters is exactly the recipe's own `Correct:` example line. The
+# contrastive-anchor pattern (ADR 0011) that makes these recipes work is the
+# same pattern that hands the model a fluent, on-topic sentence to fall back
+# on when the real input is long; the earlier AI-815 leak in pr-description
+# was the same shape. Prompt text alone cannot close this — the guards telling
+# the model not to copy are themselves lines it can copy — so it becomes a
+# deterministic post-generation check.
+#
+# Comparison is against $recipe_template_raw (pre-substitution) so only
+# recipe-AUTHORED text is a pattern; the substituted template contains the
+# caller's own context, and legitimately reproducing a supplied fact must
+# never flag. Matching is whole-line, literal (grep -F, no regex, so linear
+# time), after trimming surrounding whitespace and any `Wrong:` / `Correct:`
+# label from the anchor lines. The 40-char floor keeps short shared lines
+# (a heading, a sign-off, a fence) from colliding by coincidence.
+#
+# Opt out per recipe with `no_example_echo: false` in the frontmatter checks
+# block — for a recipe whose output is genuinely supposed to reproduce a long
+# boilerplate line from its own template — or for one call with
+# DELEGATE_NO_ECHO_CHECK=1.
+if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
+   && [[ -n "${recipe_template_raw:-}" ]] \
+   && [[ "${DELEGATE_NO_ECHO_CHECK:-}" != "1" ]] \
+   && [[ "${recipe_checks:-}" != *"no_example_echo: false"* ]]; then
+  checks_run=$((checks_run + 1))
+  # The same normalisation runs on BOTH sides. Stripping the label only from
+  # the template side left a false negative: a model that copies the whole
+  # line, label included, produces "Correct: <sentence>" which no longer
+  # matches the stripped "<sentence>" pattern, so the most literal possible
+  # echo was the one that got through.
+  echoed_line=$(printf '%s\n' "$recipe_template_raw" \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+          -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
+    | awk 'length($0) >= 40' \
+    | grep -Fxf - <(printf '%s\n' "$output" \
+        | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+              -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//') \
+    | head -n 1)
+  if [[ -n "$echoed_line" ]]; then
+    echo "delegate: check 'no_example_echo' FAILED — REJECT this draft. The model" >&2
+    echo "  reproduced a line from the recipe's own prompt verbatim instead of writing" >&2
+    echo "  one from your context: \"${echoed_line:0:120}\"" >&2
+    echo "  The draft is not grounded in the input. Re-run or hand-write; do not ship it." >&2
+    checks_failed=$((checks_failed + 1))
+    checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_example_echo"
+    capability_failed=$((capability_failed + 1))
+  fi
+fi
+
 if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${recipe_checks:-}" ]]; then
   # Signatures of the recurring BODY_NO_PADDING failure: a trailing participial
   # clause, a "This-X" declarative rephrase, or a known restating phrase. The
@@ -1637,6 +1777,11 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
           fi
         fi
         ;;
+      no_example_echo)
+        # Handled before this loop (it is on by default for every recipe, not
+        # declared per-recipe); the frontmatter key exists only as an opt-out
+        # switch, so it is accepted here and does nothing.
+        ;;
       *)
         echo "delegate: unknown check '$ckey' in recipe '$recipe' — ignored" >&2
         ;;
@@ -1681,7 +1826,11 @@ context_chars=${#context}
 output_chars=${#output}
 tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$output_chars")
 
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names"
+draft_file=""
+if (( status == 0 )); then
+  draft_file=$(capture_draft "$output" "$ts_start")
+fi
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file"
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to

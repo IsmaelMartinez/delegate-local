@@ -1425,6 +1425,92 @@ out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" scaffolding 2>&1) || E
 assert_eq 2 "$EC" "near-miss verdict 'scaffolding' -> exit 2 (not silently accepted)"
 rm -rf "$tmp"
 
+# ---------------------------------------------------------------------------
+# FN: --final captures the text that ACTUALLY shipped beside the captured
+# draft, so a rejection carries the (generated, shipped) pair rather than only
+# a prose description of the difference between them.
+# ---------------------------------------------------------------------------
+# FN1: a file path is copied in and named on the row.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+printf 'the reply that actually shipped\n' > "$tmp/final.txt"
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --final "$tmp/final.txt" miss "dropped every anchor" 2>&1)
+row=$(tail -1 "$tmp/m.jsonl")
+final_name=$(printf '%s' "$row" | jq -r '.final_file // ""')
+stem=$(printf '%s' "$TS_LATEST" | tr -d ':-')
+assert_eq "$stem-nodraft.final.txt" "$final_name" \
+  "--final: falls back to a ts stem when the row has no draft_file"
+assert_eq "the reply that actually shipped" "$(cat "$tmp/drafts/$final_name" 2>/dev/null)" \
+  "--final: shipped text stored verbatim beside the draft"
+rm -rf "$tmp"
+
+# FN1b: when the delegate row names a draft, the final is named after THAT,
+# not after ref_ts. Timestamps are second-precision and parallel delegations
+# share them, so a ts-derived name would overwrite another delegation's
+# shipped text; naming off draft_file also proves the two halves belong to the
+# same delegation.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+mkdir -p "$tmp/drafts"
+printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"draft_file":"20260826T101206Z-a1b2c3d4.draft.txt"}\n' \
+  "$TS_LATEST" >> "$tmp/m.jsonl"
+printf 'shipped\n' > "$tmp/f.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --final "$tmp/f.txt" miss "r" >/dev/null 2>&1
+assert_eq "20260826T101206Z-a1b2c3d4.final.txt" \
+  "$(tail -1 "$tmp/m.jsonl" | jq -r '.final_file // ""')" \
+  "--final: named after the row's draft_file, not after ref_ts"
+rm -rf "$tmp"
+
+# FN1c: the shipped text is the most sensitive artefact of the pair, so
+# neither the directory nor the file may inherit a permissive umask.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+printf 'shipped\n' > "$tmp/f.txt"
+( umask 000
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+    bash "$SCRIPT" --final "$tmp/f.txt" miss "r" >/dev/null 2>&1 )
+final_name=$(tail -1 "$tmp/m.jsonl" | jq -r '.final_file // ""')
+assert_eq "700" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$tmp/drafts")" \
+  "--final: drafts directory is private (700) under a permissive umask"
+assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$tmp/drafts/$final_name")" \
+  "--final: shipped-text file is private (600) under a permissive umask"
+rm -rf "$tmp"
+
+# FN2: - reads the shipped text from stdin.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+echo "shipped via stdin" | DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --final - miss "reason" >/dev/null 2>&1
+final_name=$(tail -1 "$tmp/m.jsonl" | jq -r '.final_file // ""')
+assert_eq "shipped via stdin" "$(cat "$tmp/drafts/$final_name" 2>/dev/null)" \
+  "--final -: shipped text read from stdin"
+rm -rf "$tmp"
+
+# FN3: a nonexistent path fails BEFORE the verdict row is written, so a typo
+# cannot leave a verdict recorded against evidence that was never stored.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+before=$(grep -c '' "$tmp/m.jsonl")
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --final "$tmp/nope.txt" miss "r" 2>&1) || EC=$?
+assert_eq 2 "$EC" "--final: missing file exits 2"
+assert_contains "--final file not found" "$out" "--final: missing file names the path"
+assert_eq "$before" "$(grep -c '' "$tmp/m.jsonl")" "--final: missing file writes no verdict row"
+rm -rf "$tmp"
+
+# FN4: --final requires a value.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --final 2>&1) || EC=$?
+assert_eq 2 "$EC" "--final with no value exits 2"
+rm -rf "$tmp"
+
+# FN5: omitting --final leaves the row shape exactly as it was, so every
+# reader written before this flag existed keeps working.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" miss "r" >/dev/null 2>&1
+assert_eq "false" "$(tail -1 "$tmp/m.jsonl" | jq -r 'has("final_file")')" \
+  "--final omitted: no final_file field on the row"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

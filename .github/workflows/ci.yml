@@ -112,6 +112,9 @@ jobs:
       - name: Quality-trend tests
         run: bash tests/test-quality-trend.sh
 
+      - name: Self-improve tests
+        run: bash tests/test-self-improve.sh
+
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh
 

@@ -5103,6 +5103,291 @@ assert_eq 2 "$EC" "no recipe and no prompt still exits 2"
 rm -rf "$tmp"
 
 
+# ---------------------------------------------------------------------------
+# 40. no_example_echo (ADR 0029) — on by default for every recipe call, and
+# the one check that guards against the model returning the prompt's own
+# example instead of an answer. Reproduces the 2026-08-26 maintainer-reply
+# leak: two calls carrying 7.7k / 7.3k chars of context each returned exactly
+# the recipe's `Correct:` line, byte for byte.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/anchor.md" <<'EOF'
+---
+tier: prose
+---
+# anchor
+
+## When to use
+Contrastive-anchor recipe.
+
+## Prompt template
+
+```
+Answer using only the facts below.
+
+Wrong: The regression is in the date parser, and ask the reporter to confirm it.
+Correct: The regression is in the date parser. Could you confirm whether it also happens on older inputs?
+
+=== Facts ===
+{{stdin}}
+```
+
+## Calibration notes
+n/a
+EOF
+# 40a. Output that reproduces the Correct: example verbatim -> FAILED + named.
+make_mock_curl_think "$tmp" 'The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
+out=$(echo "unrelated facts about a config loader" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
+assert_contains "check 'no_example_echo' FAILED" "$out" "echo-check: verbatim example reproduction is caught"
+assert_contains "REJECT this draft" "$out" "echo-check: stderr tells the caller not to ship it"
+row=$(tail -1 "$metrics")
+assert_contains '"checks_failed_names":["no_example_echo"]' "$row" "echo-check: named on the metrics row"
+# 40b. The label prefix is stripped before comparing, so the Wrong: arm is
+# caught too — an echoed Wrong: line is the #283 instruction-echo failure.
+make_mock_curl_think "$tmp" 'The regression is in the date parser, and ask the reporter to confirm it.'
+out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
+assert_contains "check 'no_example_echo' FAILED" "$out" "echo-check: echoed Wrong: arm caught after label strip"
+# 40b-i. The label is stripped from the OUTPUT side too, so the most literal
+# echo of all — the whole line including its `Correct:` label — is caught.
+# Stripping only the template side left exactly that case undetected.
+make_mock_curl_think "$tmp" 'Correct: The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
+out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
+assert_contains "check 'no_example_echo' FAILED" "$out" "echo-check: echo that keeps the Correct: label is caught"
+# 40c. A genuine answer must not trip it. This is the guard that matters —
+# a false positive here would flag every good delegation.
+make_mock_curl_think "$tmp" 'The override in src/config/loader.js:88 silently wins. Could you make it defer?'
+out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
+if [[ "$out" == *"no_example_echo"* ]]; then
+  echo "  FAIL  echo-check: genuine answer must not trip the check"; fail=$((fail+1))
+else
+  echo "  PASS  echo-check: genuine answer does not trip the check"; pass=$((pass+1))
+fi
+# 40d. Short shared lines are below the 40-char floor, so a recipe and its
+# output can share a heading or a sign-off without colliding.
+make_mock_curl_think "$tmp" '=== Facts ==='
+out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
+if [[ "$out" == *"no_example_echo"* ]]; then
+  echo "  FAIL  echo-check: short shared line must stay below the length floor"; fail=$((fail+1))
+else
+  echo "  PASS  echo-check: short shared line stays below the length floor"; pass=$((pass+1))
+fi
+# 40e. Caller-supplied context is NOT a pattern: the comparison runs against
+# the PRE-substitution template, so reproducing a supplied fact is correct
+# behaviour and must never flag.
+make_mock_curl_think "$tmp" 'The token drop is on the Teams side, inside its own MSAL cache layer.'
+out=$(echo "The token drop is on the Teams side, inside its own MSAL cache layer." \
+  | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
+if [[ "$out" == *"no_example_echo"* ]]; then
+  echo "  FAIL  echo-check: reproducing piped context must not flag"; fail=$((fail+1))
+else
+  echo "  PASS  echo-check: reproducing piped context does not flag"; pass=$((pass+1))
+fi
+# 40f. Env opt-out.
+make_mock_curl_think "$tmp" 'The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
+out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_ECHO_CHECK=1 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
+if [[ "$out" == *"no_example_echo"* ]]; then
+  echo "  FAIL  echo-check: DELEGATE_NO_ECHO_CHECK=1 must silence it"; fail=$((fail+1))
+else
+  echo "  PASS  echo-check: DELEGATE_NO_ECHO_CHECK=1 silences it"; pass=$((pass+1))
+fi
+# 40g. Frontmatter opt-out, for a recipe whose output legitimately reproduces
+# a long line of its own template. Must not warn "unknown check" either.
+cat > "$prompts/optout.md" <<'EOF'
+---
+tier: prose
+checks:
+  no_example_echo: false
+---
+# optout
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+Answer using only the facts below.
+
+Correct: The regression is in the date parser. Could you confirm whether it also happens on older inputs?
+
+=== Facts ===
+{{stdin}}
+```
+
+## Calibration notes
+n/a
+EOF
+out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe optout prose "go" 2>&1)
+if [[ "$out" == *"no_example_echo"* || "$out" == *"unknown check"* ]]; then
+  echo "  FAIL  echo-check: frontmatter opt-out must be silent and known"; fail=$((fail+1))
+else
+  echo "  PASS  echo-check: frontmatter opt-out is silent and recognised"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics"
+
+# ---------------------------------------------------------------------------
+# 41. Draft capture — the generated output is persisted beside its metrics row
+# so a later MISS carries the artefact, not just a prose description of it.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+data="$tmp/data"; mkdir -p "$data"
+metrics="$data/metrics.jsonl"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/cap.md" <<'EOF'
+---
+tier: prose
+---
+# cap
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+GO
+{{stdin}}
+```
+
+## Calibration notes
+n/a
+EOF
+make_mock_curl_think "$tmp" 'a draft worth keeping around'
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+draft_name=$(printf '%s' "$row" | jq -r '.draft_file // ""')
+if [[ -n "$draft_name" && -f "$data/drafts/$draft_name" ]]; then
+  echo "  PASS  draft-capture: draft_file names a file that exists"; pass=$((pass+1))
+else
+  echo "  FAIL  draft-capture: draft_file missing or file absent (got '$draft_name')"; fail=$((fail+1))
+fi
+assert_eq "a draft worth keeping around" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
+  "draft-capture: file holds the generated output verbatim"
+# The name leads with the row ts (so the directory sorts chronologically) and
+# carries a uniquifying suffix, because ts alone is second-precision and
+# parallel delegations share it.
+row_ts=$(printf '%s' "$row" | jq -r '.ts')
+case "$draft_name" in
+  "$(printf '%s' "$row_ts" | tr -d ':-')"-*.draft.txt)
+    echo "  PASS  draft-capture: filename leads with the row ts and is suffixed"; pass=$((pass+1)) ;;
+  *) echo "  FAIL  draft-capture: unexpected draft filename '$draft_name'"; fail=$((fail+1)) ;;
+esac
+# 41a-i. Two delegations landing in the same second must not clobber each
+# other. The archived corpus holds 14 such timestamps, one shared by eight
+# delegations, so this is the case that would have silently destroyed the
+# draft-to-verdict pairing the whole feature rests on.
+before_count=$(ls "$data/drafts" | grep -c '')
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
+after_count=$(ls "$data/drafts" | grep -c '')
+if (( after_count == before_count + 2 )); then
+  echo "  PASS  draft-capture: two same-second delegations write two distinct files"; pass=$((pass+1))
+else
+  echo "  FAIL  draft-capture: same-second delegations collided ($before_count -> $after_count)"; fail=$((fail+1))
+fi
+# Every metrics row must still name a file that exists.
+missing=0
+while IFS= read -r df; do
+  [[ -z "$df" ]] && continue
+  [[ -f "$data/drafts/$df" ]] || missing=$((missing+1))
+done < <(jq -r '.draft_file // empty' "$metrics")
+assert_eq 0 "$missing" "draft-capture: every draft_file on a row exists on disk"
+# 41a-ii. Drafts hold whatever context was piped in, so neither the directory
+# nor the files may inherit a permissive umask. Asserted under a deliberately
+# wide-open umask, which is the only condition where the bug is visible.
+rm -rf "$data"; mkdir -p "$data"
+( umask 000
+  env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1 )
+draft_name=$(tail -1 "$metrics" | jq -r '.draft_file // ""')
+assert_eq "700" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$data/drafts")" \
+  "draft-capture: drafts directory is private (700) under a permissive umask"
+assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$data/drafts/$draft_name")" \
+  "draft-capture: draft file is private (600) under a permissive umask"
+# 41b. Opt-out.
+rm -rf "$data"; mkdir -p "$data"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_DRAFT_CAPTURE=1 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
+assert_eq "false" "$(tail -1 "$metrics" | jq -r 'has("draft_file")')" \
+  "draft-capture: DELEGATE_NO_DRAFT_CAPTURE=1 writes no draft_file field"
+if [[ -d "$data/drafts" ]]; then
+  echo "  FAIL  draft-capture: opt-out must not create the drafts directory"; fail=$((fail+1))
+else
+  echo "  PASS  draft-capture: opt-out creates no drafts directory"; pass=$((pass+1))
+fi
+# 41c. Metrics off means no row to join to, so no draft either.
+rm -rf "$data"; mkdir -p "$data"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOCAL_NO_METRICS=1 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
+if [[ -d "$data/drafts" ]]; then
+  echo "  FAIL  draft-capture: NO_METRICS must not capture a draft"; fail=$((fail+1))
+else
+  echo "  PASS  draft-capture: NO_METRICS captures no draft"; pass=$((pass+1))
+fi
+# 41d. Oversized output is truncated with a marker rather than dropped, so a
+# runaway generation cannot fill the data dir and a truncated file cannot be
+# mistaken for a complete draft.
+rm -rf "$data"; mkdir -p "$data"
+make_mock_curl_think "$tmp" 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_MAX_BYTES=20 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
+draft_name=$(tail -1 "$metrics" | jq -r '.draft_file // ""')
+assert_contains "[truncated at 20 bytes" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
+  "draft-capture: oversized draft is truncated with a marker"
+# 41e. The cap is a BYTE cap, so multi-byte text must be measured in bytes.
+# Eight 3-byte characters are 8 characters and 24 bytes; a character-length
+# comparison would wave them past a 20-byte cap. LANG is set explicitly
+# because the rest of the suite runs under `env -i` (C locale), where bash
+# counts bytes anyway and the bug would be invisible.
+rm -rf "$data"; mkdir -p "$data"
+make_mock_curl_think "$tmp" '\u4e2d\u6587\u6d4b\u8bd5\u4e2d\u6587\u6d4b\u8bd5'
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" LANG=en_US.UTF-8 DELEGATE_DRAFT_MAX_BYTES=20 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
+draft_name=$(tail -1 "$metrics" | jq -r '.draft_file // ""')
+assert_contains "[truncated at 20 bytes" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
+  "draft-capture: byte cap measured in bytes, not characters"
+# 41f. A malformed cap falls back to the default rather than silently
+# disabling the bound.
+rm -rf "$data"; mkdir -p "$data"
+make_mock_curl_think "$tmp" 'short'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_MAX_BYTES=abc \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cap prose "go" </dev/null 2>&1)
+assert_contains "is not a positive integer" "$out" "draft-capture: malformed byte cap is reported"
+draft_name=$(tail -1 "$metrics" | jq -r '.draft_file // ""')
+assert_eq "short" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
+  "draft-capture: malformed byte cap still captures under the default bound"
+rm -rf "$tmp" "$data"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
