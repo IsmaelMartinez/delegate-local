@@ -33,6 +33,8 @@ The recent merged-PR body is the load-bearing context. The model learns the proj
 
 The `<<<EXAMPLE_BEGIN ... EXAMPLE_END>>>` envelope around each example is intentional — without explicit delimiters the model bleeds content from one example into the next or treats the whole block as one example with confused shape.
 
+**Pick an example from unrelated work.** The delimiters stop one example bleeding into the next; they do not stop an example bleeding into the answer. Both 2026-08-26 echo events came from passing the immediately preceding PR on the *same* repo and the *same* topic — a self-improvement PR used as the anchor for the next self-improvement PR — and what came back was that PR's paragraphs, describing that PR's work. This is the same rule SKILL.md already states for one-shot examples generally: "the example must use a different finding/item from the actual input so it doesn't leak the answer." A merged PR from a different area of the repo teaches the shape just as well and has nothing plausible to copy.
+
 ## Prompt template
 
 ```
@@ -329,3 +331,28 @@ The check is therefore verified by replaying the documented shape and by the
 copy-out-of-the-prohibition case, not by a fresh reproduction. Treat it as
 regression insurance on a defect that was deterministic three weeks ago and is
 not today, on this model.
+
+
+### 2026-08-26 (later) — exemplar content bleed, and the size hypothesis measured and dropped
+
+`no_example_echo` fired twice on this recipe in one day, at `20:02:51Z` and
+`22:11:08Z`. The first returned the closing line of the PR #432 exemplar; the
+second returned three paragraphs of PR #433's body, including the
+dangling-reference sweep and "no prompt template changed", both of which
+belonged entirely to that PR. Neither draft shipped — the check caught both —
+so the cost is a wasted call rather than a bad artifact.
+
+The obvious mechanical fix was a cap on exemplar size, and the data does not
+support it. Across the nine `pr-description` calls in the live corpus the two
+that echoed carried 7,138 and 7,400 `prompt_chars`, while calls at 7,929 and
+10,126 did not. There is no threshold to draw. That is the second time an
+input-size hypothesis has been measured and dropped on this corpus, after the
+same exercise on `maintainer-reply` earlier the same day.
+
+What both echo events did share is topical adjacency: the anchor was the
+previous PR in the same series, describing work of the same kind, so its
+sentences were plausible answers to the new question. That is a hypothesis, not
+a measurement, which is why the fix here is caller-facing guidance in "Context
+to gather first" rather than a check. If it recurs with a deliberately
+unrelated anchor, the hypothesis is wrong and the next attempt should be
+mechanical.
