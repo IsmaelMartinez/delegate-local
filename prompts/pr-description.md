@@ -7,6 +7,7 @@ inputs:
 echo_guard_vars: recent_prs
 checks:
   no_invented_task_list: recent_prs
+  no_invented_refs: true
 ---
 # pr-description
 
@@ -294,3 +295,37 @@ declared check except `no_padding_tail`.
 Still open and untouched by this: the reference-trailer fabrication recorded in
 the 2026-08-21 entry above, which wants the same treatment and a different
 check.
+
+### 2026-08-26 — the reference-trailer check the 2026-08-21 entry asked for
+
+The entry above ends by saying the trailer fabrication "needs a deterministic
+post-generation check, not more prompt text: a trailer whose identifier does not
+appear in the inputs should be stripped or fail the call, in the manner of the
+ADR 0014 checks." `no_invented_refs: true` is that check.
+
+The design detail that matters is what counts as grounding. Only the caller's
+inputs do — every `--var` value plus the piped context. The recipe template is
+deliberately excluded, because the failure the entry documents is a model
+copying `AI-815` straight out of a `Wrong:` example that contained it, and
+grounding against the template would have licensed exactly that copy. There is
+an assertion pinning this: an identifier that appears in the recipe's own text
+and nowhere in the caller's inputs still fails.
+
+Only trailer-shaped lines (`Key: value`) are scanned, and two token shapes are
+recognised, `#123` and a ticket like `AI-813` with two or more trailing digits.
+That keeps `UTF-8` and similar hyphenated prose tokens out of it. Known gap: a
+trailer line carrying something like `SHA-256` matches the ticket shape and
+would flag if the inputs never mention it. Warn-only, so that costs a line on
+stderr.
+
+**The live defect did not reproduce, and that is worth recording rather than
+hiding.** Four reps against `mlx-community/Qwen3.6-35B-A3B-8bit` with the exact
+2026-08-21 setup — two anchor examples ending in `Refs: AI-812` and
+`Refs: AI-806`, a Context naming no ticket, and a trailing instruction asking
+explicitly for the trailer — produced no trailer at all, every time. With no
+ticket in the Context the only honest options are omit or invent, and the model
+omitted, so the EVIDENCE and SHAPE guards appear to have held for this case.
+The check is therefore verified by replaying the documented shape and by the
+copy-out-of-the-prohibition case, not by a fresh reproduction. Treat it as
+regression insurance on a defect that was deterministic three weeks ago and is
+not today, on this model.

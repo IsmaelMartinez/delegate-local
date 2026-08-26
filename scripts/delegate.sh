@@ -1559,7 +1559,7 @@ run_output_checks() {
 # is a function (it ran at top level before the refactor). The result and the
 # counters — output, checks_run/failed/autofixed, capability_failed — are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks authority
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks authority ref_ground ref_tok invented_refs
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -1946,6 +1946,57 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
               checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_invented_task_list"
               capability_failed=$((capability_failed + 1))
             fi
+          fi
+        fi
+        ;;
+      no_invented_refs)
+        # A trailer identifier the model made up. `pr-description`'s 2026-08-21
+        # calibration entry documents the shape: given examples ending in
+        # `Refs: AI-812` / `Refs: AI-806` and a Context naming no ticket, the
+        # model emits `Refs: AI-813`, continuing the numbering. Four prompt-side
+        # attempts were made and all reverted, and one made things actively
+        # worse — its `Wrong:` example carried a literal identifier and the
+        # model emitted exactly that identifier, copying the value straight out
+        # of the prohibition. The entry's own conclusion is that this needs a
+        # post-generation check, which is this one.
+        #
+        # The grounding set is the CALLER's inputs only: every --var value plus
+        # the piped context. The recipe template is deliberately NOT in it. That
+        # is the whole lesson of the reverted attempt above: an identifier
+        # sitting in the recipe's own prose is precisely what gets copied, so
+        # grounding against the template would license the copy it is meant to
+        # catch.
+        #
+        # Only trailer-shaped lines are scanned (`Key: value`), because that is
+        # where the defect lives and because prose is full of hyphenated tokens
+        # that are not identifiers. Two token shapes are recognised: `#123` and
+        # a ticket like `AI-813`. The ticket pattern requires two or more
+        # trailing digits, which keeps `UTF-8` out of it. KNOWN GAP: a trailer
+        # line carrying something like `SHA-256` still matches the shape and
+        # would flag if the inputs never mention it. Warn-only, so the cost of
+        # that is a line on stderr.
+        if [[ "$cval" == "true" ]]; then
+          checks_run=$((checks_run + 1))
+          ref_ground=""
+          for _kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
+            ref_ground="${ref_ground}${_kv#*=}
+"
+          done
+          ref_ground="${ref_ground}${context}"
+          invented_refs=""
+          while IFS= read -r ref_tok; do
+            [[ -z "$ref_tok" ]] && continue
+            printf '%s' "$ref_ground" | grep -qF -- "$ref_tok" && continue
+            invented_refs="${invented_refs:+$invented_refs }$ref_tok"
+          done < <(printf '%s\n' "$output" | tr -d '\r' \
+            | awk '/^[A-Za-z][A-Za-z0-9-]*:[[:space:]]/' \
+            | grep -oE '#[0-9]+|[A-Z][A-Z0-9]+-[0-9]{2,}' \
+            | sort -u)
+          if [[ -n "$invented_refs" ]]; then
+            echo "delegate: check 'no_invented_refs' FAILED — trailer names $invented_refs, which appears in none of the inputs you supplied" >&2
+            checks_failed=$((checks_failed + 1))
+            checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_invented_refs"
+            capability_failed=$((capability_failed + 1))
           fi
         fi
         ;;

@@ -276,6 +276,33 @@ call, in the manner of the ADR 0014 checks."
 3. Discriminating tests, and a dated calibration entry.
    *Verify:* the fail-then-pass counts are recorded here.
 
+**Status: DONE.**
+
+**Results**
+
+1. `no_invented_refs: true` on `prompts/pr-description.md`. Grounding is the
+   caller's `--var` values plus the piped context; the recipe template is
+   excluded by design. Fires on the documented shape: examples ending in
+   `AI-812` / `AI-806`, caller naming no ticket, output `Refs: AI-813` →
+   `trailer names AI-813, which appears in none of the inputs you supplied`.
+   Silent when the caller does name it.
+2. The copy-out-of-the-prohibition trap is closed and pinned. An identifier
+   present only in the recipe's own `Wrong:` example still fails, which is the
+   assertion that stops a future refactor from "helpfully" grounding against the
+   template.
+3. Discriminating: 8 new assertions, all failing without the implementation,
+   `test-delegate.sh` 680 passed / 0 failed with it. `test-prompts-library.sh`
+   366. Dated calibration entry added.
+
+**The live defect did not reproduce.** Four reps with the exact 2026-08-21
+setup, including a trailing instruction explicitly asking for the trailer,
+produced no trailer at all. With no ticket in the Context, omitting is the
+correct behaviour, so the prompt-side guards appear to have held for this case.
+The check is verified by replay and by the prohibition-copy case, not by a fresh
+reproduction, and is honestly regression insurance rather than a live fix. That
+is written into the calibration entry too, so nobody later reads it as a
+measured win.
+
 ---
 
 ## Findings log
