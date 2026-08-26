@@ -178,6 +178,31 @@ classify_segment() {
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+release[[:space:]]+create([[:space:]]|$)' <<<"$seg"; then
     boundary="release-create"; recipe="release-note"; return 0
   fi
+  # A maintainer's PR REVIEW BODY, either `gh pr review <n> --body ...` or the
+  # equivalent reviews-endpoint POST. This is the evidence-led shape — a verdict
+  # plus the anchors it rests on — which is `maintainer-review-reply`, not the
+  # closed two-sentence `maintainer-reply` below.
+  #
+  # Until 2026-08-26 this was not a boundary at all. `gh pr review` clears the
+  # pre-filter (it is `gh pr ...`) and then matched no branch, so the single most
+  # common way a maintainer posts a judgement produced no row and no nudge. Over
+  # the same period `maintainer-reply` absorbed the workload at 21% usable over
+  # n=33 while `maintainer-review-reply` sat at n=0 calls, with prose pointers in
+  # SKILL.md and in both scope paragraphs of `maintainer-reply.md`. Prose routing
+  # had been tried twice; this is the mechanical version.
+  #
+  # An inline body is required for the same reason issue-create requires one:
+  # `--web` and the interactive editor have no drafting moment to intercept.
+  if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+review([[:space:]]|$)' <<<"$seg" \
+     && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[bF]|--body)' <<<"$seg" \
+     && ! grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*w|--web)([[:space:]]|$)' <<<"$seg"; then
+    boundary="pr-review-body"; recipe="maintainer-review-reply"; return 0
+  fi
+  if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+api([[:space:]]|$)' <<<"$seg" \
+     && grep -Eq '/pulls/[0-9]+/reviews' <<<"$seg" \
+     && grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$seg"; then
+    boundary="pr-review-body"; recipe="maintainer-review-reply"; return 0
+  fi
   # Inline PR review-comment reply: `gh api .../pulls/<n>/comments -X POST -f body=...`
   # (the /address-pr-comments inline path). Scope to the pulls endpoint so an
   # issue-comment POST (`.../issues/<n>/comments`) is not misread as a PR review

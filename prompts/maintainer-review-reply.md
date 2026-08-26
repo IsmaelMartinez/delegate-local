@@ -142,3 +142,20 @@ being re-discovered from scratch on a recipe that already knows about it.
 ### Tier choice
 
 Prose tier. The task is reshaping supplied facts into a maintainer's voice; the facts are passive content to preserve and order, not reasoning targets. Same discriminator as `maintainer-reply.md`. If a future measurement shows anchor preservation failing on the prose tier specifically, the reasoning tier is the escalation to try before rewriting the guards again.
+
+### 2026-08-26 (later) — the routing became mechanical
+
+Still `n=0` calls at the end of the day it was created, with pointers in
+SKILL.md and in both scope paragraphs of `maintainer-reply.md`. The reason turned
+out to be structural rather than persuasive: `gh pr review --body`, the most
+common way a maintainer posts a judgement, was not a boundary in
+`scripts/delegate-boundary-hook.sh` at all. It cleared the pre-filter, matched no
+branch, and produced no opportunity row and no reminder, so nothing ever named
+this recipe at the moment of drafting. The hook now classifies it (and a `POST`
+to `.../pulls/<n>/reviews`) as `pr-review-body` and names this recipe with its
+`verdict` and `ask` vars.
+
+`gh pr comment` still routes to `maintainer-reply`, pinned by its own assertion,
+so the fix cannot quietly swallow the closed short shape. Re-measure by whether
+this recipe starts taking calls at all; anything about its keep rate needs
+roughly ten of them first.
