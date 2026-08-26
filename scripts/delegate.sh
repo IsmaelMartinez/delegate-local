@@ -993,6 +993,21 @@ if [[ -n "$recipe" ]]; then
     in_fm && in_checks && /^[a-zA-Z_]/ { in_checks=0 }
   ' "$recipe_file")
 
+  # Optional frontmatter `echo_guard_vars:` — a comma-separated list of --var
+  # names whose values are EXEMPLARS (shape anchors) rather than content. Their
+  # text is shown to the model to teach a shape, and must never come back in
+  # the output. `no_example_echo` covers the recipe's own prompt; this covers
+  # the exemplars the caller supplies, which is where the failure that
+  # motivated it actually happened (issue #428).
+  recipe_echo_guard_vars=$(awk '
+    BEGIN { in_fm=0 }
+    NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
+    in_fm && /^---[[:space:]]*$/ { exit }
+    in_fm && /^echo_guard_vars:[[:space:]]*/ {
+      sub(/^echo_guard_vars:[[:space:]]*/, ""); print; exit
+    }
+  ' "$recipe_file")
+
   # Identify the placeholders the *original* template requires. Validating
   # against this list — not the post-substitution string — means substituted
   # values that legitimately contain `{{...}}` (Vue/Angular bindings, Go
@@ -1544,7 +1559,7 @@ run_output_checks() {
 # is a function (it ran at top level before the refactor). The result and the
 # counters — output, checks_run/failed/autofixed, capability_failed — are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines echoed_line
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines echoed_line echo_exemplars _egv _kv
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -1581,23 +1596,70 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
    && [[ "${DELEGATE_NO_ECHO_CHECK:-}" != "1" ]] \
    && [[ "${recipe_checks:-}" != *"no_example_echo: false"* ]]; then
   checks_run=$((checks_run + 1))
+  # Exemplar --var values join the template as forbidden-output patterns when
+  # the recipe declares them (issue #428). Verified case: `commit-message` was
+  # handed three real recent commits as shape anchors and returned one of them
+  # as its subject, so the message named v4.37.6 — the version the change was
+  # bumping AWAY from — and dropped half the change. The exemplar reads to the
+  # model as something to copy rather than as background.
+  #
+  # Two normalisations make that catchable. The conventional-commit type
+  # prefix and a trailing ` (#123)` are stripped from both sides, because the
+  # echo arrived as `ci: <copied subject>` against an anchor of
+  # `chore(deps): <same subject> (#253)` — a whole-line compare without them
+  # misses the most common shape of the bug. And a line that appears in MORE
+  # than one exemplar is dropped from the pattern set: repeated across the
+  # anchors means convention or boilerplate (a trailer, a generated-by line, a
+  # section heading), which the output is supposed to reproduce. Only a line
+  # unique to a single exemplar is that exemplar's own content.
+  echo_exemplars=""
+  if [[ -n "${recipe_echo_guard_vars:-}" ]]; then
+    for _egv in $(printf '%s' "$recipe_echo_guard_vars" | tr ',' ' '); do
+      for _kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
+        if [[ "${_kv%%=*}" == "$_egv" ]]; then
+          echo_exemplars="${echo_exemplars}${_kv#*=}
+"
+        fi
+      done
+    done
+  fi
   # The same normalisation runs on BOTH sides. Stripping the label only from
   # the template side left a false negative: a model that copies the whole
   # line, label included, produces "Correct: <sentence>" which no longer
   # matches the stripped "<sentence>" pattern, so the most literal possible
   # echo was the one that got through.
-  echoed_line=$(printf '%s\n' "$recipe_template_raw" \
-    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-          -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
+  # ONE normalisation, applied identically to every pattern source and to the
+  # output. Asymmetry is how this check has failed twice: first the
+  # `Wrong:`/`Correct:` label was stripped from the template side only, so an
+  # echo that kept its label slipped through; then the conventional-commit
+  # prefix was stripped from the output side only, so an echoed template
+  # example that began `fix:` stopped matching the pattern it came from. Any
+  # future rule added here must go in echo_normalise and nowhere else.
+  #
+  # sed -E: making the `(scope)` of a conventional-commit prefix optional needs
+  # an ERE group, which BRE cannot express in one pass. BSD and GNU both take
+  # -E. Order matters — the label comes off before the type prefix, so a
+  # `Correct: fix: X` example reduces all the way to `X`.
+  echo_normalise() {
+    sed -E -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+           -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
+           -e 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' \
+           -e 's/[[:space:]]*\(#[0-9]+\)$//'
+  }
+  echoed_line=$( { printf '%s\n' "$recipe_template_raw" | echo_normalise
+    if [[ -n "$echo_exemplars" ]]; then
+      # uniq -u keeps only lines appearing exactly once across the exemplars;
+      # anything repeated is convention the output is meant to reproduce.
+      printf '%s' "$echo_exemplars" | echo_normalise | sort | uniq -u
+    fi; } \
     | awk 'length($0) >= 40' \
-    | grep -Fxf - <(printf '%s\n' "$output" \
-        | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-              -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//') \
+    | grep -Fxf - <(printf '%s\n' "$output" | echo_normalise) \
     | head -n 1)
   if [[ -n "$echoed_line" ]]; then
     echo "delegate: check 'no_example_echo' FAILED — REJECT this draft. The model" >&2
-    echo "  reproduced a line from the recipe's own prompt verbatim instead of writing" >&2
-    echo "  one from your context: \"${echoed_line:0:120}\"" >&2
+    echo "  reproduced a line from its own prompt (the recipe's example, or one of the" >&2
+    echo "  exemplars you passed as a shape anchor) instead of writing one from your" >&2
+    echo "  content: \"${echoed_line:0:120}\"" >&2
     echo "  The draft is not grounded in the input. Re-run or hand-write; do not ship it." >&2
     checks_failed=$((checks_failed + 1))
     checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_example_echo"

@@ -5166,6 +5166,40 @@ out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
 assert_contains "check 'no_example_echo' FAILED" "$out" "echo-check: echo that keeps the Correct: label is caught"
+# 40b-ii. A template example that itself begins with a conventional-commit
+# prefix must still match when echoed. The exemplar work added a type-prefix
+# strip to the output side; leaving the template side unstripped meant an
+# echoed `fix: ...` example no longer matched the pattern it came from. One
+# normalisation, applied to both sides, is the invariant this pins.
+cat > "$prompts/cc.md" <<'EOF'
+---
+tier: prose
+---
+# cc
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+Write a commit message.
+
+Correct: fix: bump the model-resolution cache TTL to 60 seconds flat
+
+=== Facts ===
+{{stdin}}
+```
+
+## Calibration notes
+n/a
+EOF
+make_mock_curl_think "$tmp" 'fix: bump the model-resolution cache TTL to 60 seconds flat'
+out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cc prose "go" 2>&1)
+assert_contains "check 'no_example_echo' FAILED" "$out" \
+  "echo-check: echoed template example beginning with a type prefix is caught"
 # 40c. A genuine answer must not trip it. This is the guard that matters —
 # a false positive here would flag every good delegation.
 make_mock_curl_think "$tmp" 'The override in src/config/loader.js:88 silently wins. Could you make it defer?'
@@ -5246,6 +5280,146 @@ if [[ "$out" == *"no_example_echo"* || "$out" == *"unknown check"* ]]; then
 else
   echo "  PASS  echo-check: frontmatter opt-out is silent and recognised"; pass=$((pass+1))
 fi
+rm -rf "$tmp" "$metrics"
+
+# ---------------------------------------------------------------------------
+# 40h. echo_guard_vars — the exemplar half of no_example_echo (issue #428).
+# A recipe may declare which --var values are SHAPE anchors; their lines then
+# join the forbidden-output set. Reproduces the verified 2026-08-26 case: a
+# commit-message call was handed three real recent commits and returned one of
+# them as its subject, naming the version the change was bumping AWAY from.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/cm.md" <<'EOF'
+---
+tier: prose
+inputs:
+  recent_commits: string
+  why: string
+echo_guard_vars: recent_commits
+---
+# cm
+
+## When to use
+Exemplar-echo test recipe.
+
+## Prompt template
+
+```
+Write a commit message.
+
+=== Recent commits (SHAPE anchors) ===
+{{recent_commits}}
+
+=== Why ===
+{{why}}
+```
+
+## Calibration notes
+n/a
+EOF
+ANCHORS='chore(deps): bump codeql-action init and analyze together to v4.37.6 (#253)
+chore(deps): bump github/codeql-action/analyze from 4.37.3 to 4.37.4 (#240)
+perf(football): cut CI validate from 34 to 7 minutes (#287)'
+run_cm() {
+  echo x | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe cm --var recent_commits="$ANCHORS" --var why="w" 2>&1 >/dev/null
+}
+# 40h-i. The real failure: the anchor came back as the subject under a
+# different type prefix and without the PR suffix, so a naive whole-line
+# compare misses it. Both are stripped from both sides.
+make_mock_curl_think "$tmp" 'ci: bump codeql-action init and analyze together to v4.37.6\n\nCombines the Dependabot PRs.'
+out=$(run_cm)
+assert_contains "check 'no_example_echo' FAILED" "$out" \
+  "echo-guard: anchor subject echoed under a different type prefix is caught"
+assert_contains '"checks_failed_names":["no_example_echo"]' "$(tail -1 "$metrics")" \
+  "echo-guard: named on the metrics row"
+# 40h-ii. An exact copy including the PR suffix is caught too.
+make_mock_curl_think "$tmp" 'chore(deps): bump codeql-action init and analyze together to v4.37.6 (#253)\n\nbody here.'
+assert_contains "check 'no_example_echo' FAILED" "$(run_cm)" \
+  "echo-guard: verbatim anchor including its PR suffix is caught"
+# 40h-iii. The message that actually shipped for that change must NOT flag.
+# This is the guard that matters: a false positive here would reject correct
+# work on every call that shares vocabulary with its anchors.
+make_mock_curl_think "$tmp" 'chore(deps): bump codeql-action to v4.37.8 and osv-scanner-action to v2.5.1\n\nCombines four Dependabot PRs that each touch one workflow file.'
+out=$(run_cm)
+if [[ "$out" == *"no_example_echo"* ]]; then
+  echo "  FAIL  echo-guard: the correct subject for the same change must not flag"; fail=$((fail+1))
+else
+  echo "  PASS  echo-guard: the correct subject for the same change does not flag"; pass=$((pass+1))
+fi
+# 40h-iv. A line repeated across several anchors is convention, not content:
+# a shared trailer or generated-by line is exactly what the output SHOULD
+# reproduce, so multi-occurrence lines are dropped from the pattern set.
+BOILER='chore(deps): bump one thing to v1 (#1)
+
+Generated with the standard project tooling and reviewed by a maintainer.
+
+chore(deps): bump another thing to v2 (#2)
+
+Generated with the standard project tooling and reviewed by a maintainer.'
+make_mock_curl_think "$tmp" 'feat: a brand new and entirely different subject line\n\nGenerated with the standard project tooling and reviewed by a maintainer.'
+out=$(echo x | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cm --var recent_commits="$BOILER" --var why="w" 2>&1 >/dev/null)
+if [[ "$out" == *"no_example_echo"* ]]; then
+  echo "  FAIL  echo-guard: a line repeated across anchors must not be forbidden"; fail=$((fail+1))
+else
+  echo "  PASS  echo-guard: a line repeated across anchors is convention, not flagged"; pass=$((pass+1))
+fi
+# 40h-v. Without the frontmatter declaration the anchors are ordinary content
+# and echoing one is not this check's business — the blast radius stays opt-in.
+sed '/^echo_guard_vars:/d' "$prompts/cm.md" > "$prompts/cm2.md"
+make_mock_curl_think "$tmp" 'ci: bump codeql-action init and analyze together to v4.37.6\n\nCombines the Dependabot PRs.'
+out=$(echo x | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cm2 --var recent_commits="$ANCHORS" --var why="w" 2>&1 >/dev/null)
+if [[ "$out" == *"no_example_echo"* ]]; then
+  echo "  FAIL  echo-guard: must stay opt-in via echo_guard_vars"; fail=$((fail+1))
+else
+  echo "  PASS  echo-guard: undeclared vars are not guarded (opt-in)"; pass=$((pass+1))
+fi
+# 40h-vi. `echo_guard_vars: a, b` — the list is comma-separated and callers
+# will write it with spaces. The `tr ',' ' '` plus unquoted word splitting
+# already handles that; this pins it, because the obvious refactor to
+# `IFS=, read` would silently leave the second name with a leading space and
+# stop guarding it.
+cat > "$prompts/two.md" <<'EOF'
+---
+tier: prose
+inputs:
+  aa: string
+  bb: string
+echo_guard_vars: aa, bb
+---
+# two
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+Write something.
+{{aa}}
+{{bb}}
+```
+
+## Calibration notes
+n/a
+EOF
+make_mock_curl_think "$tmp" 'the second exemplar line which is definitely over forty characters'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe two \
+    --var aa="the first exemplar line which is definitely over forty characters" \
+    --var bb="the second exemplar line which is definitely over forty characters" \
+    </dev/null 2>&1 >/dev/null)
+assert_contains "check 'no_example_echo' FAILED" "$out" \
+  "echo-guard: a var listed after 'comma space' is still guarded"
 rm -rf "$tmp" "$metrics"
 
 # ---------------------------------------------------------------------------
