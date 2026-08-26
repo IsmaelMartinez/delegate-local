@@ -49,11 +49,13 @@ Count the distinct asks in the ask topic below. Two asks are distinct when answe
 1. If there is exactly ONE ask, write the closed two-sentence shape described above.
 2. If there are TWO OR MORE, do NOT merge them into one sentence and do NOT drop any of them. Keep the cause-or-praise sentence, then write each ask as its own numbered item, each a direct question to the reader. The two-sentence cap in the rules below is lifted for the ask list only; everything else still applies.
 3. Never join distinct asks with "and" into a single run-on question. Mutually exclusive asks in particular must stay separate, because merging them produces a question the reader cannot answer.
-Wrong: The regression is in the GPU sandbox flag. Could you confirm whether it happens on 2.10 and also send the config you are using and say whether a downgrade fixes it?
-Correct: The regression is in the GPU sandbox flag.
-1. Does it happen on 2.10?
-2. Could you paste the config you are running?
-3. Does a downgrade clear it?
+4. A SINGLE ask is never a numbered list, however many clauses, conditions or qualifiers it carries. One ask means one question, written as a sentence. Splitting one ask across numbered items is the same defect as merging several into one.
+5. If the ask topic or the trailing instruction asks for prose, or says not to use a list, obey it: keep the asks as separate sentences rather than numbering them. An explicit format instruction from the caller outranks this rule.
+Wrong: <the cause>. Could you confirm <ask one> and also send <ask two> and say whether <ask three>?
+Correct: <the cause>.
+1. <ask one, as a question>?
+2. <ask two, as a question>?
+3. <ask three, as a question>?
 
 NO-FACT-DROP — non-negotiable:
 Every fact supplied on stdin that bears on the diagnosis must survive into the reply. The sentence cap is a ceiling on padding, never a licence to discard a supplied fact. If the facts do not fit the shape, add an item — do not delete a fact. If a fact is supplied that you cannot place, keep it in the cause sentence rather than dropping it.
@@ -67,10 +69,11 @@ Rules:
 - Stop after the question (or the sign-off). Do NOT add a closing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "This ensures", "This enables"). End on the question mark, the sign-off, or a finite verb introducing new content.
 - Output only the reply text. No preamble, no "Here's the reply:", no markdown fence.
 
-Example shape (do not copy literally — the input below is different):
+Example shape. These are skeletons, not sentences: the angle-bracket slots are
+filled from the facts below, never carried through as written.
 
-Wrong: The regression is in the date parser, and ask the reporter to confirm whether it happens on older inputs.
-Correct: The regression is in the date parser. Could you confirm whether it also happens on older inputs?
+Wrong: <the cause>, and ask the reporter to confirm whether <condition>.
+Correct: <the cause>. Could you confirm whether <condition>?
 
 === Facts (confirmed cause, or the specific thing to praise) ===
 {{stdin}}
@@ -158,6 +161,32 @@ The model rephrased the imperative into a question (`Could you check whether…?
 A metrics sweep over the rolling 30-day window put the recipe at 23% keep across 21 calls, against 93% across 16 calls before 2026-07-04. Splitting by project isolated it: `delegate-local` moved 92% → 71% (a dip), while `teams-for-linux` moved 3/3 → 0/13. The model (`mlx-community/Qwen3.6-35B-A3B-8bit`), the backend (MLX) and the template were all unchanged across the two eras, so the regression is task shape, not drift — the recipe met a wave of multi-ask reporter replies it was never scoped for, and the two-sentence cap merged or dropped the asks every time.
 
 Rather than re-assert the "one ask per call" scope note that callers had already ignored 13 times, multi-ask became a supported shape via MULTI-ASK-SPLIT, with NO-FACT-DROP added because one MISS showed the cap discarding a supplied fact outright rather than merely compressing. Both are pinned in `tests/test-prompts-library.sh` so a later simplification pass cannot quietly drop them. Re-measure over the next ~10 `teams-for-linux` replies before trusting the fix.
+
+### 2026-08-26 — the examples were being returned as the answer
+
+Two `pr-agent` calls minutes apart, carrying 7,689 and 7,317 characters of
+piped context, both returned exactly 96 characters. Ninety-six characters is
+the length of this recipe's own `Correct:` line, and the outputs were that
+line, byte for byte. A third call the same hour opened with the same example's
+"the regression is" framing for a change that was not a regression at all. The
+agent that received them recorded "recipe appears broken, not a prose-quality
+problem", which is the right instinct and the wrong diagnosis: the recipe was
+working exactly as written, and what it had written was a fluent, on-topic,
+grammatically complete sentence for the model to reach for when the real input
+got long. Same shape as the AI-815 leak in `pr-description`.
+
+The contrast is what makes ADR 0011 anchors work, not the sentences carrying
+it, so both pairs became skeletons with angle-bracket slots. A leak now
+surfaces as literal `<the cause>` text rather than a plausible fabrication —
+the same principle that killed the reference-trailer guard in `pr-description`,
+where a guard that turned visibly-wrong output into a believable fake was worse
+than no guard. Backing it up, `no_example_echo` (ADR 0029) now runs on every
+recipe call and rejects any output that reproduces a line of its own prompt.
+
+The same day's rejections also showed MULTI-ASK-SPLIT rule 2 firing on single
+asks — "rendered a single request as a numbered list", twice, and once against
+an explicit no-list instruction from the caller — so rules 4 and 5 pin one ask
+to one sentence and give a caller's format instruction precedence.
 
 ### Tier choice
 
