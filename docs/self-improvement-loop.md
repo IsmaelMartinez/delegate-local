@@ -31,10 +31,23 @@ Running it advances a watermark, so the next run sees only what is new. Use
 Five sections, in the order you should read them.
 
 The **verdict tally** is the headline: how many of the new delegations were
-kept, used as a scaffold, or rewritten. The **per-recipe outcomes** section
-ranks recipes by keep rate over a rolling window, worst first, so the recipe
-worth your attention is the top line with a meaningful `n`. Ignore a 0% on
-`n=1`; one delegation is not a signal.
+used, used as a scaffold, or rewritten — split into the two ADR 0015 tiers,
+because they do not mean the same thing. A human verdict is a taste judgment
+and is the quality signal. A `--source agent` verdict is the agent reporting
+whether it used its own draft, which is usage. The tally says `n=0` on the
+human side out loud when there is none, rather than printing a 0% that reads
+as a quality collapse.
+
+The **per-recipe outcomes** section ranks recipes by usable rate — kept plus
+scaffold — over a rolling window, worst first, so the recipe worth your
+attention is the top line with a meaningful `n`. Usable rather than kept alone,
+because a draft the agent edited and shipped did most of its job, while a
+recipe whose drafts are all thrown away is a different and worse problem, and
+a kept-only rate cannot tell the two apart. `commit-message` read 0% kept and
+80% usable on the same 25 rows the day this changed. The `h=` count on each
+row says how much of it is human judgment; treat a row of `h=0` as usage data,
+not as a quality measurement. Ignore a 0% on `n=1`; one delegation is not a
+signal.
 
 The **deterministic check failures** section needs no interpretation. The
 wrapper already decided the output broke a constraint the recipe declared, so
@@ -111,8 +124,10 @@ number and the one-line reason it exists.
 
 ## Do not fake progress
 
-Quote the `n` beside every rate. At this corpus size one delegation moves a
-percentage by several points, and a keep rate over `n=3` is a rumour.
+Quote the `n` beside every rate, and say which tier it came from. At this
+corpus size one delegation moves a percentage by several points, a rate over
+`n=3` is a rumour, and a rate built entirely from `--source agent` rows is a
+usage figure however much it looks like a quality one.
 
 Never claim a fix worked without a measurement taken after it landed. The
 honest form is "this landed on <date>, re-measure after ~10 more calls on that

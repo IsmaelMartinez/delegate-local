@@ -122,13 +122,30 @@ if [[ -n "$dupe_ts" ]]; then
 fi
 echo
 
+# ADR 0015 keeps two verdict tiers apart and `metrics-summary.sh` honours the
+# split: a human recording their own taste judgment is the quality signal, and
+# `--source agent` is the agent reporting whether it used its own draft, which
+# is usage. This block used to add them together and print the total under the
+# word "kept", which is the quality vocabulary. With the live corpus at 100%
+# agent verdicts the two happened to be equal, so the blend was invisible — and
+# it stops being equal the moment one human verdict lands, silently, in a number
+# `docs/self-improvement-loop.md` tells the session to act on.
 jq -rs --arg prev "$prev_ts" '
   (map(select((.source // "delegate") == "delegate")) | INDEX(.ts)) as $d
   | map(select(.source == "feedback" and ($prev == "" or ($d[.ref_ts].ts // "") > $prev)))
-  | (map(select(.kept)) | length) as $kept
-  | (map(select(.scaffold)) | length) as $scaf
-  | (length - $kept - $scaf) as $rewrote
-  | "Verdicts on those delegations: \(length) total — kept=\($kept) scaffold=\($scaf) rewrote=\($rewrote)"
+  | (map(select((.verdict_source // "human") == "human"))) as $h
+  | (map(select(.verdict_source == "agent"))) as $a
+  | "Verdicts on those delegations: \(length) total"
+    + "\n  human (quality):  n=\($h | length)"
+    + (if ($h | length) > 0
+       then "  kept=\($h | map(select(.kept)) | length) scaffold=\($h | map(select(.scaffold)) | length) rewrote=\($h | map(select((.kept | not) and (.scaffold | not))) | length)"
+       else "  — no human taste judgment in this window, so there is no keep rate to quote"
+       end)
+    + "\n  agent (usage):    n=\($a | length)"
+    + (if ($a | length) > 0
+       then "  used=\($a | map(select(.kept)) | length) scaffold=\($a | map(select(.scaffold)) | length) rewrote=\($a | map(select((.kept | not) and (.scaffold | not))) | length)"
+       else ""
+       end)
 ' "$metrics_file"
 echo
 
@@ -137,24 +154,31 @@ echo
 # "is this a new defect or a standing one", and the ranking that says which
 # recipe is worth the session's time. Worst first, ties broken by volume.
 # ---------------------------------------------------------------------------
-echo "--- per-recipe outcomes, last ${window_days}d (worst keep-rate first) ---"
+echo "--- per-recipe outcomes, last ${window_days}d (worst usable-rate first; h= human verdicts) ---"
 jq -rs --argjson days "$window_days" '
   (now - ($days * 86400)) as $cut
   | (map(select((.source // "delegate") == "delegate")) | INDEX(.ts)) as $d
   | map(select(.source == "feedback"))
   | map(select((($d[.ref_ts].ts // "") | if . == "" then 0 else (fromdateiso8601? // 0) end) > $cut))
   | map({r: ($d[.ref_ts].recipe // "(bare)"),
+         h: (if (.verdict_source // "human") == "human" then 1 else 0 end),
          u: (if .kept then "kept" elif .scaffold then "scaffold" else "rewrote" end)})
   | group_by(.r)
   | map({recipe: .[0].r,
          n: length,
+         human: (map(.h) | add),
          kept: (map(select(.u == "kept")) | length),
          scaffold: (map(select(.u == "scaffold")) | length),
          rewrote: (map(select(.u == "rewrote")) | length)})
-  | map(. + {rate: (if .n > 0 then (.kept * 100 / .n | floor) else 0 end)})
+  # Ranked on kept+scaffold rather than kept alone. A draft the agent edited and
+  # shipped did most of its job; a recipe whose drafts are all thrown away is a
+  # different and worse problem, and ranking on kept alone cannot tell them
+  # apart. The h= count says how much of the row is human taste judgment, which
+  # for now is zero everywhere and should be read as such.
+  | map(. + {rate: (if .n > 0 then ((.kept + .scaffold) * 100 / .n | floor) else 0 end)})
   | sort_by(.rate, -.n)
   | .[]
-  | "  \(.recipe)  n=\(.n)  kept=\(.kept)  scaffold=\(.scaffold)  rewrote=\(.rewrote)  keep=\(.rate)%"
+  | "  \(.recipe)  n=\(.n) h=\(.human)  kept=\(.kept)  scaffold=\(.scaffold)  rewrote=\(.rewrote)  usable=\(.rate)%"
 ' "$metrics_file"
 echo
 
