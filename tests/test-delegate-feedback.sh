@@ -1511,6 +1511,45 @@ assert_eq "false" "$(tail -1 "$tmp/m.jsonl" | jq -r 'has("final_file")')" \
   "--final omitted: no final_file field on the row"
 rm -rf "$tmp"
 
+# ---------------------------------------------------------------------------
+# An agent-recorded rejection needs a reason. Measured 2026-08-26: 12 of the 63
+# rejections in the live corpus carried none, every one `verdict_source: agent`,
+# all from a single bulk sweep, all on the recipe that then sat bottom of the
+# per-recipe ranking with nothing behind its position. Scoped to the agent tier:
+# verdict-sweep.sh records reasonless verdicts for a human working through old
+# rows, where not remembering is honest.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d); metrics="$tmp/m.jsonl"
+seed_row() { printf '{"ts":"%s","source":"delegate","recipe":"x","tier":"prose","exit_status":0}\n' "$1" > "$metrics"; }
+fb() { DELEGATE_METRICS_FILE="$metrics" bash "$SCRIPT" --ts 2026-08-26T23:00:00Z "$@" 2>&1; }
+fbrc() { DELEGATE_METRICS_FILE="$metrics" bash "$SCRIPT" --ts 2026-08-26T23:00:00Z "$@" >/dev/null 2>&1; echo $?; }
+
+seed_row 2026-08-26T23:00:00Z
+assert_eq 2 "$(fbrc --source agent miss)" "reason-required: an agent miss with no reason exits 2"
+assert_contains "needs a reason" "$(fb --source agent miss)" \
+  "reason-required: the refusal says what is missing"
+assert_eq 1 "$(grep -c . "$metrics")" "reason-required: the refused row is not written"
+
+seed_row 2026-08-26T23:00:00Z
+assert_eq 2 "$(fbrc --source agent scaffold)" "reason-required: an agent scaffold with no reason exits 2"
+# Whitespace is not a reason.
+seed_row 2026-08-26T23:00:00Z
+assert_eq 2 "$(fbrc --source agent miss '   ')" "reason-required: whitespace is not a reason"
+
+# The three paths that must keep working.
+seed_row 2026-08-26T23:00:00Z
+assert_eq 0 "$(fbrc --source agent miss 'dropped every file:line anchor')" \
+  "reason-required: an agent miss with a reason still records"
+seed_row 2026-08-26T23:00:00Z
+assert_eq 0 "$(fbrc --source agent hit)" \
+  "reason-required: an agent hit needs no reason"
+# verdict-sweep.sh calls `delegate-feedback.sh --ts <ts> miss` with no --source
+# and no reason. That path is the human tier and must not break.
+seed_row 2026-08-26T23:00:00Z
+assert_eq 0 "$(fbrc miss)" \
+  "reason-required: the human sweep's reasonless miss still records"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
