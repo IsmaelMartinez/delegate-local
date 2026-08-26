@@ -7,6 +7,7 @@ inputs:
   signoff: string?
 checks:
   no_padding_tail: true
+  no_single_item_list: true
 ---
 # maintainer-reply
 
@@ -187,6 +188,33 @@ The same day's rejections also showed MULTI-ASK-SPLIT rule 2 firing on single
 asks — "rendered a single request as a numbered list", twice, and once against
 an explicit no-list instruction from the caller — so rules 4 and 5 pin one ask
 to one sentence and give a caller's format instruction precedence.
+
+### 2026-08-26 (later) — the single-ask list survived two rewordings, so it became a check
+
+Four `pr-agent` rejections in twelve minutes, all on this recipe. One of them
+(19:29:41Z) came back as a numbered list holding exactly one item: `1. Would you
+like to apply the two inline suggestions ... or leave the pipe-label case for a
+follow-up?`. That is MULTI-ASK-SPLIT rule 4 failing hours after rule 4 was
+written to prevent it, and rule 4 was itself the second attempt, because the
+rule 2 numbered shape (2026-08-03) is what introduced the defect in the first
+place.
+
+`no_single_item_list`, declared in the frontmatter above, is the third attempt
+and the first that does not ask the model to comply. A one-item list is wrong
+here whichever branch the caller is on: rule 2 gives two-or-more asks an item
+each and rule 4 gives a single ask a sentence, so the check never needs to know
+how many asks were passed. Counted against the four drafts from that window it
+fires on exactly the one carrying the defect (1 item) and leaves the others
+alone (0, 2 and 2 items). Warn-only, like every declared check except
+`no_padding_tail`.
+
+The larger signal in the same window is deliberately NOT addressed here, and is
+recorded so a later run does not read it as new. Three of the four rejections
+wanted a verdict-first, multi-paragraph, anchor-carrying reply, which is
+`maintainer-review-reply.md` — live since 15:09 that day, pointed at from
+SKILL.md, and still at n=0 calls. That is a routing problem, and a third
+paragraph of routing prose is the thrash path `docs/self-improvement-loop.md`
+warns about. Re-measure once that recipe has calls of its own.
 
 ### Tier choice
 

@@ -1559,7 +1559,7 @@ run_output_checks() {
 # is a function (it ran at top level before the refactor). The result and the
 # counters — output, checks_run/failed/autofixed, capability_failed — are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -1868,6 +1868,38 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             echo "delegate: check 'body_max_words' FAILED — body is $body_words words (> $cval)" >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}body_max_words"
+            capability_failed=$((capability_failed + 1))
+          fi
+        fi
+        ;;
+      no_single_item_list)
+        # A numbered list holding exactly ONE item is never a correct reply.
+        # Both reply recipes say so from opposite directions: MULTI-ASK-SPLIT
+        # rule 2 gives each of two-or-more asks its own item, and rule 4 says a
+        # single ask is one sentence however many clauses it carries. So a
+        # one-item list breaks the recipe on whichever branch the caller is on,
+        # and the check needs no knowledge of how many asks were passed in.
+        #
+        # This is the third attempt at the same defect and the first that is
+        # not prompt text. MULTI-ASK-SPLIT (2026-08-03) introduced the numbered
+        # shape, rules 4 and 5 (2026-08-26) tried to bound it to genuine
+        # multi-ask input, and hours after those landed a single ask came back
+        # as `1. Would you like to apply the two inline suggestions ...` on
+        # pr-agent. Per docs/self-improvement-loop.md, a defect that survives
+        # two rewordings gets a check instead of a third one.
+        #
+        # Warn-only, like every declared check except no_padding_tail. The
+        # counting matches body_required's idiom: `printf '%s\n'` guarantees a
+        # final newline, `tr -d '\r'` keeps a CRLF line from hiding the marker
+        # from awks that do not treat a lone \r as whitespace.
+        if [[ "$cval" == "true" ]]; then
+          checks_run=$((checks_run + 1))
+          list_items=$(printf '%s\n' "$output" | tr -d '\r' \
+            | awk '/^[[:space:]]*[0-9]+[.)][[:space:]]/ { n++ } END { print n + 0 }')
+          if [[ "$list_items" =~ ^[0-9]+$ ]] && (( list_items == 1 )); then
+            echo "delegate: check 'no_single_item_list' FAILED — output is a numbered list of one item; a single ask is one sentence" >&2
+            checks_failed=$((checks_failed + 1))
+            checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_single_item_list"
             capability_failed=$((capability_failed + 1))
           fi
         fi
