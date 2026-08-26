@@ -1628,25 +1628,32 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
   # line, label included, produces "Correct: <sentence>" which no longer
   # matches the stripped "<sentence>" pattern, so the most literal possible
   # echo was the one that got through.
-  # sed -E throughout: making the optional `(scope)` of a conventional-commit
-  # prefix optional needs an ERE group, and BRE cannot express it without
-  # splitting into two passes. Both BSD and GNU sed accept -E.
-  echoed_line=$( { printf '%s\n' "$recipe_template_raw" \
-      | sed -E -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-               -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//'
+  # ONE normalisation, applied identically to every pattern source and to the
+  # output. Asymmetry is how this check has failed twice: first the
+  # `Wrong:`/`Correct:` label was stripped from the template side only, so an
+  # echo that kept its label slipped through; then the conventional-commit
+  # prefix was stripped from the output side only, so an echoed template
+  # example that began `fix:` stopped matching the pattern it came from. Any
+  # future rule added here must go in echo_normalise and nowhere else.
+  #
+  # sed -E: making the `(scope)` of a conventional-commit prefix optional needs
+  # an ERE group, which BRE cannot express in one pass. BSD and GNU both take
+  # -E. Order matters — the label comes off before the type prefix, so a
+  # `Correct: fix: X` example reduces all the way to `X`.
+  echo_normalise() {
+    sed -E -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+           -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
+           -e 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' \
+           -e 's/[[:space:]]*\(#[0-9]+\)$//'
+  }
+  echoed_line=$( { printf '%s\n' "$recipe_template_raw" | echo_normalise
     if [[ -n "$echo_exemplars" ]]; then
-      printf '%s' "$echo_exemplars" \
-        | sed -E -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-                 -e 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' \
-                 -e 's/[[:space:]]*\(#[0-9]+\)$//' \
-        | sort | uniq -u
+      # uniq -u keeps only lines appearing exactly once across the exemplars;
+      # anything repeated is convention the output is meant to reproduce.
+      printf '%s' "$echo_exemplars" | echo_normalise | sort | uniq -u
     fi; } \
     | awk 'length($0) >= 40' \
-    | grep -Fxf - <(printf '%s\n' "$output" \
-        | sed -E -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-                 -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
-                 -e 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' \
-                 -e 's/[[:space:]]*\(#[0-9]+\)$//') \
+    | grep -Fxf - <(printf '%s\n' "$output" | echo_normalise) \
     | head -n 1)
   if [[ -n "$echoed_line" ]]; then
     echo "delegate: check 'no_example_echo' FAILED — REJECT this draft. The model" >&2

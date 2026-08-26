@@ -308,6 +308,14 @@ same shape as these recent examples" under a heading reading "Recent commit
 examples to match". SHAPE-NOT-CONTENT now states the precedence explicitly and
 the heading says shape only.
 
+Review caught a regression in the first cut, worth recording because it is the
+second time this check has failed the same way: the type-prefix strip went on
+the output side only, so an echoed template example beginning `fix:` stopped
+matching the pattern it came from. The earlier version had the `Wrong:`/
+`Correct:` label stripped from the template side only. Both are asymmetry, so
+the normalisation is now a single `echo_normalise` applied to every pattern
+source and to the output, and any future rule has to go there and nowhere else.
+
 Unmeasured on purpose: this landed 2026-08-26 with no post-change data. The
 prior `commit-message` keep rate is 36% over n=22; re-measure after ~10 more
 calls before treating any movement as real.

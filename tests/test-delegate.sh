@@ -5166,6 +5166,40 @@ out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
 assert_contains "check 'no_example_echo' FAILED" "$out" "echo-check: echo that keeps the Correct: label is caught"
+# 40b-ii. A template example that itself begins with a conventional-commit
+# prefix must still match when echoed. The exemplar work added a type-prefix
+# strip to the output side; leaving the template side unstripped meant an
+# echoed `fix: ...` example no longer matched the pattern it came from. One
+# normalisation, applied to both sides, is the invariant this pins.
+cat > "$prompts/cc.md" <<'EOF'
+---
+tier: prose
+---
+# cc
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+Write a commit message.
+
+Correct: fix: bump the model-resolution cache TTL to 60 seconds flat
+
+=== Facts ===
+{{stdin}}
+```
+
+## Calibration notes
+n/a
+EOF
+make_mock_curl_think "$tmp" 'fix: bump the model-resolution cache TTL to 60 seconds flat'
+out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cc prose "go" 2>&1)
+assert_contains "check 'no_example_echo' FAILED" "$out" \
+  "echo-check: echoed template example beginning with a type prefix is caught"
 # 40c. A genuine answer must not trip it. This is the guard that matters —
 # a false positive here would flag every good delegation.
 make_mock_curl_think "$tmp" 'The override in src/config/loader.js:88 silently wins. Could you make it defer?'
