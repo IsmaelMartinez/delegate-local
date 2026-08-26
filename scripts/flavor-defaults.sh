@@ -16,3 +16,9 @@
 # commit-message recipe
 FLAVOR_COMMIT_SUBJECT_MAX=72
 FLAVOR_COMMIT_TYPES="feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+# The prompt asks for "1-2 short flowing-prose paragraphs"; 120 words is that
+# contract and nothing tighter, so the default only catches a body that has
+# run away from what the prompt already asked for. How short a commit body
+# should actually be is house style, not a standard — set a tighter value in
+# your own profile.sh if your project wants one.
+FLAVOR_COMMIT_BODY_MAX_WORDS=120
