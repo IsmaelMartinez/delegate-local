@@ -36,12 +36,17 @@ a claim about work not done, which the model cannot know.
 
 **Goals (each independently verifiable)**
 
-1. A `no_task_list` check exists in `scripts/delegate.sh`, warn-only, gated on a
-   frontmatter boolean like every other declared check.
-   *Verify:* `grep -c no_task_list scripts/delegate.sh` returns > 0.
+1. A `no_invented_task_list` check exists in `scripts/delegate.sh`, warn-only.
+   Its frontmatter value is not a boolean like the other declared checks: it
+   names the `--var` holding the shape-authority examples, because the
+   2026-08-21 calibration entry established that a task list IS correct output
+   for a repo whose PR template carries one. Revised from "boolean `no_task_list`"
+   after reading that entry.
+   *Verify:* `grep -c no_invented_task_list scripts/delegate.sh` returns > 0.
 2. It fires on the real captured draft.
-   *Verify:* feeding `20260826T200251Z-*.draft.txt` through the check reports
-   FAILED and names `no_task_list`.
+   *Verify:* feeding `20260826T200251Z-*.draft.txt` through the wrapper with a
+   shape-authority value carrying no checklist reports FAILED and names
+   `no_invented_task_list`.
 3. It does not fire on a PR body that legitimately contains a bullet list or a
    `[x]`-free checklist heading.
    *Verify:* the pass-case assertions in `tests/test-delegate.sh` are green.

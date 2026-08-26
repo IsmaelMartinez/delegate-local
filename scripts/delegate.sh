@@ -1909,8 +1909,9 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         # asked for a PR body, `pr-description` appended a `## Test plan`
         # section of unchecked items reading "(not run yet)" directly after a
         # paragraph of its own that named the suites and their passing counts.
-        # An unchecked box is a claim about work not done, and whether the work
-        # was done is not something the model can know from the input.
+        # Either box state is a claim the model cannot support: an unchecked one
+        # asserts work was not done, a ticked one asserts it was, and neither is
+        # knowable from the input. Both are counted.
         #
         # A blanket ban would be wrong. This recipe's shape authority is the
         # merged-PR examples the caller passes in, and a repo whose PR template
@@ -1940,7 +1941,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             done
             auth_tasks=$(printf '%s\n' "$authority" | tr -d '\r' | awk "$task_prog")
             if [[ "$auth_tasks" == "0" ]]; then
-              echo "delegate: check 'no_invented_task_list' FAILED — output carries $out_tasks markdown task-list item(s) but the '$cval' examples carry none; the shape was invented, and an unchecked box claims work the model cannot know was done" >&2
+              echo "delegate: check 'no_invented_task_list' FAILED — output carries $out_tasks markdown task-list item(s) but the '$cval' examples carry none; the shape was invented, and a task-list box asserts a verification state the model cannot know" >&2
               checks_failed=$((checks_failed + 1))
               checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_invented_task_list"
               capability_failed=$((capability_failed + 1))
