@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.28.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.10...v0.28.0) (2026-08-26)
+
+
+### Features
+
+* capture drafts and shipped text to enable the self-improvement loop ([#427](https://github.com/IsmaelMartinez/delegate-local/issues/427)) ([32fffcb](https://github.com/IsmaelMartinez/delegate-local/commit/32fffcbc25226d3babee9512de6d81554df4cb69))
+* catch the one-item numbered list with a check ([#432](https://github.com/IsmaelMartinez/delegate-local/issues/432)) ([5fdaba5](https://github.com/IsmaelMartinez/delegate-local/commit/5fdaba562c5cfabfbd5f34071115888a7dc5d473))
+* **delegate:** recipes declare their tier, so callers stop guessing ([#414](https://github.com/IsmaelMartinez/delegate-local/issues/414)) ([d1cf878](https://github.com/IsmaelMartinez/delegate-local/commit/d1cf878bc8148d29e1d8a3755ae20682fae3a36e))
+* enforce commit body length with a body_max_words check ([#431](https://github.com/IsmaelMartinez/delegate-local/issues/431)) ([bce8940](https://github.com/IsmaelMartinez/delegate-local/commit/bce8940df99759145a89476a6222b74593163143))
+* name scaffold and --final in the verdict nudge ([#429](https://github.com/IsmaelMartinez/delegate-local/issues/429)) ([0d747e8](https://github.com/IsmaelMartinez/delegate-local/commit/0d747e8e4e8bf1a24c4a3ad07832c393b6ca70f0))
+* record failing check names in the metrics row ([#423](https://github.com/IsmaelMartinez/delegate-local/issues/423)) ([fb82b81](https://github.com/IsmaelMartinez/delegate-local/commit/fb82b81291e69b4cb8c717ddf17418d0aa20a4d8))
+* restore the apply-and-test oracle and fix-with-test recipe ([#419](https://github.com/IsmaelMartinez/delegate-local/issues/419)) ([07850c3](https://github.com/IsmaelMartinez/delegate-local/commit/07850c39f6645a14c66a1fcf6958cb4c146070cf))
+* restore the verdict tooling archived in 22395b2 ([#416](https://github.com/IsmaelMartinez/delegate-local/issues/416)) ([c0d0c44](https://github.com/IsmaelMartinez/delegate-local/commit/c0d0c447685ccfc04dab27f916cfb58cfa81cac3))
+* **sweep:** sample what the agent graded itself on ([#417](https://github.com/IsmaelMartinez/delegate-local/issues/417)) ([e03a2b3](https://github.com/IsmaelMartinez/delegate-local/commit/e03a2b3bd8d2638830e13d3a8e6759483ef988f9))
+
+
+### Bug Fixes
+
+* ban invented pytest logs in pr-description recipe ([#421](https://github.com/IsmaelMartinez/delegate-local/issues/421)) ([935643d](https://github.com/IsmaelMartinez/delegate-local/commit/935643d467413ac2048136fed893e4bfda6c23dc))
+* **dashboards:** partition feedback queries by verdict tier per ADR 0015 ([#408](https://github.com/IsmaelMartinez/delegate-local/issues/408)) ([db11403](https://github.com/IsmaelMartinez/delegate-local/commit/db1140333c294bc119c03a37593a9f435ba7b676))
+* **delegate:** add --tier, the flag the tool already told callers to use ([#413](https://github.com/IsmaelMartinez/delegate-local/issues/413)) ([28f69de](https://github.com/IsmaelMartinez/delegate-local/commit/28f69deccf5dd02ee48ea3cc1b72da474ecbfd5b)), closes [#411](https://github.com/IsmaelMartinez/delegate-local/issues/411)
+* generalise no_example_echo to catch exemplar echo from caller vars ([#430](https://github.com/IsmaelMartinez/delegate-local/issues/430)) ([28fa76d](https://github.com/IsmaelMartinez/delegate-local/commit/28fa76dab6ccf4ae01b7c61574b5f8e398bd47b7))
+* **metrics:** say what "tokens avoided" actually avoided ([#415](https://github.com/IsmaelMartinez/delegate-local/issues/415)) ([1723bf2](https://github.com/IsmaelMartinez/delegate-local/commit/1723bf2055579c3152aab0624eefdc82ff410e7a)), closes [#412](https://github.com/IsmaelMartinez/delegate-local/issues/412)
+* repair the dangling recipe cross-references and pin them ([#433](https://github.com/IsmaelMartinez/delegate-local/issues/433)) ([24bc0d0](https://github.com/IsmaelMartinez/delegate-local/commit/24bc0d069cadb8459a774c96297b99065210fca9))
+* widen positional tier scan to whole fenced block ([#422](https://github.com/IsmaelMartinez/delegate-local/issues/422)) ([6f21b88](https://github.com/IsmaelMartinez/delegate-local/commit/6f21b886c76472f1abcfce0c12956f8d68ef7b89))
+* widen the boundary window and make delegation credits consumable ([#424](https://github.com/IsmaelMartinez/delegate-local/issues/424)) ([f87082b](https://github.com/IsmaelMartinez/delegate-local/commit/f87082b09bd58878649a9325993a9f28577640d5))
+
+
+### Documentation
+
+* record ADR 0028 on the metrics corpus reset ([#418](https://github.com/IsmaelMartinez/delegate-local/issues/418)) ([d401cbc](https://github.com/IsmaelMartinez/delegate-local/commit/d401cbc66544ef65a482810555ffc344eac5c5ed))
+* record the dev-skill symlink, corpus reset, and tooling archive ([#420](https://github.com/IsmaelMartinez/delegate-local/issues/420)) ([fc8bb02](https://github.com/IsmaelMartinez/delegate-local/commit/fc8bb02f15b98048ad337a88d315b1b196a6b9bd))
+
+
+### Maintenance
+
+* **deps:** bump google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml ([#425](https://github.com/IsmaelMartinez/delegate-local/issues/425)) ([d2581bb](https://github.com/IsmaelMartinez/delegate-local/commit/d2581bbc495b614f5b9dd70e42df0c4cdd82eab0))
+
 ## [0.27.10](https://github.com/IsmaelMartinez/delegate-local/compare/v0.27.9...v0.27.10) (2026-08-19)
 
 
