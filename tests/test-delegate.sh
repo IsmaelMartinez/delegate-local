@@ -5382,6 +5382,44 @@ if [[ "$out" == *"no_example_echo"* ]]; then
 else
   echo "  PASS  echo-guard: undeclared vars are not guarded (opt-in)"; pass=$((pass+1))
 fi
+# 40h-vi. `echo_guard_vars: a, b` — the list is comma-separated and callers
+# will write it with spaces. The `tr ',' ' '` plus unquoted word splitting
+# already handles that; this pins it, because the obvious refactor to
+# `IFS=, read` would silently leave the second name with a leading space and
+# stop guarding it.
+cat > "$prompts/two.md" <<'EOF'
+---
+tier: prose
+inputs:
+  aa: string
+  bb: string
+echo_guard_vars: aa, bb
+---
+# two
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+Write something.
+{{aa}}
+{{bb}}
+```
+
+## Calibration notes
+n/a
+EOF
+make_mock_curl_think "$tmp" 'the second exemplar line which is definitely over forty characters'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe two \
+    --var aa="the first exemplar line which is definitely over forty characters" \
+    --var bb="the second exemplar line which is definitely over forty characters" \
+    </dev/null 2>&1 >/dev/null)
+assert_contains "check 'no_example_echo' FAILED" "$out" \
+  "echo-guard: a var listed after 'comma space' is still guarded"
 rm -rf "$tmp" "$metrics"
 
 # ---------------------------------------------------------------------------
