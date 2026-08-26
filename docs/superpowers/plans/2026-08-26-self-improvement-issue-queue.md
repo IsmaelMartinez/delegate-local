@@ -305,6 +305,34 @@ measured win.
 
 ---
 
+## Issue 7 — pr-description copies exemplar CONTENT, not just shape
+
+**Status: DONE, as guidance rather than a check, with the mechanical fix
+measured and dropped.**
+
+**Observed.** `no_example_echo` fired twice on this recipe in one day
+(`20:02:51Z`, `22:11:08Z`). The second returned three paragraphs of PR #433's
+body, including facts belonging entirely to that PR. Neither shipped; the guard
+caught both, so the cost is a wasted call.
+
+**The size hypothesis was measured and does not hold.** Across the nine
+`pr-description` calls in the live corpus, the two that echoed carried 7,138 and
+7,400 `prompt_chars` and calls at 7,929 and 10,126 did not. No threshold exists
+to draw. That is the second input-size hypothesis measured and dropped on this
+corpus today, after the same exercise ruled out an `input_max_chars` check on
+`maintainer-reply`.
+
+**What shipped.** Caller-facing guidance in "Context to gather first": pick an
+anchor from unrelated work. Both echo events used the immediately preceding PR
+in the same series on the same topic, so the exemplar's sentences were plausible
+answers to the new question. SKILL.md already states this rule for one-shot
+examples generally; the recipe did not. The calibration entry records the
+adjacency reading as a hypothesis and says that if it recurs with a deliberately
+unrelated anchor, the hypothesis is wrong and the next attempt should be
+mechanical.
+
+---
+
 ## Findings log
 
 New defects found while working the queue are appended here with the evidence
