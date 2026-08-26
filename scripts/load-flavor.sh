@@ -44,6 +44,34 @@ if [[ -f "$profile" ]]; then
   fi
 fi
 
+# 2b. Derived values, resolved after the profile so a profile override feeds
+#     into them. A recipe that states BOTH a structural shape and a word cap can
+#     otherwise be handed two instructions that contradict each other: "1-2
+#     short flowing-prose paragraphs" is right for the shipped 120-word cap and
+#     impossible under a profile that tightens the cap to 50, because two
+#     stretches of prose short enough to fit do not read as paragraphs.
+#
+#     Measured 2026-08-26 on the live corpus: 11 of 14 `commit-message`
+#     scaffolds were length rewrites, and the recorded reasons name the
+#     STRUCTURE rather than the count — "body was three paragraphs against this
+#     repo's one-to-two-sentence convention", "body ran to four clauses where
+#     the repo convention is". The model follows the shape it can see and
+#     overshoots the number it would have to count. Deriving the shape from the
+#     cap removes the contradiction instead of asking the model to resolve it.
+#
+#     A profile that sets FLAVOR_COMMIT_BODY_SHAPE explicitly wins; this only
+#     fills the gap. The 60-word threshold is a judgement, not a measurement:
+#     two stretches of prose need roughly 30 words each to read as paragraphs,
+#     so a cap below about 60 makes the two-paragraph shape unwritable.
+if [[ -z "${FLAVOR_COMMIT_BODY_SHAPE:-}" ]]; then
+  if [[ "${FLAVOR_COMMIT_BODY_MAX_WORDS:-}" =~ ^[0-9]+$ ]] \
+     && (( FLAVOR_COMMIT_BODY_MAX_WORDS <= 60 )); then
+    FLAVOR_COMMIT_BODY_SHAPE="one short flowing-prose paragraph of one or two sentences"
+  else
+    FLAVOR_COMMIT_BODY_SHAPE="1-2 short flowing-prose paragraphs"
+  fi
+fi
+
 # 3. Emit resolved flavor values as flavor_<lowercased-key>=<value> lines.
 #    The `|| true` keeps a no-FLAVOR_*-set profile from tripping pipefail.
 for v in $(compgen -v | grep '^FLAVOR_' || true); do

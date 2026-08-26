@@ -40,11 +40,11 @@ Draft a git commit message in EXACTLY the same shape as these recent examples.
 SHAPE-NOT-CONTENT — non-negotiable, outranks every other instruction about the examples:
 The recent commits below show you the FORM of a message in this project: the type vocabulary, the subject length, the register, whether there is a scope. Their WORDS and their VALUES belong to changes that already happened and are not yours to reuse. Never copy a subject from them. Never carry over a version number, a file path, a PR number, a package name or a count that appears only in them. Every fact in your message must come from the diff and the WHY context; if the examples are the only place a detail appears, it is not a detail about this change.
 Subject ≤ {{flavor_commit_subject_max}} chars starting with '<TYPE>:' ({{flavor_commit_types}}).
-Then a blank line, then 1-2 short flowing-prose paragraphs, {{flavor_commit_body_max_words}} words maximum for the whole body (NO bullet lists, NO indentation).
+Then a blank line, then {{flavor_commit_body_shape}}, {{flavor_commit_body_max_words}} words maximum for the whole body (NO bullet lists, NO indentation).
 
 BODY — mandatory, non-negotiable:
 Every message MUST have a body, not just a subject. After the subject and a blank
-line, write 1-2 short flowing-prose paragraphs saying WHY the change was made.
+line, write {{flavor_commit_body_shape}} saying WHY the change was made.
 This holds even when the diff is tiny — a rename, a one-line config edit, a
 test-only or docs-only change — and even when every recent-commit example below
 is subject-only. Those examples are squash-merge subjects with their bodies
@@ -139,6 +139,7 @@ Output ONLY the commit message itself, nothing else.
 - `{{type}}` — OPTIONAL. The conventional-commit type (any type in the flavor vocabulary, e.g. `feat`, `fix`, `docs`) when the caller already knows it. When set, it overrides the TYPE-selection priority list and forces the subject prefix verbatim, sidestepping the model's type inference entirely. Omit it to let the priority rules choose; an omitted value is blanked by `delegate.sh` so the placeholder collapses to empty. When set, it also feeds the frontmatter `subject_type: {{type}}` check (ADR 0014), which warns on stderr if the emitted subject does not start with that type — the deterministic backstop for the recurring "model ignored the explicit override" MISS.
 - `{{flavor_commit_subject_max}}` — subject-length ceiling in characters. Injected from the flavor profile (ADR 0013), not passed via `--var`: shipped default `72` (the git subject convention), overridable per-user through `~/.local/share/delegate-local/profile.sh` (generate one with `scripts/onboard.sh` or `scripts/derive-flavor.sh`).
 - `{{flavor_commit_types}}` — allowed conventional-commit type vocabulary for the subject prefix. Injected from the flavor profile, not passed via `--var`: shipped default `feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert` (the @commitlint/config-conventional standard enum), overridable per-user.
+- `{{flavor_commit_body_shape}}` — the body's structural instruction. Injected from the flavor profile and DERIVED from `{{flavor_commit_body_max_words}}` rather than shipped as a constant: at or below 60 words it resolves to `one short flowing-prose paragraph of one or two sentences`, above it to `1-2 short flowing-prose paragraphs`. The derivation runs after the profile is read, so tightening the cap cannot leave the prompt asking for a shape that does not fit inside it. Set `FLAVOR_COMMIT_BODY_SHAPE` in `profile.sh` to override it outright.
 
 ## Invocation
 
@@ -359,3 +360,31 @@ Unmeasured: landed 2026-08-26 with no post-change data, and inert at the
 shipped default by design. Prior keep rate 34% over n=23. Re-measure after ~10
 more calls on a profile that sets a tighter limit before treating any movement
 as real.
+
+### 2026-08-27 — the shape instruction and the word cap were contradicting each other
+
+`body_max_words` (added 2026-08-26) made the overshoot visible: five failures in
+the rolling week, the worst two at 92 and 71 words against a 50-word profile
+limit. Making it visible did not make it stop — the draft still needed hand
+compression every time, which is a scaffold rather than a hit. Of the fourteen
+`commit-message` scaffolds in the live corpus, eleven are length rewrites.
+
+The recorded reasons name the STRUCTURE, not the count: "body was three
+paragraphs against this repo's one-to-two-sentence convention", "body ran to
+four clauses where the repo convention is". That is the diagnosis. The prompt
+asked for "1-2 short flowing-prose paragraphs" as a hardcoded literal while the
+cap beside it came from the flavor profile. At the shipped 120-word default the
+two agree; under a profile that tightens the cap to 50 they cannot both be
+satisfied, because two stretches of prose short enough to fit do not read as
+paragraphs. The model followed the shape it could see and overshot the number it
+would have had to count, which is the expected outcome and not a model defect.
+
+The shape is now `{{flavor_commit_body_shape}}`, derived from the cap in
+`load-flavor.sh` after the profile is sourced. Measured against the real diff of
+`fafd439` at temperature 0, four reps each: the previous wording produced a
+92-word body on four of four, the derived shape 45 on four of four. 92 is the
+exact number the 2026-08-26 rejection reason named, so this reproduces the
+production failure and clears it — from over the limit to under it.
+
+A synthetic one-line diff does NOT reproduce the defect (both wordings land near
+30 words), which is worth knowing before anyone tries to re-measure this cheaply.

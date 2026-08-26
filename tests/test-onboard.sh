@@ -238,6 +238,50 @@ if [[ -f "$h/custom/metrics.jsonl" ]]; then
   echo "  PASS  M7: honours DELEGATE_LOCAL_DATA_DIR"; pass=$((pass+1))
 else echo "  FAIL  M7: ignored DELEGATE_LOCAL_DATA_DIR"; fail=$((fail+1)); fi
 
+# --- T12: commit body SHAPE is derived from the word cap ---------------------
+# A recipe that states both a structural shape and a word cap can be handed two
+# instructions that contradict each other. "1-2 short flowing-prose paragraphs"
+# fits the shipped 120-word cap and is unwritable under a profile that tightens
+# it to 50. Measured 2026-08-26 against a real merged diff at temperature 0: the
+# previous wording produced a 92-word body on four of four reps, the derived
+# shape 45 on four of four. 92 is the number the production rejection reason
+# named. The derivation runs AFTER the profile is sourced so an override feeds
+# into it.
+t12=$(mktemp -d)
+out=$(env DELEGATE_LOCAL_PROFILE="$t12/absent.sh" bash "$REPO/scripts/load-flavor.sh")
+assert_contains "flavor_commit_body_shape=1-2 short flowing-prose paragraphs" "$out" \
+  "T12: the shipped 120-word cap derives the two-paragraph shape"
+
+mkprof() { printf '%s\n' "$1" > "$t12/p.sh"; chmod 600 "$t12/p.sh"; }
+lf() { env DELEGATE_LOCAL_PROFILE="$t12/p.sh" bash "$REPO/scripts/load-flavor.sh" 2>/dev/null; }
+
+mkprof 'FLAVOR_COMMIT_BODY_MAX_WORDS=50'
+out=$(lf)
+assert_contains "flavor_commit_body_shape=one short flowing-prose paragraph" "$out" \
+  "T12: a tightened cap derives the one-paragraph shape"
+assert_contains "flavor_commit_body_max_words=50" "$out" \
+  "T12: the tightened cap itself still resolves"
+
+# The threshold is inclusive at 60 and releases at 61.
+mkprof 'FLAVOR_COMMIT_BODY_MAX_WORDS=60'
+assert_contains "flavor_commit_body_shape=one short flowing-prose paragraph" "$(lf)" \
+  "T12: 60 is inside the one-paragraph band"
+mkprof 'FLAVOR_COMMIT_BODY_MAX_WORDS=61'
+assert_contains "flavor_commit_body_shape=1-2 short flowing-prose paragraphs" "$(lf)" \
+  "T12: 61 is outside it"
+
+# An explicit profile value wins; the derivation only fills the gap.
+mkprof 'FLAVOR_COMMIT_BODY_MAX_WORDS=50
+FLAVOR_COMMIT_BODY_SHAPE="three terse bullet-free sentences"'
+assert_contains "flavor_commit_body_shape=three terse bullet-free sentences" "$(lf)" \
+  "T12: an explicit shape in the profile beats the derivation"
+
+# A non-numeric cap must not crash the resolver or leave the shape unset.
+mkprof 'FLAVOR_COMMIT_BODY_MAX_WORDS=lots'
+assert_contains "flavor_commit_body_shape=1-2 short flowing-prose paragraphs" "$(lf)" \
+  "T12: a non-numeric cap falls back to the shipped shape"
+rm -rf "$t12"
+
 echo
 echo "$pass passed, $fail failed"
 if [[ "$fail" -gt 0 ]]; then exit 1; fi

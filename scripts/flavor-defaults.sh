@@ -22,3 +22,7 @@ FLAVOR_COMMIT_TYPES="feat, fix, docs, style, refactor, perf, test, build, ci, ch
 # should actually be is house style, not a standard — set a tighter value in
 # your own profile.sh if your project wants one.
 FLAVOR_COMMIT_BODY_MAX_WORDS=120
+# The body's STRUCTURAL shape (FLAVOR_COMMIT_BODY_SHAPE) is deliberately not set
+# here: load-flavor.sh derives it from the cap above AFTER the profile is read,
+# so tightening the cap cannot leave the recipe asking for a shape that does not
+# fit inside it. Set it in profile.sh to override the derivation.
