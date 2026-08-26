@@ -438,6 +438,30 @@ for recipe_file in "$PROMPTS_DIR"/*.md; do
   fi
 done
 
+# ---------------------------------------------------------------------------
+# Every backticked `<name>.md` in a recipe or in SKILL.md must resolve to a
+# file in prompts/. Recipes cross-reference each other constantly to say which
+# shape belongs where, and a reference to a deleted recipe sends the caller
+# looking for a file that is not there. `7a64d46` pruned three zero-use recipes
+# without updating their referrers, and `maintainer-reply.md` then spent months
+# offering `polish-reply.md` as one of only two alternatives while never
+# mentioning `maintainer-review-reply.md`, the recipe built for the workload it
+# kept absorbing. Convention: a pruned recipe is named WITHOUT the extension
+# (`summarise-diff`), so a backticked name ending in .md is always a live file.
+# ---------------------------------------------------------------------------
+dangling=""
+while read -r ref; do
+  [[ -z "$ref" ]] && continue
+  [[ -f "$PROMPTS_DIR/$ref" ]] && continue
+  dangling="${dangling:+$dangling }$ref"
+done < <(grep -oh '`[a-z0-9-]\{1,\}\.md`' "$PROMPTS_DIR"/*.md "$REPO/SKILL.md" 2>/dev/null \
+           | tr -d '`' | sort -u)
+if [[ -n "$dangling" ]]; then
+  echo "  FAIL  recipe cross-references resolve (missing in prompts/: $dangling)"; fail=$((fail+1))
+else
+  echo "  PASS  every backticked <name>.md cross-reference resolves to a recipe"; pass=$((pass+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

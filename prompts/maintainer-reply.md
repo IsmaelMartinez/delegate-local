@@ -15,11 +15,11 @@ checks:
 
 You are a project maintainer drafting a short outbound reply to a contributor or reporter — a PR-review comment, an issue status comment, or a diagnostic one-liner on a bug report — from facts you already have in hand. The desired shape is closed: one sentence of specific praise (for a contribution) or the confirmed cause (for a bug), then exactly one question or ask, then an optional warm sign-off. This is the shape that fit all three live cases in issue #283 (a PR review on teams-for-linux #2632, an issue status comment on #2621, a diagnostic one-liner on #2603).
 
-Distinct from the two adjacent reply recipes: `pr-review-reply.md` is the PR *author* posting a one-line "Applied in `<hash>`" under a reviewer's inline comment, and `polish-reply.md` *tightens an existing multi-paragraph draft*. This recipe *drafts the maintainer's reply from scratch* in the maintainer's outbound voice.
+Distinct from the two adjacent reply recipes: `pr-review-reply.md` is the PR *author* posting a one-line "Applied in `<hash>`" under a reviewer's inline comment, and `maintainer-review-reply.md` leads with a verdict and then carries the evidence behind it, at whatever length that evidence needs. This recipe *drafts the maintainer's reply from scratch* in the maintainer's outbound voice, in the closed short shape.
 
 Multi-ask replies are in scope as of 2026-08-03: pass the several asks in one `--var ask=...` and the MULTI-ASK-SPLIT rule keeps each as its own numbered question instead of merging them. This replaced the earlier "call the recipe once per distinct reply" guidance, which callers did not follow — 13 consecutive multi-ask teams-for-linux replies were rewritten because the two-sentence cap compressed several asks into one run-on sentence.
 
-Not for: replies that push back on the reporter's premise or argue a contentious design decision (write those by hand — a model dilutes the maintainer's voice on contention), or multi-paragraph technical explanations (the recipe caps the prose body at two sentences even when the ask list is long).
+Not for: replies that push back on the reporter's premise or argue a contentious design decision (write those by hand — a model dilutes the maintainer's voice on contention), or multi-paragraph technical explanations (the recipe caps the prose body at two sentences even when the ask list is long). A reply whose length is set by how much evidence it has to carry — file paths, hashes, issue refs, measured counts — belongs to `maintainer-review-reply.md`. Reaching for this recipe and then having to expand the answer back into paragraphs is the most common way it gets rejected, so check that first.
 
 ## Context to gather first
 
@@ -216,6 +216,29 @@ SKILL.md, and still at n=0 calls. That is a routing problem, and a third
 paragraph of routing prose is the thrash path `docs/self-improvement-loop.md`
 warns about. Re-measure once that recipe has calls of its own.
 
+### 2026-08-26 (later still) — the scope note pointed at a recipe that had been deleted
+
+The "distinct from the two adjacent reply recipes" paragraph named
+`polish-reply`, pruned in `7a64d46` as a zero-use recipe, and the prune never
+updated the referrer. So a caller reading this file to decide whether it was the
+right recipe was offered one alternative that does not exist and was not told
+about `maintainer-review-reply.md`, which is the one built for the workload this
+recipe keeps absorbing.
+
+That matters more than a dangling link because of what the same day measured.
+`maintainer-reply` took 14 verdicted calls on 2026-08-26 and kept none of them,
+and three of the four rejections in the 19:17-19:29 window wanted the
+verdict-first, multi-paragraph, anchor-carrying shape that this recipe
+explicitly excludes. `maintainer-review-reply` had been live since 15:09 with a
+pointer in SKILL.md and had zero calls. The pointer in SKILL.md is one clause in
+a long paragraph; this file is what a caller actually opens when deciding, so
+the hand-off belongs here too.
+
+Prose only, no template change: the two-sentence shape is unchanged and the
+model's behaviour is not what this addresses. Re-measure by whether
+`maintainer-review-reply` starts taking calls at all, not by this recipe's keep
+rate.
+
 ### Tier choice
 
-Prose tier (`qwen3.6:35b-a3b-q8_0` by default). The task is drafting short prose from supplied facts; the facts are passive content the model reproduces and reshapes, not active reasoning targets. The discriminator is the same as `polish-reply.md`: this is prose shaping, not reasoning.
+Prose tier (`qwen3.6:35b-a3b-q8_0` by default). The task is drafting short prose from supplied facts; the facts are passive content the model reproduces and reshapes, not active reasoning targets. The discriminator is the same as `maintainer-review-reply.md`: this is prose shaping, not reasoning.
