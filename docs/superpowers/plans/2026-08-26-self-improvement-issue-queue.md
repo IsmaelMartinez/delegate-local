@@ -333,6 +333,49 @@ mechanical.
 
 ---
 
+## Issues 8-10 — found by re-running the gate after the first seven landed
+
+### Issue 8 — the commit body's shape instruction contradicted its word cap
+
+**Status: DONE.** `body_max_words` made the overshoot visible (six failures in
+the rolling week) without stopping it: the draft still needed hand compression
+every time, which is a scaffold rather than a hit, and **11 of the 14
+`commit-message` scaffolds in the corpus are length rewrites**. The recorded
+reasons name the STRUCTURE rather than the count — "body was three paragraphs
+against this repo's one-to-two-sentence convention". The prompt asked for "1-2
+short flowing-prose paragraphs" as a hardcoded literal while the cap beside it
+came from the flavor profile; at the shipped 120-word default they agree, and
+under a 50-word profile they cannot both hold.
+
+The shape is now derived from the cap in `load-flavor.sh`, after the profile is
+sourced. Measured on the real diff of `fafd439` at temperature 0, four reps
+each: **92, 92, 92, 92 words before; 45, 45, 45, 45 after.** 92 is the exact
+number the production rejection reason named. A synthetic one-line diff does not
+reproduce the defect, which is recorded so nobody re-measures it cheaply and
+concludes there was never one. PR #442.
+
+### Issue 9 — 12 of 63 rejections carry no reason at all
+
+**Status: DONE.** Every one `verdict_source: agent`, all from a single bulk
+sweep on 2026-08-25, all on the recipe that then sat bottom of the ranking with
+nothing behind its position. `delegate-feedback.sh` now exits 2 on an
+agent-recorded `miss` or `scaffold` with no reason. Scoped to the agent tier:
+`verdict-sweep.sh` records reasonless verdicts for a human working through old
+rows, where not remembering is honest, and an assertion pins that path. PR #443.
+
+### Issue 10 — a zero-padded numeric limit silently disabled its check
+
+**Status: DONE.** Found while applying a Copilot finding on #442 and deferred to
+its own change. `subject_max: 08` leaked `((: 08: value too great for base` to
+the caller's stderr mid-run **and let a 62-character subject through a limit of
+8 with no warning**. A check that silently fails open is the worst failure mode
+a check has, and `subject_max` is flavor-substituted, so a profile carrying a
+padded value would have disabled it for every commit message on that machine.
+Five external-value sites now use `10#`; the awk-produced counters are left
+alone because awk emits no leading zeros. PR #444.
+
+---
+
 ## Findings log
 
 New defects found while working the queue are appended here with the evidence
@@ -343,3 +386,17 @@ that established them, then promoted to their own numbered issue.
   rather than promoted, because it was a defect in the fix under construction
   and never shipped. The general lesson is in the queue rules: a goal that
   replays real captured evidence catches what synthetic assertions cannot.
+
+- **2026-08-27, closing the queue.** Ten issues, ten merged PRs (#434, #437,
+  #438, #439, #440, #441, #442, #443, #444, plus issue #436 filed), and 0.28.0
+  released. Two patterns are worth carrying forward. First, **an input-size
+  hypothesis was measured and dropped twice** — once for `maintainer-reply` and
+  once for `pr-description` — because in both cases the failing and passing
+  calls interleave with no threshold between them. It is the intuitive fix for
+  a long-input defect and it has not been right yet. Second, **three of the ten
+  defects were in the fix under construction rather than in the thing being
+  fixed**: `awk -v` escape processing collapsing a bracket pattern, substring
+  grounding letting `#427` pass on an input naming `#4271`, and octal parsing
+  disabling a check outright. The goals that replay real captured evidence, and
+  the discipline of running each new suite against the tree WITHOUT the
+  implementation, are what caught them.
