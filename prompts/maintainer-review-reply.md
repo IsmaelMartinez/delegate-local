@@ -8,6 +8,7 @@ inputs:
   signoff: string?
 checks:
   no_padding_tail: true
+  no_single_item_list: true
 ---
 # maintainer-review-reply
 
@@ -129,6 +130,14 @@ Drafted 2026-08-26 from a measured scope mismatch rather than from a coverage ga
 The alternative considered and rejected was widening `maintainer-reply`. Its two-sentence cap is its identity — the shape that fits a diagnostic one-liner — and the library's design is one closed shape per recipe. Widening it would have cost the short shape without reliably buying the long one.
 
 Un-validated on first commit: written from nine rejection reasons and the shipped replies that replaced those drafts, not yet from its own HIT. Expect the first ten calls to move it. The pairing to watch is `no_example_echo` against ANCHOR-PRESERVATION: this recipe's skeleton is deliberately anchor-free so that a leak of it is visibly bracketed rather than a plausible fabrication.
+
+### 2026-08-26 (later) — no_single_item_list declared before the first call
+
+This recipe carries the same rule as `maintainer-reply.md` ("A single ask is
+never a list") and inherits its history: there the rule survived two rewordings
+and had to become a deterministic check. Declaring `no_single_item_list` here
+now, at n=0 calls, costs one frontmatter line and stops the identical defect
+being re-discovered from scratch on a recipe that already knows about it.
 
 ### Tier choice
 

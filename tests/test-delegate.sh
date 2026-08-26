@@ -5680,6 +5680,98 @@ assert_contains "body is 5 words (> 3)" "$out" \
   "body_max_words: the limit comes from the flavor profile"
 rm -rf "$tmp" "$metrics"
 
+# ---------------------------------------------------------------------------
+# 43. no_single_item_list — a numbered list holding exactly one item. Wrong on
+# both reply recipes whichever branch the caller is on: MULTI-ASK-SPLIT rule 2
+# gives two-or-more asks an item each, rule 4 gives a single ask a sentence.
+# The check therefore needs no knowledge of how many asks were passed in.
+# Added 2026-08-26 after the defect survived two prompt-text fixes.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+mk_sil_recipe() {
+  cat > "$prompts/sil.md" <<EOF
+---
+tier: prose
+checks:
+  no_single_item_list: $1
+---
+# sil
+
+## When to use
+n/a
+
+## Prompt template
+
+\`\`\`
+GO
+\`\`\`
+
+## Calibration notes
+n/a
+EOF
+}
+run_sil() {
+  env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe sil prose "go" </dev/null 2>&1 >/dev/null
+}
+mk_sil_recipe true
+# 43a. The live regression, verbatim from the 2026-08-26T19:29:41Z pr-agent
+# draft: one sentence of verdict, then a single numbered ask.
+make_mock_curl_think "$tmp" '@swayamg20, the fix in sanitize_diagram() handles unquoted labels.\n1. Would you like to apply the two inline suggestions, or leave the pipe-label case for a follow-up?'
+out=$(run_sil)
+assert_contains "check 'no_single_item_list' FAILED" "$out" \
+  "no_single_item_list: a one-item numbered list fails"
+assert_contains '"checks_failed_names":["no_single_item_list"]' "$(tail -1 "$metrics")" \
+  "no_single_item_list: named on the metrics row"
+# 43b. Two items is the legitimate MULTI-ASK-SPLIT shape and must pass. This is
+# the assertion that keeps the fix from simply inverting the defect.
+make_mock_curl_think "$tmp" 'The cause is the flag flip.\n1. Does it reproduce on 2.9?\n2. Could you paste the launch flags?'
+if [[ "$(run_sil)" == *"no_single_item_list"* ]]; then
+  echo "  FAIL  no_single_item_list: a genuine two-ask list must pass"; fail=$((fail+1))
+else
+  echo "  PASS  no_single_item_list: a genuine two-ask list passes"; pass=$((pass+1))
+fi
+# 43c. Plain prose has no list at all and must pass.
+make_mock_curl_think "$tmp" 'The cause is the flag flip. Could you confirm whether it survives a cold start?'
+if [[ "$(run_sil)" == *"no_single_item_list"* ]]; then
+  echo "  FAIL  no_single_item_list: prose with no list must pass"; fail=$((fail+1))
+else
+  echo "  PASS  no_single_item_list: prose with no list passes"; pass=$((pass+1))
+fi
+# 43d. The paren form of the enumerator counts too.
+make_mock_curl_think "$tmp" 'The cause is the flag flip.\n1) Could you paste the launch flags?'
+assert_contains "check 'no_single_item_list' FAILED" "$(run_sil)" \
+  "no_single_item_list: the 1) enumerator form counts"
+# 43e. An enumerator needs its trailing space. A decimal opening a wrapped
+# prose line is not a list item and must not be read as one.
+make_mock_curl_think "$tmp" 'The regression landed in\n2.9.1 and not before it.'
+if [[ "$(run_sil)" == *"no_single_item_list"* ]]; then
+  echo "  FAIL  no_single_item_list: a bare decimal is not a list item"; fail=$((fail+1))
+else
+  echo "  PASS  no_single_item_list: a bare decimal is not a list item"; pass=$((pass+1))
+fi
+# 43f. CRLF output must behave the same as LF, for the reason body_required
+# and body_max_words carry the same guard: a lone \r is non-whitespace to some
+# awks, so the marker would sit behind it and never match.
+make_mock_curl_think "$tmp" 'The cause is the flag flip.\r\n1. Could you paste the launch flags?'
+assert_contains "check 'no_single_item_list' FAILED" "$(run_sil)" \
+  "no_single_item_list: CRLF output behaves the same as LF"
+# 43g. The boolean gate. A `false` value skips the check WITHOUT tripping the
+# unknown-check warning, so a recipe can opt out by value rather than by
+# deleting the key.
+mk_sil_recipe false
+make_mock_curl_think "$tmp" 'The cause is the flag flip.\n1. Could you paste the launch flags?'
+out=$(run_sil)
+if [[ "$out" == *"no_single_item_list' FAILED"* || "$out" == *"unknown check"* ]]; then
+  echo "  FAIL  no_single_item_list: 'false' must skip the check quietly"; fail=$((fail+1))
+else
+  echo "  PASS  no_single_item_list: 'false' skips the check quietly"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
