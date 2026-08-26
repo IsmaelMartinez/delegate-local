@@ -95,8 +95,11 @@ false-positive rate; it was not taken on day one because a check with no
 production history should not be able to break every caller.
 
 The captured drafts hold whatever context was piped in, so they inherit its
-sensitivity. They never leave the machine, but a host with sensitive delegation
-traffic should set `DELEGATE_DRAFT_RETENTION_DAYS` low or
+sensitivity. The directory is forced to 700 and every file to 600, written
+under `umask 077` so there is no permissive window between create and chmod;
+inheriting the caller's umask would have left them world-readable on a host
+with a loose one. They never leave the machine, but a host with sensitive
+delegation traffic should still set `DELEGATE_DRAFT_RETENTION_DAYS` low or
 `DELEGATE_NO_DRAFT_CAPTURE=1`.
 
 Coverage of the pair depends on callers passing `--final`, which is the one

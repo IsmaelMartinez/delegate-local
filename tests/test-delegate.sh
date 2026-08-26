@@ -5316,6 +5316,19 @@ while IFS= read -r df; do
   [[ -f "$data/drafts/$df" ]] || missing=$((missing+1))
 done < <(jq -r '.draft_file // empty' "$metrics")
 assert_eq 0 "$missing" "draft-capture: every draft_file on a row exists on disk"
+# 41a-ii. Drafts hold whatever context was piped in, so neither the directory
+# nor the files may inherit a permissive umask. Asserted under a deliberately
+# wide-open umask, which is the only condition where the bug is visible.
+rm -rf "$data"; mkdir -p "$data"
+( umask 000
+  env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1 )
+draft_name=$(tail -1 "$metrics" | jq -r '.draft_file // ""')
+assert_eq "700" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$data/drafts")" \
+  "draft-capture: drafts directory is private (700) under a permissive umask"
+assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$data/drafts/$draft_name")" \
+  "draft-capture: draft file is private (600) under a permissive umask"
 # 41b. Opt-out.
 rm -rf "$data"; mkdir -p "$data"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_DRAFT_CAPTURE=1 \

@@ -325,13 +325,18 @@ if [[ -n "$final_src" ]]; then
     final_stem="$(printf '%s' "$ref_ts" | tr -d ':-')-nodraft"
   fi
   if mkdir -p "$drafts_dir" 2>/dev/null; then
+    # Same sensitivity as the draft it sits beside, and more of it: this is
+    # verbatim what went out, anchors included. 700 on the directory, 600 on
+    # the file, written under `umask 077` so there is no permissive window.
+    chmod 700 "$drafts_dir" 2>/dev/null || true
     if [[ "$final_src" == "-" ]]; then
-      if cat > "$drafts_dir/$final_stem.final.txt" 2>/dev/null; then
+      if ( umask 077; cat > "$drafts_dir/$final_stem.final.txt" ) 2>/dev/null; then
         final_file="$final_stem.final.txt"
       fi
-    elif cp "$final_src" "$drafts_dir/$final_stem.final.txt" 2>/dev/null; then
+    elif ( umask 077; cat "$final_src" > "$drafts_dir/$final_stem.final.txt" ) 2>/dev/null; then
       final_file="$final_stem.final.txt"
     fi
+    [[ -n "$final_file" ]] && chmod 600 "$drafts_dir/$final_file" 2>/dev/null
   fi
   if [[ -z "$final_file" ]]; then
     echo "delegate-feedback: could not store --final text (verdict still recorded)" >&2

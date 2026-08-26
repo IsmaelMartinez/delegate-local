@@ -1461,6 +1461,20 @@ assert_eq "20260826T101206Z-a1b2c3d4.final.txt" \
   "--final: named after the row's draft_file, not after ref_ts"
 rm -rf "$tmp"
 
+# FN1c: the shipped text is the most sensitive artefact of the pair, so
+# neither the directory nor the file may inherit a permissive umask.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+printf 'shipped\n' > "$tmp/f.txt"
+( umask 000
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+    bash "$SCRIPT" --final "$tmp/f.txt" miss "r" >/dev/null 2>&1 )
+final_name=$(tail -1 "$tmp/m.jsonl" | jq -r '.final_file // ""')
+assert_eq "700" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$tmp/drafts")" \
+  "--final: drafts directory is private (700) under a permissive umask"
+assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$tmp/drafts/$final_name")" \
+  "--final: shipped-text file is private (600) under a permissive umask"
+rm -rf "$tmp"
+
 # FN2: - reads the shipped text from stdin.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 echo "shipped via stdin" | DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \

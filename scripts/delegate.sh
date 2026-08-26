@@ -536,6 +536,11 @@ capture_draft() {
   [[ -n "$text" ]] || return 0
   dir="$(dirname "$metrics_file")/drafts"
   mkdir -p "$dir" 2>/dev/null || return 0
+  # A draft is the model's rendering of whatever context was piped in, so the
+  # directory inherits that content's sensitivity and must not inherit a
+  # permissive umask. 700 on the directory, 600 on the files, and the writes
+  # happen under `umask 077` so there is no window between create and chmod.
+  chmod 700 "$dir" 2>/dev/null || true
   # Colons are legal in POSIX filenames but awkward in shell globs and in
   # Finder, so the ts goes in compacted — but the ts ALONE is not a safe name.
   # It has second precision, and parallel callers collide: the archived corpus
@@ -563,11 +568,13 @@ capture_draft() {
   # head -c bounds a runaway generation without failing the call. The marker
   # keeps a truncated file from being read later as a complete draft.
   if [[ "$bytes" =~ ^[0-9]+$ ]] && (( bytes > max )); then
-    { printf '%s' "$text" | head -c "$max"; printf '\n[truncated at %s bytes by DELEGATE_DRAFT_MAX_BYTES]\n' "$max"; } \
-      > "$dir/$stem.draft.txt" 2>/dev/null || return 0
+    ( umask 077
+      { printf '%s' "$text" | head -c "$max"; printf '\n[truncated at %s bytes by DELEGATE_DRAFT_MAX_BYTES]\n' "$max"; } \
+        > "$dir/$stem.draft.txt" ) 2>/dev/null || return 0
   else
-    printf '%s' "$text" > "$dir/$stem.draft.txt" 2>/dev/null || return 0
+    ( umask 077; printf '%s' "$text" > "$dir/$stem.draft.txt" ) 2>/dev/null || return 0
   fi
+  chmod 600 "$dir/$stem.draft.txt" 2>/dev/null || true
   # Retention prune. Cheap enough to run inline (a few hundred small files at
   # steady state) and self-limiting, so there is no cron dependency for it.
   # 0 disables. -mtime +N is POSIX and behaves the same on BSD and GNU find.
