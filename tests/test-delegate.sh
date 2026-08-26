@@ -5931,6 +5931,12 @@ assert_contains "trailer names #4271" "$(run_rf $'TITLE: one\nBODY:\nprose\nClos
 make_mock_curl_think "$tmp" 'A short body.\n\nRefs: ZZ-9915'
 assert_contains "trailer names ZZ-9915" "$(run_rf $'TITLE: one\nBODY:\nprose\nRefs: AI-812')" \
   "no_invented_refs: an identifier taken from the recipe's own text is not grounded"
+# 45d-i. Grounding is token-for-token, not substring. An input mentioning
+# `#4271` must not ground an output that says `#427` — one digit short of a real
+# reference is exactly the shape that reads as legitimate to a reviewer.
+make_mock_curl_think "$tmp" 'A short body.\n\nCloses: #427'
+assert_contains "trailer names #427" "$(run_rf $'TITLE: one\nBODY:\nfixes #4271 in the parser')" \
+  "no_invented_refs: a prefix of a grounded identifier is not itself grounded"
 # 45e. Prose is not scanned, only trailer-shaped lines. A hyphenated token in a
 # sentence is not an identifier claim.
 make_mock_curl_think "$tmp" 'The parser now reads UTF-8 and rejects ISO-8859 input, per RFC-3629.'

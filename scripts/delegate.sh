@@ -1983,10 +1983,17 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
 "
           done
           ref_ground="${ref_ground}${context}"
+          # Grounding is compared token-for-token, not as a substring. A plain
+          # `grep -F` for `#427` matches inside an input that says `#4271`, so an
+          # invented reference one digit short of a real one would pass as
+          # grounded. The same identifier shapes are extracted from the inputs
+          # and matched whole-line with `grep -qxF`.
+          ref_ground=$(printf '%s\n' "$ref_ground" \
+            | grep -oE '#[0-9]+|[A-Z][A-Z0-9]+-[0-9]{2,}' | sort -u)
           invented_refs=""
           while IFS= read -r ref_tok; do
             [[ -z "$ref_tok" ]] && continue
-            printf '%s' "$ref_ground" | grep -qF -- "$ref_tok" && continue
+            printf '%s\n' "$ref_ground" | grep -qxF -- "$ref_tok" && continue
             invented_refs="${invented_refs:+$invented_refs }$ref_tok"
           done < <(printf '%s\n' "$output" | tr -d '\r' \
             | awk '/^[A-Za-z][A-Za-z0-9-]*:[[:space:]]/' \
