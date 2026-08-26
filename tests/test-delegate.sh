@@ -5153,6 +5153,14 @@ out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
 assert_contains "check 'no_example_echo' FAILED" "$out" "echo-check: echoed Wrong: arm caught after label strip"
+# 40b-i. The label is stripped from the OUTPUT side too, so the most literal
+# echo of all — the whole line including its `Correct:` label — is caught.
+# Stripping only the template side left exactly that case undetected.
+make_mock_curl_think "$tmp" 'Correct: The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
+out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
+assert_contains "check 'no_example_echo' FAILED" "$out" "echo-check: echo that keeps the Correct: label is caught"
 # 40c. A genuine answer must not trip it. This is the guard that matters —
 # a false positive here would flag every good delegation.
 make_mock_curl_think "$tmp" 'The override in src/config/loader.js:88 silently wins. Could you make it defer?'
@@ -5313,6 +5321,30 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_MAX_BYTES=20 \
 draft_name=$(tail -1 "$metrics" | jq -r '.draft_file // ""')
 assert_contains "[truncated at 20 bytes" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
   "draft-capture: oversized draft is truncated with a marker"
+# 41e. The cap is a BYTE cap, so multi-byte text must be measured in bytes.
+# Eight 3-byte characters are 8 characters and 24 bytes; a character-length
+# comparison would wave them past a 20-byte cap. LANG is set explicitly
+# because the rest of the suite runs under `env -i` (C locale), where bash
+# counts bytes anyway and the bug would be invisible.
+rm -rf "$data"; mkdir -p "$data"
+make_mock_curl_think "$tmp" '\u4e2d\u6587\u6d4b\u8bd5\u4e2d\u6587\u6d4b\u8bd5'
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" LANG=en_US.UTF-8 DELEGATE_DRAFT_MAX_BYTES=20 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
+draft_name=$(tail -1 "$metrics" | jq -r '.draft_file // ""')
+assert_contains "[truncated at 20 bytes" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
+  "draft-capture: byte cap measured in bytes, not characters"
+# 41f. A malformed cap falls back to the default rather than silently
+# disabling the bound.
+rm -rf "$data"; mkdir -p "$data"
+make_mock_curl_think "$tmp" 'short'
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_MAX_BYTES=abc \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cap prose "go" </dev/null 2>&1)
+assert_contains "is not a positive integer" "$out" "draft-capture: malformed byte cap is reported"
+draft_name=$(tail -1 "$metrics" | jq -r '.draft_file // ""')
+assert_eq "short" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
+  "draft-capture: malformed byte cap still captures under the default bound"
 rm -rf "$tmp" "$data"
 
 echo

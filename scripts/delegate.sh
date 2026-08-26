@@ -530,7 +530,7 @@ compute_tokens_local() {
 # capture is skipped entirely when metrics are off, because without the row
 # there is nothing to join the file to.
 capture_draft() {
-  local text="$1" ts="$2" stem dir max
+  local text="$1" ts="$2" stem dir max bytes
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
   [[ "${DELEGATE_NO_DRAFT_CAPTURE:-}" == "1" ]] && return 0
   [[ -n "$text" ]] || return 0
@@ -540,9 +540,17 @@ capture_draft() {
   # Finder; the ts is the join key either way, so store it compacted.
   stem=$(printf '%s' "$ts" | tr -d ':-')
   max="${DELEGATE_DRAFT_MAX_BYTES:-65536}"
+  if ! [[ "$max" =~ ^[1-9][0-9]*$ ]]; then
+    echo "delegate: DELEGATE_DRAFT_MAX_BYTES='$max' is not a positive integer — using 65536" >&2
+    max=65536
+  fi
+  # Measured in bytes, because the cap is in bytes: ${#text} counts CHARACTERS
+  # under a UTF-8 locale, so a draft of multi-byte text could sail past a byte
+  # cap it had already exceeded several times over.
+  bytes=$(printf '%s' "$text" | wc -c | tr -d '[:space:]')
   # head -c bounds a runaway generation without failing the call. The marker
   # keeps a truncated file from being read later as a complete draft.
-  if (( ${#text} > max )); then
+  if [[ "$bytes" =~ ^[0-9]+$ ]] && (( bytes > max )); then
     { printf '%s' "$text" | head -c "$max"; printf '\n[truncated at %s bytes by DELEGATE_DRAFT_MAX_BYTES]\n' "$max"; } \
       > "$dir/$stem.draft.txt" 2>/dev/null || return 0
   else
@@ -1554,11 +1562,18 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
    && [[ "${DELEGATE_NO_ECHO_CHECK:-}" != "1" ]] \
    && [[ "${recipe_checks:-}" != *"no_example_echo: false"* ]]; then
   checks_run=$((checks_run + 1))
+  # The same normalisation runs on BOTH sides. Stripping the label only from
+  # the template side left a false negative: a model that copies the whole
+  # line, label included, produces "Correct: <sentence>" which no longer
+  # matches the stripped "<sentence>" pattern, so the most literal possible
+  # echo was the one that got through.
   echoed_line=$(printf '%s\n' "$recipe_template_raw" \
     | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
           -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
     | awk 'length($0) >= 40' \
-    | grep -Fxf - <(printf '%s\n' "$output" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//') \
+    | grep -Fxf - <(printf '%s\n' "$output" \
+        | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+              -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//') \
     | head -n 1)
   if [[ -n "$echoed_line" ]]; then
     echo "delegate: check 'no_example_echo' FAILED — REJECT this draft. The model" >&2
