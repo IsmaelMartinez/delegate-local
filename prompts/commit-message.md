@@ -236,3 +236,37 @@ lean-core reset removed it for legibility. It is preserved verbatim in the
 `pre-cleanup-2026-06-19` tag and the `archive/research-machinery` branch — read
 it with `git show pre-cleanup-2026-06-19:prompts/commit-message.md`. The prompt
 template above, the only part the model ever sees, is unchanged by the reset.
+
+### 2026-08-26 — observed, not yet actioned: the body copies its input
+
+Logged by the self-improvement loop so the next run has the history rather than
+rediscovering it. Three rejections describe the body being lifted from the
+prompt rather than composed from it: "near-verbatim restatement of the why
+input rather than a compression" and "again restated the why input across two
+paragraphs instead of compressing" (both 2026-08-19), and on 2026-08-26 a
+subject that "echoed the recent_commits example ... wrong version (v4.37.6, the
+version being bumped away from) and omitted the osv-scanner half of the
+change". That last one is the `no_example_echo` failure shape (ADR 0029) aimed
+at a `--var` value instead of the template, which the shipped check cannot see:
+it compares against the PRE-substitution template precisely so caller-supplied
+content never flags.
+
+Four further rejections in the same window name an over-long body ("two
+paragraphs against the owner's one-to-two-sentence house style", "three
+paragraphs", "four clauses where the repo convention is one or two sentences").
+Length may be the symptom rather than the defect: a body copied from `why` is
+long because `why` was.
+
+Deliberately unactioned this run, for two reasons. The template already says
+"1-2 short flowing-prose paragraphs" twice under a "mandatory, non-negotiable"
+heading, so a third rewording is the treadmill the loop is supposed to avoid;
+and the input is not stored, so the copy hypothesis cannot be verified from the
+corpus. The threshold problem is worse: the captured pairs separate rejected
+bodies (104, 80, 61, 56 words) from shipped ones (43, 45) cleanly, but that is
+n=2 on the shipped side, and this repo's own last 25 commits have a median body
+of 103 words because squash merges absorb PR descriptions. Any numeric cap
+picked today would be picked from noise.
+
+What would settle it: enough `--final` pairs on `commit-message` to see whether
+the rejected bodies share long verbatim runs with their `why` input. If they
+do, the fix is an input-echo check, not a length cap.
