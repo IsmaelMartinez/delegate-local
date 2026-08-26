@@ -64,8 +64,12 @@ fi
 #     two stretches of prose need roughly 30 words each to read as paragraphs,
 #     so a cap below about 60 makes the two-paragraph shape unwritable.
 if [[ -z "${FLAVOR_COMMIT_BODY_SHAPE:-}" ]]; then
+  # `10#` forces base 10. Without it a zero-padded but perfectly valid value
+  # like `050` is read as octal, and `08` is not octal at all, so bash aborts the
+  # arithmetic with "value too great for base" on stderr — which in a recipe run
+  # lands in the caller's stderr for no reason.
   if [[ "${FLAVOR_COMMIT_BODY_MAX_WORDS:-}" =~ ^[0-9]+$ ]] \
-     && (( FLAVOR_COMMIT_BODY_MAX_WORDS <= 60 )); then
+     && (( 10#${FLAVOR_COMMIT_BODY_MAX_WORDS} <= 60 )); then
     FLAVOR_COMMIT_BODY_SHAPE="one short flowing-prose paragraph of one or two sentences"
   else
     FLAVOR_COMMIT_BODY_SHAPE="1-2 short flowing-prose paragraphs"

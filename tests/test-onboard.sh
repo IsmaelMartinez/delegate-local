@@ -276,6 +276,19 @@ FLAVOR_COMMIT_BODY_SHAPE="three terse bullet-free sentences"'
 assert_contains "flavor_commit_body_shape=three terse bullet-free sentences" "$(lf)" \
   "T12: an explicit shape in the profile beats the derivation"
 
+# A zero-padded value is still base 10. Without `10#` bash reads `08` as octal,
+# aborts the arithmetic with "value too great for base", and leaks that to the
+# caller's stderr mid-recipe while silently taking the wrong branch.
+mkprof 'FLAVOR_COMMIT_BODY_MAX_WORDS=08'
+out=$(env DELEGATE_LOCAL_PROFILE="$t12/p.sh" bash "$REPO/scripts/load-flavor.sh" 2>&1)
+assert_contains "flavor_commit_body_shape=one short flowing-prose paragraph" "$out" \
+  "T12: a zero-padded cap takes the one-paragraph branch"
+if [[ "$out" == *"value too great for base"* ]]; then
+  echo "  FAIL  T12: a zero-padded cap must not leak an arithmetic error"; fail=$((fail+1))
+else
+  echo "  PASS  T12: a zero-padded cap leaks no arithmetic error"; pass=$((pass+1))
+fi
+
 # A non-numeric cap must not crash the resolver or leave the shape unset.
 mkprof 'FLAVOR_COMMIT_BODY_MAX_WORDS=lots'
 assert_contains "flavor_commit_body_shape=1-2 short flowing-prose paragraphs" "$(lf)" \
