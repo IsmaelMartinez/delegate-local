@@ -79,7 +79,8 @@ second output. Not a loop, not a repair heuristic per check.
 - G1.5 `DELEGATE_NO_RETRY=1` restores today's single-call behaviour exactly.
 - G1.6 The new assertions fail against the tree without the implementation.
 
-**Result.** Done. `tests/test-delegate.sh` 686 -> 699 assertions, all green.
+**Result.** Done, merged as #446. `tests/test-delegate.sh` 686 -> 707 across
+the implementation and four rounds of review, all green.
 
 G1.6 first, because it is what makes the rest evidence: run against the tree
 before the implementation, five of the thirteen new assertions failed — two
@@ -103,6 +104,20 @@ released only when no retry follows. Without that the caller sees "check
 which is a complaint about a draft that was thrown away. `checks_failed` on
 the metrics row is now the POST-retry state, which is what SKILL.md already
 told the agent it meant ("the model's text still violates").
+
+Review found four consequences of the second dispatch that the implementation
+had not followed through, every one real and none covered by the goals as
+written. The token accounting described only the surviving call, so a retried
+row under-reported local work against the definition SKILL.md states; the
+rejected generation's length was read AFTER `run_output_checks`, which mutates
+`$output` in place via the ADR 0017 auto-strip, so a retry triggered by any
+other check was charged for the shortened text; `ttfb_s` was overwritten by the
+second dispatch, dropping the first call's whole wait into `generation_ms`; and
+the new span attribute emitted a JSON number where proto3 JSON maps int64 to a
+string, then went missing entirely on backfill. The lesson for the next queue:
+a goal set written around "does the feature work" does not cover "what else did
+the second call change", and all four of these lived in the accounting rather
+than in the behaviour.
 
 ---
 
@@ -244,7 +259,7 @@ extraction Issue 3 would have introduced, now owned here) and route
   the change is measurable from the metrics alone.
 - G4.5 The new assertions fail against the tree without the implementation.
 
-**Result.** _(PR #450)_ `tests/test-delegate-boundary-hook.sh` 186 -> 196. Six
+**Result.** Merged as #450. `tests/test-delegate-boundary-hook.sh` 186 -> 196. Six
 of the ten new assertions fail against `main`; the other four are negative
 controls, including that the inline review-comment branch still wins on a long
 body.
@@ -279,7 +294,19 @@ into the affected recipes' calibration notes, including the possibility that
 - G5.2 `pr-description` calibration notes record that `#441` is un-measured.
 - G5.3 Neither note claims a fix worked without a post-landing measurement.
 
-**Result.** _(to fill in)_
+**Result.** Done, merged as #449.
+
+`#442`: the `body_max_words` check failed on 5 of the 28 `commit-message` calls
+in the seven days before it merged and on 1 of the 7 since. 18% against 14% on
+an n of 7 is not a difference. The controlled measurement behind it stands —
+92, 92, 92, 92 words before against 45, 45, 45, 45 after, same diff, same
+temperature — and the honest status is measured in the lab, unmeasured in the
+field.
+
+`#441`: one call since it merged. It followed the guidance and the content leak
+it targets did not recur, but the draft was rejected for reproducing the repo's
+generated-by footer, which is Issue 6's defect and not the one `#441` is about.
+It still cannot be measured.
 
 ---
 
@@ -348,7 +375,7 @@ adding a second `uniq` rule that a one-element set still defeats.
   existing assertions still passing untouched.
 - G6.4 The new assertions fail against the tree without the implementation.
 
-**Result.** _(PR TBD)_ Re-scoped once the evidence came in, and the goals above
+**Result.** Merged as #451. Re-scoped once the evidence came in, and the goals above
 were written before two measurements that changed the answer.
 
 A per-line length floor looked like the fix and is not. The two true positives
@@ -386,4 +413,59 @@ recurrence on another repo's footer, and is not claimed to.
 - G7.3 A delegation issued from inside a repo is unaffected.
 - G7.4 The new assertions fail against the tree without the implementation.
 
-**Result.** _(to fill in)_
+**Result.** Merged as #452. `tests/test-project-name.sh` 7 -> 10, and
+`tests/test-delegate.sh` gains the end-to-end pair plus a rewrite of the
+sibling that asserted the old fallback. Nothing downstream needed changing:
+`metrics-summary.sh` has bucketed a missing project as `(none)` since before
+`delegate.project` landed, and `self-improve.sh` renders it as `-`.
+
+Review caught that removing the cwd fallback also removed the `--show-toplevel`
+path, which serves a different case — a git too old for `--git-common-dir`
+(pre-2.5) — and would have returned no project INSIDE a repository on those
+hosts. It is back, scoped, with a shim-based assertion that fails without it.
+
+---
+
+## Closing record
+
+Seven issues. Five changed code, one changed only documentation, one changed
+nothing and is a report. Merged as #446, #447, #449, #450, #451, #452.
+
+### What the queue actually measured
+
+The strongest measurement was Issue 2's replay: 5 CUT and 3 INVENTED across
+every captured draft/final pair, each agreeing with the free-text reason its
+human wrote at the time. That is the loop's own instrument being checked
+against the loop's own record, and it found the instrument reporting a
+hallucination on the corpus's most common rejection shape.
+
+The most useful negative result was Issue 6's. A per-line length floor
+separates the two true positives (157 B and 697 B of matched prose) from the
+62 B footer that caused the false positive — and dies the moment
+`commit-message`'s ~53-character subject echo is included, because no floor
+sits above 62 and below 53. Measuring the alternative before building it is
+what stopped a plausible fix from shipping.
+
+Issue 3 is the queue's only issue with no code, and that was the right answer.
+Its size-floor premise was falsified by reading `pr-review-reply`'s own
+documented output before writing anything: 150-200 characters, the same order
+as `maintainer-reply`'s shape, which runs at 11/73 rather than 0/30. What
+remains is #358's mechanism, and it was then observed directly — replying to
+the Copilot finding on #446 meant composing the reply text and the `gh api`
+command in one keystroke, so the hook fires after the drafting moment is over.
+
+### Two corrections to the previous queue's closing report
+
+`#442` was reported as working on a controlled measurement. Production says
+18% against 14% on an n of 7, which is nothing. `#441` was reported as needing
+ten more calls; it has had one, and that one was rejected for a defect it is
+not about.
+
+### Carried forward, unmeasured
+
+Every routing change in this queue and the last one needs traffic before it can
+be judged: `maintainer-reply` at 21% over n=33 with #450 now sending its long
+replies elsewhere, `maintainer-review-reply` still at n=0, and #384's retry
+with 3 production firings so far. Every verdict in the corpus is still
+`--source agent`; the human tier is n=0, which the gate now says out loud.
+
