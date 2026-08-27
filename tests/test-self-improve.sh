@@ -285,19 +285,25 @@ assert_contains "DROPPED" "$replacement" \
   "the replacement pair still reports what the human had to put back"
 assert_not_contains "CUT" "$replacement" "a replacement is not labelled CUT"
 
-# 12c. A shipped text LONGER than the draft is not a compression, whatever the
-# token sets say — the human expanded rather than trimmed.
+# 12c. A shipped text LONGER than the draft, where the human still put nothing
+# back, is CUT and not INVENTED. Invention is a claim that something was WRONG
+# and had to be replaced; a longer result with no new salient token is prose
+# added around material that was removed, which is no evidence of that at all.
 cat > "$tmp/drafts/C1.final.txt" <<'EOF'
 fix: widen the tier scan in delegate.sh
 
 The scan in `scripts/delegate.sh` read until the first line without a trailing
 backslash, so a recipe whose first value spans lines was scanned 2 lines deep
-and reported a pass. Covered by `tests/test-delegate.sh`, and this sentence is
-here only to make the shipped text longer than the draft it replaced.
+and reported a pass. The test reference is gone and these two sentences carry
+no path, no hash and no count, so the shipped text is longer than the draft it
+replaced while putting nothing at all in the place of what it removed.
 EOF
 out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state12c" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
 longer=$(printf '%s\n' "$out" | sed -n '/C1.draft.txt/,/^$/p')
-assert_not_contains "CUT" "$longer" "a longer shipped text is not labelled a compression"
+assert_not_contains "INVENTED" "$longer" \
+  "an expansion that puts nothing back is not called invention"
+assert_contains "CUT" "$longer" \
+  "an expansion that puts nothing back is still a removal"
 rm -rf "$tmp"
 
 echo

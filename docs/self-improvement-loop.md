@@ -65,9 +65,9 @@ produced and the text that actually shipped, plus three objective signals:
   rejection where the human ALSO put tokens back. Something in the draft was
   substituted, so this is the hallucination signal.
 - `CUT` — present in the draft, absent from the shipped text, on a rejection
-  where the human put nothing back and shipped something shorter. Material was
-  removed, not replaced. This is a length edit and says nothing about whether
-  the draft was true; do not read a `CUT` list as invention. Five of the seven
+  where the human put nothing back. Material was removed and nothing was
+  substituted for it, usually a length edit. It says nothing about whether the
+  draft was true, so do not read a `CUT` list as invention. Five of the seven
   pairs in the window to 2026-08-27 were this, every one of them a
   `commit-message` body trimmed to the profile's word cap.
 - `SHAPE` — a list-vs-prose mismatch between the draft and what shipped.

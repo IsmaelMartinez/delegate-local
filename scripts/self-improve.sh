@@ -279,23 +279,23 @@ jq -rs --arg prev "$prev_ts" '
       draft_only=$(comm -23 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
       [[ -n "${dropped// /}"  ]] && echo "    DROPPED  (in the shipped text, absent from the draft): $dropped"
       # A token in the draft and not in the shipped text has two very different
-      # causes, and calling both of them INVENTED made the loop's own
-      # instrument report a hallucination on its most common rejection shape.
-      # The dominant `commit-message` rejection is a pure compression: the
-      # facts are right, the body is too long, the human cuts clauses — and
-      # every clause cut lands here. Four of the six rejections in the window
-      # to 2026-08-27 were exactly that, each one's own reason saying so
-      # ("the draft's facts were all correct but the body ran 92 words").
+      # causes, and calling both of them INVENTED made this instrument report a
+      # hallucination on the most common rejection shape there is: the facts
+      # are right, the body is too long, the human cuts clauses, and every
+      # clause cut lands in the list. Measured against the captured pairs on
+      # 2026-08-27, most of them were that rather than invention.
       #
-      # The discriminator is DROPPED. If the human put back nothing the draft
-      # lacked, and the shipped text is shorter, material was removed and
-      # nothing was substituted for it. Only when the shipped text also
-      # carries tokens the draft lacked is there positive evidence that
-      # something in the draft was replaced — which is the case the two
-      # `pr-description` fabrications in the same window both show.
+      # The discriminator is DROPPED, and only DROPPED. Invention is a claim
+      # that something in the draft was WRONG and had to be replaced, and the
+      # only evidence for it is the shipped text carrying a token the draft
+      # lacked. Where the human put nothing back, material was removed and
+      # nothing substituted — whether the result is shorter (a length edit) or
+      # longer (prose added that happens to carry no salient token). Reading
+      # the byte delta instead would call that second case invention on no
+      # evidence at all.
       if [[ -n "${draft_only// /}" ]]; then
-        if [[ -z "${dropped// /}" ]] && (( fbytes < dbytes )); then
-          echo "    CUT      (in the draft, removed for length; the shipped text put nothing in their place): $draft_only"
+        if [[ -z "${dropped// /}" ]]; then
+          echo "    CUT      (in the draft, removed; the shipped text put nothing in their place): $draft_only"
         else
           echo "    INVENTED (in the draft, replaced in the shipped text): $draft_only"
         fi
