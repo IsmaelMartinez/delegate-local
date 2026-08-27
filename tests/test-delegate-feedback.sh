@@ -1633,6 +1633,66 @@ assert_eq "closer to a hit than a miss" "$(printf '%s' "$last" | jq -r '.reason 
 rm -rf "$tmp"
 
 
+# ---------------------------------------------------------------------------
+# Adopting a final the boundary hook already captured. The reply recipes post
+# their output inline, so there is no path for the caller to hand to --final;
+# the hook writes what was posted under the draft's own stem and this adopts
+# it. `final_source` keeps an inferred pair distinguishable from one the caller
+# vouched for.
+# ---------------------------------------------------------------------------
+adopt_setup() { # -> tmp with a delegate row naming a draft, and drafts/
+  tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+  mkdir -p "$tmp/drafts"
+  printf '{"ts":"%s","source":"delegate","tier":"prose","recipe":"maintainer-reply","exit_status":0,"draft_file":"20260827T100000Z-aaaa1111.draft.txt"}\n' \
+    "$TS_LATEST" >> "$tmp/m.jsonl"
+}
+
+adopt_setup
+printf 'what the hook saw go out' > "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --source agent scaffold "trimmed the second paragraph" >/dev/null 2>&1
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "20260827T100000Z-aaaa1111.final.txt" "$(printf '%s' "$last" | jq -r '.final_file // ""')" \
+  "adopt: a hook-captured final is adopted when --final was not passed"
+assert_eq "posted" "$(printf '%s' "$last" | jq -r '.final_source // ""')" \
+  "adopt: the row records that the pair was inferred from a post"
+rm -rf "$tmp"
+
+# An explicit --final is the caller vouching for the pair, so it wins and is
+# not relabelled as inferred.
+adopt_setup
+printf 'what the hook saw go out' > "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt"
+printf 'what the caller says shipped' > "$tmp/mine.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --source agent scaffold "r" --final "$tmp/mine.txt" >/dev/null 2>&1
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "what the caller says shipped" "$(cat "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt")" \
+  "adopt: an explicit --final overwrites the hook's capture"
+assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_source")')" \
+  "adopt: an explicit --final is not labelled as inferred"
+rm -rf "$tmp"
+
+# A hit means the draft shipped as-is, so there is no difference to diff and
+# nothing for the loop to read; adopting would add a field that says nothing.
+adopt_setup
+printf 'what the hook saw go out' > "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --source agent hit >/dev/null 2>&1
+assert_eq "false" "$(tail -1 "$tmp/m.jsonl" | jq -r 'has("final_file")')" \
+  "adopt: a hit does not adopt a captured final"
+rm -rf "$tmp"
+
+# No capture, no field: every reader written before this existed keeps working.
+adopt_setup
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --source agent scaffold "r" >/dev/null 2>&1
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_file")')" \
+  "adopt: nothing captured means no final_file"
+assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_source")')" \
+  "adopt: nothing captured means no final_source"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

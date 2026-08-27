@@ -355,8 +355,10 @@ ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # rules as the draft — local file beside metrics.jsonl, never transmitted.
 # Failure to write is non-fatal: the verdict row still lands, without the field.
 final_file=""
-if [[ -n "$final_src" ]]; then
-  drafts_dir="$(dirname "$metrics_file")/drafts"
+final_source=""
+drafts_dir="$(dirname "$metrics_file")/drafts"
+parent_draft=""
+if [[ -n "$final_src" || "$kept" == "false" ]]; then
   # Name the final after the DRAFT the pinned row actually points at, not after
   # ref_ts. ref_ts has second precision and parallel delegations share it (the
   # archived corpus has one second carrying eight of them), so a ts-derived
@@ -369,6 +371,9 @@ if [[ -n "$final_src" ]]; then
   parent_draft=$(jq -r --arg ts "$ref_ts" \
     'select((.source // "delegate") == "delegate" and .ts == $ts) | .draft_file // empty' \
     "$metrics_file" | tail -n 1)
+fi
+
+if [[ -n "$final_src" ]]; then
   if [[ -n "$parent_draft" ]]; then
     final_stem="${parent_draft%.draft.txt}"
   else
@@ -391,6 +396,21 @@ if [[ -n "$final_src" ]]; then
   if [[ -z "$final_file" ]]; then
     echo "delegate-feedback: could not store --final text (verdict still recorded)" >&2
   fi
+elif [[ -n "$parent_draft" ]]; then
+  # No --final was passed, but the boundary hook may already have stored what
+  # was posted: when a `gh`/`glab` post is credited to a delegation, that post
+  # IS the delegation's shipped form, and the hook writes it under the draft's
+  # own stem. This is the only capture path for the reply recipes, whose output
+  # is posted inline and never reaches a file the caller could name — before it
+  # existed, `maintainer-reply` had 32 rejections and not one captured pair.
+  #
+  # An explicit --final is handled above and always wins. `final_source` marks
+  # which of the two produced the file, so a pair inferred from a post is never
+  # mistaken for one the caller vouched for.
+  if [[ -f "$drafts_dir/${parent_draft%.draft.txt}.final.txt" ]]; then
+    final_file="${parent_draft%.draft.txt}.final.txt"
+    final_source="posted"
+  fi
 fi
 # Main repo basename, even inside a git worktree (delegate_project_name from
 # lib/otel.sh, sourced above) — so a verdict recorded in a worktree attributes
@@ -404,8 +424,8 @@ feedback_project=$(delegate_project_name)
 # (default) omits the field, so it is indistinguishable from the legacy rows
 # written before this tier existed, and the reporting partition maps both to
 # human. Only the agent tier carries the marker.
-jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --argjson scaffold "$is_scaffold" --arg reason "${reason:-}" --arg project "$feedback_project" --arg vsource "$verdict_source" --arg final "$final_file" \
-  '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + (if $reason != "" then {reason:$reason} else {} end) + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end) + (if $final != "" then {final_file:$final} else {} end)' \
+jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --argjson scaffold "$is_scaffold" --arg reason "${reason:-}" --arg project "$feedback_project" --arg vsource "$verdict_source" --arg final "$final_file" --arg finalsrc "$final_source" \
+  '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + (if $reason != "" then {reason:$reason} else {} end) + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end) + (if $final != "" then {final_file:$final} else {} end) + (if $finalsrc != "" then {final_source:$finalsrc} else {} end)' \
   >> "$metrics_file"
 
 case "$verdict" in

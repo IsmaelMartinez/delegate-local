@@ -306,6 +306,34 @@ assert_contains "CUT" "$longer" \
   "an expansion that puts nothing back is still a removal"
 rm -rf "$tmp"
 
+# ---------------------------------------------------------------------------
+# A final the boundary hook inferred from the post is labelled as such. The
+# hook runs BEFORE the post, so it stores what was about to go out rather than
+# what demonstrably did, and the maintainer reading the bundle should be able
+# to tell the two apart. One the caller passed with --final carries no label.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+ft=$(iso_ago 600)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$ft","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","exit_status":0,"draft_file":"P1.draft.txt"}
+{"ts":"$(iso_ago 590)","source":"feedback","ref_ts":"$ft","kept":false,"reason":"trimmed it","verdict_source":"agent","final_file":"P1.final.txt","final_source":"posted"}
+EOF
+printf 'the draft as generated\n' > "$tmp/drafts/P1.draft.txt"
+printf 'the reply that went out\n' > "$tmp/drafts/P1.final.txt"
+out=$(bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_contains "captured from the post" "$out" \
+  "a final inferred from the post is labelled in the evidence bundle"
+assert_contains "trimmed it" "$out" \
+  "the extra field does not shift the reason out of the record"
+# Same row without the marker: no label, and the reason still lands.
+perl -pi -e 's/,"final_source":"posted"//' "$tmp/m.jsonl"
+out=$(bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_not_contains "captured from the post" "$out" \
+  "a caller-supplied final carries no inferred label"
+assert_contains "trimmed it" "$out" \
+  "the unlabelled row still shows its reason"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
