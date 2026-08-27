@@ -242,3 +242,25 @@ rate.
 ### Tier choice
 
 Prose tier (`qwen3.6:35b-a3b-q8_0` by default). The task is drafting short prose from supplied facts; the facts are passive content the model reproduces and reshapes, not active reasoning targets. The discriminator is the same as `maintainer-review-reply.md`: this is prose shaping, not reasoning.
+
+### 2026-08-27 — the comment boundary now routes by size
+
+`comment-reply` pinned this recipe unconditionally, so every `gh pr comment`
+posted anywhere named the closed two-sentence shape. That is most of how it
+came to hold 33 of the corpus's delegations at 21% usable (agent tier, h=0),
+with the rejection reasons repeating one sentence in different words:
+"collapsed all 14 facts into a single run-on sentence", "returned two sentences
+instead of a four-paragraph body", "dropped every measured fact from the
+context".
+
+None of that is a quality problem with this recipe. The closed shape was doing
+exactly its job to a workload its own scope section excludes. The hook now
+measures the body being posted and names `maintainer-review-reply` at or above
+600 characters, a threshold taken from the two recipes' own documented output
+(182 here, 467 there) and set high on purpose: routing a genuinely short reply
+to the evidence-led recipe would be a new failure, while leaving a long one
+here is only today's behaviour.
+
+Re-measure this recipe's usable rate after roughly ten more calls, and expect
+the n to fall as well as the rate to move — some of its traffic should now be
+going elsewhere.

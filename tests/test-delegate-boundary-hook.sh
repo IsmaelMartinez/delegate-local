@@ -861,6 +861,140 @@ payload 'gh pr review 2822 --web' "$tmpcwd" \
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq 0 "$(nrows)" "pr-review-body: --web writes no row"
 
+# ---------------------------------------------------------------------------
+# 58. comment-reply routes by how much is being posted. The two candidates are
+# different SHAPES, not different qualities: `maintainer-reply` caps its prose
+# body at two sentences, `maintainer-review-reply` sets its length by the
+# evidence it carries. Pinning the first unconditionally is how it came to hold
+# 33 delegations at 21% usable.
+# ---------------------------------------------------------------------------
+long_body=$(python3 -c "print('The sandbox flag in src/main.js is the cause and not your distro. ' * 12)")
+
+# 58a. A short inline body keeps the closed short shape.
+: > "$METRICS"
+payload 'gh pr comment 12 --body "The token drop is on Teams side. Could you check a cold start?"' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a short body keeps maintainer-reply"
+
+# 58b. A long inline body names the evidence-led recipe instead.
+: > "$METRICS"
+out=$(payload "gh pr comment 12 --body \"$long_body\"" "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a long body names maintainer-review-reply"
+assert_contains 'maintainer-review-reply' "$out" \
+  "comment-reply: the nudge names the recipe it routed to"
+assert_contains '--var verdict=' "$out" \
+  "comment-reply: the nudge carries the routed recipe's own vars"
+
+# 58c. --body-file is measured from the file, not from the path.
+: > "$METRICS"
+printf '%s' "$long_body" > "$tmpcwd/long.md"
+payload "gh pr comment 12 --body-file $tmpcwd/long.md" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: --body-file is measured from the file"
+: > "$METRICS"
+printf 'two short sentences. and an ask?' > "$tmpcwd/short.md"
+payload "gh pr comment 12 --body-file $tmpcwd/short.md" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a short --body-file keeps the short shape"
+
+# 58d. A file that cannot be read must not promote the reply on no evidence.
+: > "$METRICS"
+payload "gh pr comment 12 --body-file $tmpcwd/does-not-exist.md" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: an unreadable body-file falls back to the short shape"
+
+# 58d-ii. Only a REGULAR file is read. This runs inside a PreToolUse hook on
+# every Bash call, and `wc -c < /dev/zero` never returns; a directory or a FIFO
+# would be just as wrong, if less dramatic.
+: > "$METRICS"
+payload "gh pr comment 12 --body-file /dev/zero" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" perl -e 'alarm 15; exec @ARGV' bash "$HOOK" >/dev/null 2>&1
+ec=$?
+# perl's alarm rather than `timeout`, which is GNU coreutils and absent on the
+# macOS baseline; perl is already a hard dependency here. A regression makes
+# this exit 142 (SIGALRM) instead of hanging the suite.
+assert_eq 0 "$ec" "comment-reply: a character device is not read as a body file"
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a character device falls back to the short shape"
+: > "$METRICS"
+payload "gh pr comment 12 --body-file $tmpcwd" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a directory is not read as a body file"
+
+# 58d-iii. A quoted path is still a path, and trailing shell punctuation is not
+# part of it.
+: > "$METRICS"
+payload "gh pr comment 12 --body-file \"$tmpcwd/long.md\"" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a quoted --body-file path is measured"
+: > "$METRICS"
+payload "gh pr comment 12 --body-file $tmpcwd/long.md; echo done" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: trailing shell punctuation is not part of the path"
+
+# 58d-iv. A quoted path containing SPACES is one path, not its first word.
+: > "$METRICS"
+cp "$tmpcwd/long.md" "$tmpcwd/notes with spaces.md"
+payload "gh pr comment 12 --body-file \"$tmpcwd/notes with spaces.md\"" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a quoted path with spaces is measured whole"
+
+# 58d-v. A --body-file wins over an inline --body in the same command: it names
+# where the text really is.
+: > "$METRICS"
+payload "gh pr comment 12 --body \"short\" --body-file $tmpcwd/long.md" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: --body-file outranks an inline body in the same command"
+
+# 58d-vi. A flag MENTIONED inside quoted prose is data, not a flag. The scan
+# that classifies the boundary already blanks quoted spans; the measurement
+# reads the raw command and has to do its own skipping, or a sentence about
+# `--body-file` promotes a two-sentence reply to the evidence-led recipe —
+# the direction that costs something.
+: > "$METRICS"
+payload "echo \"pass --body-file $tmpcwd/long.md when you post it\"; gh pr comment 12 --body \"two sentences. and an ask?\"" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a flag inside quoted prose is not measured"
+: > "$METRICS"
+payload "echo \"$long_body\"; gh pr comment 12 --body \"two sentences. and an ask?\"" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a long quoted string in another segment is not the body"
+
+# 58e. The threshold is overridable, so the routing can be re-tuned from the
+# corpus without editing the hook.
+: > "$METRICS"
+payload 'gh pr comment 12 --body "short enough by default"' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_BOUNDARY_LONG_BODY_CHARS=10 bash "$HOOK" >/dev/null
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: DELEGATE_BOUNDARY_LONG_BODY_CHARS moves the split"
+
+# 58f. glab's --message carries the same routing.
+: > "$METRICS"
+payload "glab mr note 4 --message \"$long_body\"" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: glab --message routes the same way"
+
+# 58g. The OTHER boundaries are untouched — a long PR-review-comment body is
+# still pr-review-reply, because that branch matches before this one.
+: > "$METRICS"
+payload "gh api repos/o/r/pulls/12/comments -X POST -f body=\"$long_body\"" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq pr-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: the inline review-comment branch still wins on a long body"
+
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
