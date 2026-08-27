@@ -264,3 +264,15 @@ here is only today's behaviour.
 Re-measure this recipe's usable rate after roughly ten more calls, and expect
 the n to fall as well as the rate to move — some of its traffic should now be
 going elsewhere.
+
+### 2026-08-27 — the 600-character threshold, measured after the fact
+
+The threshold above was set from the two recipes' own documented output and
+said so. The population it actually routes is now measured: 27 issue comments
+authored by the maintainer on this repo run min 8, p25 573, median 950, p75
+1417, max 2522 characters. A 600-character split leaves 8 of them here and
+sends 19 to `maintainer-review-reply`, and the tail it keeps — two comments
+under 200 characters — is the status-line shape this recipe is capped for. The
+guess was close enough to leave alone. What it does not license is reusing the
+number elsewhere: the `pr-review-comment` boundary's population has a median of
+312 over n=23, so 600 would route none of it.

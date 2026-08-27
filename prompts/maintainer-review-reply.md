@@ -172,3 +172,12 @@ Still `n=0` calls. Two mechanical routing fixes are now in place and the honest
 status is that neither has been measured. Re-measure by whether this recipe
 starts taking calls at all; anything about its keep rate needs roughly ten of
 them first.
+
+### 2026-08-27 — what the routing threshold was measured against
+
+The 600-character split that sends a comment here rather than to
+`maintainer-reply` was a guess when it shipped. Measured the same day over 27
+maintainer-authored issue comments on this repo (min 8, p25 573, median 950,
+p75 1417, max 2522), it sends 19 of the 27 to this recipe. That is the traffic
+this recipe has been waiting for, so the next reading of its keep rate has a
+denominator to work with. Still `n=0` calls at the time of writing.
