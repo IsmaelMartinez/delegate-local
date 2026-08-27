@@ -1591,6 +1591,8 @@ retry_constraint_for() {
       echo "no_single_item_list: a single item is a sentence, never a one-item numbered list." ;;
     no_invented_task_list)
       echo "no_invented_task_list: do not write a markdown task list; the examples you were given carry none." ;;
+    no_invented_headings)
+      echo "no_invented_headings: do not write a markdown heading; the examples you were given carry none, so write flowing prose." ;;
     no_invented_refs)
       echo "no_invented_refs: every issue or ticket identifier in a trailer must appear in the input you were given." ;;
     no_example_echo)
@@ -1605,7 +1607,7 @@ run_output_checks() {
 # is a function (it ran at top level before the refactor). The result and the
 # counters — output, checks_run/failed/autofixed, capability_failed — are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks authority ref_ground ref_tok invented_refs
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -1998,6 +2000,50 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
               echo "delegate: check 'no_invented_task_list' FAILED — output carries $out_tasks markdown task-list item(s) but the '$cval' examples carry none; the shape was invented, and a task-list box asserts a verification state the model cannot know" >&2
               checks_failed=$((checks_failed + 1))
               checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_invented_task_list"
+              capability_failed=$((capability_failed + 1))
+            fi
+          fi
+        fi
+        ;;
+      no_invented_headings)
+        # A markdown heading the model made up. Measured 2026-08-27 with
+        # DELEGATE_NO_RETRY=1 so the first pass is visible: handed two
+        # heading-free merged-PR exemplars (`#422`, `#413`) and the facts of a
+        # change as terse notes, `pr-description` produced `### Implementation
+        # Details` and `### Testing` with bullet lists under each. The SHAPE
+        # section states the constraint in prose — "Do NOT add '## Summary',
+        # '## Test plan', or any heading that the examples themselves do not
+        # use" — and it has been restated four times across that recipe's
+        # calibration history without holding.
+        #
+        # Same contract as no_invented_task_list, deliberately: a blanket ban
+        # would be wrong, because a repo whose merged PRs all carry
+        # `## Summary` SHOULD get that shape back. The value names the --var
+        # carrying the shape authority, and the check fires only when the
+        # output has a heading and the examples have none.
+        #
+        # Fenced blocks are skipped on both sides. A PR body pasting a shell
+        # snippet carries `# comment` lines that are not headings, and counting
+        # them would fire on output that matched its examples perfectly. The
+        # `#+[[:space:]]` shape also leaves `#!/usr/bin/env bash` alone.
+        if [[ -n "$cval" ]]; then
+          checks_run=$((checks_run + 1))
+          # The pattern is the awk PROGRAM for the same reason the task-list
+          # one is: awk escape-processes -v values, which breaks the pattern.
+          head_prog='/^[[:space:]]*```/ { fence = !fence; next } !fence && /^[[:space:]]*#+[[:space:]]/ { n++ } END { print n + 0 }'
+          out_heads=$(printf '%s\n' "$output" | tr -d '\r' | awk "$head_prog")
+          if [[ "$out_heads" =~ ^[0-9]+$ ]] && (( out_heads > 0 )); then
+            authority=""
+            for _kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
+              if [[ "${_kv%%=*}" == "$cval" ]]; then
+                authority="${_kv#*=}"
+              fi
+            done
+            auth_heads=$(printf '%s\n' "$authority" | tr -d '\r' | awk "$head_prog")
+            if [[ "$auth_heads" == "0" ]]; then
+              echo "delegate: check 'no_invented_headings' FAILED — output carries $out_heads markdown heading(s) but the '$cval' examples carry none; the shape was invented rather than matched" >&2
+              checks_failed=$((checks_failed + 1))
+              checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_invented_headings"
               capability_failed=$((capability_failed + 1))
             fi
           fi

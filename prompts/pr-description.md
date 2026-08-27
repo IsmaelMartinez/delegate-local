@@ -7,6 +7,7 @@ inputs:
 echo_guard_vars: recent_prs
 checks:
   no_invented_task_list: recent_prs
+  no_invented_headings: recent_prs
   no_invented_refs: true
 ---
 # pr-description
@@ -413,3 +414,36 @@ the stall was cold LOAD, not generation — and the recipe's own header records
 the gate being retired for the same reason. Measured again 2026-08-27 on the
 current host: two exemplars at 3.3 KB with a ~1 KB context returned a complete,
 accurate PR body in 12.0 s warm. The reason for `--limit 1` no longer exists.
+
+### 2026-08-27 — `no_invented_headings`, and how to write the context
+
+Two findings from writing this repo's own PR bodies, one about the recipe and
+one about the caller.
+
+The recipe first. The SHAPE section has said "Do NOT add '## Summary',
+'## Test plan', or any heading that the examples themselves do not use" for
+several revisions, and it does not hold. Measured with `DELEGATE_NO_RETRY=1` so
+the first pass is visible, against `#422` and `#424` (both verified heading-free
+by the same scan the check uses): 4 runs of 4 invented at least one markdown
+heading. The frontmatter now declares `no_invented_headings: recent_prs`, the
+same contract as its sibling — the value names the `--var` holding the shape
+authority, and the check fires only when the output has a heading and the
+examples have none, so a repo whose merged PRs all carry `## Summary` still gets
+that shape back. In the run inspected in full the invented heading was
+`## Test plan`, whose items `no_invented_task_list` already catches, so on that
+input the two overlap; the heading check earns its place on the section heading
+that arrives without checkboxes under it.
+
+A correction worth keeping, because it nearly became the calibration entry. The
+first version of this measurement claimed the model invented `### Implementation
+Details` and `### Testing` against heading-free exemplars. It did not: `#413`
+was one of the two exemplars and carries three `###` headings, so the model was
+matching. The check stayed silent, which is how the mistake surfaced. Verify
+that an exemplar is heading-free before concluding a heading was invented.
+
+Now the caller. `{{context}}` is not a hint, and it is not a draft. Given facts
+written as finished sentences the model reflows and returns them — two calls on
+2026-08-27 (12:03 and 14:35) came back as the context file, every line, in
+order, with no synthesis. Given the same facts as terse notes it writes a PR
+body. Write `context` as notes, one fact per line, the way
+`maintainer-review-reply.md` asks for its stdin.
