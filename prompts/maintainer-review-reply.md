@@ -176,8 +176,9 @@ them first.
 ### 2026-08-27 — what the routing threshold was measured against
 
 The 600-character split that sends a comment here rather than to
-`maintainer-reply` was a guess when it shipped. Measured the same day over 27
-maintainer-authored issue comments on this repo (min 8, p25 573, median 950,
-p75 1417, max 2522), it sends 19 of the 27 to this recipe. That is the traffic
+`maintainer-reply` was a guess when it shipped. The population it routes was
+measured the same day — 27 maintainer-authored issue comments on this repo,
+min 8, p25 573, median 950, p75 1417, max 2522 — and the split sends 19 of the
+27 to this recipe. That is the traffic
 this recipe has been waiting for, so the next reading of its keep rate has a
 denominator to work with. Still `n=0` calls at the time of writing.
