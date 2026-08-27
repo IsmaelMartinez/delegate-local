@@ -20,14 +20,16 @@ The user has a branch with one or more commits and wants a GitHub PR description
 ## Context to gather first
 
 ```bash
-gh pr list --repo <owner>/<repo> --state merged --limit 1 \
+# TWO examples, with the generated-by footer stripped out of each. Both halves
+# matter: see the 2026-08-27 calibration note.
+gh pr list --repo <owner>/<repo> --state merged --limit 2 \
   --json title,body,number \
-  --jq '.[] | "<<<EXAMPLE_BEGIN PR #\(.number)>>>\nTITLE: \(.title)\nBODY:\n\(.body)\n<<<EXAMPLE_END>>>\n"'
+  --jq '.[] | "<<<EXAMPLE_BEGIN PR #\(.number)>>>\nTITLE: \(.title)\nBODY:\n\(.body | split("\n") | map(select(test("^[[:space:]]*🤖 Generated with|^https://claude\\.ai/code/") | not)) | join("\n"))\n<<<EXAMPLE_END>>>\n"'
 git diff <base-branch> --stat                    # what changed
 git log <base-branch>..HEAD --pretty=oneline    # commit-by-commit shape
 ```
 
-The recent merged-PR body is the load-bearing context. The model learns the project's bullet-vs-prose shape, the standard subsection headings, and the test-plan-checkbox convention from the literal, not from descriptors.
+Two of them, not one, and with the generated-by footer removed. `no_example_echo` classifies a line as shared convention when it appears in more than one exemplar, so a single exemplar leaves the check with nothing to compare and its boilerplate reads as that exemplar's own content; and a footer that only some merged PRs carry defeats the rule even at two, which is why it is stripped rather than left to repetition. The filter is anchored to the start of the line, so it removes the footer itself and never a paragraph that merely mentions it. The recent merged-PR body is the load-bearing context. The model learns the project's bullet-vs-prose shape, the standard subsection headings, and the test-plan-checkbox convention from the literal, not from descriptors.
 
 **Superseded 2026-06-28: the blocker is cold-LOAD latency, not generation (see the 2026-06-28 calibration note).** The earlier 2026-05-10/11/13 measurements timed wall-clock from a cold (or memory-evicted) state on the 35B/80B prose and long-context tiers and attributed the disk-load latency to generation — concluding, wrongly, that the failure axis was model parameter count at recipe-sized prompts. The 2026-06-28 probe showed the MLX 35B generates a grade-A PR body in ~6 s once warm; the only slow part is the ~77 s cold-load. The active mitigation is therefore NOT hand-writing: on a host where the prose tier resolves to a 35B-class MLX model, set `DELEGATE_PREFLIGHT_TIMEOUT=90` on the first (cold) call so the pre-flight canary tolerates the load window — warm calls return in seconds and need nothing. Keep the model resident (Ollama `keep_alive`, or `mlx_lm.server` holding the last model) to avoid paying cold-load repeatedly. The recipe also passes where the prose tier resolves to a smaller model.
 
@@ -380,3 +382,34 @@ classified as that exemplar's own content. `#441` may well be working; this
 call cannot tell us, because the check rejected the draft for something `#441`
 was never about. Re-measure after the single-exemplar defect is fixed and
 roughly ten more calls have landed.
+
+### 2026-08-27 — two exemplars, and the footer stripped out of them
+
+`no_example_echo` failed the 06:44:53Z draft, and its retry, for reproducing
+`🤖 Generated with [Claude Code](https://claude.com/claude-code)` — 62
+characters of footer that the answer is supposed to carry. The exemplar was PR
+#422, chosen unrelated exactly as `#441` asks, and nothing of #422's content
+came back. The check was right that a prompt line was reproduced and wrong that
+it mattered.
+
+The mechanism is the convention/content split. A line appearing in more than
+one exemplar is dropped from the pattern set, on the reasoning that repetition
+means boilerplate the output is meant to reproduce. With ONE exemplar every
+line appears exactly once, so the rule cannot fire and the footer is classified
+as content. Two exemplars restore it — except that the footer is not in every
+merged PR of this repo (measured 2026-08-27: 1 of the last 8), so repetition
+alone does not reach it. Hence both halves: `--limit 2`, and a jq filter that
+drops the footer lines outright.
+
+A per-line length floor was measured and rejected as the fix. The two true
+positives matched 157 B and 697 B against this false positive's 62 B, which
+looks separable until `commit-message`'s exemplar case is included: the echo
+that motivated `echo_guard_vars` (#428) was a ~53-character commit subject that
+MUST still flag. No single floor sits above 62 and below 53.
+
+`--limit 1` was itself a 2026-05-10 decision, taken because `--limit 2` was
+believed to stall the 35B prose host. ADR 0027 falsified that premise in June —
+the stall was cold LOAD, not generation — and the recipe's own header records
+the gate being retired for the same reason. Measured again 2026-08-27 on the
+current host: two exemplars at 3.3 KB with a ~1 KB context returned a complete,
+accurate PR body in 12.0 s warm. The reason for `--limit 1` no longer exists.

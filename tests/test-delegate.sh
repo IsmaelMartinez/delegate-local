@@ -5211,6 +5211,20 @@ if [[ "$out" == *"no_example_echo"* ]]; then
 else
   echo "  PASS  echo-check: genuine answer does not trip the check"; pass=$((pass+1))
 fi
+# 40c-ii. The failure names exemplar boilerplate as a cause. The check cannot
+# tell a repo's generated-by footer from an exemplar's own content when only
+# one exemplar is supplied — measured 2026-08-27, a 62-character footer failed
+# a draft and then its retry — and the fix belongs in the exemplar, never in
+# the answer. A rejection that does not say so reads as "the model hallucinated".
+make_mock_curl_think "$tmp" 'The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
+out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
+assert_contains "strip it from" "$out" \
+  "echo-check: the failure says to strip boilerplate from the exemplar"
+assert_contains "pass two" "$out" \
+  "echo-check: the failure says why one exemplar cannot be classified"
+
 # 40d. Short shared lines are below the 40-char floor, so a recipe and its
 # output can share a heading or a sign-off without colliding.
 make_mock_curl_think "$tmp" '=== Facts ==='
