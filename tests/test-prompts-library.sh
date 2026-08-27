@@ -352,10 +352,15 @@ pr_description_gather=$(awk '
   in_section && /^## / { exit }
   in_section { print }
 ' "$PROMPTS_DIR/pr-description.md")
-if printf '%s' "$pr_description_gather" | grep -q -- '--limit 1'; then
-  echo "  FAIL  pr-description.md gather block must fetch more than one example"; fail=$((fail+1))
+# Asserted POSITIVELY on the number, not as the absence of `--limit 1`: a
+# regression to `--limit 0`, or to no `--limit` at all, breaks the same
+# invariant and a negative match would wave both through.
+pr_description_limit=$(printf '%s' "$pr_description_gather" \
+  | sed -nE 's/^.*[[:space:]]--limit[[:space:]]+([0-9]+).*$/\1/p' | head -n 1)
+if [[ "$pr_description_limit" =~ ^[0-9]+$ ]] && (( 10#$pr_description_limit >= 2 )); then
+  echo "  PASS  pr-description.md gather block fetches at least two examples"; pass=$((pass+1))
 else
-  echo "  PASS  pr-description.md gather block fetches more than one example"; pass=$((pass+1))
+  echo "  FAIL  pr-description.md gather block fetches at least two examples (got '${pr_description_limit:-no --limit}')"; fail=$((fail+1))
 fi
 assert_contains "Generated with" "$pr_description_gather" \
   "pr-description.md gather block strips the generated-by footer from each example"
