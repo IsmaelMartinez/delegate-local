@@ -171,51 +171,60 @@ boundary="" recipe=""
 # measurement that failed must not promote a reply to the long recipe on no
 # evidence at all.
 posted_body_chars() {
-  local raw="$1" path n
-  # An optional opening quote is consumed so `--body-file "notes.md"` yields
-  # the path rather than nothing, and the captured token is cut at the first
-  # shell punctuation so `--body-file notes.md;` does not become `notes.md;`.
-  path=$(sed -nE 's/^.*[[:space:]](--body-file|-F)[[:space:]]+["'"'"']?([^[:space:]"'"'"']+).*$/\2/p' <<<"$raw" | head -n 1)
-  path="${path%%[;,\&|\)]*}"
-  # -f, not just -r: this runs inside a PreToolUse hook on every Bash call, and
-  # `wc -c < /dev/zero` never returns. A directory, a device or a FIFO is not a
-  # body file, and anything that is not a regular file falls through to the
-  # inline branch and then to the short-shape default.
-  if [[ -n "$path" && -f "$path" && -r "$path" ]]; then
-    n=$(wc -c < "$path" 2>/dev/null | tr -d ' ')
-    printf '%s' "${n:-0}"
-    return 0
-  fi
-  # One left-to-right pass, no backtracking: find each flag that starts at a
-  # word boundary, then measure the argument that follows it, quoted or bare.
-  awk 'BEGIN { RS="\1" } {
+  local raw="$1" kind val n
+  # ONE left-to-right pass, no backtracking: find each flag that starts at a
+  # word boundary and read the argument after it. A quoted argument is taken
+  # whole, spaces included, so `--body-file "notes with spaces.md"` resolves to
+  # a path rather than to its first word; a bare one stops at whitespace or at
+  # shell punctuation, so `--body-file notes.md;` does not become `notes.md;`.
+  # A `--body-file` wins over an inline body: it names where the text really
+  # is, and the file is the honest measurement.
+  IFS=$'\t' read -r kind val < <(awk 'BEGIN { RS="\1" } {
     n = length($0); if (n > 32768) n = 32768;
-    best = 0;
+    best = 0; file = "";
     for (i = 1; i <= n; i++) {
       if (i > 1 && substr($0, i - 1, 1) !~ /[[:space:]]/) continue;
-      f = 0;
-      if (substr($0, i, 7) == "--body ")        f = 7;
+      f = 0; isfile = 0;
+      if (substr($0, i, 12) == "--body-file ")   { f = 12; isfile = 1 }
+      else if (substr($0, i, 3) == "-F ")        { f = 3;  isfile = 1 }
+      else if (substr($0, i, 7) == "--body ")      f = 7;
       else if (substr($0, i, 10) == "--message ") f = 10;
-      else if (substr($0, i, 3) == "-b ")       f = 3;
+      else if (substr($0, i, 3) == "-b ")          f = 3;
       if (f == 0) continue;
       j = i + f;
       while (j <= n && substr($0, j, 1) == " ") j++;
-      c = substr($0, j, 1); len = 0;
+      c = substr($0, j, 1); v = "";
       if (c == "\"" || c == "\047") {
         j++;
         while (j <= n && substr($0, j, 1) != c) {
           # A backslash escapes the next character inside double quotes only;
           # inside single quotes the shell takes it literally.
           if (c == "\"" && substr($0, j, 1) == "\\") j++;
-          len++; j++;
+          v = v substr($0, j, 1); j++;
         }
       } else {
-        while (j <= n && substr($0, j, 1) !~ /[[:space:]]/) { len++; j++ }
+        while (j <= n && substr($0, j, 1) !~ /[[:space:];,&|)]/) { v = v substr($0, j, 1); j++ }
       }
-      if (len > best) best = len;
+      if (isfile) { if (file == "") file = v }
+      else if (length(v) > best) best = length(v);
     }
-    print best + 0;
-  }' <<<"$raw"
+    if (file != "") printf "FILE\t%s\n", file; else printf "INLINE\t%d\n", best;
+  }' <<<"$raw")
+  if [[ "$kind" == "FILE" ]]; then
+    # -f, not just -r: this runs inside a PreToolUse hook on every Bash call,
+    # and `wc -c < /dev/zero` never returns. A directory, a device or a FIFO is
+    # not a body file, and anything that is not a regular file falls back to 0
+    # so the caller keeps the short-shape default — a measurement that failed
+    # must not promote a reply to the long recipe on no evidence at all.
+    if [[ -n "$val" && -f "$val" && -r "$val" ]]; then
+      n=$(wc -c < "$val" 2>/dev/null | tr -d ' ')
+      printf '%s' "${n:-0}"
+    else
+      printf '0'
+    fi
+    return 0
+  fi
+  printf '%s' "${val:-0}"
 }
 
 long_body_chars="${DELEGATE_BOUNDARY_LONG_BODY_CHARS:-600}"

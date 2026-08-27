@@ -940,6 +940,22 @@ payload "gh pr comment 12 --body-file $tmpcwd/long.md; echo done" "$tmpcwd" \
 assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
   "comment-reply: trailing shell punctuation is not part of the path"
 
+# 58d-iv. A quoted path containing SPACES is one path, not its first word.
+: > "$METRICS"
+cp "$tmpcwd/long.md" "$tmpcwd/notes with spaces.md"
+payload "gh pr comment 12 --body-file \"$tmpcwd/notes with spaces.md\"" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a quoted path with spaces is measured whole"
+
+# 58d-v. A --body-file wins over an inline --body in the same command: it names
+# where the text really is.
+: > "$METRICS"
+payload "gh pr comment 12 --body \"short\" --body-file $tmpcwd/long.md" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: --body-file outranks an inline body in the same command"
+
 # 58e. The threshold is overridable, so the routing can be re-tuned from the
 # corpus without editing the hook.
 : > "$METRICS"
