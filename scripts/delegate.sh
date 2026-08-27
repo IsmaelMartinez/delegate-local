@@ -2087,6 +2087,11 @@ fi
 # the retry suppresses is a complaint about a draft nobody will ever see.
 checks_stderr=$(mktemp)
 trap 'rm -f "$body_file" "$checks_stderr"' EXIT
+# Banked before the checks run, because run_output_checks can MUTATE $output:
+# the ADR 0017 auto-strip removes a trailing padding clause in place. Reading
+# the length afterwards would charge the retry for the post-strip text and
+# under-count the generation that was actually rejected.
+rejected_output_chars=${#output}
 run_output_checks 2>"$checks_stderr"
 
 retried=""
@@ -2100,7 +2105,7 @@ if (( status == 0 )) && (( checks_failed > 0 )) \
   # prompt_chars / output_chars, which keep meaning "the request that
   # produced the answer you got"; the row still reproduces its own token
   # count as (prompt + context + output + retry) / 4.
-  retry_chars=${#output}
+  retry_chars=$rejected_output_chars
   retry_notice=""
   for _rc in $(printf '%s' "$checks_failed_names" | tr ',' ' '); do
     retry_notice="${retry_notice}- $(retry_constraint_for "$_rc")

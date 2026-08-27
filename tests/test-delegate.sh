@@ -6196,6 +6196,68 @@ assert_eq "$(printf '%s' "$row" | jq -r '((.prompt_chars + .context_chars + .out
   "$(printf '%s' "$row" | jq -r '.estimated_tokens_avoided')" \
   "retry: the row still reproduces its own token count"
 
+# 47e-i-b. The rejected generation is measured BEFORE the checks run, because
+# the ADR 0017 auto-strip mutates $output in place. A recipe declaring both
+# no_padding_tail and another check can have its padding clause stripped and
+# then be retried for the other failure; reading the length afterwards would
+# charge the retry for the post-strip text.
+#
+# Differential, because the row cannot show it directly: checks_run/failed/
+# autofixed are all reset by the second pass, so a retried row always reports
+# the post-retry state. Two first-outputs identical but for a trailing padding
+# clause must therefore differ in retry_chars by that clause. Measuring after
+# the strip makes them equal.
+prompts2="$tmp/prompts2"; mkdir -p "$prompts2"
+cat > "$prompts2/rp.md" <<'EOF'
+---
+tier: prose
+checks:
+  subject_max: 12
+  no_padding_tail: true
+---
+# rp
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+GO
+```
+
+## Calibration notes
+n/a
+EOF
+run_rp() {
+  env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+    ${1:+DELEGATE_NO_RETRY=1} \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts2" \
+    bash "$SCRIPT" --recipe rp prose "go" </dev/null
+}
+plain_body='this subject line is far too long\n\nthe body says a thing'
+padded_body="${plain_body}, ensuring the change is covered"
+# Precondition: the padded tail really is one the auto-strip takes. Without
+# this the differential below would pass for the wrong reason.
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" "$padded_body"
+run_rp off >/dev/null 2>&1
+assert_eq 1 "$(tail -1 "$metrics" | jq -r '.checks_autofixed')" \
+  "retry: the padded tail used below is one the auto-strip takes"
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" "$plain_body" 'short one\n\nbody'
+run_rp >/dev/null 2>&1
+rc_plain=$(tail -1 "$metrics" | jq -r '.retry_chars')
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" "$padded_body" 'short one\n\nbody'
+run_rp >/dev/null 2>&1
+rc_padded=$(tail -1 "$metrics" | jq -r '.retry_chars')
+if (( rc_padded > rc_plain )); then
+  echo "  PASS  retry: the rejected generation is measured before the auto-strip"; pass=$((pass+1))
+else
+  echo "  FAIL  retry: the rejected generation is measured before the auto-strip (plain=$rc_plain padded=$rc_padded)"; fail=$((fail+1))
+fi
+
 # 47e-ii. queue_wait_ms means invoke-to-first-byte, and duration_ms covers both
 # dispatches, so a retried call has to carry both waits. Banking only the
 # second would drop the whole of the rejected call's wait into generation_ms.
