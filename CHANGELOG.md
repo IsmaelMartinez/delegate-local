@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.30.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.29.0...v0.30.0) (2026-08-27)
+
+
+### Features
+
+* retry once when a deterministic check fails ([#446](https://github.com/IsmaelMartinez/delegate-local/issues/446)) ([ec88fc3](https://github.com/IsmaelMartinez/delegate-local/commit/ec88fc34a759f7d72e86ea3f20e67ce3de9ed924))
+* route the comment boundary by how much is being posted ([#450](https://github.com/IsmaelMartinez/delegate-local/issues/450)) ([c3ef921](https://github.com/IsmaelMartinez/delegate-local/commit/c3ef921702c678b1d1954ceaa290724ffb89b15a))
+
+
+### Bug Fixes
+
+* distinguish CUT from INVENTED in self-improve diff analysis ([#447](https://github.com/IsmaelMartinez/delegate-local/issues/447)) ([dcd9d51](https://github.com/IsmaelMartinez/delegate-local/commit/dcd9d51a4ba03eb61dbccf1368413cc9a803cae6))
+* give the echo check two exemplars and strip the footer from them ([#451](https://github.com/IsmaelMartinez/delegate-local/issues/451)) ([277a9a6](https://github.com/IsmaelMartinez/delegate-local/commit/277a9a6c8b841e984a02fcedcc9c8733842c0169))
+* stop naming a project after a scratch directory ([#452](https://github.com/IsmaelMartinez/delegate-local/issues/452)) ([0cfaaa1](https://github.com/IsmaelMartinez/delegate-local/commit/0cfaaa1fe98a58be07a2d312607c54478fb8735f))
+
+
+### Documentation
+
+* close the round-two queue with results and two corrections ([#453](https://github.com/IsmaelMartinez/delegate-local/issues/453)) ([d806967](https://github.com/IsmaelMartinez/delegate-local/commit/d8069676d4caba54361602ede61fef6f191a40d9))
+* record what the two 2026-08-26 fixes actually measure ([#449](https://github.com/IsmaelMartinez/delegate-local/issues/449)) ([4e75771](https://github.com/IsmaelMartinez/delegate-local/commit/4e75771a070050bc7f9f3dcb55667aa3c4fd2f67))
+
 ## [0.29.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.28.0...v0.29.0) (2026-08-26)
 
 
