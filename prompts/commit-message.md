@@ -388,3 +388,23 @@ production failure and clears it — from over the limit to under it.
 
 A synthetic one-line diff does NOT reproduce the defect (both wordings land near
 30 words), which is worth knowing before anyone tries to re-measure this cheaply.
+
+### 2026-08-27 — the post-landing reading on the derived body shape
+
+`#442` landed at 2026-08-26T23:19:35Z with a controlled measurement behind it:
+the same diff (`fafd439`) at temperature 0, four reps each, 92,92,92,92 words
+before and 45,45,45,45 after. That is a real result and it is not the same
+thing as production moving.
+
+Production, as of 2026-08-27T07:00Z: the `body_max_words` check failed on 5 of
+the 28 `commit-message` calls in the seven days before `#442` merged, and on 1
+of the 7 since. 18% against 14%, on an n of 7. Those are not distinguishable,
+so the honest status is that the fix is measured in the lab and unmeasured in
+the field. Re-read this after roughly ten more calls; if the rate has not
+moved by then, the contradiction between the hardcoded shape and the profile
+cap was not the operative cause and something else is.
+
+One thing did change and is worth separating out. The 2026-08-27 calls include
+the first that needed no length edit at all, and the two most recent shipped
+at 39 and 45 words. That is consistent with the fix working; it is also
+consistent with four calls being four calls.

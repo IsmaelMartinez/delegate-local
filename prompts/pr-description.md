@@ -356,3 +356,27 @@ a measurement, which is why the fix here is caller-facing guidance in "Context
 to gather first" rather than a check. If it recurs with a deliberately
 unrelated anchor, the hypothesis is wrong and the next attempt should be
 mechanical.
+
+### 2026-08-27 — `#441` is un-measured, and something else was in the way
+
+`#441` (pick an exemplar from unrelated work) merged at 2026-08-26T23:06:30Z.
+Both `no_example_echo` events that motivated it predate it, at 20:02:51 and
+22:11:08, so it had taken no calls at all when this was written and its own
+rate cannot be quoted.
+
+The one call since, at 2026-08-27T06:44:53Z, followed the new guidance — the
+exemplar was PR #422, a parsing fix with nothing in common with the branch
+being described — and the content leak the guidance targets did NOT recur. The
+draft copied no paragraph of #422 and invented nothing from it. What it did
+reproduce was `🤖 Generated with [Claude Code](https://claude.com/claude-code)`,
+the trailer every PR in this repo carries and which the output is supposed to
+carry, and `no_example_echo` failed the draft for it twice (once on the
+generation, once on the retry that `#384` had just added).
+
+That is a different defect, in the check rather than the recipe: its
+convention/content split drops any line appearing in more than one exemplar,
+and with a single exemplar every line appears exactly once, so boilerplate is
+classified as that exemplar's own content. `#441` may well be working; this
+call cannot tell us, because the check rejected the draft for something `#441`
+was never about. Re-measure after the single-exemplar defect is fixed and
+roughly ten more calls have landed.
