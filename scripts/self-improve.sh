@@ -269,14 +269,37 @@ jq -rs --arg prev "$prev_ts" '
   echo "    reason: $reason"
   if [[ -n "$draft" && -f "$drafts_dir/$draft" ]]; then
     dpath="$drafts_dir/$draft"
-    echo "    draft:  $dpath ($(wc -c < "$dpath" | tr -d ' ') bytes)"
+    dbytes=$(wc -c < "$dpath" | tr -d ' ')
+    echo "    draft:  $dpath ($dbytes bytes)"
     if [[ -n "$final" && -f "$drafts_dir/$final" ]]; then
       fpath="$drafts_dir/$final"
-      echo "    final:  $fpath ($(wc -c < "$fpath" | tr -d ' ') bytes)"
+      fbytes=$(wc -c < "$fpath" | tr -d ' ')
+      echo "    final:  $fpath ($fbytes bytes)"
       dropped=$(comm -13 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
-      invented=$(comm -23 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
+      draft_only=$(comm -23 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
       [[ -n "${dropped// /}"  ]] && echo "    DROPPED  (in the shipped text, absent from the draft): $dropped"
-      [[ -n "${invented// /}" ]] && echo "    INVENTED (in the draft, absent from the shipped text): $invented"
+      # A token in the draft and not in the shipped text has two very different
+      # causes, and calling both of them INVENTED made this instrument report a
+      # hallucination on the most common rejection shape there is: the facts
+      # are right, the body is too long, the human cuts clauses, and every
+      # clause cut lands in the list. Measured against the captured pairs on
+      # 2026-08-27, most of them were that rather than invention.
+      #
+      # The discriminator is DROPPED, and only DROPPED. Invention is a claim
+      # that something in the draft was WRONG and had to be replaced, and the
+      # only evidence for it is the shipped text carrying a token the draft
+      # lacked. Where the human put nothing back, material was removed and
+      # nothing substituted — whether the result is shorter (a length edit) or
+      # longer (prose added that happens to carry no salient token). Reading
+      # the byte delta instead would call that second case invention on no
+      # evidence at all.
+      if [[ -n "${draft_only// /}" ]]; then
+        if [[ -z "${dropped// /}" ]]; then
+          echo "    CUT      (in the draft, removed; the shipped text put nothing in their place): $draft_only"
+        else
+          echo "    INVENTED (in the draft, replaced in the shipped text): $draft_only"
+        fi
+      fi
       dm=$(list_markers "$dpath"); fm=$(list_markers "$fpath")
       if (( dm > 0 && fm == 0 )); then
         echo "    SHAPE: draft used $dm list item(s); the shipped text used none (prose was wanted)"

@@ -224,6 +224,88 @@ assert_contains "no human taste judgment in this window" "$out" \
   "verdict tiers: an all-agent window says there is no keep rate to quote"
 rm -rf "$tmp"
 
+# ---------------------------------------------------------------------------
+# 12. CUT vs INVENTED. A salient token present in the draft and absent from the
+# shipped text has two causes that need opposite responses, and calling both
+# INVENTED made the loop's own instrument report a hallucination on the most
+# common rejection shape there is: the human cutting clauses for length.
+#
+# Its own fixture rather than an extension of seed(): the counts asserted
+# above (delegation total, verdict tally, capture coverage) are regression
+# guards, and growing the shared corpus would have moved all four.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+c1=$(iso_ago 900); c2=$(iso_ago 600)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$c1","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"delegate-local","duration_ms":2000,"exit_status":0,"estimated_tokens_avoided":100,"draft_file":"C1.draft.txt"}
+{"ts":"$(iso_ago 890)","source":"feedback","ref_ts":"$c1","kept":false,"scaffold":true,"reason":"body ran long; compressed","verdict_source":"agent","final_file":"C1.final.txt"}
+{"ts":"$c2","source":"delegate","tier":"prose","model":"q","recipe":"pr-description","project":"delegate-local","duration_ms":2000,"exit_status":0,"estimated_tokens_avoided":100,"draft_file":"C2.draft.txt"}
+{"ts":"$(iso_ago 590)","source":"feedback","ref_ts":"$c2","kept":false,"reason":"fabricated a contradiction against its own input","verdict_source":"agent","final_file":"C2.final.txt"}
+EOF
+# C1 is a PURE COMPRESSION: every salient token in the final is also in the
+# draft, and the final is shorter. Nothing was invented; clauses were cut.
+cat > "$tmp/drafts/C1.draft.txt" <<'EOF'
+fix: widen the tier scan in delegate.sh
+
+The scan in `scripts/delegate.sh` read until the first line without a trailing
+backslash, so a recipe whose first value spans lines was scanned 2 lines deep
+and reported a pass. Covered by `tests/test-delegate.sh`.
+EOF
+cat > "$tmp/drafts/C1.final.txt" <<'EOF'
+fix: widen the tier scan in delegate.sh
+
+The scan in `scripts/delegate.sh` read 2 lines deep and reported a pass.
+EOF
+# C2 is a REPLACEMENT: the shipped text carries anchors the draft never had,
+# so something in the draft was substituted rather than merely trimmed.
+cat > "$tmp/drafts/C2.draft.txt" <<'EOF'
+Only 1 of the 4 dangling references is repaired, and `docs/CHANGELOG.md` still
+names the other 3. The suites were not run.
+EOF
+cat > "$tmp/drafts/C2.final.txt" <<'EOF'
+All four dangling references are repaired in `prompts/README.md`, and
+`tests/test-prompts-library.sh` pins them at 367 assertions.
+EOF
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state12" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
+
+# 12a. The compression pair is labelled CUT, and names what the human removed.
+compression=$(printf '%s\n' "$out" | sed -n '/C1.draft.txt/,/^$/p')
+assert_contains "CUT" "$compression" "a pure compression is labelled CUT"
+assert_contains "tests/test-delegate.sh" "$compression" \
+  "CUT names the token the human removed for length"
+assert_not_contains "INVENTED" "$compression" \
+  "a pure compression is not reported as invention"
+
+# 12b. The pair where the human ALSO put back tokens the draft lacked is still
+# INVENTED — the fix must scope the signal, not disable it.
+replacement=$(printf '%s\n' "$out" | sed -n '/C2.draft.txt/,/^$/p')
+assert_contains "INVENTED" "$replacement" \
+  "a draft whose material the shipped text replaced is still INVENTED"
+assert_contains "DROPPED" "$replacement" \
+  "the replacement pair still reports what the human had to put back"
+assert_not_contains "CUT" "$replacement" "a replacement is not labelled CUT"
+
+# 12c. A shipped text LONGER than the draft, where the human still put nothing
+# back, is CUT and not INVENTED. Invention is a claim that something was WRONG
+# and had to be replaced; a longer result with no new salient token is prose
+# added around material that was removed, which is no evidence of that at all.
+cat > "$tmp/drafts/C1.final.txt" <<'EOF'
+fix: widen the tier scan in delegate.sh
+
+The scan in `scripts/delegate.sh` read until the first line without a trailing
+backslash, so a recipe whose first value spans lines was scanned 2 lines deep
+and reported a pass. The test reference is gone and these two sentences carry
+no path, no hash and no count, so the shipped text is longer than the draft it
+replaced while putting nothing at all in the place of what it removed.
+EOF
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state12c" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
+longer=$(printf '%s\n' "$out" | sed -n '/C1.draft.txt/,/^$/p')
+assert_not_contains "INVENTED" "$longer" \
+  "an expansion that puts nothing back is not called invention"
+assert_contains "CUT" "$longer" \
+  "an expansion that puts nothing back is still a removal"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
