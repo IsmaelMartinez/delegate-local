@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.31.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.30.0...v0.31.0) (2026-08-27)
+
+
+### Features
+
+* add no_invented_headings check to delegate.sh ([#458](https://github.com/IsmaelMartinez/delegate-local/issues/458)) ([e6d6fd5](https://github.com/IsmaelMartinez/delegate-local/commit/e6d6fd5b7d98530aaa858ad198d9f5e91af10ece))
+* capture the posted body as the shipped final ([#457](https://github.com/IsmaelMartinez/delegate-local/issues/457)) ([ee0406d](https://github.com/IsmaelMartinez/delegate-local/commit/ee0406d5c616c4de5e3f171553719c6785a74c64))
+* lift the pr-review-reply one-clause cap ([#456](https://github.com/IsmaelMartinez/delegate-local/issues/456)) ([dcc4ca9](https://github.com/IsmaelMartinez/delegate-local/commit/dcc4ca99bbf55ca5345a5b72211088ed18a7e0a9))
+
+
+### Bug Fixes
+
+* honour delegate-feedback flags after the verdict ([#454](https://github.com/IsmaelMartinez/delegate-local/issues/454)) ([e13e820](https://github.com/IsmaelMartinez/delegate-local/commit/e13e820bfca439aab5bc9f6d7c92d7aecc66febf))
+
+
+### Documentation
+
+* close the round-three queue with results and two corrections ([#460](https://github.com/IsmaelMartinez/delegate-local/issues/460)) ([8bcfa09](https://github.com/IsmaelMartinez/delegate-local/commit/8bcfa09b09da5b8442c1c8e599399bf5fe5abd48))
+* record what the 600-character routing threshold was measured against ([#459](https://github.com/IsmaelMartinez/delegate-local/issues/459)) ([9f0216e](https://github.com/IsmaelMartinez/delegate-local/commit/9f0216e3ae00fddbf15207d1cb2f460531d5fb14))
+
 ## [0.30.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.29.0...v0.30.0) (2026-08-27)
 
 
