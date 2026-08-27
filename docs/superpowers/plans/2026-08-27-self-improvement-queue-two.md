@@ -183,6 +183,17 @@ moves to Issue 4, which stands on its own evidence and needs it anyway.
 explanation is falsified, and the two remaining candidate mechanisms are #358
 and the `/address-pr-comments` skill's inline scripting.
 
+Then observed directly, twice, while working this queue. Replying to the
+Copilot finding on PR #446 meant composing
+`gh api .../pulls/446/comments -X POST -f body="Applied in \`c25ce0c\`. ..."` —
+the reply text and the command are the same keystroke, so by the time the hook
+fires at PreToolUse the drafting moment is already over and the nudge can only
+ask for something that has happened. That is #358's mechanism, seen from the
+inside, and it raises the finding from hypothesis to observation. It also
+explains why `git-commit` sits at 26% rather than 0: a commit message is
+composed into a file or a `-m` string as a deliberate separate step, so there
+IS a moment before the command exists.
+
 ---
 
 ## Issue 4 — `comment-reply` pins the closed short recipe for evidence-led replies
