@@ -371,6 +371,15 @@ if [[ -n "$final_src" || "$kept" == "false" ]]; then
   parent_draft=$(jq -r --arg ts "$ref_ts" \
     'select((.source // "delegate") == "delegate" and .ts == $ts) | .draft_file // empty' \
     "$metrics_file" | tail -n 1)
+  # Untrusted: it comes out of a JSONL file and becomes part of a path this
+  # script reads and writes. A bare filename ending in .draft.txt, nothing
+  # else — a row carrying `../../x.draft.txt` would otherwise place the stored
+  # final outside the drafts directory. A rejected value falls through to the
+  # ts-derived stem below, which is the same path a row with no draft takes.
+  case "$parent_draft" in
+    *.draft.txt) [[ "$parent_draft" == */* || "$parent_draft" == .* ]] && parent_draft="" ;;
+    *) parent_draft="" ;;
+  esac
 fi
 
 if [[ -n "$final_src" ]]; then

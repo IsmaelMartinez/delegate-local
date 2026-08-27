@@ -282,6 +282,14 @@ posted_body_text() {
   printf '%s' "${rest:0:65536}"
 }
 
+# 600 was picked without data on 2026-08-27 and measured the same day against
+# the population it routes: 27 issue comments authored by the maintainer on
+# this repo run min 8, p25 573, median 950, p75 1417, max 2522 characters. The
+# split sends 19 to `maintainer-review-reply` and keeps 8 for `maintainer-reply`,
+# and the short tail it keeps (two comments under 200 characters) is exactly the
+# status-line shape that recipe is capped for. Re-measure before moving it: the
+# `pr-review-comment` population is a different distribution entirely (median
+# 312 over n=23), so a threshold that suits one boundary need not suit another.
 long_body_chars="${DELEGATE_BOUNDARY_LONG_BODY_CHARS:-600}"
 
 classify_segment() {
@@ -588,6 +596,15 @@ if [[ -f "$metrics_file" ]]; then
   credit_draft="${recent_out#*$'\t'}"
   [[ "$recent" == "$recent_out" ]] && credit_draft=""
   [[ "${recent:-0}" =~ ^-?[0-9]+$ ]] || recent=0
+  # `credit_draft` is read out of a JSONL file and is about to become part of a
+  # path this hook WRITES to, so it is treated as untrusted: a bare filename
+  # ending in .draft.txt, nothing else. A hand-edited or corrupted row carrying
+  # `../../x.draft.txt` would otherwise place the captured body outside the
+  # drafts directory. Anything that fails simply loses the capture.
+  case "$credit_draft" in
+    *.draft.txt) [[ "$credit_draft" == */* || "$credit_draft" == .* ]] && credit_draft="" ;;
+    *) credit_draft="" ;;
+  esac
   [[ "${recent:-0}" -gt 0 ]] && delegated=true
 fi
 

@@ -1693,6 +1693,23 @@ assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_source")')" \
   "adopt: nothing captured means no final_source"
 rm -rf "$tmp"
 
+# The draft_file this script reads out of the JSONL becomes part of a path it
+# writes to. A hand-edited or corrupted row must not be able to place the
+# stored final outside the drafts directory; a rejected value falls through to
+# the ts-derived stem, the same path a row with no draft takes.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","tier":"prose","exit_status":0,"draft_file":"../escaped.draft.txt"}\n' \
+  "$TS_LATEST" >> "$tmp/m.jsonl"
+printf 'shipped\n' > "$tmp/f.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --final "$tmp/f.txt" miss "r" >/dev/null 2>&1
+assert_eq "false" "$([[ -e "$tmp/escaped.final.txt" ]] && echo true || echo false)" \
+  "traversing draft_file: nothing is written outside the drafts directory"
+assert_eq "$(printf '%s' "$TS_LATEST" | tr -d ':-')-nodraft.final.txt" \
+  "$(tail -1 "$tmp/m.jsonl" | jq -r '.final_file // ""')" \
+  "traversing draft_file: falls through to the ts-derived stem"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

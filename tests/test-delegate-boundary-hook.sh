@@ -1052,9 +1052,9 @@ rm -rf "$capdir" "$capcwd"
 # so neither the directory nor the file may inherit a permissive umask.
 cap_setup
 ( umask 000; cap_post 'gh pr comment 12 --body "the fix landed in abc1234"' )
-assert_eq 700 "$(stat -f '%Lp' "$capdir/drafts" 2>/dev/null || stat -c '%a' "$capdir/drafts" 2>/dev/null)" \
+assert_eq 700 "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$capdir/drafts")" \
   "capture: drafts directory is private (700) under a permissive umask"
-assert_eq 600 "$(stat -f '%Lp' "$capdir/drafts/20260827T100000Z-aaaa1111.final.txt" 2>/dev/null || stat -c '%a' "$capdir/drafts/20260827T100000Z-aaaa1111.final.txt" 2>/dev/null)" \
+assert_eq 600 "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$capdir/drafts/20260827T100000Z-aaaa1111.final.txt")" \
   "capture: stored body is private (600) under a permissive umask"
 rm -rf "$capdir" "$capcwd"
 
@@ -1090,6 +1090,28 @@ printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","project":"%s
 cap_post 'gh pr comment 12 --body "the fix landed in abc1234"'
 assert_eq true "$(jq -r .delegated <<<"$(tail -1 "$capm")")" "capture: draftless delegation still credits the post"
 assert_eq "" "$(ls "$capdir/drafts" 2>/dev/null)" "capture: a draftless delegation stores nothing"
+rm -rf "$capdir" "$capcwd"
+
+# A draft_file read out of the metrics JSONL becomes part of a path this hook
+# writes to, so it is untrusted input: a bare filename ending in .draft.txt or
+# nothing at all. A hand-edited or corrupted row must not be able to place the
+# captured body outside the drafts directory.
+cap_setup
+printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","project":"%s","draft_file":"../escaped.draft.txt"}\n' \
+  "$capts" "$capproj" > "$capm"
+cap_post 'gh pr comment 12 --body "the fix landed in abc1234"'
+assert_eq "false" "$([[ -e "$capdir/escaped.final.txt" ]] && echo true || echo false)" \
+  "capture: a traversing draft_file writes nothing outside the drafts dir"
+assert_eq "" "$(ls "$capdir/drafts" 2>/dev/null)" \
+  "capture: a traversing draft_file writes nothing inside it either"
+rm -rf "$capdir" "$capcwd"
+
+# A draft_file that is not a draft at all is refused the same way.
+cap_setup
+printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","project":"%s","draft_file":"notes.txt"}\n' \
+  "$capts" "$capproj" > "$capm"
+cap_post 'gh pr comment 12 --body "the fix landed in abc1234"'
+assert_eq "" "$(ls "$capdir/drafts" 2>/dev/null)" "capture: a draft_file without the .draft.txt suffix stores nothing"
 rm -rf "$capdir" "$capcwd"
 
 echo
