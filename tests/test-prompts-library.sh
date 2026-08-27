@@ -487,6 +487,34 @@ else
   echo "  PASS  every backticked <name>.md cross-reference resolves to a recipe"; pass=$((pass+1))
 fi
 
+# ---------------------------------------------------------------------------
+# `pr-review-reply` must not go back to capping its body at one clause. The
+# `pr-review-comment` boundary fired 49 times without ever being credited, and
+# the reason was this cap: the 23 replies actually posted on PRs #440-#452
+# measure a median of 312 characters with only 4 under 100, against a recipe
+# that permitted the opener plus one short clause. The cap looks like concision
+# and reads like a bug in the trigger rate, so pin its removal and pin the
+# check that took over its anti-padding half.
+# ---------------------------------------------------------------------------
+prr="$PROMPTS_DIR/pr-review-reply.md"
+prr_template=$(awk '/^## Prompt template/{f=1} f' "$prr" 2>/dev/null | awk '/^```/{n++; next} n==1')
+if [[ -z "$prr_template" ]]; then
+  # A silent skip in an invariant is worse than no invariant: the grep below
+  # cannot match an empty string, so a heading rename or a fence change would
+  # turn this into a PASS asserting coverage that never happened. Same lesson
+  # as the positional-tier truncation pinned above.
+  echo "  FAIL  pr-review-reply.md prompt template could not be extracted"; fail=$((fail+1))
+elif printf '%s' "$prr_template" | grep -qiE 'at most one short clause|no additional sentences|one-sentence reply'; then
+  echo "  FAIL  pr-review-reply.md prompt template still caps the body at one clause"; fail=$((fail+1))
+else
+  echo "  PASS  pr-review-reply.md prompt template does not cap the body at one clause"; pass=$((pass+1))
+fi
+if awk '/^---[[:space:]]*$/{d++; if (d==2) exit; next} d==1' "$prr" 2>/dev/null | grep -qE '^[[:space:]]+no_padding_tail:[[:space:]]*true'; then
+  echo "  PASS  pr-review-reply.md declares no_padding_tail"; pass=$((pass+1))
+else
+  echo "  FAIL  pr-review-reply.md does not declare no_padding_tail (the check that replaced the clause cap)"; fail=$((fail+1))
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
