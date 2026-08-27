@@ -141,7 +141,21 @@ shipped text also carries tokens the draft lacked.
   one is the hallucination signal.
 - G2.5 The new assertions fail against the tree without the implementation.
 
-**Result.** _(to fill in)_
+**Result.** Done, merged as #447. `tests/test-self-improve.sh` 37 -> 45, on its
+own fixture rather than an extension of the shared `seed()` so the four counts
+that fixture guards stayed untouched.
+
+G2.3's replay is the measurement: 5 CUT and 3 INVENTED across the captured
+pairs, every one agreeing with the free-text reason its human wrote at the
+time. G2.5 twice — two assertions failed against `main`, and after review found
+the first rule wrong, two more failed against that first implementation.
+
+The review caught a real error worth recording. The rule shipped as "DROPPED
+empty AND the final is shorter", which calls an expansion invention when the
+shipped text merely removed a token and added prose carrying no salient one.
+The byte delta was doing work it had no business doing: invention is a claim
+that something was WRONG and had to be replaced, and DROPPED is the only
+evidence for that. The length test is gone.
 
 ---
 
@@ -230,7 +244,24 @@ extraction Issue 3 would have introduced, now owned here) and route
   the change is measurable from the metrics alone.
 - G4.5 The new assertions fail against the tree without the implementation.
 
-**Result.** _(to fill in)_
+**Result.** _(PR #450)_ `tests/test-delegate-boundary-hook.sh` 186 -> 196. Six
+of the ten new assertions fail against `main`; the other four are negative
+controls, including that the inline review-comment branch still wins on a long
+body.
+
+G4.3's threshold is 600 characters, from the two recipes' own documented
+output: `maintainer-reply`'s expected-output block is 182 characters,
+`maintainer-review-reply`'s is 467 and explicitly open-ended above that. It
+errs high deliberately — routing a short reply to the evidence-led recipe would
+be a NEW failure, while leaving a long one on the closed shape is only today's
+behaviour, which is already measured.
+
+The interesting part was where to measure from. The first implementation read
+the sanitised scan, which blanks every quoted run so a body can never be read
+as live shell — correct for classification, and it means the segment handed to
+`classify_segment` carries none of the body. Four assertions caught it
+returning 0 for every inline body. It reads the raw command now, taking only a
+length from it.
 
 ---
 
@@ -317,7 +348,30 @@ adding a second `uniq` rule that a one-element set still defeats.
   existing assertions still passing untouched.
 - G6.4 The new assertions fail against the tree without the implementation.
 
-**Result.** _(to fill in)_
+**Result.** _(PR TBD)_ Re-scoped once the evidence came in, and the goals above
+were written before two measurements that changed the answer.
+
+A per-line length floor looked like the fix and is not. The two true positives
+matched 157 B and 697 B of prose against the false positive's 62 B footer,
+which separates cleanly — until `commit-message`'s exemplar case is included:
+the echo that motivated `echo_guard_vars` (#428) was a ~53-character commit
+subject that MUST still flag. No floor sits above 62 and below 53.
+
+`--limit 2` alone is not the fix either. The convention filter needs the
+boilerplate in more than one exemplar, and measured 2026-08-27 the footer
+appears in 1 of this repo's last 8 merged PRs. So the gather block now does
+both: `--limit 2`, and a jq filter anchored to the start of the line that drops
+the footer outright without touching a paragraph that merely mentions it.
+
+The `--limit 1` it replaces was a 2026-05-10 decision resting on a stall that
+ADR 0027 reclassified in June as cold LOAD rather than generation — the same
+premise that retired this recipe's flaky gate. Measured again on the current
+host: two exemplars at 3.3 KB with a ~1 KB context returned a complete,
+accurate PR body in 12.0 s warm.
+
+The failure message also names exemplar boilerplate as a cause now and says the
+fix belongs in the exemplar, never in the answer. That does not stop a
+recurrence on another repo's footer, and is not claimed to.
 
 ---
 

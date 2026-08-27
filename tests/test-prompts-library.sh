@@ -340,6 +340,26 @@ assert_contains "NEVER tick a box that asserts a verification" "$pr_description_
   "pr-description.md prompt template bans the verification-asserting checked box"
 assert_contains "NEVER write a command's output, a pass/fail count, or a timing" "$pr_description_template" \
   "pr-description.md prompt template bans fabricated command output"
+# The gather block must fetch MORE THAN ONE example and strip the generated-by
+# footer out of each. Both halves are load-bearing and both are easy to undo by
+# accident. `no_example_echo` classifies a line as shared convention only when
+# it appears in more than one exemplar, so `--limit 1` leaves the check nothing
+# to compare and its boilerplate is read as that exemplar's own content — the
+# 2026-08-27 double failure. And a footer that only some merged PRs carry
+# (measured: 1 of the last 8 in this repo) defeats the rule even at two.
+pr_description_gather=$(awk '
+  /^## Context to gather first[[:space:]]*$/ { in_section=1; next }
+  in_section && /^## / { exit }
+  in_section { print }
+' "$PROMPTS_DIR/pr-description.md")
+if printf '%s' "$pr_description_gather" | grep -q -- '--limit 1'; then
+  echo "  FAIL  pr-description.md gather block must fetch more than one example"; fail=$((fail+1))
+else
+  echo "  PASS  pr-description.md gather block fetches more than one example"; pass=$((pass+1))
+fi
+assert_contains "Generated with" "$pr_description_gather" \
+  "pr-description.md gather block strips the generated-by footer from each example"
+
 pr_description_guards=$(awk '
   /^## Anti-hallucination guards/ { in_section=1; next }
   /^## / && in_section { in_section=0 }

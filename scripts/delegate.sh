@@ -1707,6 +1707,14 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
     echo "  exemplars you passed as a shape anchor) instead of writing one from your" >&2
     echo "  content: \"${echoed_line:0:120}\"" >&2
     echo "  The draft is not grounded in the input. Re-run or hand-write; do not ship it." >&2
+    # A line every artifact in the target repo carries — a generated-by footer,
+    # a sign-off, a badge — is boilerplate the answer is SUPPOSED to reproduce,
+    # and the convention filter only reaches it when more than one exemplar
+    # carries it. Naming that here turns a confusing rejection into an
+    # actionable one; the fix belongs in the exemplar, never in the answer.
+    echo "  If that line is boilerplate every artifact in the repo carries, strip it from" >&2
+    echo "  the exemplar you passed (and pass two, so shared lines can be recognised as" >&2
+    echo "  convention) rather than removing it from the answer." >&2
     checks_failed=$((checks_failed + 1))
     checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_example_echo"
     capability_failed=$((capability_failed + 1))
