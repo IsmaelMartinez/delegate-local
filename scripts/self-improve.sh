@@ -269,14 +269,37 @@ jq -rs --arg prev "$prev_ts" '
   echo "    reason: $reason"
   if [[ -n "$draft" && -f "$drafts_dir/$draft" ]]; then
     dpath="$drafts_dir/$draft"
-    echo "    draft:  $dpath ($(wc -c < "$dpath" | tr -d ' ') bytes)"
+    dbytes=$(wc -c < "$dpath" | tr -d ' ')
+    echo "    draft:  $dpath ($dbytes bytes)"
     if [[ -n "$final" && -f "$drafts_dir/$final" ]]; then
       fpath="$drafts_dir/$final"
-      echo "    final:  $fpath ($(wc -c < "$fpath" | tr -d ' ') bytes)"
+      fbytes=$(wc -c < "$fpath" | tr -d ' ')
+      echo "    final:  $fpath ($fbytes bytes)"
       dropped=$(comm -13 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
-      invented=$(comm -23 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
+      draft_only=$(comm -23 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
       [[ -n "${dropped// /}"  ]] && echo "    DROPPED  (in the shipped text, absent from the draft): $dropped"
-      [[ -n "${invented// /}" ]] && echo "    INVENTED (in the draft, absent from the shipped text): $invented"
+      # A token in the draft and not in the shipped text has two very different
+      # causes, and calling both of them INVENTED made the loop's own
+      # instrument report a hallucination on its most common rejection shape.
+      # The dominant `commit-message` rejection is a pure compression: the
+      # facts are right, the body is too long, the human cuts clauses — and
+      # every clause cut lands here. Four of the six rejections in the window
+      # to 2026-08-27 were exactly that, each one's own reason saying so
+      # ("the draft's facts were all correct but the body ran 92 words").
+      #
+      # The discriminator is DROPPED. If the human put back nothing the draft
+      # lacked, and the shipped text is shorter, material was removed and
+      # nothing was substituted for it. Only when the shipped text also
+      # carries tokens the draft lacked is there positive evidence that
+      # something in the draft was replaced — which is the case the two
+      # `pr-description` fabrications in the same window both show.
+      if [[ -n "${draft_only// /}" ]]; then
+        if [[ -z "${dropped// /}" ]] && (( fbytes < dbytes )); then
+          echo "    CUT      (in the draft, removed for length; the shipped text put nothing in their place): $draft_only"
+        else
+          echo "    INVENTED (in the draft, replaced in the shipped text): $draft_only"
+        fi
+      fi
       dm=$(list_markers "$dpath"); fm=$(list_markers "$fpath")
       if (( dm > 0 && fm == 0 )); then
         echo "    SHAPE: draft used $dm list item(s); the shipped text used none (prose was wanted)"

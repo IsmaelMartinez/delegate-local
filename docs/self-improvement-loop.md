@@ -61,8 +61,15 @@ produced and the text that actually shipped, plus three objective signals:
   numbers) present in the shipped text and absent from the draft. These are
   the specific facts a human had to put back. A recipe edit aimed at these is
   calibrated; one aimed at "dropped every load-bearing fact" is a guess.
-- `INVENTED` — present in the draft, absent from the shipped text. The
-  hallucination signal.
+- `INVENTED` — present in the draft, absent from the shipped text, on a
+  rejection where the human ALSO put tokens back. Something in the draft was
+  substituted, so this is the hallucination signal.
+- `CUT` — present in the draft, absent from the shipped text, on a rejection
+  where the human put nothing back and shipped something shorter. Material was
+  removed, not replaced. This is a length edit and says nothing about whether
+  the draft was true; do not read a `CUT` list as invention. Five of the seven
+  pairs in the window to 2026-08-27 were this, every one of them a
+  `commit-message` body trimmed to the profile's word cap.
 - `SHAPE` — a list-vs-prose mismatch between the draft and what shipped.
 
 The **capture coverage** line says how much of that you actually have. Drafts
