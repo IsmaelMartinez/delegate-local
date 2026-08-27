@@ -79,8 +79,8 @@ second output. Not a loop, not a repair heuristic per check.
 - G1.5 `DELEGATE_NO_RETRY=1` restores today's single-call behaviour exactly.
 - G1.6 The new assertions fail against the tree without the implementation.
 
-**Result.** Done, merged as #446. `tests/test-delegate.sh` 686 -> 707 across
-the implementation and four rounds of review, all green.
+**Result.** Done, merged as #446. `tests/test-delegate.sh` 686 -> 707 assertions
+across the implementation and four rounds of review, all green.
 
 G1.6 first, because it is what makes the rest evidence: run against the tree
 before the implementation, five of the thirteen new assertions failed — two
@@ -297,8 +297,8 @@ into the affected recipes' calibration notes, including the possibility that
 **Result.** Done, merged as #449.
 
 `#442`: the `body_max_words` check failed on 5 of the 28 `commit-message` calls
-in the seven days before it merged and on 1 of the 7 since. 18% against 14% on
-an n of 7 is not a difference. The controlled measurement behind it stands —
+in the seven days before it merged and on 1 of the 7 since. 18% against 14% at n=7 is not a
+difference. The controlled measurement behind it stands —
 92, 92, 92, 92 words before against 45, 45, 45, 45 after, same diff, same
 temperature — and the honest status is measured in the lab, unmeasured in the
 field.
@@ -457,7 +457,7 @@ command in one keystroke, so the hook fires after the drafting moment is over.
 ### Two corrections to the previous queue's closing report
 
 `#442` was reported as working on a controlled measurement. Production says
-18% against 14% on an n of 7, which is nothing. `#441` was reported as needing
+18% against 14% at n=7, which is nothing. `#441` was reported as needing
 ten more calls; it has had one, and that one was rejected for a defect it is
 not about.
 
