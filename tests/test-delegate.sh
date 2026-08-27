@@ -6303,6 +6303,12 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
 assert_eq "$(tail -1 "$metrics" | jq -r '.retry_chars')" \
   "$(jq -r '[.. | objects | select(.key? == "delegate.retry_chars") | .value.intValue] | .[0]' "$otel_body" 2>/dev/null)" \
   "retry: the span carries the same retry_chars as the row"
+# OTLP/JSON encodes int64 as a JSON STRING (proto3 JSON mapping), and every
+# other intValue on this span already does. A number here would be the one
+# inconsistent attribute in the payload.
+assert_eq "string" \
+  "$(jq -r '[.. | objects | select(.key? == "delegate.retry_chars") | .value.intValue | type] | .[0]' "$otel_body" 2>/dev/null)" \
+  "retry: delegate.retry_chars intValue is a JSON string"
 mv "$tmp/curl.chat" "$tmp/curl"
 
 # 47f. DELEGATE_NO_RETRY=1 restores the single-call behaviour exactly.

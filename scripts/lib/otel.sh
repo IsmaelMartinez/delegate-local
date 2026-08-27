@@ -270,7 +270,7 @@ emit_otel_span() {
                 {key: "delegate.estimated_tokens_avoided", value: {intValue: $tokens_avoided}},
                 {key: "delegate.exit_status", value: {intValue: $exit_status}}
               ]
-              + (if $retry_chars != "" then [{key: "delegate.retry_chars", value: {intValue: ($retry_chars|tonumber)}}] else [] end)
+              + (if $retry_chars != "" then [{key: "delegate.retry_chars", value: {intValue: $retry_chars}}] else [] end)
               + (if $recipe != "" then [{key: "delegate.recipe", value: {stringValue: $recipe}}] else [] end)
               + (if $project != "" then [{key: "delegate.project", value: {stringValue: $project}}] else [] end)
               + (if $include_content == "1" then [

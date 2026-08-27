@@ -183,7 +183,7 @@ ROW_SPAN=""
 emit_delegate_row() {
   local row="$1"
   local ts source backend tier model recipe
-  local pchars cchars ochars dur_ms qwait_ms gen_ms status tokens_avoided
+  local pchars cchars ochars dur_ms qwait_ms gen_ms status tokens_avoided retry_chars
   local existing_trace existing_span
   ROW_KIND="delegate"
 
@@ -223,11 +223,12 @@ emit_delegate_row() {
     .estimated_tokens_avoided // 0,
     .otel_trace_id // "",
     .otel_span_id // "",
-    .project // ""
+    .project // "",
+    .retry_chars // ""
   ] | map(tostring) | join("\u001f")' <<< "$row")
   IFS=$'\x1f' read -r ts source backend tier model recipe \
     pchars cchars ochars dur_ms qwait_ms gen_ms status tokens_avoided \
-    existing_trace existing_span project <<< "$fields"
+    existing_trace existing_span project retry_chars <<< "$fields"
 
   if [[ -n "$existing_trace" && -n "$existing_span" ]]; then
     ROW_RESULT="SKIP"
@@ -286,7 +287,7 @@ emit_delegate_row() {
   # exporter's existing exit-status-neutral contract.
   emit_otel_span "$start_ms" "$dur_ms" "$status" "$trace_id" "$span_id" \
     "$model" "$backend" "$tier" "$recipe" "$pchars" "$cchars" "$ochars" \
-    "$qwait_ms" "$gen_ms" "$tokens_avoided" "" "" "" "$project"
+    "$qwait_ms" "$gen_ms" "$tokens_avoided" "" "" "" "$project" "$retry_chars"
   ROW_RESULT="OK"
   return 0
 }

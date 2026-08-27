@@ -399,6 +399,26 @@ out=$(env -i PATH="$SAFE_PATH" HOME="$HOME" \
 assert_eq 2 "$EC" "T10: unknown flag → exit 2"
 assert_contains "usage:" "$out" "T10: usage line printed on bad flag"
 
+# ---------------------------------------------------------------------------
+# T11. A row carrying retry_chars (#384) exports it, so a re-exported span
+# matches what the live exporter would have sent. Without the pass-through the
+# attribute is simply absent and the span's token total cannot be reconciled
+# against its char counts.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+bodies="$tmp/bodies"
+make_mock_curl "$tmp" "$bodies" "$tmp/inv.log"
+cat > "$tmp/m.jsonl" <<'EOF'
+{"ts":"2026-08-27T07:00:00Z","source":"delegate","backend":"mlx","tier":"prose","model":"q","recipe":"rt","prompt_chars":10,"context_chars":0,"output_chars":20,"duration_ms":100,"queue_wait_ms":2,"generation_ms":98,"exit_status":0,"estimated_tokens_avoided":80,"project":"p","retried":true,"retry_chars":297}
+EOF
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" --metrics-file "$tmp/m.jsonl" >/dev/null 2>&1
+assert_eq "297" \
+  "$(jq -r '[.. | objects | select(.key? == "delegate.retry_chars") | .value.intValue] | .[0] // "absent"' "$bodies/1.json" 2>/dev/null)" \
+  "T11: a backfilled row exports delegate.retry_chars"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
