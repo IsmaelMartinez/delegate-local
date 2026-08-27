@@ -861,6 +861,76 @@ payload 'gh pr review 2822 --web' "$tmpcwd" \
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq 0 "$(nrows)" "pr-review-body: --web writes no row"
 
+# ---------------------------------------------------------------------------
+# 58. comment-reply routes by how much is being posted. The two candidates are
+# different SHAPES, not different qualities: `maintainer-reply` caps its prose
+# body at two sentences, `maintainer-review-reply` sets its length by the
+# evidence it carries. Pinning the first unconditionally is how it came to hold
+# 33 delegations at 21% usable.
+# ---------------------------------------------------------------------------
+long_body=$(python3 -c "print('The sandbox flag in src/main.js is the cause and not your distro. ' * 12)")
+
+# 58a. A short inline body keeps the closed short shape.
+: > "$METRICS"
+payload 'gh pr comment 12 --body "The token drop is on Teams side. Could you check a cold start?"' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a short body keeps maintainer-reply"
+
+# 58b. A long inline body names the evidence-led recipe instead.
+: > "$METRICS"
+out=$(payload "gh pr comment 12 --body \"$long_body\"" "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a long body names maintainer-review-reply"
+assert_contains 'maintainer-review-reply' "$out" \
+  "comment-reply: the nudge names the recipe it routed to"
+assert_contains '--var verdict=' "$out" \
+  "comment-reply: the nudge carries the routed recipe's own vars"
+
+# 58c. --body-file is measured from the file, not from the path.
+: > "$METRICS"
+printf '%s' "$long_body" > "$tmpcwd/long.md"
+payload "gh pr comment 12 --body-file $tmpcwd/long.md" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: --body-file is measured from the file"
+: > "$METRICS"
+printf 'two short sentences. and an ask?' > "$tmpcwd/short.md"
+payload "gh pr comment 12 --body-file $tmpcwd/short.md" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a short --body-file keeps the short shape"
+
+# 58d. A file that cannot be read must not promote the reply on no evidence.
+: > "$METRICS"
+payload "gh pr comment 12 --body-file $tmpcwd/does-not-exist.md" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: an unreadable body-file falls back to the short shape"
+
+# 58e. The threshold is overridable, so the routing can be re-tuned from the
+# corpus without editing the hook.
+: > "$METRICS"
+payload 'gh pr comment 12 --body "short enough by default"' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_BOUNDARY_LONG_BODY_CHARS=10 bash "$HOOK" >/dev/null
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: DELEGATE_BOUNDARY_LONG_BODY_CHARS moves the split"
+
+# 58f. glab's --message carries the same routing.
+: > "$METRICS"
+payload "glab mr note 4 --message \"$long_body\"" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: glab --message routes the same way"
+
+# 58g. The OTHER boundaries are untouched — a long PR-review-comment body is
+# still pr-review-reply, because that branch matches before this one.
+: > "$METRICS"
+payload "gh api repos/o/r/pulls/12/comments -X POST -f body=\"$long_body\"" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq pr-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: the inline review-comment branch still wins on a long body"
+
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

@@ -154,6 +154,63 @@ boundary="" recipe=""
 # everything here is gated on it, so a new branch whose command word is missing
 # there is dead code that silently never fires, with tests still green because
 # they only exercise branches that exist.
+# How much text a comment-posting command is about to publish. Used only to
+# choose between the two reply shapes, so an estimate that errs in a known
+# direction is enough.
+#
+# Measured from the RAW command rather than from $scan. The scanner blanks
+# every quoted run so that a body can never be read as live shell, which is
+# right for classification and also means the segment handed to
+# classify_segment carries no body at all — the first version of this measured
+# $seg and silently returned 0 for every inline body. Nothing here is
+# executed; the only thing taken from the raw text is a length.
+#
+# `--body-file` names a path, and the file is the honest measurement, so it is
+# read when readable. When neither form is present, or the named file cannot be
+# read, 0 comes back and the caller keeps the short-shape default: a
+# measurement that failed must not promote a reply to the long recipe on no
+# evidence at all.
+posted_body_chars() {
+  local raw="$1" path
+  path=$(sed -nE 's/^.*[[:space:]](--body-file|-F)[[:space:]]+([^[:space:]"'"'"']+).*$/\2/p' <<<"$raw" | head -n 1)
+  if [[ -n "$path" && -r "$path" ]]; then
+    wc -c < "$path" | tr -d ' '
+    return 0
+  fi
+  # One left-to-right pass, no backtracking: find each flag that starts at a
+  # word boundary, then measure the argument that follows it, quoted or bare.
+  awk 'BEGIN { RS="\1" } {
+    n = length($0); if (n > 32768) n = 32768;
+    best = 0;
+    for (i = 1; i <= n; i++) {
+      if (i > 1 && substr($0, i - 1, 1) !~ /[[:space:]]/) continue;
+      f = 0;
+      if (substr($0, i, 7) == "--body ")        f = 7;
+      else if (substr($0, i, 10) == "--message ") f = 10;
+      else if (substr($0, i, 3) == "-b ")       f = 3;
+      if (f == 0) continue;
+      j = i + f;
+      while (j <= n && substr($0, j, 1) == " ") j++;
+      c = substr($0, j, 1); len = 0;
+      if (c == "\"" || c == "\047") {
+        j++;
+        while (j <= n && substr($0, j, 1) != c) {
+          # A backslash escapes the next character inside double quotes only;
+          # inside single quotes the shell takes it literally.
+          if (c == "\"" && substr($0, j, 1) == "\\") j++;
+          len++; j++;
+        }
+      } else {
+        while (j <= n && substr($0, j, 1) !~ /[[:space:]]/) { len++; j++ }
+      }
+      if (len > best) best = len;
+    }
+    print best + 0;
+  }' <<<"$raw"
+}
+
+long_body_chars="${DELEGATE_BOUNDARY_LONG_BODY_CHARS:-600}"
+
 classify_segment() {
   local seg="$1"
   # git commit that authors a message inline (-m/-F), but not --amend (which
@@ -218,11 +275,29 @@ classify_segment() {
      && grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$seg"; then
     boundary="pr-review-comment"; recipe="pr-review-reply"; return 0
   fi
-  # General PR / issue / MR comment reply authored inline.
+  # General PR / issue / MR comment reply authored inline. Which recipe this
+  # names depends on how much is being posted, because the two candidates are
+  # different SHAPES rather than different qualities: `maintainer-reply` caps
+  # its prose body at two sentences, and `maintainer-review-reply` sets its
+  # length by how much evidence the reply has to carry.
+  #
+  # Pinning `maintainer-reply` unconditionally is how that recipe came to hold
+  # 33 of the corpus's delegations at 21% usable, with rejection reasons that
+  # are one shape repeated — "collapsed all 14 facts into a single run-on
+  # sentence", "returned two sentences instead of a four-paragraph body",
+  # "dropped every measured fact from the context". The closed shape was doing
+  # exactly its job to a workload it explicitly excludes, and the nudge naming
+  # it was teaching that routing rather than correcting it.
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+comment([[:space:]]|$)' <<<"$seg" \
      || grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+issue[[:space:]]+comment([[:space:]]|$)' <<<"$seg" \
      || grep -Eq '(^|[^[:alnum:]_-])glab[[:space:]]+(mr|issue)[[:space:]]+(discussion[[:space:]]+)?note([[:space:]]|$)' <<<"$seg"; then
-    boundary="comment-reply"; recipe="maintainer-reply"; return 0
+    boundary="comment-reply"
+    if (( $(posted_body_chars "$cmd") >= long_body_chars )); then
+      recipe="maintainer-review-reply"
+    else
+      recipe="maintainer-reply"
+    fi
+    return 0
   fi
   return 1
 }

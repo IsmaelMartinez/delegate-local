@@ -159,3 +159,16 @@ to `.../pulls/<n>/reviews`) as `pr-review-body` and names this recipe with its
 so the fix cannot quietly swallow the closed short shape. Re-measure by whether
 this recipe starts taking calls at all; anything about its keep rate needs
 roughly ten of them first.
+
+### 2026-08-27 — the second routing fix
+
+`#440` made `gh pr review --body` a boundary that names this recipe; it has
+taken no traffic since, because that is not the command the sessions on this
+machine actually use. `gh pr comment` is, and it was pinned to
+`maintainer-reply`. The hook now routes it by the size of the body being
+posted, so a long evidence-led comment names this recipe.
+
+Still `n=0` calls. Two mechanical routing fixes are now in place and the honest
+status is that neither has been measured. Re-measure by whether this recipe
+starts taking calls at all; anything about its keep rate needs roughly ten of
+them first.
