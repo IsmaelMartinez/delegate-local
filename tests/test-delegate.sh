@@ -6368,6 +6368,99 @@ assert_eq 1 "$(wc -l < "$counter" | tr -d ' ')" \
   "retry: a bare call is never retried"
 rm -rf "$tmp" "$metrics"
 
+# ---------------------------------------------------------------------------
+# no_invented_headings — a markdown heading the model produced without having
+# been shown one. Measured 2026-08-27 with DELEGATE_NO_RETRY=1 so the first
+# pass is visible: given two heading-free merged-PR exemplars and the facts of
+# a change as terse notes, `pr-description` returned `### Implementation
+# Details` and `### Testing` with bullets under each. Same contract as
+# no_invented_task_list — the value names the --var holding the shape
+# authority, and the check fires only when the output has a heading and those
+# examples have none.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/hd.md" <<'EOF'
+---
+tier: prose
+checks:
+  no_invented_headings: examples
+---
+# hd
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+Examples: {{examples}}
+```
+
+## Calibration notes
+n/a
+EOF
+run_hd() {
+  env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+    DELEGATE_NO_ECHO_CHECK=1 DELEGATE_NO_RETRY=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe hd --var examples="$1" prose "go" </dev/null 2>&1 >/dev/null
+}
+
+# The live regression: headings with bullets under them, against exemplars
+# that are heading-free prose.
+make_mock_curl_think "$tmp" 'A paragraph of prose.\n\n### Implementation Details\n- Capture: pre-post.\n\n### Testing\n- 18 new assertions.'
+out=$(run_hd $'TITLE: a merged PR\nBODY:\nTwo sentences of prose. No headings at all.')
+assert_contains "check 'no_invented_headings' FAILED" "$out" \
+  "no_invented_headings: an invented heading fails"
+assert_contains "carries 2 markdown heading(s)" "$out" \
+  "no_invented_headings: the count is named"
+assert_contains '"checks_failed_names":["no_invented_headings"]' "$(tail -1 "$metrics")" \
+  "no_invented_headings: named on the metrics row"
+
+# When the examples carry headings the output is matching the shape it was
+# shown, which is the whole contract of the recipe. Must stay silent.
+if [[ "$(run_hd $'TITLE: a merged PR\nBODY:\n## Summary\nWhat it does.')" == *"no_invented_headings"* ]]; then
+  echo "  FAIL  no_invented_headings: a heading the examples also carry must pass"; fail=$((fail+1))
+else
+  echo "  PASS  no_invented_headings: a heading the examples also carry passes"; pass=$((pass+1))
+fi
+
+# Heading-free output against heading-free examples: silent.
+make_mock_curl_think "$tmp" 'Just prose, two sentences of it. Nothing else.'
+if [[ "$(run_hd $'TITLE: a merged PR\nBODY:\nprose')" == *"no_invented_headings"* ]]; then
+  echo "  FAIL  no_invented_headings: output with no heading must pass"; fail=$((fail+1))
+else
+  echo "  PASS  no_invented_headings: output with no heading passes"; pass=$((pass+1))
+fi
+
+# A shell comment inside a fenced block is not a heading. A PR body that pastes
+# a snippet would otherwise fire on output that matched its examples exactly.
+make_mock_curl_think "$tmp" 'Prose about the fix.\n\n```bash\n# run the suite\nbash tests/run-tests.sh\n```\n\nMore prose.'
+if [[ "$(run_hd $'TITLE: a merged PR\nBODY:\nprose')" == *"no_invented_headings"* ]]; then
+  echo "  FAIL  no_invented_headings: a comment inside a fenced block is not a heading"; fail=$((fail+1))
+else
+  echo "  PASS  no_invented_headings: a comment inside a fenced block is not a heading"; pass=$((pass+1))
+fi
+
+# A shebang has no space after the hash, so it is not a heading either.
+make_mock_curl_think "$tmp" 'Prose.\n\n#!/usr/bin/env bash is the first line of the script.'
+if [[ "$(run_hd $'TITLE: a merged PR\nBODY:\nprose')" == *"no_invented_headings"* ]]; then
+  echo "  FAIL  no_invented_headings: a shebang is not a heading"; fail=$((fail+1))
+else
+  echo "  PASS  no_invented_headings: a shebang is not a heading"; pass=$((pass+1))
+fi
+
+# Fences in the EXAMPLES are skipped too, so a snippet comment in an exemplar
+# cannot be mistaken for the exemplar carrying headings — which would silence
+# the check on the very output it exists to catch.
+make_mock_curl_think "$tmp" 'Prose.\n\n## Summary\nInvented.'
+assert_contains "check 'no_invented_headings' FAILED" \
+  "$(run_hd $'TITLE: a merged PR\nBODY:\nprose\n```bash\n# not a heading\nls\n```')" \
+  "no_invented_headings: a fenced comment in the examples is not a heading either"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
