@@ -6029,6 +6029,171 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
+# ---------------------------------------------------------------------------
+# 47. Retry-on-check-failure (#384). A declared check that fails used to report
+# and stop, leaving the caller to rewrite or discard by hand — ten such
+# failures in the 7-day window to 2026-08-27, ten hand-edits. The wrapper holds
+# both the prompt that produced the bad output and the name of the constraint
+# it broke, so it spends one more generation naming the failure. Exactly one:
+# a second failure means the model cannot satisfy the constraint on this input
+# and a third call buys nothing but latency.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/rt.md" <<'EOF'
+---
+tier: prose
+checks:
+  subject_max: 12
+---
+# rt
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+GO
+```
+
+## Calibration notes
+n/a
+EOF
+
+make_mock_curl_seq() {
+  # Mock curl that answers dispatch calls from a queue of canned contents, one
+  # per call, and appends a line to a counter file for every DISPATCH (the
+  # GET /v1/models probe is answered before the counter, so discovery never
+  # inflates the count). Each dispatch payload is written to
+  # "$dir/payload.<n>.json" so a test can assert on what the retry actually
+  # sent. The last content is reused if the script dispatches more times than
+  # there are entries, which is what makes an unbounded-retry regression show
+  # up as a count assertion rather than as a hang.
+  local dir="$1" counter="$2"; shift 2
+  local q="$dir/queue"; : > "$q"
+  local c
+  for c in "$@"; do printf '%s\n' "$c" >> "$q"; done
+  : > "$counter"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+out_file=""
+write_out=""
+saw_probe=0
+argv_all="\$*"
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *"/v1/models"*) saw_probe=1; shift ;;
+    *) shift ;;
+  esac
+done
+if (( saw_probe == 1 )); then printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0; fi
+echo x >> "$counter"
+n=\$(wc -l < "$counter" | tr -d ' ')
+cat > "$dir/payload.\$n.json"
+line=\$(sed -n "\${n}p" "$q")
+[[ -z "\$line" ]] && line=\$(tail -n 1 "$q")
+body="{\"choices\":[{\"message\":{\"content\":\"\$line\"},\"finish_reason\":\"stop\"}]}"
+if [[ -n "\$out_file" ]]; then
+  printf '%s' "\$body" > "\$out_file"
+else
+  printf '%s' "\$body"
+fi
+if [[ -n "\$write_out" ]]; then
+  printf '%s' "\${write_out//%\{time_starttransfer\}/0.001}"
+fi
+EOF
+  chmod +x "$dir/curl"
+}
+counter="$tmp/calls"
+run_rt() {
+  env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+    ${1:+DELEGATE_NO_RETRY=1} \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe rt prose "go" </dev/null
+}
+
+# 47a. A first output that fails the check is re-generated once, and the
+# SECOND output is what the caller receives.
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" \
+  'this subject line is far too long\n\nbody' \
+  'short one\n\nbody'
+out=$(run_rt 2>/dev/null)
+assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
+  "retry: a failed check costs exactly two dispatches"
+assert_contains "short one" "$out" \
+  "retry: the caller receives the retried output, not the rejected one"
+
+# 47b. A first output that passes is never retried.
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" 'short one\n\nbody'
+out=$(run_rt 2>/dev/null)
+assert_eq 1 "$(wc -l < "$counter" | tr -d ' ')" \
+  "retry: a passing check costs exactly one dispatch"
+
+# 47c. The retry names the failed check, so the model is told what to fix
+# rather than merely asked again.
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" \
+  'this subject line is far too long\n\nbody' \
+  'short one\n\nbody'
+run_rt >/dev/null 2>&1
+assert_contains "subject_max" "$(cat "$tmp/payload.2.json")" \
+  "retry: the second request names the check that failed"
+if [[ "$(cat "$tmp/payload.1.json")" == *"was rejected"* ]]; then
+  echo "  FAIL  retry: the FIRST request must not carry a rejection notice"; fail=$((fail+1))
+else
+  echo "  PASS  retry: the first request carries no rejection notice"; pass=$((pass+1))
+fi
+
+# 47d. One retry, never a loop. Every response fails, so an unbounded
+# implementation would dispatch until the queue or the patience ran out.
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" 'this subject line is far too long\n\nbody'
+EC=0
+run_rt >/dev/null 2>&1 || EC=$?
+assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
+  "retry: a check that keeps failing still costs exactly two dispatches"
+assert_eq 0 "$EC" "retry: a still-failing check stays warn-only (exit 0)"
+assert_contains '"checks_failed_names":["subject_max"]' "$(tail -1 "$metrics")" \
+  "retry: the post-retry check state is what the metrics row records"
+
+# 47e. The row says whether a retry happened, so the cost is measurable.
+assert_contains '"retried":true' "$(tail -1 "$metrics")" \
+  "retry: a retried call is marked on the metrics row"
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" 'short one\n\nbody'
+run_rt >/dev/null 2>&1
+if [[ "$(tail -1 "$metrics")" == *'"retried"'* ]]; then
+  echo "  FAIL  retry: a call that was not retried must carry no retried field"; fail=$((fail+1))
+else
+  echo "  PASS  retry: a call that was not retried carries no retried field"; pass=$((pass+1))
+fi
+
+# 47f. DELEGATE_NO_RETRY=1 restores the single-call behaviour exactly.
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" 'this subject line is far too long\n\nbody'
+out=$(run_rt off 2>&1)
+assert_eq 1 "$(wc -l < "$counter" | tr -d ' ')" \
+  "retry: DELEGATE_NO_RETRY=1 dispatches once even on a failure"
+assert_contains "check 'subject_max' FAILED" "$out" \
+  "retry: DELEGATE_NO_RETRY=1 still reports the failure"
+
+# 47g. A bare (recipe-free) call declares no checks, so nothing can fail and
+# nothing is ever retried.
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" 'this subject line is far too long\n\nbody'
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "go" </dev/null >/dev/null 2>&1
+assert_eq 1 "$(wc -l < "$counter" | tr -d ' ')" \
+  "retry: a bare call is never retried"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

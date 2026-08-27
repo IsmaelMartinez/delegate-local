@@ -590,7 +590,7 @@ log_metric() {
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
     s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}" \
     checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}" checks_failed_names="${22:-}" \
-    draft_file="${23:-}"
+    draft_file="${23:-}" retried="${24:-}"
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$ochars")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -636,6 +636,7 @@ log_metric() {
     --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
     --arg crun "$checks_run" --arg cfail "$checks_failed" --arg cfix "$checks_autofixed" \
     --arg cnames "$checks_failed_names" --arg draft "$draft_file" \
+    --arg retried "$retried" \
     '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
      + (if $recipe != "" then {recipe:$recipe} else {} end)
      + (if $project != "" then {project:$project} else {} end)
@@ -647,7 +648,8 @@ log_metric() {
      + (if $s_pp != "" then {sampling_presence_penalty:($s_pp|tonumber)} else {} end)
      + (if ($crun != "" and ($crun|tonumber) > 0) then {checks_run:($crun|tonumber), checks_failed:($cfail|tonumber), checks_autofixed:($cfix|tonumber)} else {} end)
      + (if $cnames != "" then {checks_failed_names:($cnames|split(","))} else {} end)
-     + (if $draft != "" then {draft_file:$draft} else {} end)' \
+     + (if $draft != "" then {draft_file:$draft} else {} end)
+     + (if $retried != "" then {retried:true} else {} end)' \
     >> "$metrics_file" 2>/dev/null || true
 }
 
@@ -1563,6 +1565,41 @@ fi
 # $capability_failed counts only the non-style checks (subject_max / subject_type
 # / body_required) and excludes the style check no_padding_tail (the auto-strip
 # owns it). It is retained as an observable counter; nothing currently reads it.
+# retry_constraint_for — one plain sentence per check name, telling the model
+# what it broke when a repair attempt is made (#384). The declared limit is
+# read back out of $recipe_checks, the same post-substitution frontmatter the
+# checks themselves parse, so the sentence and the check cannot drift apart on
+# the number. A check with no entry here still produces a usable line rather
+# than an empty bullet.
+retry_constraint_for() {
+  local name="$1" val
+  val=$(printf '%s\n' "${recipe_checks:-}" | awk -v k="$name" '
+    { sub(/^[[:space:]]+/, "") }
+    index($0, k ":") == 1 { sub(/^[^:]*:[[:space:]]*/, ""); print; exit }')
+  case "$name" in
+    subject_max)
+      echo "subject_max: the first line must be at most ${val:-the stated number of} characters." ;;
+    body_max_words)
+      echo "body_max_words: everything after the first blank line must be at most ${val:-the stated number of} words." ;;
+    subject_type)
+      echo "subject_type: the first line must begin with one of these types: ${val:-the stated list}." ;;
+    body_required)
+      echo "body_required: the answer needs a body after the first blank line, not a subject on its own." ;;
+    no_padding_tail)
+      echo "no_padding_tail: do not end with a clause that restates what the answer already said." ;;
+    no_single_item_list)
+      echo "no_single_item_list: a single item is a sentence, never a one-item numbered list." ;;
+    no_invented_task_list)
+      echo "no_invented_task_list: do not write a markdown task list; the examples you were given carry none." ;;
+    no_invented_refs)
+      echo "no_invented_refs: every issue or ticket identifier in a trailer must appear in the input you were given." ;;
+    no_example_echo)
+      echo "no_example_echo: do not reproduce any line of this prompt or of an example; write from the input." ;;
+    *)
+      echo "$name: the constraint of that name, stated above, was not met." ;;
+  esac
+}
+
 run_output_checks() {
 # Locals keep the per-call scratch state out of the global scope now that this
 # is a function (it ran at top level before the refactor). The result and the
@@ -2030,7 +2067,52 @@ fi
 }
 
 # Run the checks on the primary (tier-resolved) output.
-run_output_checks
+# One bounded repair attempt (#384). A declared check that failed used to
+# report and stop: ten failures in the 7-day window to 2026-08-27 across
+# `commit-message` and `pr-description`, ten hand-edits or discards. At that
+# moment the wrapper holds both the exact prompt that produced the bad output
+# and the name of the constraint it broke, so naming the failure and spending
+# one more generation is cheaper than the rewrite it replaces.
+#
+# Exactly one retry, never a loop. A second failure is evidence the model
+# cannot satisfy the constraint on this input, and a third call would spend
+# latency to learn nothing. `no_padding_tail` reaches here only when the
+# auto-strip declined the shape (ADR 0017 leaves checks_failed at 0 when it
+# repairs), which is precisely the case worth re-asking about.
+#
+# The first pass's stderr is captured rather than printed, because a failure
+# that is about to be repaired is not the caller's problem. It is released
+# unchanged whenever no retry follows — a passing call (where it still carries
+# any autofix notice), an opted-out call, or a bare call — so the only output
+# the retry suppresses is a complaint about a draft nobody will ever see.
+checks_stderr=$(mktemp)
+trap 'rm -f "$body_file" "$checks_stderr"' EXIT
+run_output_checks 2>"$checks_stderr"
+
+retried=""
+if (( status == 0 )) && (( checks_failed > 0 )) \
+   && [[ -n "$recipe" ]] \
+   && [[ "${DELEGATE_NO_RETRY:-}" != "1" ]]; then
+  retried="true"
+  retry_notice=""
+  for _rc in $(printf '%s' "$checks_failed_names" | tr ',' ' '); do
+    retry_notice="${retry_notice}- $(retry_constraint_for "$_rc")
+"
+  done
+  echo "delegate: check(s) ${checks_failed_names} failed — regenerating once." >&2
+  # Appended to the SAME templated prompt rather than sent as a fresh one:
+  # the rules the model broke are in there, and re-stating them out of context
+  # would be a second, differently-worded prompt whose failures could not be
+  # attributed to the recipe.
+  full_input="${full_input}
+
+Your previous answer was REJECTED. It broke these constraints:
+${retry_notice}Write the answer again, in full, obeying every rule above. Output only the answer."
+  dispatch_to_model "$model"
+  run_output_checks
+else
+  cat "$checks_stderr" >&2
+fi
 
 end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 duration_ms=$((end_epoch_ms - start_epoch_ms))
@@ -2069,7 +2151,7 @@ draft_file=""
 if (( status == 0 )); then
   draft_file=$(capture_draft "$output" "$ts_start")
 fi
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file"
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried"
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to
