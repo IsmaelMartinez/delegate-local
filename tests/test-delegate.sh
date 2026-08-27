@@ -4631,12 +4631,14 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq teams-for-linux "$(jq -r .project < "$metrics")" "--project=NAME form accepted"
 : > "$metrics"
 
-# Neither set: the cwd derivation is unchanged. Run from a throwaway directory
-# outside any git repo so the expected value is just its basename.
+# Neither set, and the cwd is outside any git repository: no project at all.
+# The basename of a throwaway directory is not a project name, and recording it
+# as one produced `project:"tmp"` in the live corpus on 2026-08-27.
 (cd "$tmp" && env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1)
-assert_eq "$(basename "$tmp")" "$(jq -r .project < "$metrics")" "no override: falls back to the cwd derivation"
+assert_eq "false" "$(jq -r 'has("project")' < "$metrics")" \
+  "no override outside a repo: the row carries no project"
 
 # --project with no value is a usage error, not a silently empty project.
 EC=0
@@ -6209,6 +6211,27 @@ fi
 assert_eq "$(printf '%s' "$row" | jq -r '((.prompt_chars + .context_chars + .output_chars + .retry_chars) / 4 | floor)')" \
   "$(printf '%s' "$row" | jq -r '.estimated_tokens_avoided')" \
   "retry: the row still reproduces its own token count"
+
+# 46-ii. A delegation issued from outside any git repository writes no project
+# field, rather than one named after the scratch directory it happened to run
+# in. Observed 2026-08-27: a delegation about `delegate-local` run from a job
+# temp dir was filed under `project:"tmp"`, which fragments the per-project
+# rollup and matches no boundary lookup, so the hook nudged a session that had
+# in fact delegated.
+: > "$metrics"
+outside="$tmp/not-a-repo"; mkdir -p "$outside"
+make_mock_curl_ok "$tmp"
+( cd "$outside" && env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+    DELEGATE_METRICS_FILE="$metrics" bash "$SCRIPT" prose "go" </dev/null >/dev/null 2>&1 )
+if [[ "$(tail -1 "$metrics" | jq -r 'has("project")')" == "false" ]]; then
+  echo "  PASS  project: a delegation outside a repo writes no project field"; pass=$((pass+1))
+else
+  echo "  FAIL  project: a delegation outside a repo writes no project field (got $(tail -1 "$metrics" | jq -r '.project'))"; fail=$((fail+1))
+fi
+( cd "$outside" && env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+    DELEGATE_METRICS_FILE="$metrics" bash "$SCRIPT" --project delegate-local prose "go" </dev/null >/dev/null 2>&1 )
+assert_eq "delegate-local" "$(tail -1 "$metrics" | jq -r '.project')" \
+  "project: --project still names it from outside a repo"
 
 # 47e-i-b. The rejected generation is measured BEFORE the checks run, because
 # the ADR 0017 auto-strip mutates $output in place. A recipe declaring both

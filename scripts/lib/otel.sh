@@ -41,11 +41,15 @@ _DELEGATE_OTEL_LIB_LOADED=1
 #   The path it prints may be relative, so `cd` + `pwd` makes it absolute — this
 #   avoids `--path-format=absolute`, which needs git 2.31+ and would otherwise
 #   fail silently on older git and fall back to the (wrong) worktree name.
-#   Falls back to the worktree toplevel, then the cwd, when not in (or unable to
-#   resolve) a git repo — preserving the previous behaviour outside worktrees.
-#   bash 3.2-safe.
+#   Falls back to the worktree toplevel when git cannot answer
+#   `--git-common-dir` at all (pre-2.5), which names the working tree rather
+#   than the main repo but is still a project. Outside a git repository it
+#   emits NOTHING and returns 0: the cwd's basename is not a project name, and
+#   recording it as one filed a delegation about this repo, issued from a
+#   scratch directory, under `project:"tmp"`. `--project NAME` and
+#   DELEGATE_PROJECT are checked first and both still win. bash 3.2-safe.
 delegate_project_name() {
-  local common common_dir
+  local common common_dir toplevel
   # An explicit DELEGATE_PROJECT wins over any derivation: the cwd is only the
   # right answer when the script runs inside the repo the delegation is FOR
   # (#342). Honouring it here rather than in delegate.sh alone means
@@ -60,9 +64,36 @@ delegate_project_name() {
   if [[ -n "$common" ]]; then
     common_dir=$(cd "$common" 2>/dev/null && pwd)
     basename "$(dirname "$common_dir")"
-  else
-    basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    return 0
   fi
+  # --show-toplevel is the fallback for a repository whose git cannot answer
+  # --git-common-dir (pre-2.5). It names the working tree rather than the main
+  # repo, so a linked worktree resolves to its own directory name there — worse
+  # than the primary path, and still a project. It fails outside a repository,
+  # which is what keeps the case below reachable.
+  toplevel=$(git rev-parse --show-toplevel 2>/dev/null)
+  if [[ -n "$toplevel" ]]; then
+    basename "$toplevel"
+    return 0
+  fi
+  # Outside a git repository there is no project, and the cwd's basename is not
+  # one. The old fallback said otherwise and filed a delegation issued from a
+  # scratch directory under `project:"tmp"` — a real-looking name that names
+  # nothing, fragments the per-project rollup, and can never match a boundary
+  # lookup, so the hook nudges a session that did delegate (#342's loop, from
+  # the other end). delegate-boundary-hook.sh already refuses this exact string
+  # for its own derivation ("a `cd /tmp` must not file the boundary under `tmp`
+  # and fragment the denominator", #385); this is the wrapper agreeing.
+  #
+  # Emitting nothing is not a silent degradation: `--project NAME` and
+  # DELEGATE_PROJECT are checked above and both still win, and the nudge the
+  # hook prints already names --project explicitly for exactly this case.
+  #
+  # Explicit `return 0`: no project is a normal outcome, not an error, and
+  # falling off the end would carry out the failed `[[ -n "$toplevel" ]]` as a
+  # status 1. This lib's contract is that sourcing and calling it never change
+  # the caller's exit status, and delegate.sh runs under `set -e`.
+  return 0
 }
 
 # otel_gen_id <nhex>
