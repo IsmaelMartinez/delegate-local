@@ -60,21 +60,34 @@ assert_eq "" "$(cd "$scratch" && delegate_project_name)" "T4b: a scratch dir is 
 # T4c: a git too old to answer --git-common-dir (pre-2.5) still resolves a
 # project via --show-toplevel. Removing that fallback while adding the
 # outside-a-repo case would have returned nothing INSIDE a repository on those
-# hosts. Simulated with a git shim that refuses the one subcommand.
+# hosts.
+#
+# The shim answers both subcommands itself and never execs the real git. An
+# earlier version did exec it, and hung CI: `VAR=x func` sets a shell variable
+# rather than an exported one when func is a FUNCTION, so the shim never saw
+# the path it was told to delegate to. Self-contained is also simply the right
+# shape here — the point is to simulate a git that does not have the
+# subcommand, not to run the host's.
 shim="$tmp/shim"
 mkdir -p "$shim"
 cat > "$shim/git" <<'SHIMEOF'
 #!/usr/bin/env bash
 for a in "$@"; do
-  if [[ "$a" == "--git-common-dir" ]]; then exit 129; fi
+  case "$a" in
+    --git-common-dir) exit 129 ;;
+    --show-toplevel)
+      if [[ -n "${SHIM_TOPLEVEL:-}" ]]; then printf '%s\n' "$SHIM_TOPLEVEL"; exit 0; fi
+      exit 128 ;;
+  esac
 done
-exec /usr/bin/env -u PATH_SHIM "$REAL_GIT" "$@"
+exit 129
 SHIMEOF
 chmod +x "$shim/git"
-REAL_GIT=$(command -v git) \
-  && assert_eq "myrepo" "$(cd "$repo" && PATH="$shim:$PATH" REAL_GIT="$REAL_GIT" delegate_project_name)" \
-    "T4c: --show-toplevel still resolves a project when --git-common-dir fails"
-assert_eq "" "$(cd "$outside" && PATH="$shim:$PATH" REAL_GIT="$(command -v git)" delegate_project_name)" \
+assert_eq "myrepo" \
+  "$(cd "$repo" && export PATH="$shim:$PATH" SHIM_TOPLEVEL="$repo" && delegate_project_name)" \
+  "T4c: --show-toplevel still resolves a project when --git-common-dir fails"
+assert_eq "" \
+  "$(cd "$outside" && export PATH="$shim:$PATH" && unset SHIM_TOPLEVEL && delegate_project_name)" \
   "T4d: the fallback still yields nothing outside a repo"
 
 # T4e: no project is a normal outcome, not an error. Falling off the end of the
