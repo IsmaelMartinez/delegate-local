@@ -84,6 +84,12 @@ delegate_project_name() {
   # Emitting nothing is not a silent degradation: `--project NAME` and
   # DELEGATE_PROJECT are checked above and both still win, and the nudge the
   # hook prints already names --project explicitly for exactly this case.
+  #
+  # Explicit `return 0`: no project is a normal outcome, not an error, and
+  # falling off the end would carry out the failed `[[ -n "$toplevel" ]]` as a
+  # status 1. This lib's contract is that sourcing and calling it never change
+  # the caller's exit status, and delegate.sh runs under `set -e`.
+  return 0
 }
 
 # otel_gen_id <nhex>

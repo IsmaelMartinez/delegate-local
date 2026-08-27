@@ -77,6 +77,12 @@ REAL_GIT=$(command -v git) \
 assert_eq "" "$(cd "$outside" && PATH="$shim:$PATH" REAL_GIT="$(command -v git)" delegate_project_name)" \
   "T4d: the fallback still yields nothing outside a repo"
 
+# T4e: no project is a normal outcome, not an error. Falling off the end of the
+# function would carry out the failed `[[ -n "$toplevel" ]]` as status 1, and
+# delegate.sh runs under `set -e`.
+( cd "$outside" && delegate_project_name >/dev/null )
+assert_eq 0 "$?" "T4e: returning no project is exit status 0"
+
 # T5: an explicit DELEGATE_PROJECT wins over every derivation. The cwd answer
 # is only right when the script runs inside the repo the delegation is FOR, so
 # delegating on behalf of repo X from the skill checkout has to be statable
