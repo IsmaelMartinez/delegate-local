@@ -498,7 +498,13 @@ fi
 # ---------------------------------------------------------------------------
 prr="$PROMPTS_DIR/pr-review-reply.md"
 prr_template=$(awk '/^## Prompt template/{f=1} f' "$prr" 2>/dev/null | awk '/^```/{n++; next} n==1')
-if printf '%s' "$prr_template" | grep -qiE 'at most one short clause|no additional sentences|one-sentence reply'; then
+if [[ -z "$prr_template" ]]; then
+  # A silent skip in an invariant is worse than no invariant: the grep below
+  # cannot match an empty string, so a heading rename or a fence change would
+  # turn this into a PASS asserting coverage that never happened. Same lesson
+  # as the positional-tier truncation pinned above.
+  echo "  FAIL  pr-review-reply.md prompt template could not be extracted"; fail=$((fail+1))
+elif printf '%s' "$prr_template" | grep -qiE 'at most one short clause|no additional sentences|one-sentence reply'; then
   echo "  FAIL  pr-review-reply.md prompt template still caps the body at one clause"; fail=$((fail+1))
 else
   echo "  PASS  pr-review-reply.md prompt template does not cap the body at one clause"; pass=$((pass+1))

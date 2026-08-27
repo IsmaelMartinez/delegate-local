@@ -101,7 +101,7 @@ Not applied — the suggested `mktemp -t` is BSD-only and breaks on GNU coreutil
 ```
 
 ```
-Applied in `244ad56`, and it was worse than a theoretical hang — an assertion against the un-hardened version exits 142 on SIGALRM, so `--body-file /dev/zero` really did stall the hook indefinitely on every Bash call. It reads regular files only now, and the parse takes an optional opening quote and cuts at the first shell punctuation.
+Applied in `244ad56`. It was worse than a theoretical hang — an assertion against the un-hardened version exits 142 on SIGALRM, so `--body-file /dev/zero` really did stall the hook indefinitely on every Bash call. It reads regular files only now, and the parse takes an optional opening quote and cuts at the first shell punctuation.
 ```
 
 Verify before recording verdict: starts with the exact opener for the verdict, every anchor traceable to an input, no flattery, no echo of the reviewer's wording, no closing sentence that restates the point.
@@ -130,9 +130,12 @@ The cause was not that review replies are too short to be worth delegating. The
 312, p75 472, max 562 characters, and only 4 of the 23 are under 100. The
 recipe permitted the opener "and at most one short clause... No additional
 sentences beyond the opener and that single clause", which is roughly 150
-characters. The three-opener contract held on all 23 posts, so the opener was
-right and the cap was wrong: 19 of 23 replies could not have been produced by
-the recipe the boundary kept naming.
+characters. The opener contract held on 21 of the 23 — 19 exact `Applied in
+`<hash>`.`, one `Partially applied in`, one `Not applied —`, plus two that
+continued with a comma instead of a full stop and one reporting a finding that
+did not reproduce, for which the contract offers no opener. So the opener was
+broadly right and the cap was wrong: 19 of 23 replies could not have been
+produced by the recipe the boundary kept naming.
 
 Measured before and after at temperature 0 on the prose tier
 (`mlx-community/Qwen3.6-35B-A3B-8bit`) against two real Copilot comments from
