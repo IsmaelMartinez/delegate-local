@@ -237,3 +237,80 @@ into the affected recipes' calibration notes, including the possibility that
 
 New defects found while working the queue go here, with the evidence, and are
 either promoted to an issue in this queue or reported and left.
+
+### F1 — `no_example_echo` cannot tell convention from content with one exemplar
+
+Promoted to Issue 6 below.
+
+The check drops any line appearing in more than one exemplar, on the reasoning
+that a repeated line is convention the output is supposed to reproduce (a
+trailer, a generated-by line, a section heading). With a SINGLE exemplar every
+line appears exactly once, so `uniq -u` keeps all of them and the boilerplate
+is classified as that exemplar's own content.
+
+Observed twice on 2026-08-27 while writing PR #446's own description: one
+merged PR was passed as `recent_prs`, and both the first draft and the retry
+were failed for reproducing `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
+— a trailer every PR in this repo carries and which the output is meant to
+carry. The retry added by Issue 1 is what made it visible twice instead of
+once.
+
+This interacts badly with `#441`, which now tells callers to pick ONE example
+from unrelated work: the guidance and the check's discrimination rule pull in
+opposite directions.
+
+### F2 — a delegation from a scratch directory is filed under `project:"tmp"`
+
+`delegate.sh` resolves the project from the cwd (main repo basename, even
+inside a worktree) with `--project` / `DELEGATE_PROJECT` as the override. Run
+from a directory that is not a git repo at all it falls through to the cwd
+basename, so a delegation about `delegate-local` issued from a scratch dir was
+recorded as `project:"tmp"` at 2026-08-27T06:43:28Z.
+
+`delegate-boundary-hook.sh` already decided this exact string is not a project
+name — "must not file the boundary under `tmp` and fragment the denominator"
+(#385) — and guards against it. The wrapper writing the rows does not, which
+is the asymmetry: the sensor refuses to file under `tmp` while the thing it
+measures happily does. One bad row is noise; the failure mode is that the
+per-project rollup and the boundary hook's credit lookup both key on a name
+that names nothing.
+
+---
+
+## Issue 6 — `no_example_echo` flags shared boilerplate when given one exemplar
+
+**Evidence.** F1 above: two failures on 2026-08-27, both on the repo's own
+generated-by trailer, both on a single-exemplar `pr-description` call.
+
+**Fix shape.** The convention/content split cannot come from repetition across
+exemplars when there is only one. It can come from repetition between the
+exemplar and the recipe's own expected-output shape, or from the line being
+present in the caller's other inputs. Decide against the evidence, not by
+adding a second `uniq` rule that a one-element set still defeats.
+
+**Goals.**
+- G6.1 A single exemplar carrying the repo's standard trailer does not fail
+  the check when the output reproduces that trailer.
+- G6.2 A single exemplar's own CONTENT sentence still fails the check when the
+  output reproduces it. The fix must not simply disable the check for the
+  one-exemplar case.
+- G6.3 The two-or-more-exemplar behaviour is unchanged, asserted by the
+  existing assertions still passing untouched.
+- G6.4 The new assertions fail against the tree without the implementation.
+
+**Result.** _(to fill in)_
+
+---
+
+## Issue 7 — the wrapper files delegations under a project name the hook rejects
+
+**Evidence.** F2 above.
+
+**Goals.**
+- G7.1 A delegation issued from a directory that is not inside a git repo is
+  not recorded under that directory's basename.
+- G7.2 `--project` and `DELEGATE_PROJECT` are unaffected.
+- G7.3 A delegation issued from inside a repo is unaffected.
+- G7.4 The new assertions fail against the tree without the implementation.
+
+**Result.** _(to fill in)_
