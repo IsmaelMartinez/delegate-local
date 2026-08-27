@@ -112,14 +112,33 @@ usage: delegate-feedback.sh [--ts <iso8601>] [--source human|agent]
   stdin) beside the captured draft, so a MISS carries the concrete
   (generated, shipped) pair instead of only a prose description of the
   difference. This is the signal recipe edits are calibrated from.
+  All three flags may appear anywhere on the line, including after the
+  reason words. Put `--` before the verdict when the reason itself needs
+  to name a flag, e.g. `-- miss "the nudge should say --final"`.
 EOF
   exit 2
 }
 
-# Argument parsing — flags come first, then verdict, then reason.
+# Argument parsing. Flags are honoured wherever they appear — before the
+# verdict, after it, or after the reason words — and the positional arguments
+# are collected in order and re-established as "$@" once scanning is done.
+#
+# Parsing used to stop at the first non-flag argument, which is always the
+# verdict, so anything after it was reason words. Measured 2026-08-27: three
+# rejections in the live corpus recorded a reason ending
+# `--final /Users/.../tmp/msg.txt` and stored no shipped text at all. Against
+# 17 successfully stored finals that is 3 of 20 capture attempts lost, and each
+# loss is a rejection that reaches the loop as prose about a draft nobody can
+# look at again — the ceiling ADR 0029 exists to break. Trailing is also the
+# natural way to type it, because the flag is an afterthought about a verdict
+# the caller has already decided.
+#
+# The cost is that a reason can no longer contain a bare `--final`, `--ts` or
+# `--source` as prose. `--` ends flag parsing for exactly that case.
 override_ts=""
 verdict_source="human"
 final_src=""
+positional=()
 while (($# > 0)); do
   case "$1" in
     --final)
@@ -156,10 +175,15 @@ while (($# > 0)); do
       fi
       shift;;
     -h|--help) usage;;
-    --) shift; break;;
-    *) break;;
+    --) shift; while (($# > 0)); do positional+=("$1"); shift; done;;
+    *) positional+=("$1"); shift;;
   esac
 done
+# bash 3.2 (the macOS baseline) expands an empty array under `set -u` as an
+# unbound variable, so the `+` form is load-bearing rather than decorative:
+# `delegate-feedback.sh` with no arguments at all must reach the usage check
+# below, not die with "positional: unbound variable".
+set -- ${positional[@]+"${positional[@]}"}
 
 # The agent-observed-verdict tier (Phase E). "human" (default) is a maintainer
 # taste judgment; "agent" is the agent's honest record of whether it used its
