@@ -1550,6 +1550,89 @@ assert_eq 0 "$(fbrc miss)" \
   "reason-required: the human sweep's reasonless miss still records"
 rm -rf "$tmp"
 
+# ---------------------------------------------------------------------------
+# Flags are honoured wherever they appear, not only before the verdict.
+# Measured 2026-08-27: three rejections in the live corpus recorded a reason
+# ending `--final /Users/.../tmp/msg.txt` and no final_file, because parsing
+# stopped at the verdict and swallowed the flag as reason words. Against 17
+# stored finals that is 3 of 20 capture attempts lost — and a lost capture is
+# a rejection that reaches the loop as prose about a draft nobody can look at
+# again, which is the ceiling ADR 0029 exists to break.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+mkdir -p "$tmp/drafts"
+printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"draft_file":"20260827T090000Z-abcd1234.draft.txt"}\n' \
+  "$TS_LATEST" >> "$tmp/m.jsonl"
+printf 'the reply that actually shipped\n' > "$tmp/shipped.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" scaffold "body ran long" --final "$tmp/shipped.txt" >/dev/null 2>&1
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "20260827T090000Z-abcd1234.final.txt" "$(printf '%s' "$last" | jq -r '.final_file // ""')" \
+  "trailing --final: the shipped text is stored"
+assert_eq "body ran long" "$(printf '%s' "$last" | jq -r '.reason // ""')" \
+  "trailing --final: the flag is consumed, not left in the reason"
+assert_eq "the reply that actually shipped" "$(cat "$tmp/drafts/20260827T090000Z-abcd1234.final.txt" 2>/dev/null)" \
+  "trailing --final: the stored text is the shipped text"
+rm -rf "$tmp"
+
+# The same permutation for the other two flags, so the rule is "flags are
+# flags", not "--final is special".
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" miss "dropped every anchor" --source agent >/dev/null 2>&1
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "agent" "$(printf '%s' "$last" | jq -r '.verdict_source // ""')" \
+  "trailing --source: the verdict tier is honoured"
+assert_eq "dropped every anchor" "$(printf '%s' "$last" | jq -r '.reason // ""')" \
+  "trailing --source: the flag is consumed, not left in the reason"
+rm -rf "$tmp"
+
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" miss "wrong subject" --ts "$TS_OLDEST" >/dev/null 2>&1
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "$TS_OLDEST" "$(printf '%s' "$last" | jq -r '.ref_ts // ""')" \
+  "trailing --ts: the verdict is pinned to the named row"
+assert_eq "wrong subject" "$(printf '%s' "$last" | jq -r '.reason // ""')" \
+  "trailing --ts: the flag is consumed, not left in the reason"
+rm -rf "$tmp"
+
+# A reason that genuinely needs to talk about a flag ends flag parsing with
+# `--`. Without this escape there would be no way to write one, since the
+# permutation above consumes a real flag anywhere in the line.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" -- miss "the nudge should name --final here" >/dev/null 2>&1
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "the nudge should name --final here" "$(printf '%s' "$last" | jq -r '.reason // ""')" \
+  "-- ends flag parsing: a reason may quote a flag verbatim"
+assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_file")')" \
+  "-- ends flag parsing: the quoted flag stored nothing"
+rm -rf "$tmp"
+
+# An unknown double-dash token is reason text, not an error: the catch-all
+# that made trailing flags reason words in the first place is still what
+# handles anything this script does not define.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" miss "shape was --bulleted not prose" >/dev/null 2>&1
+assert_eq "shape was --bulleted not prose" "$(tail -1 "$tmp/m.jsonl" | jq -r '.reason // ""')" \
+  "unknown --token stays in the reason"
+rm -rf "$tmp"
+
+# A verdict word appearing later in the reason must not be re-read as the
+# verdict: only the first positional is the verdict.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" scaffold "closer to a hit than a miss" >/dev/null 2>&1
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "true" "$(printf '%s' "$last" | jq -r '.scaffold // false')" \
+  "first positional is the verdict: later verdict words are reason text"
+assert_eq "closer to a hit than a miss" "$(printf '%s' "$last" | jq -r '.reason // ""')" \
+  "first positional is the verdict: the reason keeps them"
+rm -rf "$tmp"
+
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
