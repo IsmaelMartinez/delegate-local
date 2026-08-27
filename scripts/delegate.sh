@@ -2117,7 +2117,13 @@ if (( status == 0 )) && (( checks_failed > 0 )) \
 Your previous answer was REJECTED. It broke these constraints:
 ${retry_notice}Write the answer again, in full, obeying every rule above. Output only the answer."
   retry_chars=$(( retry_chars + ${#full_input} - retry_input_before ))
+  # queue_wait_ms means "invoke to first byte", and duration_ms covers both
+  # dispatches, so a retried call has to carry both waits or the whole of the
+  # rejected call's time lands in generation_ms. dispatch_to_model overwrites
+  # ttfb_s, so the first one is banked here and the two are summed after.
+  ttfb_prev="${ttfb_s:-0}"
   dispatch_to_model "$model"
+  ttfb_s=$(awk -v a="${ttfb_prev:-0}" -v b="${ttfb_s:-0}" 'BEGIN { printf "%.6f", a + b }')
   run_output_checks
 else
   cat "$checks_stderr" >&2
@@ -2161,7 +2167,7 @@ if (( status == 0 )); then
   draft_file=$(capture_draft "$output" "$ts_start")
 fi
 log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}"
-emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project"
+emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project" "${retry_chars:-}"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to
 # read after every delegation, so it can tell the user which model handled

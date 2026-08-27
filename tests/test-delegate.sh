@@ -6196,6 +6196,53 @@ assert_eq "$(printf '%s' "$row" | jq -r '((.prompt_chars + .context_chars + .out
   "$(printf '%s' "$row" | jq -r '.estimated_tokens_avoided')" \
   "retry: the row still reproduces its own token count"
 
+# 47e-ii. queue_wait_ms means invoke-to-first-byte, and duration_ms covers both
+# dispatches, so a retried call has to carry both waits. Banking only the
+# second would drop the whole of the rejected call's wait into generation_ms.
+# The mock reports 1 ms per dispatch, so a retried call reads 2.
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" \
+  'this subject line is far too long\n\nbody' \
+  'short one\n\nbody'
+run_rt >/dev/null 2>&1
+assert_eq 2 "$(tail -1 "$metrics" | jq -r '.queue_wait_ms')" \
+  "retry: queue_wait_ms carries both dispatches' waits"
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" 'short one\n\nbody'
+run_rt >/dev/null 2>&1
+assert_eq 1 "$(tail -1 "$metrics" | jq -r '.queue_wait_ms')" \
+  "retry: a single dispatch still reads one wait"
+
+# 47e-iii. The OTel span carries the same retry accounting as the row, so a
+# dashboard reading delegate.estimated_tokens_avoided can still reconcile it
+# against the char counts beside it (docs/otel-schema.md).
+: > "$metrics"
+otel_body="$tmp/otel.json"
+cat > "$tmp/curl.otel" <<'OEOF'
+#!/usr/bin/env bash
+OEOF
+make_mock_curl_seq "$tmp" "$counter" \
+  'this subject line is far too long\n\nbody' \
+  'short one\n\nbody'
+# Re-wrap the mock so an OTLP POST is captured instead of answered as a chat.
+mv "$tmp/curl" "$tmp/curl.chat"
+cat > "$tmp/curl" <<EOF
+#!/usr/bin/env bash
+for _a in "\$@"; do
+  case "\$_a" in *otlp.example.com*) cat > "$otel_body"; exit 0 ;; esac
+done
+exec "$tmp/curl.chat" "\$@"
+EOF
+chmod +x "$tmp/curl"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe rt prose "go" </dev/null >/dev/null 2>&1
+assert_eq "$(tail -1 "$metrics" | jq -r '.retry_chars')" \
+  "$(jq -r '[.. | objects | select(.key? == "delegate.retry_chars") | .value.intValue] | .[0]' "$otel_body" 2>/dev/null)" \
+  "retry: the span carries the same retry_chars as the row"
+mv "$tmp/curl.chat" "$tmp/curl"
+
 # 47f. DELEGATE_NO_RETRY=1 restores the single-call behaviour exactly.
 : > "$metrics"
 make_mock_curl_seq "$tmp" "$counter" 'this subject line is far too long\n\nbody'
