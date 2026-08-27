@@ -45,7 +45,7 @@ _DELEGATE_OTEL_LIB_LOADED=1
 #   resolve) a git repo — preserving the previous behaviour outside worktrees.
 #   bash 3.2-safe.
 delegate_project_name() {
-  local common common_dir
+  local common common_dir toplevel
   # An explicit DELEGATE_PROJECT wins over any derivation: the cwd is only the
   # right answer when the script runs inside the repo the delegation is FOR
   # (#342). Honouring it here rather than in delegate.sh alone means
@@ -60,6 +60,17 @@ delegate_project_name() {
   if [[ -n "$common" ]]; then
     common_dir=$(cd "$common" 2>/dev/null && pwd)
     basename "$(dirname "$common_dir")"
+    return 0
+  fi
+  # --show-toplevel is the fallback for a repository whose git cannot answer
+  # --git-common-dir (pre-2.5). It names the working tree rather than the main
+  # repo, so a linked worktree resolves to its own directory name there — worse
+  # than the primary path, and still a project. It fails outside a repository,
+  # which is what keeps the case below reachable.
+  toplevel=$(git rev-parse --show-toplevel 2>/dev/null)
+  if [[ -n "$toplevel" ]]; then
+    basename "$toplevel"
+    return 0
   fi
   # Outside a git repository there is no project, and the cwd's basename is not
   # one. The old fallback said otherwise and filed a delegation issued from a

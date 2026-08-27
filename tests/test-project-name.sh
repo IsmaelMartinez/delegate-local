@@ -57,6 +57,26 @@ scratch="$tmp/tmp"
 mkdir -p "$scratch"
 assert_eq "" "$(cd "$scratch" && delegate_project_name)" "T4b: a scratch dir is not filed under its basename"
 
+# T4c: a git too old to answer --git-common-dir (pre-2.5) still resolves a
+# project via --show-toplevel. Removing that fallback while adding the
+# outside-a-repo case would have returned nothing INSIDE a repository on those
+# hosts. Simulated with a git shim that refuses the one subcommand.
+shim="$tmp/shim"
+mkdir -p "$shim"
+cat > "$shim/git" <<'SHIMEOF'
+#!/usr/bin/env bash
+for a in "$@"; do
+  if [[ "$a" == "--git-common-dir" ]]; then exit 129; fi
+done
+exec /usr/bin/env -u PATH_SHIM "$REAL_GIT" "$@"
+SHIMEOF
+chmod +x "$shim/git"
+REAL_GIT=$(command -v git) \
+  && assert_eq "myrepo" "$(cd "$repo" && PATH="$shim:$PATH" REAL_GIT="$REAL_GIT" delegate_project_name)" \
+    "T4c: --show-toplevel still resolves a project when --git-common-dir fails"
+assert_eq "" "$(cd "$outside" && PATH="$shim:$PATH" REAL_GIT="$(command -v git)" delegate_project_name)" \
+  "T4d: the fallback still yields nothing outside a repo"
+
 # T5: an explicit DELEGATE_PROJECT wins over every derivation. The cwd answer
 # is only right when the script runs inside the repo the delegation is FOR, so
 # delegating on behalf of repo X from the skill checkout has to be statable
