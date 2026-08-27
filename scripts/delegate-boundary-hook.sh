@@ -170,8 +170,12 @@ boundary="" recipe=""
 # read, 0 comes back and the caller keeps the short-shape default: a
 # measurement that failed must not promote a reply to the long recipe on no
 # evidence at all.
-posted_body_chars() {
-  local raw="$1" kind val n
+# Both callers share one scan. `want=len` returns what the routing decision was
+# calibrated against, byte for byte; `want=text` returns the body itself, so a
+# post that is the shipped form of a delegation can be stored as the other half
+# of the (generated, shipped) pair.
+_posted_body_scan() {
+  local raw="$1" want="$2"
   # ONE left-to-right pass, no backtracking: find each flag that starts at a
   # word boundary and read the argument after it. A quoted argument is taken
   # whole, spaces included, so `--body-file "notes with spaces.md"` resolves to
@@ -179,9 +183,9 @@ posted_body_chars() {
   # shell punctuation, so `--body-file notes.md;` does not become `notes.md;`.
   # A `--body-file` wins over an inline body: it names where the text really
   # is, and the file is the honest measurement.
-  IFS=$'\t' read -r kind val < <(awk 'BEGIN { RS="\1" } {
+  awk -v want="$want" 'BEGIN { RS="\1" } {
     n = length($0); if (n > 32768) n = 32768;
-    best = 0; file = ""; i = 1; prev = " ";
+    best = 0; bestv = ""; file = ""; i = 1; prev = " ";
     while (i <= n) {
       c = substr($0, i, 1);
       # A quoted span that is not a flag argument is DATA, and is skipped
@@ -221,14 +225,21 @@ posted_body_chars() {
             while (j <= n && substr($0, j, 1) !~ /[[:space:];,&|)]/) { v = v substr($0, j, 1); j++ }
           }
           if (isfile) { if (file == "") file = v }
-          else if (length(v) > best) best = length(v);
+          else if (length(v) > best) { best = length(v); bestv = v }
           prev = " "; i = j; continue;
         }
       }
       prev = c; i++;
     }
-    if (file != "") printf "FILE\t%s\n", file; else printf "INLINE\t%d\n", best;
-  }' <<<"$raw")
+    if (file != "") { printf "FILE\t%s\n", file }
+    else if (want == "text") { printf "INLINE\n"; printf "%s", bestv }
+    else { printf "INLINE\t%d\n", best }
+  }' <<<"$raw"
+}
+
+posted_body_chars() {
+  local kind val n
+  IFS=$'\t' read -r kind val < <(_posted_body_scan "$1" len)
   if [[ "$kind" == "FILE" ]]; then
     # -f, not just -r: this runs inside a PreToolUse hook on every Bash call,
     # and `wc -c < /dev/zero` never returns. A directory, a device or a FIFO is
@@ -244,6 +255,31 @@ posted_body_chars() {
     return 0
   fi
   printf '%s' "${val:-0}"
+}
+
+# The body itself, for the capture path below. Returns 1 when there is nothing
+# to capture, so the caller can skip silently rather than store an empty file.
+# The 64 KB cap matches the spirit of the 32 KB scan cap: this runs inside a
+# PreToolUse hook on every Bash call, and a body larger than that is not a
+# reply anyone hand-edited from a draft.
+posted_body_text() {
+  local out first rest path
+  # The trailing X survives command substitution's newline stripping, so a body
+  # that legitimately ends in a blank line is not silently reshaped.
+  out=$(_posted_body_scan "$1" text; printf X)
+  out=${out%X}
+  first=${out%%$'\n'*}
+  if [[ "$first" == FILE* ]]; then
+    path="${first#FILE$'\t'}"
+    # Same -f guard as the length path: a character device is readable and
+    # `head` on /dev/zero would hang the hook on every Bash call.
+    [[ -n "$path" && -f "$path" && -r "$path" ]] || return 1
+    head -c 65536 < "$path" 2>/dev/null
+    return 0
+  fi
+  rest=${out#*$'\n'}
+  [[ -n "$rest" ]] || return 1
+  printf '%s' "${rest:0:65536}"
 }
 
 long_body_chars="${DELEGATE_BOUNDARY_LONG_BODY_CHARS:-600}"
@@ -508,6 +544,7 @@ metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/s
 window_min="${DELEGATE_BOUNDARY_WINDOW_MIN:-480}"
 now_epoch=$(date -u +%s)
 delegated=false
+credit_draft=""
 if [[ -f "$metrics_file" ]]; then
   # Only the recent tail can fall inside the look-back window, so cap the read
   # instead of slurping the whole (ever-growing) metrics file on each boundary.
@@ -519,7 +556,7 @@ if [[ -f "$metrics_file" ]]; then
   # `recent` is delegate rows MINUS already-credited posts (delegated:true
   # opportunity rows for the same project+recipe in the same window), so a
   # boundary is credited only while an unspent delegation remains.
-  recent=$(tail -n 2000 "$metrics_file" 2>/dev/null | jq -s --argjson win "$((window_min * 60))" --arg proj "$project" --arg proj2 "$cwd_project" --arg proj3 "$repo_project" --arg recipe "$recipe" --argjson now "$now_epoch" '
+  recent_out=$(tail -n 2000 "$metrics_file" 2>/dev/null | jq -rs --argjson win "$((window_min * 60))" --arg proj "$project" --arg proj2 "$cwd_project" --arg proj3 "$repo_project" --arg recipe "$recipe" --argjson now "$now_epoch" '
     # Any of the three candidates counts. With no `cd`, $proj and $proj2 are
     # equal, so $proj3 is load-bearing rather than decorative. $proj3 is the
     # only candidate that can be empty, and it is guarded: 3 delegate rows in
@@ -534,15 +571,63 @@ if [[ -f "$metrics_file" ]]; then
        | select((.source // "delegate") == "delegate")
        | select(matches_proj)
        | select((.recipe // "") == $recipe)
-       | select(in_window) ] | length)
-    -
-    ([ .[]
+       | select(in_window) ] | sort_by(.ts)) as $d
+    | ([ .[]
        | select((.source // "") == "opportunity")
        | select(.delegated == true)
        | select(matches_proj)
        | select((.suggested_recipe // "") == $recipe)
-       | select(in_window) ] | length)' 2>/dev/null) || recent=0
+       | select(in_window) ] | length) as $c
+    # Two fields from one pass: the credit count the nudge decision reads, and
+    # the draft belonging to the delegation THIS post is about to spend.
+    # Oldest-unspent-first, because that is the order a sweep posts in — the
+    # 12-reply flow that set the 480-minute window delegates a batch and works
+    # down it, so the n-th post is the n-th draft.
+    | "\($d | length - $c)\t\($d[$c].draft_file // "")"' 2>/dev/null) || recent_out=""
+  recent="${recent_out%%$'\t'*}"
+  credit_draft="${recent_out#*$'\t'}"
+  [[ "$recent" == "$recent_out" ]] && credit_draft=""
+  [[ "${recent:-0}" =~ ^-?[0-9]+$ ]] || recent=0
+  # `credit_draft` is read out of a JSONL file and is about to become part of a
+  # path this hook WRITES to, so it is treated as untrusted: a bare filename
+  # ending in .draft.txt, nothing else. A hand-edited or corrupted row carrying
+  # `../../x.draft.txt` would otherwise place the captured body outside the
+  # drafts directory. Anything that fails simply loses the capture.
+  case "$credit_draft" in
+    *.draft.txt) [[ "$credit_draft" == */* || "$credit_draft" == .* ]] && credit_draft="" ;;
+    *) credit_draft="" ;;
+  esac
   [[ "${recent:-0}" -gt 0 ]] && delegated=true
+fi
+
+# --- store the posted body as the shipped half of the pair (ADR 0029) -------
+# `maintainer-reply` was the weakest recipe with any volume (21% usable over
+# n=33) and the only one whose 32 rejections carried no captured final at all,
+# because its output is posted inline inside `gh pr comment --body "..."` and
+# there is no path on disk for `delegate-feedback.sh --final` to name. A commit
+# message reaches a file before `git commit -F` reads it; a reply never does.
+#
+# This hook is the one place that sees the shipped text, and when the post is
+# credited to a delegation it IS that delegation's shipped form by definition.
+# Store it beside the draft under the draft's own stem, so the two halves are
+# guaranteed to belong together, and let `delegate-feedback.sh` adopt it when
+# the caller passed no `--final`. An existing file is never overwritten: a
+# hand-supplied final outranks an inferred one.
+#
+# The capture is PRE-post, so a post that then fails leaves a final for text
+# that never shipped. The verdict is recorded by whoever ran the command and
+# knows, and `--final` still wins, so the cost of that is bounded.
+if [[ "$delegated" == "true" && -n "${credit_draft:-}" \
+      && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
+  drafts_dir="$(dirname "$metrics_file")/drafts"
+  final_path="$drafts_dir/${credit_draft%.draft.txt}.final.txt"
+  if [[ ! -e "$final_path" ]] && body_text=$(posted_body_text "$cmd"); then
+    if mkdir -p "$drafts_dir" 2>/dev/null; then
+      chmod 700 "$drafts_dir" 2>/dev/null || true
+      ( umask 077; printf '%s' "$body_text" > "$final_path" ) 2>/dev/null || true
+      [[ -f "$final_path" ]] && chmod 600 "$final_path" 2>/dev/null
+    fi
+  fi
 fi
 # A delegated boundary is a counted success, not an excluded row, so the
 # delegated flag supersedes pre-drafted when both describe the same post.

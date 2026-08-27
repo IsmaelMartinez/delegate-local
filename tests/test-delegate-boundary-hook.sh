@@ -995,6 +995,125 @@ payload "gh api repos/o/r/pulls/12/comments -X POST -f body=\"$long_body\"" "$tm
 assert_eq pr-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
   "comment-reply: the inline review-comment branch still wins on a long body"
 
+# ---------------------------------------------------------------------------
+# Capturing the posted body as the shipped half of the (generated, shipped)
+# pair. `maintainer-reply` was the weakest recipe with any volume — 21% usable
+# over n=33 — and the only one whose 32 rejections carried no captured final,
+# because its output is posted inline and never reaches a file
+# `delegate-feedback.sh --final` could name. This hook is the one place that
+# sees the shipped text.
+# ---------------------------------------------------------------------------
+cap_setup() { # -> sets capdir capm capcwd capproj; seeds one delegate row
+  capdir=$(mktemp -d); capm="$capdir/metrics.jsonl"
+  capcwd=$(mktemp -d); capproj=$(basename "$capcwd")
+  capts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","project":"%s","draft_file":"20260827T100000Z-aaaa1111.draft.txt"}\n' \
+    "$capts" "$capproj" > "$capm"
+}
+cap_post() { payload "$1" "$capcwd" | DELEGATE_METRICS_FILE="$capm" bash "$HOOK" >/dev/null 2>&1; }
+
+cap_setup
+cap_post 'gh pr comment 12 --body "the fix landed in abc1234"'
+assert_eq true "$(jq -r .delegated <<<"$(tail -1 "$capm")")" \
+  "capture: the post is credited to the delegation"
+assert_eq "the fix landed in abc1234" "$(cat "$capdir/drafts/20260827T100000Z-aaaa1111.final.txt" 2>/dev/null)" \
+  "capture: a credited post stores the posted body under the credited draft's stem"
+rm -rf "$capdir" "$capcwd"
+
+# Uncredited: nothing was delegated, so there is no draft this post is the
+# shipped form OF, and storing it would invent a pair.
+cap_setup
+: > "$capm"
+cap_post 'gh pr comment 12 --body "the fix landed in abc1234"'
+assert_eq false "$(jq -r .delegated <<<"$(tail -1 "$capm")")" "capture: uncredited post is not credited"
+assert_eq "" "$(ls "$capdir/drafts" 2>/dev/null)" "capture: an uncredited post stores nothing"
+rm -rf "$capdir" "$capcwd"
+
+# A hand-supplied --final outranks an inferred one, so an existing file is
+# never overwritten.
+cap_setup
+mkdir -p "$capdir/drafts"
+printf 'what the human actually shipped' > "$capdir/drafts/20260827T100000Z-aaaa1111.final.txt"
+cap_post 'gh pr comment 12 --body "a different body entirely"'
+assert_eq "what the human actually shipped" "$(cat "$capdir/drafts/20260827T100000Z-aaaa1111.final.txt")" \
+  "capture: an existing final is not overwritten"
+rm -rf "$capdir" "$capcwd"
+
+# Opting out of metrics opts out of the capture too: the shipped text is more
+# sensitive than the row, so it cannot outlive the thing it annotates.
+cap_setup
+payload 'gh pr comment 12 --body "the fix landed in abc1234"' "$capcwd" \
+  | DELEGATE_METRICS_FILE="$capm" DELEGATE_LOCAL_NO_METRICS=1 bash "$HOOK" >/dev/null 2>&1
+assert_eq "" "$(ls "$capdir/drafts" 2>/dev/null)" \
+  "capture: DELEGATE_LOCAL_NO_METRICS=1 stores nothing"
+rm -rf "$capdir" "$capcwd"
+
+# Same sensitivity rules as the draft it sits beside: verbatim outbound text,
+# so neither the directory nor the file may inherit a permissive umask.
+cap_setup
+( umask 000; cap_post 'gh pr comment 12 --body "the fix landed in abc1234"' )
+assert_eq 700 "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$capdir/drafts")" \
+  "capture: drafts directory is private (700) under a permissive umask"
+assert_eq 600 "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$capdir/drafts/20260827T100000Z-aaaa1111.final.txt")" \
+  "capture: stored body is private (600) under a permissive umask"
+rm -rf "$capdir" "$capcwd"
+
+# Oldest-unspent-first. A sweep delegates a batch and works down it, so with one
+# post already credited the next one belongs to the SECOND draft, not the first.
+# Pairing the newest delegation with every post would file a whole afternoon of
+# replies against one draft.
+cap_setup
+printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","project":"%s","draft_file":"20260827T110000Z-bbbb2222.draft.txt"}\n' \
+  "$capts" "$capproj" >> "$capm"
+printf '{"ts":"%s","source":"opportunity","boundary":"comment-reply","suggested_recipe":"maintainer-reply","delegated":true,"project":"%s"}\n' \
+  "$capts" "$capproj" >> "$capm"
+cap_post 'gh pr comment 12 --body "the second reply"'
+assert_eq "the second reply" "$(cat "$capdir/drafts/20260827T110000Z-bbbb2222.final.txt" 2>/dev/null)" \
+  "capture: the second post is filed against the second draft"
+assert_eq "false" "$([[ -e "$capdir/drafts/20260827T100000Z-aaaa1111.final.txt" ]] && echo true || echo false)" \
+  "capture: the already-spent draft is left alone"
+rm -rf "$capdir" "$capcwd"
+
+# A --body-file post is pre-drafted, but a delegation still credits it, and the
+# file is where the shipped text is.
+cap_setup
+printf 'the reply that came from a file\n' > "$capcwd/reply.md"
+cap_post "gh pr comment 12 --body-file $capcwd/reply.md"
+assert_eq "the reply that came from a file" "$(cat "$capdir/drafts/20260827T100000Z-aaaa1111.final.txt" 2>/dev/null)" \
+  "capture: a --body-file post stores the file's contents"
+rm -rf "$capdir" "$capcwd"
+
+# A delegation with no captured draft has no stem to file the post under, so the
+# capture is skipped rather than inventing a name that matches no draft.
+cap_setup
+printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","project":"%s"}\n' "$capts" "$capproj" > "$capm"
+cap_post 'gh pr comment 12 --body "the fix landed in abc1234"'
+assert_eq true "$(jq -r .delegated <<<"$(tail -1 "$capm")")" "capture: draftless delegation still credits the post"
+assert_eq "" "$(ls "$capdir/drafts" 2>/dev/null)" "capture: a draftless delegation stores nothing"
+rm -rf "$capdir" "$capcwd"
+
+# A draft_file read out of the metrics JSONL becomes part of a path this hook
+# writes to, so it is untrusted input: a bare filename ending in .draft.txt or
+# nothing at all. A hand-edited or corrupted row must not be able to place the
+# captured body outside the drafts directory.
+cap_setup
+printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","project":"%s","draft_file":"../escaped.draft.txt"}\n' \
+  "$capts" "$capproj" > "$capm"
+cap_post 'gh pr comment 12 --body "the fix landed in abc1234"'
+assert_eq "false" "$([[ -e "$capdir/escaped.final.txt" ]] && echo true || echo false)" \
+  "capture: a traversing draft_file writes nothing outside the drafts dir"
+assert_eq "" "$(ls "$capdir/drafts" 2>/dev/null)" \
+  "capture: a traversing draft_file writes nothing inside it either"
+rm -rf "$capdir" "$capcwd"
+
+# A draft_file that is not a draft at all is refused the same way.
+cap_setup
+printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","project":"%s","draft_file":"notes.txt"}\n' \
+  "$capts" "$capproj" > "$capm"
+cap_post 'gh pr comment 12 --body "the fix landed in abc1234"'
+assert_eq "" "$(ls "$capdir/drafts" 2>/dev/null)" "capture: a draft_file without the .draft.txt suffix stores nothing"
+rm -rf "$capdir" "$capcwd"
+
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

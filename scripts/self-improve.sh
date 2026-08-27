@@ -260,10 +260,11 @@ jq -rs --arg prev "$prev_ts" '
        then ($fin | sub("\\.final\\.txt$"; ".draft.txt"))
        else ($d[.ref_ts].draft_file // "") end),
       $fin,
+      (.final_source // ""),
       (if .scaffold then "scaffold" else "rewrote" end),
       ((.reason // "(no reason recorded)") | gsub("[[:cntrl:]]"; " ")) ]
   | join("\u001f")
-' "$metrics_file" | while IFS=$'\037' read -r rts proj rec draft final verdict reason; do
+' "$metrics_file" | while IFS=$'\037' read -r rts proj rec draft final fsrc verdict reason; do
   echo
   echo "  [$verdict] $rts  project=$proj  recipe=$rec"
   echo "    reason: $reason"
@@ -274,7 +275,15 @@ jq -rs --arg prev "$prev_ts" '
     if [[ -n "$final" && -f "$drafts_dir/$final" ]]; then
       fpath="$drafts_dir/$final"
       fbytes=$(wc -c < "$fpath" | tr -d ' ')
-      echo "    final:  $fpath ($fbytes bytes)"
+      # A final the boundary hook inferred from the post is worth reading with
+      # slightly more suspicion than one the caller handed over: the hook runs
+      # BEFORE the post, so it stores what was about to go out rather than what
+      # demonstrably did.
+      if [[ "$fsrc" == "posted" ]]; then
+        echo "    final:  $fpath ($fbytes bytes, captured from the post)"
+      else
+        echo "    final:  $fpath ($fbytes bytes)"
+      fi
       dropped=$(comm -13 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
       draft_only=$(comm -23 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
       [[ -n "${dropped// /}"  ]] && echo "    DROPPED  (in the shipped text, absent from the draft): $dropped"

@@ -73,9 +73,15 @@ produced and the text that actually shipped, plus three objective signals:
 - `SHAPE` — a list-vs-prose mismatch between the draft and what shipped.
 
 The **capture coverage** line says how much of that you actually have. Drafts
-are captured automatically; the shipped text only arrives when a caller passes
-`--final` to `delegate-feedback.sh`. If coverage is low, raising it is a more
-valuable fix than any recipe edit, because everything downstream depends on it.
+are captured automatically. The shipped text arrives either because a caller
+passed `--final` to `delegate-feedback.sh`, or because the boundary hook saw
+the post: when a `gh`/`glab` post is credited to a delegation, that post is
+that delegation's shipped form, so the hook stores it under the draft's own
+stem and the verdict adopts it. A final that arrived that way is marked
+`captured from the post` in the bundle, because the hook runs BEFORE the post
+and therefore stores what was about to go out rather than what demonstrably
+did. If coverage is low, raising it is a more valuable fix than any recipe
+edit, because everything downstream depends on it.
 
 ## Choose one fix
 
