@@ -392,8 +392,8 @@ A synthetic one-line diff does NOT reproduce the defect (both wordings land near
 ### 2026-08-27 — the post-landing reading on the derived body shape
 
 `#442` landed at 2026-08-26T23:19:35Z with a controlled measurement behind it:
-the same diff (`fafd439`) at temperature 0, four reps each, 92,92,92,92 words
-before and 45,45,45,45 after. That is a real result and it is not the same
+the same diff (`fafd439`) at temperature 0, four reps each, 92, 92, 92, 92 words
+before and 45, 45, 45, 45 after. That is a real result and it is not the same
 thing as production moving.
 
 Production, as of 2026-08-27T07:00Z: the `body_max_words` check failed on 5 of

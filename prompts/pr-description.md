@@ -357,11 +357,11 @@ to gather first" rather than a check. If it recurs with a deliberately
 unrelated anchor, the hypothesis is wrong and the next attempt should be
 mechanical.
 
-### 2026-08-27 — `#441` is un-measured, and something else was in the way
+### 2026-08-27 — `#441` is unmeasured, and something else was in the way
 
 `#441` (pick an exemplar from unrelated work) merged at 2026-08-26T23:06:30Z.
-Both `no_example_echo` events that motivated it predate it, at 20:02:51 and
-22:11:08, so it had taken no calls at all when this was written and its own
+Both `no_example_echo` events that motivated it predate it, at 20:02:51Z and
+22:11:08Z, so it had taken no calls at all when this was written and its own
 rate cannot be quoted.
 
 The one call since, at 2026-08-27T06:44:53Z, followed the new guidance — the
