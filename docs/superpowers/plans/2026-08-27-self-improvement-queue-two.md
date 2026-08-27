@@ -159,22 +159,29 @@ writing it. If that reading holds, the hook has spent 30 nudges asking for
 something nobody should do, which both pollutes the denominator of the
 trigger-rate metric (#277) and trains the session to ignore the nudge.
 
-**Fix shape.** The body being posted is present in the command the hook already
-parses. Extract it and apply a floor: below N characters, record the
-opportunity but do not nudge. This is a sensor fix, not a recipe change.
+**Premise falsified before any code was written; re-scoped.** The size-floor
+hypothesis assumed `pr-review-reply` produces something too small to be worth a
+model round-trip. Its own documented output shape is three variants of 150-200
+characters ("Applied in `<hash>`. <one-line addendum>"), which is the same
+order as `maintainer-reply`'s two-sentence shape — and that boundary runs at
+11/73, not 0. So size does not separate the zero from the non-zero, and a floor
+would not have moved either number. The recipe also has a recorded verbatim HIT
+from its 2026-05-10 dogfood, so "the recipe is not worth calling" is not the
+explanation either.
 
-**Goals.**
-- G3.1 A `gh api .../comments -f body="Applied in \`abc123\`"` produces no
-  nudge; the same command with a multi-paragraph body still nudges.
-- G3.2 A body passed via `--body-file` is measured from the file when it is
-  readable and treated as above-floor when it is not (never silently skipped).
-- G3.3 The opportunity row still records the boundary, so the denominator
-  keeps the event; a new field distinguishes "not nudged, below floor" from
-  "nudged and ignored".
-- G3.4 The floor is one named constant with an env override.
-- G3.5 The new assertions fail against the tree without the implementation.
+What is left, unverified: the hook fires at PreToolUse on the POST, by which
+point the reply text has already been composed in-context (issue #358, "the
+boundary hook never observes the drafting moment for write-then-post bodies");
+and `/address-pr-comments`, the skill that generates essentially all
+`pr-review-comment` traffic, scripts the reply inline and never mentions the
+recipe. The second is a change to the user's own skill, not to this repo.
 
-**Result.** _(to fill in)_
+Recorded as a finding. The body extraction this issue would have introduced
+moves to Issue 4, which stands on its own evidence and needs it anyway.
+
+**Result.** No code change. Reported: 0/30 and 0/15 are real, the size
+explanation is falsified, and the two remaining candidate mechanisms are #358
+and the `/address-pr-comments` skill's inline scripting.
 
 ---
 
@@ -198,9 +205,10 @@ both times (a kept call at 5,561 chars sits inside a rewrite range of
 the body being posted — which is a different measurement and has not been
 tested.
 
-**Fix shape.** Depends on Issue 3 landing the body extraction. Route
-`comment-reply` by the size of the body being posted: short stays
-`maintainer-reply`, long names `maintainer-review-reply`.
+**Fix shape.** Extract the body from the command the hook already parses (the
+extraction Issue 3 would have introduced, now owned here) and route
+`comment-reply` by its size: short stays `maintainer-reply`, long names
+`maintainer-review-reply`.
 
 **Goals.**
 - G4.1 A short `gh pr comment --body` still names `maintainer-reply`.

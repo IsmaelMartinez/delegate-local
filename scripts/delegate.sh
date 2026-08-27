@@ -590,9 +590,9 @@ log_metric() {
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
     s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}" \
     checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}" checks_failed_names="${22:-}" \
-    draft_file="${23:-}" retried="${24:-}"
+    draft_file="${23:-}" retried="${24:-}" retry_chars="${25:-}"
   local tokens_avoided
-  tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$ochars")
+  tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$(( ochars + ${retry_chars:-0} ))")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
   # source:"delegate" discriminates this from experiment-runner traffic that
   # writes to the same file via experiments/lib/run_api_cell.sh. backend
@@ -636,7 +636,7 @@ log_metric() {
     --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
     --arg crun "$checks_run" --arg cfail "$checks_failed" --arg cfix "$checks_autofixed" \
     --arg cnames "$checks_failed_names" --arg draft "$draft_file" \
-    --arg retried "$retried" \
+    --arg retried "$retried" --arg retry_chars "$retry_chars" \
     '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
      + (if $recipe != "" then {recipe:$recipe} else {} end)
      + (if $project != "" then {project:$project} else {} end)
@@ -649,7 +649,7 @@ log_metric() {
      + (if ($crun != "" and ($crun|tonumber) > 0) then {checks_run:($crun|tonumber), checks_failed:($cfail|tonumber), checks_autofixed:($cfix|tonumber)} else {} end)
      + (if $cnames != "" then {checks_failed_names:($cnames|split(","))} else {} end)
      + (if $draft != "" then {draft_file:$draft} else {} end)
-     + (if $retried != "" then {retried:true} else {} end)' \
+     + (if $retried != "" then {retried:true, retry_chars:($retry_chars|tonumber)} else {} end)' \
     >> "$metrics_file" 2>/dev/null || true
 }
 
@@ -2094,6 +2094,13 @@ if (( status == 0 )) && (( checks_failed > 0 )) \
    && [[ -n "$recipe" ]] \
    && [[ "${DELEGATE_NO_RETRY:-}" != "1" ]]; then
   retried="true"
+  # The rejected generation and the notice appended to the prompt are real
+  # local work, and tokens_local is defined as total chars in + out over 4.
+  # They are carried in their own field rather than folded into
+  # prompt_chars / output_chars, which keep meaning "the request that
+  # produced the answer you got"; the row still reproduces its own token
+  # count as (prompt + context + output + retry) / 4.
+  retry_chars=${#output}
   retry_notice=""
   for _rc in $(printf '%s' "$checks_failed_names" | tr ',' ' '); do
     retry_notice="${retry_notice}- $(retry_constraint_for "$_rc")
@@ -2104,10 +2111,12 @@ if (( status == 0 )) && (( checks_failed > 0 )) \
   # the rules the model broke are in there, and re-stating them out of context
   # would be a second, differently-worded prompt whose failures could not be
   # attributed to the recipe.
+  retry_input_before=${#full_input}
   full_input="${full_input}
 
 Your previous answer was REJECTED. It broke these constraints:
 ${retry_notice}Write the answer again, in full, obeying every rule above. Output only the answer."
+  retry_chars=$(( retry_chars + ${#full_input} - retry_input_before ))
   dispatch_to_model "$model"
   run_output_checks
 else
@@ -2145,13 +2154,13 @@ generation_ms=$((duration_ms - queue_wait_ms))
 prompt_chars=$(( ${#recipe_template} + ${#prompt} ))
 context_chars=${#context}
 output_chars=${#output}
-tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$output_chars")
+tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$(( output_chars + ${retry_chars:-0} ))")
 
 draft_file=""
 if (( status == 0 )); then
   draft_file=$(capture_draft "$output" "$ts_start")
 fi
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried"
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}"
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to

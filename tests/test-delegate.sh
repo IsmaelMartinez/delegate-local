@@ -6174,6 +6174,28 @@ else
   echo "  PASS  retry: a call that was not retried carries no retried field"; pass=$((pass+1))
 fi
 
+# 47e-i. The rejected generation and the appended notice are real local work.
+# tokens_local is defined as total chars in + out over 4, so a retried row that
+# counted only the surviving call would under-report it. They ride their own
+# field rather than inflating prompt_chars / output_chars, which keep meaning
+# "the request that produced the answer you got"; the row still reproduces its
+# own token count.
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" \
+  'this subject line is far too long\n\nbody' \
+  'short one\n\nbody'
+run_rt >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+rc=$(printf '%s' "$row" | jq -r '.retry_chars // 0')
+if (( rc > 0 )); then
+  echo "  PASS  retry: the rejected generation and the notice are counted"; pass=$((pass+1))
+else
+  echo "  FAIL  retry: the rejected generation and the notice are counted (retry_chars=$rc)"; fail=$((fail+1))
+fi
+assert_eq "$(printf '%s' "$row" | jq -r '((.prompt_chars + .context_chars + .output_chars + .retry_chars) / 4 | floor)')" \
+  "$(printf '%s' "$row" | jq -r '.estimated_tokens_avoided')" \
+  "retry: the row still reproduces its own token count"
+
 # 47f. DELEGATE_NO_RETRY=1 restores the single-call behaviour exactly.
 : > "$metrics"
 make_mock_curl_seq "$tmp" "$counter" 'this subject line is far too long\n\nbody'
