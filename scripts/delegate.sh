@@ -2008,13 +2008,19 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
       no_invented_headings)
         # A markdown heading the model made up. Measured 2026-08-27 with
         # DELEGATE_NO_RETRY=1 so the first pass is visible: handed two
-        # heading-free merged-PR exemplars (`#422`, `#413`) and the facts of a
-        # change as terse notes, `pr-description` produced `### Implementation
-        # Details` and `### Testing` with bullet lists under each. The SHAPE
+        # merged-PR exemplars verified heading-free by this same scan (`#422`,
+        # `#424`) and the facts of a change as terse notes, `pr-description`
+        # invented at least one markdown heading on 4 runs of 4. The SHAPE
         # section states the constraint in prose — "Do NOT add '## Summary',
         # '## Test plan', or any heading that the examples themselves do not
-        # use" — and it has been restated four times across that recipe's
-        # calibration history without holding.
+        # use" — and it has been restated across several revisions of that
+        # recipe without holding.
+        #
+        # Verify an exemplar is heading-free before concluding a heading was
+        # invented. The first version of this measurement used `#413`, which
+        # carries three `###` headings, so the output it called invented was
+        # the model matching a shape it had been shown; this check stayed
+        # silent on that input, which is how the error surfaced.
         #
         # Same contract as no_invented_task_list, deliberately: a blanket ban
         # would be wrong, because a repo whose merged PRs all carry
