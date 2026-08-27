@@ -60,9 +60,19 @@ delegate_project_name() {
   if [[ -n "$common" ]]; then
     common_dir=$(cd "$common" 2>/dev/null && pwd)
     basename "$(dirname "$common_dir")"
-  else
-    basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   fi
+  # Outside a git repository there is no project, and the cwd's basename is not
+  # one. The old fallback said otherwise and filed a delegation issued from a
+  # scratch directory under `project:"tmp"` — a real-looking name that names
+  # nothing, fragments the per-project rollup, and can never match a boundary
+  # lookup, so the hook nudges a session that did delegate (#342's loop, from
+  # the other end). delegate-boundary-hook.sh already refuses this exact string
+  # for its own derivation ("a `cd /tmp` must not file the boundary under `tmp`
+  # and fragment the denominator", #385); this is the wrapper agreeing.
+  #
+  # Emitting nothing is not a silent degradation: `--project NAME` and
+  # DELEGATE_PROJECT are checked above and both still win, and the nudge the
+  # hook prints already names --project explicitly for exactly this case.
 }
 
 # otel_gen_id <nhex>

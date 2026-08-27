@@ -42,10 +42,20 @@ assert_eq "myrepo" "$(cd "$wt" && delegate_project_name)" "T2: linked worktree r
 # T3: from a nested subdirectory of the main repo → repo basename.
 assert_eq "myrepo" "$(cd "$repo/sub/dir" && delegate_project_name)" "T3: subdirectory resolves to repo name"
 
-# T4: outside any git repo → cwd basename (fallback preserves old behaviour).
+# T4: outside any git repo → NOTHING. The cwd's basename is not a project, and
+# saying it is produced a real-looking name that names nothing: a delegation
+# about `delegate-local` issued from a scratch directory was filed under
+# `project:"tmp"` on 2026-08-27. That fragments the per-project rollup and can
+# never match a boundary lookup, so the hook nudges a session that did in fact
+# delegate. delegate-boundary-hook.sh already refuses this exact string for its
+# own derivation (#385); this is the wrapper agreeing.
 outside="$tmp/not-a-repo"
 mkdir -p "$outside"
-assert_eq "not-a-repo" "$(cd "$outside" && delegate_project_name)" "T4: outside a repo falls back to cwd basename"
+assert_eq "" "$(cd "$outside" && delegate_project_name)" "T4: outside a repo yields no project"
+# T4b: and specifically not the scratch-directory name that started this.
+scratch="$tmp/tmp"
+mkdir -p "$scratch"
+assert_eq "" "$(cd "$scratch" && delegate_project_name)" "T4b: a scratch dir is not filed under its basename"
 
 # T5: an explicit DELEGATE_PROJECT wins over every derivation. The cwd answer
 # is only right when the script runs inside the repo the delegation is FOR, so
@@ -55,7 +65,7 @@ assert_eq "not-a-repo" "$(cd "$outside" && delegate_project_name)" "T4: outside 
 assert_eq "teams-for-linux" "$(cd "$repo" && DELEGATE_PROJECT=teams-for-linux delegate_project_name)" \
   "T5: DELEGATE_PROJECT overrides the repo derivation"
 assert_eq "teams-for-linux" "$(cd "$outside" && DELEGATE_PROJECT=teams-for-linux delegate_project_name)" \
-  "T5b: DELEGATE_PROJECT overrides the cwd fallback"
+  "T5b: DELEGATE_PROJECT still names the project outside a repo"
 # T6: an empty DELEGATE_PROJECT is not an override — it falls through.
 assert_eq "myrepo" "$(cd "$repo" && DELEGATE_PROJECT= delegate_project_name)" \
   "T6: empty DELEGATE_PROJECT falls through to the derivation"
