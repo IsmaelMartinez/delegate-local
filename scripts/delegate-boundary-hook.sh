@@ -171,10 +171,19 @@ boundary="" recipe=""
 # measurement that failed must not promote a reply to the long recipe on no
 # evidence at all.
 posted_body_chars() {
-  local raw="$1" path
-  path=$(sed -nE 's/^.*[[:space:]](--body-file|-F)[[:space:]]+([^[:space:]"'"'"']+).*$/\2/p' <<<"$raw" | head -n 1)
-  if [[ -n "$path" && -r "$path" ]]; then
-    wc -c < "$path" | tr -d ' '
+  local raw="$1" path n
+  # An optional opening quote is consumed so `--body-file "notes.md"` yields
+  # the path rather than nothing, and the captured token is cut at the first
+  # shell punctuation so `--body-file notes.md;` does not become `notes.md;`.
+  path=$(sed -nE 's/^.*[[:space:]](--body-file|-F)[[:space:]]+["'"'"']?([^[:space:]"'"'"']+).*$/\2/p' <<<"$raw" | head -n 1)
+  path="${path%%[;,\&|\)]*}"
+  # -f, not just -r: this runs inside a PreToolUse hook on every Bash call, and
+  # `wc -c < /dev/zero` never returns. A directory, a device or a FIFO is not a
+  # body file, and anything that is not a regular file falls through to the
+  # inline branch and then to the short-shape default.
+  if [[ -n "$path" && -f "$path" && -r "$path" ]]; then
+    n=$(wc -c < "$path" 2>/dev/null | tr -d ' ')
+    printf '%s' "${n:-0}"
     return 0
   fi
   # One left-to-right pass, no backtracking: find each flag that starts at a

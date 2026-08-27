@@ -908,6 +908,38 @@ payload "gh pr comment 12 --body-file $tmpcwd/does-not-exist.md" "$tmpcwd" \
 assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
   "comment-reply: an unreadable body-file falls back to the short shape"
 
+# 58d-ii. Only a REGULAR file is read. This runs inside a PreToolUse hook on
+# every Bash call, and `wc -c < /dev/zero` never returns; a directory or a FIFO
+# would be just as wrong, if less dramatic.
+: > "$METRICS"
+payload "gh pr comment 12 --body-file /dev/zero" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" perl -e 'alarm 15; exec @ARGV' bash "$HOOK" >/dev/null 2>&1
+ec=$?
+# perl's alarm rather than `timeout`, which is GNU coreutils and absent on the
+# macOS baseline; perl is already a hard dependency here. A regression makes
+# this exit 142 (SIGALRM) instead of hanging the suite.
+assert_eq 0 "$ec" "comment-reply: a character device is not read as a body file"
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a character device falls back to the short shape"
+: > "$METRICS"
+payload "gh pr comment 12 --body-file $tmpcwd" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a directory is not read as a body file"
+
+# 58d-iii. A quoted path is still a path, and trailing shell punctuation is not
+# part of it.
+: > "$METRICS"
+payload "gh pr comment 12 --body-file \"$tmpcwd/long.md\"" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a quoted --body-file path is measured"
+: > "$METRICS"
+payload "gh pr comment 12 --body-file $tmpcwd/long.md; echo done" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: trailing shell punctuation is not part of the path"
+
 # 58e. The threshold is overridable, so the routing can be re-tuned from the
 # corpus without editing the hook.
 : > "$METRICS"
