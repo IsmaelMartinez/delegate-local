@@ -41,9 +41,13 @@ _DELEGATE_OTEL_LIB_LOADED=1
 #   The path it prints may be relative, so `cd` + `pwd` makes it absolute — this
 #   avoids `--path-format=absolute`, which needs git 2.31+ and would otherwise
 #   fail silently on older git and fall back to the (wrong) worktree name.
-#   Falls back to the worktree toplevel, then the cwd, when not in (or unable to
-#   resolve) a git repo — preserving the previous behaviour outside worktrees.
-#   bash 3.2-safe.
+#   Falls back to the worktree toplevel when git cannot answer
+#   `--git-common-dir` at all (pre-2.5), which names the working tree rather
+#   than the main repo but is still a project. Outside a git repository it
+#   emits NOTHING and returns 0: the cwd's basename is not a project name, and
+#   recording it as one filed a delegation about this repo, issued from a
+#   scratch directory, under `project:"tmp"`. `--project NAME` and
+#   DELEGATE_PROJECT are checked first and both still win. bash 3.2-safe.
 delegate_project_name() {
   local common common_dir toplevel
   # An explicit DELEGATE_PROJECT wins over any derivation: the cwd is only the
