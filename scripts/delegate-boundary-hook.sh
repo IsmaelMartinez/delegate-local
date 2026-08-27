@@ -181,32 +181,51 @@ posted_body_chars() {
   # is, and the file is the honest measurement.
   IFS=$'\t' read -r kind val < <(awk 'BEGIN { RS="\1" } {
     n = length($0); if (n > 32768) n = 32768;
-    best = 0; file = "";
-    for (i = 1; i <= n; i++) {
-      if (i > 1 && substr($0, i - 1, 1) !~ /[[:space:]]/) continue;
-      f = 0; isfile = 0;
-      if (substr($0, i, 12) == "--body-file ")   { f = 12; isfile = 1 }
-      else if (substr($0, i, 3) == "-F ")        { f = 3;  isfile = 1 }
-      else if (substr($0, i, 7) == "--body ")      f = 7;
-      else if (substr($0, i, 10) == "--message ") f = 10;
-      else if (substr($0, i, 3) == "-b ")          f = 3;
-      if (f == 0) continue;
-      j = i + f;
-      while (j <= n && substr($0, j, 1) == " ") j++;
-      c = substr($0, j, 1); v = "";
+    best = 0; file = ""; i = 1; prev = " ";
+    while (i <= n) {
+      c = substr($0, i, 1);
+      # A quoted span that is not a flag argument is DATA, and is skipped
+      # whole. Without this, prose that merely mentions a flag counts —
+      # `echo "x --body-file draft.md"; gh pr comment --body "short"` measured
+      # the mention and promoted a two-sentence reply to the long recipe,
+      # which is the direction that costs something.
       if (c == "\"" || c == "\047") {
-        j++;
+        j = i + 1;
         while (j <= n && substr($0, j, 1) != c) {
-          # A backslash escapes the next character inside double quotes only;
-          # inside single quotes the shell takes it literally.
           if (c == "\"" && substr($0, j, 1) == "\\") j++;
-          v = v substr($0, j, 1); j++;
+          j++;
         }
-      } else {
-        while (j <= n && substr($0, j, 1) !~ /[[:space:];,&|)]/) { v = v substr($0, j, 1); j++ }
+        prev = "x"; i = j + 1; continue;
       }
-      if (isfile) { if (file == "") file = v }
-      else if (length(v) > best) best = length(v);
+      if (prev ~ /[[:space:]]/) {
+        f = 0; isfile = 0;
+        if (substr($0, i, 12) == "--body-file ")   { f = 12; isfile = 1 }
+        else if (substr($0, i, 3) == "-F ")        { f = 3;  isfile = 1 }
+        else if (substr($0, i, 7) == "--body ")      f = 7;
+        else if (substr($0, i, 10) == "--message ") f = 10;
+        else if (substr($0, i, 3) == "-b ")          f = 3;
+        if (f > 0) {
+          j = i + f;
+          while (j <= n && substr($0, j, 1) == " ") j++;
+          d = substr($0, j, 1); v = "";
+          if (d == "\"" || d == "\047") {
+            j++;
+            while (j <= n && substr($0, j, 1) != d) {
+              # A backslash escapes the next character inside double quotes
+              # only; inside single quotes the shell takes it literally.
+              if (d == "\"" && substr($0, j, 1) == "\\") j++;
+              v = v substr($0, j, 1); j++;
+            }
+            j++;
+          } else {
+            while (j <= n && substr($0, j, 1) !~ /[[:space:];,&|)]/) { v = v substr($0, j, 1); j++ }
+          }
+          if (isfile) { if (file == "") file = v }
+          else if (length(v) > best) best = length(v);
+          prev = " "; i = j; continue;
+        }
+      }
+      prev = c; i++;
     }
     if (file != "") printf "FILE\t%s\n", file; else printf "INLINE\t%d\n", best;
   }' <<<"$raw")

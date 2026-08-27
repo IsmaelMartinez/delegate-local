@@ -956,6 +956,22 @@ payload "gh pr comment 12 --body \"short\" --body-file $tmpcwd/long.md" "$tmpcwd
 assert_eq maintainer-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
   "comment-reply: --body-file outranks an inline body in the same command"
 
+# 58d-vi. A flag MENTIONED inside quoted prose is data, not a flag. The scan
+# that classifies the boundary already blanks quoted spans; the measurement
+# reads the raw command and has to do its own skipping, or a sentence about
+# `--body-file` promotes a two-sentence reply to the evidence-led recipe —
+# the direction that costs something.
+: > "$METRICS"
+payload "echo \"pass --body-file $tmpcwd/long.md when you post it\"; gh pr comment 12 --body \"two sentences. and an ask?\"" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a flag inside quoted prose is not measured"
+: > "$METRICS"
+payload "echo \"$long_body\"; gh pr comment 12 --body \"two sentences. and an ask?\"" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null 2>&1
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
+  "comment-reply: a long quoted string in another segment is not the body"
+
 # 58e. The threshold is overridable, so the routing can be re-tuned from the
 # corpus without editing the hook.
 : > "$METRICS"
