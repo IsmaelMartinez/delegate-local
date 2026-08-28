@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.32.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.31.0...v0.32.0) (2026-08-28)
+
+
+### Features
+
+* report captured-pair coverage in the metrics rollup ([#464](https://github.com/IsmaelMartinez/delegate-local/issues/464)) ([8c7d96e](https://github.com/IsmaelMartinez/delegate-local/commit/8c7d96e358e27c346c43f4d145d461996e091132)), closes [#461](https://github.com/IsmaelMartinez/delegate-local/issues/461)
+
+
+### Bug Fixes
+
+* count every boundary, dropping the pre-drafted exclusion ([#466](https://github.com/IsmaelMartinez/delegate-local/issues/466)) ([43ef3fb](https://github.com/IsmaelMartinez/delegate-local/commit/43ef3fb08dfe95b0dd208f09119bd52915f0e416))
+* recognise gh api field flags in the posted-body scanner ([#462](https://github.com/IsmaelMartinez/delegate-local/issues/462)) ([48f4a0e](https://github.com/IsmaelMartinez/delegate-local/commit/48f4a0e1affb4c048dabd87a51ff515cc203bc82)), closes [#461](https://github.com/IsmaelMartinez/delegate-local/issues/461)
+
+
+### Maintenance
+
+* **deps:** bump google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml ([#426](https://github.com/IsmaelMartinez/delegate-local/issues/426)) ([0c0fb33](https://github.com/IsmaelMartinez/delegate-local/commit/0c0fb33a06f516b242d56217cc4e14e73ef89d70))
+
 ## [0.31.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.30.0...v0.31.0) (2026-08-27)
 
 
