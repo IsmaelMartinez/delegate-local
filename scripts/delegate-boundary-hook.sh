@@ -202,15 +202,35 @@ _posted_body_scan() {
         prev = "x"; i = j + 1; continue;
       }
       if (prev ~ /[[:space:]]/) {
-        f = 0; isfile = 0;
-        if (substr($0, i, 12) == "--body-file ")   { f = 12; isfile = 1 }
-        else if (substr($0, i, 3) == "-F ")        { f = 3;  isfile = 1 }
-        else if (substr($0, i, 7) == "--body ")      f = 7;
-        else if (substr($0, i, 10) == "--message ") f = 10;
-        else if (substr($0, i, 3) == "-b ")          f = 3;
+        # `-f`/`-F` and their long forms are gh api FIELD flags: the argument
+        # is `key=value`, and only the `body` key is a body. Reading `-F` as a
+        # bare path is how `-F in_reply_to=99` became a filename, which made
+        # the whole `gh api ... -f body=... -F in_reply_to=...` reply — the
+        # shape /address-pr-comments prescribes — measure 0 characters and
+        # carry no text (#461). `-F` keeps its file meaning when the argument
+        # has no `=`, because it is also the short form of `--body-file` in
+        # `gh pr comment` / `gh issue create`.
+        f = 0; isfile = 0; isfield = 0;
+        if (substr($0, i, 12) == "--body-file ")      { f = 12; isfile = 1 }
+        else if (substr($0, i, 12) == "--raw-field ") { f = 12; isfield = 1 }
+        else if (substr($0, i, 8) == "--field ")      { f = 8;  isfield = 1 }
+        else if (substr($0, i, 3) == "-F ")           { f = 3;  isfile = 1; isfield = 1 }
+        else if (substr($0, i, 3) == "-f ")           { f = 3;  isfield = 1 }
+        else if (substr($0, i, 7) == "--body ")         f = 7;
+        else if (substr($0, i, 10) == "--message ")     f = 10;
+        else if (substr($0, i, 3) == "-b ")             f = 3;
         if (f > 0) {
           j = i + f;
           while (j <= n && substr($0, j, 1) == " ") j++;
+          # The key is read before the value so the value reader below still
+          # sees a quote where one opens: `-f body="two words"` is one body,
+          # not the bare token `body="two`.
+          key = "";
+          if (isfield) {
+            k = j;
+            while (k <= n && substr($0, k, 1) ~ /[A-Za-z0-9_-]/) { key = key substr($0, k, 1); k++ }
+            if (key != "" && substr($0, k, 1) == "=") j = k + 1; else key = "";
+          }
           d = substr($0, j, 1); v = "";
           if (d == "\"" || d == "\047") {
             j++;
@@ -224,8 +244,20 @@ _posted_body_scan() {
           } else {
             while (j <= n && substr($0, j, 1) !~ /[[:space:];,&|)]/) { v = v substr($0, j, 1); j++ }
           }
-          if (isfile) { if (file == "") file = v }
-          else if (length(v) > best) { best = length(v); bestv = v }
+          # What this argument IS, decided once: a body file, an inline body,
+          # or neither. A field flag carrying any key but `body` is neither —
+          # `-f event=COMMENT` and `-F in_reply_to=99` are not text anyone
+          # posted, and reading them as one is the whole of #461.
+          asfile = 0; asbody = 0;
+          if (isfield && key != "") {
+            if (key == "body") {
+              if (substr(v, 1, 1) == "@") { asfile = 1; v = substr(v, 2) } else asbody = 1;
+            }
+          }
+          else if (isfile) asfile = 1;
+          else if (!isfield) asbody = 1;
+          if (asfile) { if (file == "") file = v }
+          else if (asbody && length(v) > best) { best = length(v); bestv = v }
           prev = " "; i = j; continue;
         }
       }

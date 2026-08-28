@@ -1083,6 +1083,79 @@ assert_eq "the reply that came from a file" "$(cat "$capdir/drafts/20260827T1000
   "capture: a --body-file post stores the file's contents"
 rm -rf "$capdir" "$capcwd"
 
+# ---------------------------------------------------------------------------
+# #461. `gh api ... -f body=... -F in_reply_to=...` is the shape
+# /address-pr-comments prescribes for replying to one review comment, and it is
+# the shape the scanner could not read: `-f` was not a recognised flag at all,
+# and a bare `-F` argument was taken as a body-file path, so `in_reply_to=99`
+# became a filename that does not exist. Every post in that shape yielded no
+# text, which is why the capture had 0 rows carrying final_source in the whole
+# corpus while 37 finals on disk had all been supplied by hand.
+# ---------------------------------------------------------------------------
+cap_setup_recipe() { # $1 = recipe to seed, so a non-comment-reply boundary credits
+  capdir=$(mktemp -d); capm="$capdir/metrics.jsonl"
+  capcwd=$(mktemp -d); capproj=$(basename "$capcwd")
+  capts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"ts":"%s","source":"delegate","recipe":"%s","project":"%s","draft_file":"20260827T100000Z-aaaa1111.draft.txt"}\n' \
+    "$capts" "$1" "$capproj" > "$capm"
+}
+capfinal="drafts/20260827T100000Z-aaaa1111.final.txt"
+
+cap_setup_recipe pr-review-reply
+cap_post 'gh api repos/o/r/pulls/12/comments -X POST -f body="Applied in abc1234." -F in_reply_to=99'
+assert_eq true "$(jq -r .delegated <<<"$(tail -1 "$capm")")" \
+  "capture: the gh api reply is credited to the delegation"
+assert_eq "Applied in abc1234." "$(cat "$capdir/$capfinal" 2>/dev/null)" \
+  "capture: -f body= is the posted body (#461)"
+rm -rf "$capdir" "$capcwd"
+
+# A field flag whose key is not `body` is not text anyone posted. `-f
+# event=COMMENT` is longer than the body beside it, so a fix that read every
+# field argument as a candidate body would store the wrong one.
+cap_setup_recipe maintainer-review-reply
+cap_post 'gh api repos/o/r/pulls/12/reviews -X POST -f body=hello -f event=COMMENT'
+assert_eq "hello" "$(cat "$capdir/$capfinal" 2>/dev/null)" \
+  "capture: a non-body field key is not mistaken for the body"
+rm -rf "$capdir" "$capcwd"
+
+# `-F body=@file` reads the field FROM a file — the pre-drafted detector in the
+# same script already resolves that path, and the scanner now agrees with it.
+cap_setup_recipe pr-review-reply
+printf 'the reply that came from a field file' > "$capcwd/reply.md"
+cap_post "gh api repos/o/r/pulls/12/comments -X POST -F body=@$capcwd/reply.md -F in_reply_to=1"
+assert_eq "the reply that came from a field file" "$(cat "$capdir/$capfinal" 2>/dev/null)" \
+  "capture: -F body=@file stores the file's contents"
+rm -rf "$capdir" "$capcwd"
+
+# The long forms of the same two flags.
+cap_setup_recipe pr-review-reply
+cap_post 'gh api repos/o/r/pulls/12/comments -X POST --raw-field body="the long form" --field in_reply_to=9'
+assert_eq "the long form" "$(cat "$capdir/$capfinal" 2>/dev/null)" \
+  "capture: --raw-field body= is the posted body"
+rm -rf "$capdir" "$capcwd"
+
+# A POST carrying no body field at all has no text to store, and must not
+# invent one out of the other fields.
+cap_setup_recipe pr-review-reply
+cap_post 'gh api repos/o/r/pulls/12/comments -X POST -F in_reply_to=99 -F commit_id=abc1234'
+assert_eq "" "$(ls "$capdir/drafts" 2>/dev/null)" \
+  "capture: a POST with no body field stores nothing"
+rm -rf "$capdir" "$capcwd"
+
+# `-F` is ALSO `--body-file`'s short form in `gh pr comment`, where the argument
+# is a bare path with no `=`. That meaning has to survive the fix.
+cap_setup
+printf 'the reply posted with the short flag' > "$capcwd/reply.md"
+cap_post "gh pr comment 12 -F $capcwd/reply.md"
+assert_eq "the reply posted with the short flag" "$(cat "$capdir/$capfinal" 2>/dev/null)" \
+  "capture: a bare -F path is still a body file"
+rm -rf "$capdir" "$capcwd"
+
+# No routing assertion accompanies these: `posted_body_chars` has one caller,
+# the 600-char comment-reply split, and every `gh api` form is classified by
+# endpoint before it reaches that split. There is no real command where a
+# field flag meets the split, so the parse is asserted where it is observable.
+
 # A delegation with no captured draft has no stem to file the post under, so the
 # capture is skipped rather than inventing a name that matches no draft.
 cap_setup
