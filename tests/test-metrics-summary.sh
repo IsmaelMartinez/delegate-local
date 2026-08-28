@@ -730,6 +730,66 @@ case "$out" in
 esac
 rm -f "$sf3"
 
+# Captured-pair coverage (#461 follow-up). The two ways a rejection acquires its
+# shipped half are not interchangeable — `--final` needs the caller to remember,
+# the boundary hook infers it from a credited post — so the line splits them.
+# `inferred=0` is the whole reason it exists: the hook capture shipped in #457
+# and did not fire once for eleven days, and the field simply being absent from
+# every row was indistinguishable from having no reply traffic at all.
+cp=$(mktemp)
+cat > "$cp" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T09:01:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T09:02:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T09:03:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":false,"scaffold":true,"final_file":"a.final.txt","final_source":"posted"}
+{"ts":"2026-06-01T10:01:00Z","source":"feedback","ref_ts":"2026-06-01T09:01:00Z","kept":false,"final_file":"b.final.txt"}
+{"ts":"2026-06-01T10:02:00Z","source":"feedback","ref_ts":"2026-06-01T09:02:00Z","kept":false}
+{"ts":"2026-06-01T10:03:00Z","source":"feedback","ref_ts":"2026-06-01T09:03:00Z","kept":true,"final_file":"d.final.txt"}
+EOF
+out=$(bash "$SCRIPT" --file "$cp" 2>&1)
+assert_contains "Captured pairs (rejections with the shipped text stored): n=2/3  inferred=1  by-hand=1" "$out" \
+  "captured pairs: inferred and hand-supplied are counted apart, and a kept row is not a rejection"
+rm -f "$cp"
+
+# The absent case is the one that mattered: every final hand-supplied reads as
+# inferred=0, which is a claim about the hook rather than a missing field.
+cp2=$(mktemp)
+cat > "$cp2" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":false,"final_file":"b.final.txt"}
+EOF
+out=$(bash "$SCRIPT" --file "$cp2" 2>&1)
+assert_contains "n=1/1  inferred=0  by-hand=1" "$out" \
+  "captured pairs: a corpus with no hook capture reports inferred=0"
+rm -f "$cp2"
+
+# Silent with nothing to report, so a file of clean hits prints as before.
+cp3=$(mktemp)
+cat > "$cp3" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":true}
+EOF
+out=$(bash "$SCRIPT" --file "$cp3" 2>&1)
+case "$out" in
+  *"Captured pairs"*) assert_eq "absent" "present" "captured pairs: silent when nothing was rejected" ;;
+  *)                  assert_eq "absent" "absent"  "captured pairs: silent when nothing was rejected" ;;
+esac
+rm -f "$cp3"
+
+# The --since / --days window reaches this line like every other section.
+cp4=$(mktemp)
+cat > "$cp4" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":false,"final_file":"old.final.txt"}
+{"ts":"2026-07-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0}
+{"ts":"2026-07-01T10:00:00Z","source":"feedback","ref_ts":"2026-07-01T09:00:00Z","kept":false,"final_file":"new.final.txt","final_source":"posted"}
+EOF
+out=$(bash "$SCRIPT" --file "$cp4" --since 2026-06-15 2>&1)
+assert_contains "n=1/1  inferred=1  by-hand=0" "$out" \
+  "captured pairs: --since windows the line with the rest of the report"
+rm -f "$cp4"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

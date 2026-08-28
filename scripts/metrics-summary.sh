@@ -338,6 +338,23 @@ if (( n_feedback > 0 )); then
        | if ($paired | length) > 0 then
            "  Agent self-flattery (human verdict on agent-shipped output): n=\($paired|length)  human-miss=\($paired|map(select(.h=="miss"))|length)  rate=\((($paired|map(select(.h=="miss"))|length) * 100 / ($paired|length)) | floor)%"
          else empty end),
+      # Captured-pair coverage (#461 follow-up). A rejection is only diffable
+      # when the shipped text was stored beside the draft, and the two ways
+      # that happens are NOT interchangeable: `--final` needs the caller to
+      # remember, while the boundary hook infers it from a credited post and
+      # marks the row final_source:"posted". Splitting them is the point. The
+      # hook capture shipped in #457 and did not fire once for eleven days,
+      # because the scanner could not read a body out of `gh api -f body=`;
+      # `inferred=0` says that out loud, where the field merely being absent
+      # from every row looked exactly like "nobody has delegated a reply yet".
+      # Counted over feedback ROWS rather than delegations: a delegation can
+      # carry a verdict in both tiers, and each one either stored a final or
+      # did not.
+      (([.[] | select(src == "feedback" and (.kept // false) == false)]) as $rej
+       | ($rej | map(select((.final_file // "") != ""))) as $cap
+       | if ($rej | length) > 0 then
+           "  Captured pairs (rejections with the shipped text stored): n=\($cap|length)/\($rej|length)  inferred=\($cap|map(select(.final_source == "posted"))|length)  by-hand=\($cap|map(select(.final_source != "posted"))|length)"
+         else empty end),
       (if $wn > 0 then "  Raw / no-recipe (verdicts optional — experiments, audits, ad-hoc): n=\($wn)  tracked=\($raw|map(select(.h!=null or .a!=null))|length)  untracked=\($raw|map(select(.h==null and .a==null))|length)" else empty end)
   ' "$metrics_file"
   echo
