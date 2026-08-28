@@ -645,7 +645,10 @@ if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
      >> "$metrics_file" 2>/dev/null || true
 fi
 
-# --- nudge only when the artifact is about to be authored inline ----------
+# --- nudge unless the artifact was already delegated ----------------------
+# The only exemption is a credited delegation. Since #465 a file-backed body
+# nudges like an inline one, because a body file is not evidence that the text
+# came from anywhere but this agent a call earlier.
 [[ "$delegated" == "true" ]] && exit 0
 
 mode="${DELEGATE_BOUNDARY_MODE:-warn}"
