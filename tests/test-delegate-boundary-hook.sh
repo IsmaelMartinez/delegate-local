@@ -348,45 +348,60 @@ payload "$(printf 'gh pr create --title t --body-file - <<%s\nbody text\nEOF' "'
 assert_eq pr-create "$(jq -r .boundary <<<"$(last_row)")" "gh pr create with a heredoc body: still a boundary"
 assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "gh pr create with a heredoc body: delegated=false (- is not a file)"
 
-# --- #349: a body read from an existing file is pre-drafted, not missed ----
+# --- #465: a body read from an existing file is a counted opportunity -----
+# It used to be excluded as state:"pre-drafted" (#349). The hook cannot tell an
+# approved body file from one the agent wrote a Bash call earlier, and the very
+# same act WAS counted whenever the write and the post shared a call, so the
+# rate moved with shell batching rather than with behaviour.
 mkdir -p "$tmpcwd/drafts"
 printf 'already drafted and approved\n' > "$tmpcwd/drafts/body.md"
 
-# 15a. gh issue create --body-file <existing file>: no nudge, state=pre-drafted.
+# 15a. gh issue create --body-file <existing file>: nudges, no state.
 : > "$METRICS"
 ec=0
 out=$(payload 'gh issue create --title t --body-file drafts/body.md' "$tmpcwd" \
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK") || ec=$?
 assert_eq 0 "$ec" "issue-create --body-file existing: exit 0"
-assert_eq "" "$out" "issue-create --body-file existing: no nudge (drafting moment already passed)"
-assert_eq issue-create "$(jq -r .boundary <<<"$(last_row)")" "issue-create --body-file existing: boundary still recorded"
-assert_eq pre-drafted "$(jq -r .state <<<"$(last_row)")" "issue-create --body-file existing: state=pre-drafted"
+assert_contains 'github-issue-body' "$out" "issue-create --body-file existing: nudges"
+assert_eq issue-create "$(jq -r .boundary <<<"$(last_row)")" "issue-create --body-file existing: boundary recorded"
+assert_eq null "$(jq -r '.state // "null"' <<<"$(last_row)")" "issue-create --body-file existing: no state"
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "issue-create --body-file existing: counted as missed"
+
+# 15a-bis. The SAME post written and posted in one Bash call — the shape that
+# exposed the inconsistency — now records identically. Batching must not move
+# the row into a different bucket.
+: > "$METRICS"
+payload "cat > $tmpcwd/drafts/inline.md <<'EOF'
+already drafted and approved
+EOF
+gh issue create --title t --body-file $tmpcwd/drafts/inline.md" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq null "$(jq -r '.state // "null"' <<<"$(last_row)")" "same-call write+post: no state, same as the two-call form"
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "same-call write+post: counted as missed, same as the two-call form"
 
 # 15b. The -F shorthand behaves the same.
 : > "$METRICS"
 out=$(payload 'gh issue comment 7 -F drafts/body.md' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
-assert_eq "" "$out" "comment-reply -F existing: no nudge"
-assert_eq pre-drafted "$(jq -r .state <<<"$(last_row)")" "comment-reply -F existing: state=pre-drafted"
+assert_contains 'maintainer' "$out" "comment-reply -F existing: nudges"
+assert_eq null "$(jq -r '.state // "null"' <<<"$(last_row)")" "comment-reply -F existing: no state"
 
 # 15c. gh pr comment --body-file <existing file>: same.
 : > "$METRICS"
 out=$(payload "gh pr comment 12 --body-file $tmpcwd/drafts/body.md" "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
-assert_eq "" "$out" "pr comment --body-file (absolute) existing: no nudge"
-assert_eq pre-drafted "$(jq -r .state <<<"$(last_row)")" "pr comment --body-file (absolute) existing: state=pre-drafted"
+assert_contains 'maintainer' "$out" "pr comment --body-file (absolute) existing: nudges"
+assert_eq null "$(jq -r '.state // "null"' <<<"$(last_row)")" "pr comment --body-file (absolute) existing: no state"
 
 # 15c-i. `gh api -F body=@file` is the form used to post an inline PR review
-# reply, and it is the same already-drafted situation as --body-file. Observed
-# live: a maintainer session posting an approved reply this way still recorded
-# delegated:false, which is the metric noise #349 is about.
+# reply, and it is now a counted opportunity like every other body-file post.
 : > "$METRICS"
 out=$(payload "gh api repos/o/r/pulls/355/comments -X POST -F body=@$tmpcwd/drafts/body.md -F in_reply_to=1" "$tmpcwd" \
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
-assert_eq "" "$out" "gh api -F body=@existing: no nudge"
-assert_eq pre-drafted "$(jq -r .state <<<"$(last_row)")" "gh api -F body=@existing: state=pre-drafted"
+assert_contains 'pr-review-reply' "$out" "gh api -F body=@existing: nudges"
+assert_eq null "$(jq -r '.state // "null"' <<<"$(last_row)")" "gh api -F body=@existing: no state"
 
-# 15c-ii. A delegation inside the window beats pre-drafted: delegate → save →
-# post is the workflow the nudge asks for, and recording it as delegated:false
-# removed the sensor's best outcome from both sides of the ratio.
+# 15c-ii. A delegation inside the window still credits a body-file post:
+# delegate → save → post is the workflow the nudge asks for, and recording it
+# as delegated:false removed the sensor's best outcome from the ratio.
 : > "$METRICS"
 jq -nc --arg ts "$nowts" --arg p "$proj" \
   '{ts:$ts, source:"delegate", recipe:"pr-description", project:$p}' >> "$METRICS"
@@ -394,32 +409,26 @@ out=$(payload "gh pr create --title t --body-file $tmpcwd/drafts/body.md" "$tmpc
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
 assert_eq "" "$out" "delegated + body-file: no nudge"
 assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "delegated + body-file: delegated=true"
-assert_eq null "$(jq -r '.state // "null"' <<<"$(last_row)")" "delegated + body-file: delegated supersedes pre-drafted"
 
-# 15c-iii. A body-file post in a LATER segment must not mark an inline post in
-# an earlier one as pre-drafted — that suppressed a real nudge and deleted the
-# row from the metric, which is worse than the deflation #349 reports.
+# 15c-iii. Segment scoping still matters for classification: the FIRST segment
+# is the one that classifies, so a later body-file post does not change what the
+# earlier inline post is recorded as.
 : > "$METRICS"
 out=$(payload "gh issue comment 1 --body \"inline reply\" && gh issue comment 2 --body-file $tmpcwd/drafts/body.md" "$tmpcwd" \
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
 assert_contains "delegate-local" "$out" "cross-segment body-file: inline post still nudges"
-assert_eq null "$(jq -r '.state // "null"' <<<"$(last_row)")" "cross-segment body-file: no pre-drafted state"
 
 # 15c-iv. Prose naming a body flag inside a quoted message is data, not a flag.
 : > "$METRICS"
 out=$(payload "git commit -m \"docs: see --body-file drafts/body.md for the template\"" "$tmpcwd" \
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
 assert_contains "delegate-local" "$out" "prose naming --body-file: still nudges"
-assert_eq null "$(jq -r '.state // "null"' <<<"$(last_row)")" "prose naming --body-file: no pre-drafted state"
 
-# 15c-v. `git commit -F <file>` is NOT the #349 case: that is the standard way
-# an agent commits a message it composed itself moments earlier, which is
-# exactly the drafting moment the hook exists to catch.
+# 15c-v. `git commit -F <file>` nudges like every other boundary.
 : > "$METRICS"
 out=$(payload "git commit -F $tmpcwd/drafts/body.md" "$tmpcwd" \
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
 assert_contains "delegate-local" "$out" "git commit -F: still nudges"
-assert_eq null "$(jq -r '.state // "null"' <<<"$(last_row)")" "git commit -F: not pre-drafted"
 
 # 15c-vi. A heredoc write followed by a real boundary in the same call: the
 # body is data and must not classify, but the command AFTER the terminator is
@@ -452,13 +461,13 @@ assert_contains 'maintainer-reply' "$out" "inline --body: still nudges"
 assert_eq null "$(jq -r '.state // null' <<<"$(last_row)")" "inline --body: no state (ordinary missed opportunity)"
 assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "inline --body: delegated=false"
 
-# 15e. --body-file pointing at a file that does NOT exist is not pre-drafted.
+# 15e. --body-file pointing at a file that does NOT exist behaves the same.
 : > "$METRICS"
 out=$(payload 'gh issue create --title t --body-file drafts/nope.md' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
 assert_contains 'github-issue-body' "$out" "--body-file missing file: still nudges"
 assert_eq null "$(jq -r '.state // null' <<<"$(last_row)")" "--body-file missing file: no state"
 
-# 15f. gh api's -F is a field assignment, not a body file — must not pre-draft.
+# 15f. gh api's -F is a field assignment, not a body file.
 : > "$METRICS"
 out=$(payload 'gh api repos/o/r/pulls/12/comments -X POST -f body="x" -F in_reply_to=99' "$tmpcwd" \
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
@@ -1074,8 +1083,8 @@ assert_eq "false" "$([[ -e "$capdir/drafts/20260827T100000Z-aaaa1111.final.txt" 
   "capture: the already-spent draft is left alone"
 rm -rf "$capdir" "$capcwd"
 
-# A --body-file post is pre-drafted, but a delegation still credits it, and the
-# file is where the shipped text is.
+# A --body-file post is credited like any other, and the file is where the
+# shipped text is.
 cap_setup
 printf 'the reply that came from a file\n' > "$capcwd/reply.md"
 cap_post "gh pr comment 12 --body-file $capcwd/reply.md"
@@ -1118,8 +1127,8 @@ assert_eq "hello" "$(cat "$capdir/$capfinal" 2>/dev/null)" \
   "capture: a non-body field key is not mistaken for the body"
 rm -rf "$capdir" "$capcwd"
 
-# `-F body=@file` reads the field FROM a file — the pre-drafted detector in the
-# same script already resolves that path, and the scanner now agrees with it.
+# `-F body=@file` reads the field FROM a file, so the scanner resolves the path
+# rather than storing the literal `body=@...` argument.
 cap_setup_recipe pr-review-reply
 printf 'the reply that came from a field file' > "$capcwd/reply.md"
 cap_post "gh api repos/o/r/pulls/12/comments -X POST -F body=@$capcwd/reply.md -F in_reply_to=1"

@@ -425,31 +425,28 @@ fi
 # under-triggering number this signal exists to make visible. Only printed when
 # opportunity rows exist (i.e. the boundary hook is installed).
 #
-# state:"pre-drafted" rows (a --body-file/-F post of text authored at an earlier
-# Write, #349) are neither numerator nor denominator: the drafting moment was
-# never at that Bash call, so counting them as missed deflated the rate. They
-# are reported as their own trailing count, and only when some exist, so a
-# metrics file without them prints exactly the line it printed before.
+# Every opportunity row counts. state:"pre-drafted" rows (#349) used to sit
+# outside both halves of the ratio; #465 removed that exclusion, because the
+# hook could not tell an approved body file from one the agent wrote a call
+# earlier, and because the same act WAS counted whenever the write and the post
+# shared a Bash call. Historical rates therefore move: the 31 legacy
+# pre-drafted rows in the corpus at the time became counted misses.
 n_opp=$(jq -rs 'map(select((.source // "") == "opportunity")) | length' "$metrics_file")
 if (( n_opp > 0 )); then
   echo "Trigger rate (commit/PR/release/comment boundaries):"
   jq -rs '
     map(select((.source // "") == "opportunity"))
     | group_by(.project // "(none)")
-    | map(. as $rows | ($rows | map(select((.state // "") != "pre-drafted"))) as $counted | {
-        project: ($rows[0].project // "(none)"),
-        n: ($counted | length),
-        delegated: ($counted | map(select(.delegated == true)) | length),
-        missed: ($counted | map(select(.delegated == false)) | length),
-        predrafted: (($rows | length) - ($counted | length))
+    | map({
+        project: (.[0].project // "(none)"),
+        n: length,
+        delegated: (map(select(.delegated == true)) | length),
+        missed: (map(select(.delegated == false)) | length)
       })
     | sort_by(-.n)
     | .[]
     | "  \(.project | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
-      # No rate when every boundary was pre-drafted: 0/0 printed as rate=0%
-      # reads as total non-compliance, the exact misreading #349 is about.
-      + (if .n > 0 then "  rate=\(.delegated * 100 / .n | floor)%" else "" end)
-      + (if .predrafted > 0 then "  pre-drafted=\(.predrafted)" else "" end)
+      + "  rate=\(.delegated * 100 / .n | floor)%"
   ' "$metrics_file"
   echo
 fi

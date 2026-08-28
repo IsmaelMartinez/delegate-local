@@ -349,12 +349,13 @@ case "$out" in
 esac
 rm -f "$opp"
 
-# 12b. state:"pre-drafted" opportunity rows (#349) are a --body-file post of text
-# authored at an earlier Write, so the drafting moment was never at that Bash
-# call. They must leave the trigger rate alone — out of the numerator AND the
-# denominator — and be surfaced as their own count. Fixture: alpha has the same
-# 1-delegated / 1-missed pair as above plus 2 pre-drafted posts, so a naive
-# denominator would read 25% instead of the true 50%.
+# 12b. Legacy state:"pre-drafted" opportunity rows (#349) used to sit outside
+# both halves of the ratio. #465 removed that exclusion — the hook could not
+# tell an approved body file from one the agent wrote a call earlier, and the
+# same act was counted whenever the write and the post shared a Bash call — so
+# the rows that survive in older corpora now count as ordinary misses. Fixture:
+# alpha has a 1-delegated / 1-missed pair plus 2 legacy pre-drafted rows, which
+# read 1/4 rather than the 1/2 the exclusion used to print.
 predraft=$(mktemp)
 cat > "$predraft" <<'EOF'
 {"ts":"2026-06-08T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true}
@@ -364,9 +365,13 @@ cat > "$predraft" <<'EOF'
 EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$predraft" 2>&1) || EC=$?
-assert_eq 0 "$EC" "pre-drafted: exits 0"
-assert_contains "opportunities=2  delegated=1  missed=1  rate=50%  pre-drafted=2" "$out" \
-  "pre-drafted: excluded from the trigger-rate numerator and denominator, reported separately"
+assert_eq 0 "$EC" "legacy pre-drafted: exits 0"
+assert_contains "opportunities=4  delegated=1  missed=3  rate=25%" "$out" \
+  "legacy pre-drafted: counted in the ratio like every other boundary (#465)"
+case "$out" in
+  *"pre-drafted="*) assert_eq "absent" "present" "legacy pre-drafted: no separate trailing count" ;;
+  *)                assert_eq "absent" "absent"  "legacy pre-drafted: no separate trailing count" ;;
+esac
 rm -f "$predraft"
 
 # 16. Phase E agent-observed verdict tier. Fixture: 4 commit-message recipe
