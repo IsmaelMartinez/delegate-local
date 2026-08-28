@@ -30,13 +30,11 @@
 #      sees), enforce (deny the call so the model re-routes), or off (measure
 #      only, no reminder).
 #
-# One boundary shape is neither delegated nor missed: a body read from a file
-# that already exists (`--body-file` / `-F` / `--notes-file` / `--file`). The
-# drafting moment was the earlier Write, several tool calls back, so re-drafting
-# now would throw away text that was often already human-approved. Those rows
-# carry state:"pre-drafted" and no nudge fires; metrics-summary.sh keeps them out
-# of the trigger-rate numerator AND denominator so human-approved posts stop
-# reading as missed delegations (#349).
+# Every boundary counts the same way. A body read from an existing file used to
+# be excluded as state:"pre-drafted" (#349), on the theory that the drafting
+# moment had passed; that exclusion was removed in #465 because the hook cannot
+# distinguish it from a body the agent authored one call earlier, and because
+# the identical act was counted when the write and the post shared a Bash call.
 #
 # Fails OPEN: any error, missing jq, or unparseable input exits 0 so a commit is
 # never blocked by a hook bug. The only blocking path is the explicit
@@ -513,53 +511,18 @@ if [[ "$matched_seg" =~ $_repo_flag_re ]]; then
   fi
 fi
 
-# --- was the body drafted earlier, into a file? (#349) --------------------
-# `--body-file` / `-F` / `--notes-file` / `--file` pointing at a file that
-# already exists means the drafting moment has passed: the text was authored at
-# an earlier Write, and in practice was often shown to and approved by the human
-# before this call. Re-drafting on-device now would discard what they signed off
-# on, so the nudge is not actionable — and counting it as a missed delegation
-# deflates the per-project trigger rate. Recorded as its own state instead.
-# An inline `--body`/`-m` string keeps nudging: that IS the drafting moment.
-# A path that does not exist (`--body-file -`, a file about to be written) is
-# not pre-drafted either, so the boundary behaves exactly as before.
-#
-# Scoped to the segment that classified, and to the already-sanitised scan
-# surface, so the detector inherits the classifier's parsing rather than
-# re-deriving it: a `-F` in an unrelated segment, or the words `--body-file
-# drafts/body.md` inside quoted prose, must not mark an inline call as
-# pre-drafted (that would suppress a real nudge and delete the row from the
-# metric — worse than the deflation #349 reports). A literally-quoted path is
-# blanked with the rest of the quoted span and simply falls back to nudging,
-# which is the fail-safe direction.
-#
-# git-commit is excluded on purpose. #349 is about gh/glab posts of text a
-# human already approved; `git commit -F /tmp/msg.txt` is the standard way an
-# agent commits a message it composed itself moments earlier, which is exactly
-# the drafting moment this hook exists to catch.
-state=""
-if [[ "$boundary" != "git-commit" ]]; then
-  body_file_args=$(awk 'BEGIN{RS="\1"} {
-    n = split($0, t, /[[:space:]]+/);
-    for (i = 1; i <= n; i++) {
-      v = "";
-      if (t[i] == "--body-file" || t[i] == "--notes-file" || t[i] == "--file" || t[i] == "-F") {
-        if (i < n) v = t[i + 1];
-      } else if (t[i] ~ /^(--body-file|--notes-file|--file|-F)=/) {
-        v = t[i]; sub(/^[^=]*=/, "", v);
-      }
-      # `gh api -F body=@draft.md` reads the field from a file — the same
-      # already-drafted situation, in the form used to post inline PR review
-      # replies. A plain `-F key=value` has no @ and yields no candidate.
-      if (v ~ /^[A-Za-z_][A-Za-z0-9_-]*=@/) sub(/^[^=]*=@/, "", v);
-      if (v != "" && v !~ /=/) print v;
-    }
-  }' <<<"$matched_seg" 2>/dev/null) || body_file_args=""
-  while IFS= read -r cand; do
-    [[ -z "$cand" ]] && continue
-    if [[ -f "$cand" ]]; then state="pre-drafted"; break; fi
-  done <<<"$body_file_args"
-fi
+# --- #465: a body file is NOT evidence the drafting moment passed ---------
+# Until 2026-08-28 a `--body-file` / `-F` post whose file already existed was
+# recorded `state:"pre-drafted"` and excluded from the trigger-rate ratio (#349,
+# #355), on the theory that the text had been authored at an earlier Write and
+# often approved by a human. The hook cannot tell those apart from a body the
+# agent wrote inline one Bash call earlier, which is the case the sensor exists
+# to catch — and it never could, so the exclusion was quiet rather than
+# accurate (#358). It was also inconsistent: writing the body and posting it in
+# ONE call left the file non-existent at PreToolUse time, so the identical act
+# was counted as a miss and nudged, making the rate depend on how the agent
+# batched its shell calls (#465). Every boundary is now counted the same way,
+# and a body file nudges like an inline one.
 
 # --- was there a local delegation for THIS boundary's recipe, recently? ----
 # Recipe-aware: only a delegation whose recipe matches this boundary's recipe
@@ -569,10 +532,9 @@ fi
 # rate AND suppressed the nudge (delegated:true skips it below), so the artifact the
 # boundary is about was never delegated. A bare (no-recipe) delegation no longer
 # counts for any boundary — the calibrated recipe the nudge names is the path.
-# Runs for pre-drafted bodies too. Delegate-then-save-then-post is the whole
+# Runs for file-backed bodies too. Delegate-then-save-then-post is the whole
 # workflow the nudge asks for, and skipping the lookup recorded that compliant
-# case as delegated:false — removing the sensor's best outcome from both sides
-# of the ratio. delegated:true wins over pre-drafted when both apply.
+# case as delegated:false — removing the sensor's best outcome from the ratio.
 metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 # Default 480 rather than 10: the batch flow delegates a sweep of drafts,
 # waits for human approval, and posts hours later. Measured 2026-08-25, a
@@ -670,27 +632,23 @@ if [[ "$delegated" == "true" && -n "${credit_draft:-}" \
     fi
   fi
 fi
-# A delegated boundary is a counted success, not an excluded row, so the
-# delegated flag supersedes pre-drafted when both describe the same post.
-[[ "$delegated" == "true" ]] && state=""
-
 # --- record the opportunity (the trigger-rate sensor) ---------------------
 # One row per boundary so trigger rate has a denominator. Stores no command or
-# message text — only boundary type, suggested recipe, project, the flag, and
-# (when the body came from a file that already existed) state:"pre-drafted".
+# message text — only boundary type, suggested recipe, project and the flag.
 if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
   jq -nc --arg ts "$ts" --arg project "$project" --arg boundary "$boundary" \
-     --arg recipe "$recipe" --argjson delegated "$delegated" --arg state "$state" '
+     --arg recipe "$recipe" --argjson delegated "$delegated" '
      {ts:$ts, source:"opportunity", boundary:$boundary, suggested_recipe:$recipe, delegated:$delegated}
-     + (if $state != "" then {state:$state} else {} end)
      + (if $project != "" then {project:$project} else {} end)' \
      >> "$metrics_file" 2>/dev/null || true
 fi
 
-# --- nudge only when the artifact is about to be authored inline ----------
-[[ -n "$state" ]] && exit 0
+# --- nudge unless the artifact was already delegated ----------------------
+# The only exemption is a credited delegation. Since #465 a file-backed body
+# nudges like an inline one, because a body file is not evidence that the text
+# came from anywhere but this agent a call earlier.
 [[ "$delegated" == "true" ]] && exit 0
 
 mode="${DELEGATE_BOUNDARY_MODE:-warn}"
