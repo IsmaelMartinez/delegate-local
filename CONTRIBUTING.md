@@ -55,7 +55,24 @@ Two independent quirks of this repository are worth knowing before cutting one.
 
 Releases publish rather than draft. `release-please-config.json` sets `"draft": false` deliberately. A draft GitHub release does not create its git tag, and release-please anchors changelog generation on tags, so a drafted release silently breaks the *next* one: with no tag to anchor on it regenerates the whole history into the following changelog. That is what happened to v0.21.0 through v0.23.0, whose release PRs all merged normally but left no tags behind, and it is why the 0.24.0 PR was first generated with 314 changelog entries instead of six. Do not set this flag back to `true`.
 
-The release PR's CI needs a manual approval. It is authored by `github-actions[bot]`, and the repository's Actions approval policy is `first_time_contributors`, so its `ci` run completes as `action_required` with zero jobs until someone presses "Approve and run" in the Actions tab. Either approve it, or merge with `gh pr merge <n> --squash --admin` (`enforce_admins` is `false` on `main`). This is unrelated to the draft flag above: it delays a release rather than corrupting the next one. The structural fix, a PAT or GitHub App token for release-please, is tracked in #366.
+The release PR's CI needs a manual approval. It is authored by `github-actions[bot]`, and the repository's Actions approval policy is `first_time_contributors`, so every workflow run on the release branch completes as `action_required` with zero jobs until someone approves it. Because the runs hold with no jobs, they publish no check runs at all, and `validate skill` — the one required status check on `main` — can never report, so the PR sits `BLOCKED` with `mergeable: MERGEABLE`.
+
+Approve the runs; do not reach for `--admin`. Approving makes the gate actually run, whereas `--admin` merges around a gate that never reported (`enforce_admins` is `false` on `main`). From the CLI:
+
+```bash
+sha=$(gh api repos/IsmaelMartinez/delegate-local/pulls/<n> --jq .head.sha)
+# `action_required` is a valid value for BOTH status and conclusion in the
+# Actions API. A run held for approval was observed as status=completed,
+# conclusion=action_required on 2026-08-28; match either so the recipe does
+# not depend on which phase the run is caught in.
+gh run list --branch release-please--branches--main --limit 8 \
+  --json databaseId,headSha,status,conclusion \
+  --jq '.[] | select(.headSha=="'"$sha"'"
+        and (.status=="action_required" or .conclusion=="action_required")) | .databaseId'
+gh api repos/IsmaelMartinez/delegate-local/actions/runs/<run-id>/approve -X POST
+```
+
+0.32.0 was released this way on 2026-08-28 and merged with a plain `gh pr merge 463 --squash --delete-branch`. This is unrelated to the draft flag above: it delays a release rather than corrupting the next one. Removing the approval step entirely means either loosening the Actions approval policy — a security trade-off on a public repo — or giving release-please a PAT or GitHub App token so its PR is not bot-authored; that decision is tracked in #436.
 
 If a release PR is stale, re-run the `Release Please` workflow from the Actions tab; it has a `workflow_dispatch` trigger for exactly this, so there is no need to push a no-op commit to `main`.
 
