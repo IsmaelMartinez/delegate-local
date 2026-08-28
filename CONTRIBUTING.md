@@ -61,9 +61,14 @@ Approve the runs; do not reach for `--admin`. Approving makes the gate actually 
 
 ```bash
 sha=$(gh api repos/IsmaelMartinez/delegate-local/pulls/<n> --jq .head.sha)
+# `action_required` is a valid value for BOTH status and conclusion in the
+# Actions API. A run held for approval was observed as status=completed,
+# conclusion=action_required on 2026-08-28; match either so the recipe does
+# not depend on which phase the run is caught in.
 gh run list --branch release-please--branches--main --limit 8 \
-  --json databaseId,headSha,conclusion \
-  --jq '.[] | select(.headSha=="'"$sha"'" and .conclusion=="action_required") | .databaseId'
+  --json databaseId,headSha,status,conclusion \
+  --jq '.[] | select(.headSha=="'"$sha"'"
+        and (.status=="action_required" or .conclusion=="action_required")) | .databaseId'
 gh api repos/IsmaelMartinez/delegate-local/actions/runs/<run-id>/approve -X POST
 ```
 
