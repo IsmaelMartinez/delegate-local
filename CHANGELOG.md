@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.32.0...v0.32.1) (2026-08-28)
+
+
+### Documentation
+
+* approve the held release run instead of merging with --admin ([#467](https://github.com/IsmaelMartinez/delegate-local/issues/467)) ([8109fa6](https://github.com/IsmaelMartinez/delegate-local/commit/8109fa6dfa49fe2bd63c28e49ab0bd3e0856dab0))
+
 ## [0.32.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.31.0...v0.32.0) (2026-08-28)
 
 
