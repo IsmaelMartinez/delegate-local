@@ -1597,9 +1597,66 @@ retry_constraint_for() {
       echo "no_invented_refs: every issue or ticket identifier in a trailer must appear in the input you were given." ;;
     no_example_echo)
       echo "no_example_echo: do not reproduce any line of this prompt or of an example; write from the input." ;;
+    no_context_echo)
+      echo "no_context_echo: do not copy sentences of the supplied facts into the answer; carry their paths, numbers and references inside sentences of your own." ;;
     *)
       echo "$name: the constraint of that name, stated above, was not met." ;;
   esac
+}
+
+# echo_normalise — the ONE normalisation both echo checks apply, identically,
+# to every pattern source and to the output. Asymmetry is how no_example_echo
+# failed twice: first the `Wrong:`/`Correct:` label was stripped from the
+# template side only, so an echo that kept its label slipped through; then
+# the conventional-commit prefix was stripped from the output side only, so an
+# echoed template example that began `fix:` stopped matching the pattern it
+# came from. Any future rule added here must go in this function and nowhere
+# else. no_context_echo reuses it unchanged so the two checks cannot drift on
+# what counts as "the same line".
+#
+# sed -E: making the `(scope)` of a conventional-commit prefix optional needs
+# an ERE group, which BRE cannot express in one pass. BSD and GNU both take
+# -E. Order matters — the label comes off before the type prefix, so a
+# `Correct: fix: X` example reduces all the way to `X`.
+echo_normalise() {
+  sed -E -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+         -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
+         -e 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' \
+         -e 's/[[:space:]]*\(#[0-9]+\)$//'
+}
+
+# echo_matches — the ONE comparison both echo checks run, so the 40-char floor
+# and the output-side normalisation cannot be applied to one check and not the
+# other. Pattern units arrive on stdin RAW, the answer as $1 RAW; each side
+# goes through echo_normalise here and nowhere else (it is not idempotent, so
+# a caller that pre-normalises hands in a pattern the output can never match),
+# units under the floor are dropped from the pattern
+# side (an exact match cannot be shorter than its pattern, so one floor
+# suffices), and the distinct answer units that reproduce a pattern unit are
+# printed. Whole-unit, fixed-string (grep -F, linear), sorted for a stable
+# excerpt. The caller chooses the unit: no_example_echo passes lines,
+# no_context_echo passes sentences (see split_sentences).
+echo_matches() {
+  echo_normalise \
+    | awk 'length($0) >= 40' \
+    | grep -Fxf - <(printf '%s\n' "$1" | echo_normalise) \
+    | sort -u
+}
+
+# split_sentences — one unit per line: on the newlines already there, and on
+# a `.`, `?` or `!` followed by whitespace. The rejected drafts no_context_echo
+# was measured against are one paragraph line each (row 2026-09-10T20:00:01Z:
+# context 1687 chars, body one 1687-char line), because facts arrive one per
+# line and come back joined, so a whole-line compare found nothing on the very
+# failure it was built for. The terminator is DROPPED from the unit, at a split
+# and at the end of the line alike: a facts file states each fact as a bare
+# line and the model closes it with a full stop, so keeping the terminator
+# made `<fact>` and `<fact>.` different units and the common case never
+# matched (0 of 2 caught, 2 of 2 once the facts carried their own full stops).
+# Abbreviations and dotted names split the same way on both sides, and a
+# fragment that shape falls under the floor.
+split_sentences() {
+  awk '{ gsub(/[.?!]+[[:space:]]+/, "\n"); sub(/[.?!]+[[:space:]]*$/, "") } 1'
 }
 
 run_output_checks() {
@@ -1607,7 +1664,7 @@ run_output_checks() {
 # is a function (it ran at top level before the refactor). The result and the
 # counters — output, checks_run/failed/autofixed, capability_failed — are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -1671,38 +1728,29 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
       done
     done
   fi
-  # The same normalisation runs on BOTH sides. Stripping the label only from
-  # the template side left a false negative: a model that copies the whole
-  # line, label included, produces "Correct: <sentence>" which no longer
-  # matches the stripped "<sentence>" pattern, so the most literal possible
-  # echo was the one that got through.
-  # ONE normalisation, applied identically to every pattern source and to the
-  # output. Asymmetry is how this check has failed twice: first the
-  # `Wrong:`/`Correct:` label was stripped from the template side only, so an
-  # echo that kept its label slipped through; then the conventional-commit
-  # prefix was stripped from the output side only, so an echoed template
-  # example that began `fix:` stopped matching the pattern it came from. Any
-  # future rule added here must go in echo_normalise and nowhere else.
-  #
-  # sed -E: making the `(scope)` of a conventional-commit prefix optional needs
-  # an ERE group, which BRE cannot express in one pass. BSD and GNU both take
-  # -E. Order matters — the label comes off before the type prefix, so a
-  # `Correct: fix: X` example reduces all the way to `X`.
-  echo_normalise() {
-    sed -E -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-           -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
-           -e 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' \
-           -e 's/[[:space:]]*\(#[0-9]+\)$//'
-  }
-  echoed_line=$( { printf '%s\n' "$recipe_template_raw" | echo_normalise
+  # The comparison itself is echo_matches (above run_output_checks, shared
+  # with no_context_echo), which normalises both sides and applies the floor.
+  # Every pattern source reaches it RAW and is normalised there exactly once.
+  # The convention filter still has to judge on the normalised form, so that
+  # `ci: X` and `chore(deps): X (#253)` count as one line repeated, but it
+  # must not hand the helper the normalised text: echo_normalise is not
+  # idempotent (the type-prefix strip takes one prefix per pass), so an
+  # exemplar `chore: fix: X` normalised twice became the pattern `X` while the
+  # same line echoed in the output normalised once to `fix: X`, and the most
+  # literal echo of all was the one that slipped through. So each raw line is
+  # paired with its normalised form (US-separated; paste keeps them aligned
+  # because echo_normalise never drops a line), the form is counted, and the
+  # RAW line of every form seen exactly once goes to the helper. Anything
+  # repeated is convention the output is meant to reproduce.
+  echoed_line=$( { printf '%s\n' "$recipe_template_raw"
     if [[ -n "$echo_exemplars" ]]; then
-      # uniq -u keeps only lines appearing exactly once across the exemplars;
-      # anything repeated is convention the output is meant to reproduce.
-      printf '%s' "$echo_exemplars" | echo_normalise | sort | uniq -u
-    fi; } \
-    | awk 'length($0) >= 40' \
-    | grep -Fxf - <(printf '%s\n' "$output" | echo_normalise) \
-    | head -n 1)
+      paste -d "$(printf '\037')" \
+        <(printf '%s' "$echo_exemplars" | echo_normalise) \
+        <(printf '%s' "$echo_exemplars") \
+        | awk -F "$(printf '\037')" '
+            { seen[$1]++; form[NR] = $1; raw[NR] = $2 }
+            END { for (i = 1; i <= NR; i++) if (seen[form[i]] == 1) print raw[i] }'
+    fi; } | echo_matches "$output" | head -n 1)
   if [[ -n "$echoed_line" ]]; then
     echo "delegate: check 'no_example_echo' FAILED — REJECT this draft. The model" >&2
     echo "  reproduced a line from its own prompt (the recipe's example, or one of the" >&2
@@ -2109,6 +2157,44 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             echo "delegate: check 'no_invented_refs' FAILED — trailer names $invented_refs, which appears in none of the inputs you supplied" >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_invented_refs"
+            capability_failed=$((capability_failed + 1))
+          fi
+        fi
+        ;;
+      no_context_echo)
+        # The piped context handed straight back. no_example_echo compares
+        # against the recipe's own prompt and deliberately never against the
+        # caller's context (reproducing a supplied fact must not flag), which
+        # left the opposite failure uncaught: measured 2026-09-11, 63 of 97
+        # reply-recipe rejections said the draft restated the context, and
+        # rejected maintainer-review-reply output ran p50 1637 chars against a
+        # context p50 of 1627 — the draft was its input. Every one of them
+        # carried checks_failed=0, so none took the #384 retry (#475).
+        #
+        # Same machinery as no_example_echo (echo_matches: literal, both sides
+        # through echo_normalise, 40-char floor) with one difference of unit:
+        # both sides are split into SENTENCES first, because the facts arrive
+        # one per line and the rejected drafts return them joined into a
+        # paragraph, so a whole-line compare matched none of the 46 drafts it
+        # was measured against. The pattern set is the piped stdin ONLY, never
+        # the --var values: a --var is a verdict or an ask the recipe tells the
+        # model to place, and the exemplar half already has echo_guard_vars.
+        # The threshold is TWO distinct sentences. One quoted back is the
+        # evidence-carrying the reply recipes ask for ("every anchor spelled
+        # exactly as the facts spell it"), and a one-fact context legitimately
+        # comes back as that fact plus an ask; two is the draft giving up on
+        # curating. Opt-in per recipe, warn-only like the rest, and silenced
+        # by DELEGATE_NO_ECHO_CHECK=1 alongside the check it mirrors.
+        if [[ "$cval" == "true" ]] && [[ "${DELEGATE_NO_ECHO_CHECK:-}" != "1" ]]; then
+          checks_run=$((checks_run + 1))
+          context_echoed=$(printf '%s\n' "$context" | split_sentences \
+            | echo_matches "$(printf '%s\n' "$output" | split_sentences)")
+          context_echoed_n=$(printf '%s' "$context_echoed" | grep -c '')
+          if (( context_echoed_n >= 2 )); then
+            echo "delegate: check 'no_context_echo' FAILED — $context_echoed_n distinct sentence(s) of the answer reproduce sentences of the piped context verbatim, e.g. \"$(printf '%s\n' "$context_echoed" | head -n 1 | cut -c1-120)\"" >&2
+            echo "  The draft restates the facts instead of curating them; carry the anchors inside new sentences." >&2
+            checks_failed=$((checks_failed + 1))
+            checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_context_echo"
             capability_failed=$((capability_failed + 1))
           fi
         fi

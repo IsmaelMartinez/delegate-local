@@ -515,6 +515,36 @@ else
   echo "  FAIL  pr-review-reply.md does not declare no_padding_tail (the check that replaced the clause cap)"; fail=$((fail+1))
 fi
 
+# ---------------------------------------------------------------------------
+# The two maintainer reply recipes must keep no_context_echo declared and the
+# opener as a caller-supplied input (#475). 63 of 97 rejections in the
+# fortnight to 2026-09-11 said the draft restated the piped context, none of
+# them failed a check, and 39 wanted a thanks opener the template forbade.
+# The check is opt-in, so a frontmatter tidy-up could silently drop it; the
+# opener is what stops the model inventing gratitude, so the old "do not open
+# by thanking" wording must not come back either.
+# ---------------------------------------------------------------------------
+for base in maintainer-reply maintainer-review-reply; do
+  rf="$PROMPTS_DIR/$base.md"
+  rf_fm=$(awk '/^---[[:space:]]*$/{d++; if (d==2) exit; next} d==1' "$rf" 2>/dev/null)
+  if printf '%s\n' "$rf_fm" | grep -qE '^[[:space:]]+no_context_echo:[[:space:]]*true'; then
+    echo "  PASS  $base.md declares no_context_echo"; pass=$((pass+1))
+  else
+    echo "  FAIL  $base.md does not declare no_context_echo"; fail=$((fail+1))
+  fi
+  if printf '%s\n' "$rf_fm" | grep -qE '^[[:space:]]+opener:[[:space:]]*string\?'; then
+    echo "  PASS  $base.md declares opener as an optional input"; pass=$((pass+1))
+  else
+    echo "  FAIL  $base.md does not declare opener: string?"; fail=$((fail+1))
+  fi
+  rf_template=$(extract_fenced "$rf" "## Prompt template")
+  if printf '%s' "$rf_template" | grep -qiE 'do not open by thanking|do not thank the contributor'; then
+    echo "  FAIL  $base.md prompt template still forbids the opener the caller supplies"; fail=$((fail+1))
+  else
+    echo "  PASS  $base.md prompt template no longer forbids an opener"; pass=$((pass+1))
+  fi
+done
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
