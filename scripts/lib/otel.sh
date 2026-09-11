@@ -81,13 +81,15 @@ delegate_project_name() {
   # scratch directory under `project:"tmp"` — a real-looking name that names
   # nothing, fragments the per-project rollup, and can never match a boundary
   # lookup, so the hook nudges a session that did delegate (#342's loop, from
-  # the other end). delegate-boundary-hook.sh already refuses this exact string
-  # for its own derivation ("a `cd /tmp` must not file the boundary under `tmp`
-  # and fragment the denominator", #385); this is the wrapper agreeing.
+  # the other end). delegate-boundary-hook.sh refused this exact string for
+  # its `cd <path> &&` target first ("a `cd /tmp` must not file the boundary
+  # under `tmp` and fragment the denominator", #385) but kept a `|| pwd`
+  # fallback for the session cwd until #476; since then it and the Stop hook
+  # call this function instead of mirroring it, so all three agree.
   #
   # Emitting nothing is not a silent degradation: `--project NAME` and
-  # DELEGATE_PROJECT are checked above and both still win, and the nudge the
-  # hook prints already names --project explicitly for exactly this case.
+  # DELEGATE_PROJECT are checked above and both still win, and a projectless
+  # delegation is exactly what the boundary hook credits from that same cwd.
   #
   # Explicit `return 0`: no project is a normal outcome, not an error, and
   # falling off the end would carry out the failed `[[ -n "$toplevel" ]]` as a

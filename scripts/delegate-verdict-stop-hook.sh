@@ -83,15 +83,22 @@ marker_dir="$(dirname "$metrics_file")/.verdict-stop-markers"
 marker="$marker_dir/$session_id"
 [[ -f "$marker" ]] && exit 0
 
-# --- derive the project name (mirror delegate.sh / lib/otel.sh) -----------
+# --- derive the project name (shared with delegate.sh via lib/otel.sh) -----
+# The same delegate_project_name the rows being scanned were written with, so
+# the filter below matches by construction: DELEGATE_PROJECT is honoured, and
+# outside a git repository the project is EMPTY rather than the cwd's basename
+# (#476) — the inline mirror that lived here carried the same `|| pwd`
+# fallback the boundary hook had, so a Stop in a parent folder of checkouts
+# scanned for rows under that folder's name, which delegate.sh never writes.
+# An empty project scans the projectless rows, which is what delegate.sh
+# records from that same cwd — but only those THIS session wrote (see the
+# selector below). A missing lib leaves it empty too: fail open.
 [[ -n "$hook_cwd" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
 project=""
-common=$(git rev-parse --git-common-dir 2>/dev/null || true)
-if [[ -n "$common" ]]; then
-  common_dir=$(cd "$common" 2>/dev/null && pwd || true)
-  [[ -n "$common_dir" ]] && project=$(basename "$(dirname "$common_dir")")
-else
-  project=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+if [[ -f "$script_dir/lib/otel.sh" ]]; then
+  # shellcheck source=lib/otel.sh
+  . "$script_dir/lib/otel.sh"
+  project=$(delegate_project_name 2>/dev/null) || project=""
 fi
 
 # --- scan for this project's untracked delegations in the window ----------
@@ -100,16 +107,26 @@ fi
 # sweep is process-wide, but a Stop in repo A must not surface repo B's work.
 # The feedback-ref map stays global (a feedback row references a ts regardless
 # of which project recorded it). No tty step: the agent is the consumer here.
+#
+# A named project is scoped by name alone, as it always was. No project
+# (#476) is scoped by SESSION instead: the metrics file is shared by every
+# session on the machine, and "no project" would otherwise select every
+# scratch-cwd delegation there is, so a Stop in one such session would block
+# on another session's drafts. delegate.sh records CLAUDE_CODE_SESSION_ID as
+# `session` (#479), the same UUID this payload carries; a projectless row with
+# no session cannot be scoped and is left alone rather than surfaced.
 cutoff_iso=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - $ARGV[0]*3600))' "$window_hours" 2>/dev/null) || exit 0
 [[ -z "$cutoff_iso" ]] && exit 0
 
-rows=$(jq -rs --arg cutoff "$cutoff_iso" --arg proj "$project" '
+rows=$(jq -rs --arg cutoff "$cutoff_iso" --arg proj "$project" --arg sid "$session_id" '
   def src: .source // "delegate";
+  def in_scope: if $proj != "" then (.project // "") == $proj
+                else (.project // "") == "" and (.session // "") == $sid end;
   (reduce (.[] | select(src == "feedback" and .ref_ts != null)) as $f ({}; .[$f.ref_ts] = true)) as $fb
   | map(select(src == "delegate"
         and (.ts != null)
         and ((.exit_status // 0) == 0)
-        and ((.project // "") == $proj)
+        and in_scope
         and (.ts >= $cutoff)
         and ($fb[.ts] | not)))
   | .[]
@@ -136,8 +153,11 @@ find "$marker_dir" -type f -mtime +7 -delete 2>/dev/null || true
 count=$(printf '%s\n' "$rows" | grep -c '')
 batch=$(printf '%s\n' "$rows" | awk -F'\t' 'NF>=1 && $1!="" {printf "  - ts=%s  recipe=%s  tier=%s\n", $1, $2, $3}')
 
+# Outside a repository there is no name to print; say so rather than `''`.
+if [[ -n "$project" ]]; then scope="project '${project}'"
+else scope="no project: cwd outside any git repository"; fi
 reason=$(cat <<EOF
-delegate-local verdict sweep (project '${project}'): ${count} delegation(s) from this session produced output but carry no verdict. Before you stop, for each one you recognise from THIS session, record whether you USED the delegated output as-is (hit) or rewrote/discarded it (miss) — this is a fact about what you did, not a judgment of quality:
+delegate-local verdict sweep (${scope}): ${count} delegation(s) from this session produced output but carry no verdict. Before you stop, for each one you recognise from THIS session, record whether you USED the delegated output as-is (hit) or rewrote/discarded it (miss) — this is a fact about what you did, not a judgment of quality:
 
 ${batch}
   DELEGATE_METRICS_FILE="${metrics_file}" bash "${script_dir}/delegate-feedback.sh" --ts <ts> --source agent hit|miss

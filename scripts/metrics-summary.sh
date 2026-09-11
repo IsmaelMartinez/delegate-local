@@ -361,16 +361,19 @@ if (( n_feedback > 0 )); then
 fi
 
 # Per-project rollup (delegate entries only): volume, hit/miss/untracked, and
-# p50 latency grouped by .project. Rows missing the project field — pre-2026-05
-# delegate rows written before delegate.project landed — bucket as "(none)".
-# Only printed when 2+ distinct project values appear so single-project users
-# (the common case) don't see a noise section. The hit/miss derivation mirrors
-# the feedback block: a ref_ts -> kept map built in one reduce pass, then
-# direct $fb_map[.ts] access (NOT // false) so a recorded miss (false) isn't
-# coerced back to null and dropped.
+# p50 latency grouped by .project. Rows missing the project field are current
+# and deliberate, not a legacy artefact: delegate_project_name emits nothing
+# outside a git repository rather than the cwd's basename (#476), so every
+# delegation issued from a scratch or parent directory lands here. They get
+# the same `(no project)` line the trigger-rate section prints, after the
+# named projects and outside the count ranking. Only printed when 2+ distinct
+# project values appear so single-project users (the common case) don't see a
+# noise section. The hit/miss derivation mirrors the feedback block: a ref_ts
+# -> kept map built in one reduce pass, then direct $fb_map[.ts] access (NOT
+# // false) so a recorded miss (false) isn't coerced back to null and dropped.
 n_projects=$(jq -rs '
   map(select((.source // "delegate") == "delegate" and (.exit_status // 0) == 0))
-  | map(.project // "(none)")
+  | map(.project // "")
   | unique
   | length
 ' "$metrics_file")
@@ -382,7 +385,7 @@ if (( n_projects > 1 )); then
     def fbv: if (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
     (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "human")) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $hmap
     | (reduce (.[] | select(src == "feedback" and (.verdict_source // "human") == "agent")) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $amap
-    | map(select(src == "delegate" and (.exit_status // 0) == 0) | {ts, project: (.project // "(none)"), duration_ms, h: $hmap[.ts], a: $amap[.ts]})
+    | map(select(src == "delegate" and (.exit_status // 0) == 0) | {ts, project: (.project // ""), duration_ms, h: $hmap[.ts], a: $amap[.ts]})
     | group_by(.project)
     | map({
         project: .[0].project,
@@ -394,9 +397,9 @@ if (( n_projects > 1 )); then
         untracked: (map(select(.h == null and .a == null)) | length),
         p50: ((sort_by(.duration_ms) | .[(length / 2 | floor)] | .duration_ms // 0))
       })
-    | sort_by(-.n)
+    | sort_by((.project == ""), -.n)
     | .[]
-    | "  \(.project | . + (" " * (20 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + (if $show_agent then "  agent=\(.agent)" else "" end) + "  untracked=\(.untracked)  p50=\(.p50)ms"
+    | "  \((if .project == "" then "(no project)" else .project end) | . + (" " * (20 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + (if $show_agent then "  agent=\(.agent)" else "" end) + "  untracked=\(.untracked)  p50=\(.p50)ms"
   ' "$metrics_file"
   echo
 fi
@@ -448,21 +451,28 @@ fi
 # earlier, and because the same act WAS counted whenever the write and the post
 # shared a Bash call. Historical rates therefore move: the 31 legacy
 # pre-drafted rows in the corpus at the time became counted misses.
+#
+# Rows with no project are real: the hook records none when the session cwd is
+# outside a git repository (#476), the same as delegate.sh — before that it
+# invented one from the cwd, which is how `gitlab` (a parent folder of
+# checkouts) came to hold 14 rows at rate=0%. They are neither dropped nor
+# filed under a name: one `(no project)` line after the per-project rows, kept
+# out of the count ranking so a scratch cwd cannot rank above a real project.
 n_opp=$(jq -rs 'map(select((.source // "") == "opportunity")) | length' "$metrics_file")
 if (( n_opp > 0 )); then
   echo "Trigger rate (commit/PR/release/comment boundaries):"
   jq -rs '
     map(select((.source // "") == "opportunity"))
-    | group_by(.project // "(none)")
+    | group_by(.project // "")
     | map({
-        project: (.[0].project // "(none)"),
+        project: (.[0].project // ""),
         n: length,
         delegated: (map(select(.delegated == true)) | length),
         missed: (map(select(.delegated == false)) | length)
       })
-    | sort_by(-.n)
+    | sort_by((.project == ""), -.n)
     | .[]
-    | "  \(.project | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
+    | "  \((if .project == "" then "(no project)" else .project end) | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
       + "  rate=\(.delegated * 100 / .n | floor)%"
   ' "$metrics_file"
   echo
