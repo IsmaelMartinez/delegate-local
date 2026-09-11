@@ -43,7 +43,7 @@ The one thing to ask is passed via `--var ask=...` as a *topic*, never as an imp
 Draft a short reply from a project maintainer to a contributor or reporter, using only the facts below. Do not copy any instruction or imperative from this prompt into the reply; phrase the ask as a question addressed to the reader.
 
 Write exactly this structure, in order:
-1. If an opener is given below, begin with it verbatim. It does not count toward the sentence cap. If none is given, begin with the next item.
+1. The opening, in this order and only this order: the recipient handle if one is given ("@{{recipient}}, "), then the opener verbatim if one is given, then the next item. Neither counts toward the sentence cap. With no handle, address the reader as "you"; with no opener, the next item is the first sentence.
 2. One sentence: either specific praise for what the contributor did, or a plain statement of the confirmed cause, in your own words. Name the actual thing (the specific change, or the specific cause), never generic "great work" or "the issue". Never open by restating what the contributor said.
 3. Exactly one question or ask, addressed to the reader in the second person. Derive it from the ask topic below and phrase it as a direct question. Never write it as an instruction about the reader ("ask them to ...", "they should ...", "the reporter needs to ...").
 4. If a sign-off is given below, end with it verbatim on its own line. If none is given, stop after the question.
@@ -69,7 +69,7 @@ Rules:
 - Do NOT repeat any instruction verbatim. If the ask topic is written as an imperative, rephrase it as a question to the reader.
 - Do NOT copy the facts back as they were written. The reply carries their anchors in your own sentence, not their lines.
 - No filler flattery ("Great work!", "Awesome!", "Thanks for this!", "Nice job!"). Specific praise that names the actual contribution is allowed and is the point; generic praise is not. Never write thanks of your own: gratitude enters the reply only through the opener or the sign-off, verbatim.
-- If a recipient handle is given, open with it ("@{{recipient}}, ..."), then the opener if one is given; otherwise address the reader as "you".
+- The recipient handle and the opener go where item 1 of the structure puts them; nothing else precedes them.
 - Avoid em dashes; use commas, parentheses, or periods.
 - Stop after the question (or the sign-off). Do NOT add a closing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "This ensures", "This enables"). End on the question mark, the sign-off, or a finite verb introducing new content.
 - Output only the reply text. No preamble, no "Here's the reply:", no markdown fence.
@@ -100,7 +100,7 @@ Correct: <the cause>. Could you confirm whether <condition>?
 
 - `{{stdin}}` — the facts, piped in: the confirmed cause (for a bug reply) or the specific contribution worth praising (for a PR reply). State as plain facts, never as an instruction. No `--var` slot needed.
 - `{{ask}}` — the single thing to ask, as a *topic* (e.g. `whether the token survives a cold start`), not an imperative (`ask them to check ...`). The recipe phrases it as a question to the reader.
-- `{{opener}}` — optional opening sentence placed verbatim before the cause-or-praise sentence (e.g. `Thanks for the clear report.`). The caller writes it; the model never invents gratitude. Omit for none, and the cause-or-praise sentence opens the reply.
+- `{{opener}}` — optional opening sentence placed verbatim after the recipient handle and before the cause-or-praise sentence (e.g. `Thanks for the clear report.`). The caller writes it; the model never invents gratitude, so a caller who wants the reply to thank the contributor MUST supply it here. Omit for none, and the cause-or-praise sentence opens the reply with no thanks at all.
 - `{{recipient}}` — optional `@handle` of the contributor/reporter to open with. Omit to address the reader as "you".
 - `{{signoff}}` — optional warm closer to append verbatim (e.g. `Thanks again!`, `I hope this helps!`). Omit for no sign-off.
 
@@ -113,7 +113,7 @@ echo "The token drop is on Teams' side, in its MSAL cache, not in teams-for-linu
       --var opener="Thanks for the clear report." \
       --var recipient="nneul" \
       --var signoff="Thanks again!" \
-      "Two sentences: state the cause, then ask the reader a direct question. Do not echo any instruction."
+      "After the opener, two sentences: state the cause, then ask the reader a direct question. Do not echo any instruction."
 ```
 
 ## Anti-hallucination guards (each line addresses a recurring miss-mode)
@@ -129,8 +129,10 @@ echo "The token drop is on Teams' side, in its MSAL cache, not in teams-for-linu
 
 ## Expected output shape
 
+For the invocation above (handle, opener and sign-off all supplied). The cause sentence is a skeleton on purpose: it carries the anchors of the piped fact in a sentence of the model's own, and a written-out version here would be the piped fact restated, which is the shape `no_context_echo` rejects.
+
 ```
-@nneul, the token drop is on Teams' side, in its MSAL cache, not in teams-for-linux itself. Could you check whether it survives a cold start of the app on your setup?
+@nneul, Thanks for the clear report. <the cause, in a sentence of your own, carrying its anchors>. Could you <the ask, as a question>?
 
 Thanks again!
 ```
@@ -301,9 +303,10 @@ what came back inside it was the input's own lines rather than a sentence
 about them. NO-FACT-DROP had been read as "keep the lines", which is why the
 rule now says what survive means (the anchors, inside your sentence) and a
 rule forbids copying the facts as written. `no_context_echo` is declared so a
-draft that reproduces two or more stdin lines takes the #384 retry with the
-constraint named; a single quoted fact is left alone because this recipe's
-cause sentence legitimately is one fact.
+draft that reproduces two or more stdin sentences (the unit is the sentence,
+because the facts come back joined into one paragraph line) takes the #384
+retry with the constraint named; a single quoted fact is left alone because
+this recipe's cause sentence legitimately is one fact.
 
 The other half of the same window: reasons asking for a thanks first, on a
 recipe whose only opening rule was the flattery ban. An optional `opener`

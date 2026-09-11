@@ -1598,7 +1598,7 @@ retry_constraint_for() {
     no_example_echo)
       echo "no_example_echo: do not reproduce any line of this prompt or of an example; write from the input." ;;
     no_context_echo)
-      echo "no_context_echo: do not copy lines of the supplied facts into the answer; carry their paths, numbers and references inside sentences of your own." ;;
+      echo "no_context_echo: do not copy sentences of the supplied facts into the answer; carry their paths, numbers and references inside sentences of your own." ;;
     *)
       echo "$name: the constraint of that name, stated above, was not met." ;;
   esac
@@ -1623,6 +1623,34 @@ echo_normalise() {
          -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
          -e 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' \
          -e 's/[[:space:]]*\(#[0-9]+\)$//'
+}
+
+# echo_matches — the ONE comparison both echo checks run, so the 40-char floor
+# and the output-side normalisation cannot be applied to one check and not the
+# other. Pattern units arrive on stdin, the answer as $1; each side goes
+# through echo_normalise, units under the floor are dropped from the pattern
+# side (an exact match cannot be shorter than its pattern, so one floor
+# suffices), and the distinct answer units that reproduce a pattern unit are
+# printed. Whole-unit, fixed-string (grep -F, linear), sorted for a stable
+# excerpt. The caller chooses the unit: no_example_echo passes lines,
+# no_context_echo passes sentences (see split_sentences).
+echo_matches() {
+  echo_normalise \
+    | awk 'length($0) >= 40' \
+    | grep -Fxf - <(printf '%s\n' "$1" | echo_normalise) \
+    | sort -u
+}
+
+# split_sentences — one unit per line: on the newlines already there, and on
+# a `.`, `?` or `!` followed by whitespace. The rejected drafts no_context_echo
+# was measured against are one paragraph line each (row 2026-09-10T20:00:01Z:
+# context 1687 chars, body one 1687-char line), because facts arrive one per
+# line and come back joined, so a whole-line compare found nothing on the very
+# failure it was built for. The terminator keeps its trailing whitespace on the
+# unit it closes; echo_normalise trims it. Abbreviations and dotted names split
+# the same way on both sides, and a fragment that shape falls under the floor.
+split_sentences() {
+  awk '{ gsub(/[.?!][[:space:]]+/, "&\n") } 1'
 }
 
 run_output_checks() {
@@ -1694,18 +1722,17 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
       done
     done
   fi
-  # Both sides go through echo_normalise (defined above run_output_checks and
-  # shared with no_context_echo), so the label strip and the type-prefix strip
-  # apply to the pattern and to the output alike.
-  echoed_line=$( { printf '%s\n' "$recipe_template_raw" | echo_normalise
+  # The comparison itself is echo_matches (above run_output_checks, shared
+  # with no_context_echo), which normalises both sides and applies the floor.
+  # The exemplar lines are normalised once more here, BEFORE uniq -u, because
+  # the convention filter has to see `ci: X` and `chore(deps): X (#253)` as the
+  # same line; the helper's pass over them is then a no-op.
+  echoed_line=$( { printf '%s\n' "$recipe_template_raw"
     if [[ -n "$echo_exemplars" ]]; then
       # uniq -u keeps only lines appearing exactly once across the exemplars;
       # anything repeated is convention the output is meant to reproduce.
       printf '%s' "$echo_exemplars" | echo_normalise | sort | uniq -u
-    fi; } \
-    | awk 'length($0) >= 40' \
-    | grep -Fxf - <(printf '%s\n' "$output" | echo_normalise) \
-    | head -n 1)
+    fi; } | echo_matches "$output" | head -n 1)
   if [[ -n "$echoed_line" ]]; then
     echo "delegate: check 'no_example_echo' FAILED — REJECT this draft. The model" >&2
     echo "  reproduced a line from its own prompt (the recipe's example, or one of the" >&2
@@ -2126,24 +2153,27 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         # context p50 of 1627 — the draft was its input. Every one of them
         # carried checks_failed=0, so none took the #384 retry (#475).
         #
-        # Same machinery as no_example_echo: whole-line, literal, both sides
-        # through echo_normalise, 40-char floor. The pattern set is the piped
-        # stdin ONLY, never the --var values: a --var is a verdict or an ask
-        # the recipe tells the model to place, and the exemplar half already
-        # has echo_guard_vars. The threshold is TWO distinct lines. One line
-        # quoted back is the evidence-carrying the reply recipes ask for ("every
-        # anchor spelled exactly as the facts spell it"); two is the draft
-        # giving up on curating. Opt-in per recipe, warn-only like the rest.
-        if [[ "$cval" == "true" ]]; then
+        # Same machinery as no_example_echo (echo_matches: literal, both sides
+        # through echo_normalise, 40-char floor) with one difference of unit:
+        # both sides are split into SENTENCES first, because the facts arrive
+        # one per line and the rejected drafts return them joined into a
+        # paragraph, so a whole-line compare matched none of the 46 drafts it
+        # was measured against. The pattern set is the piped stdin ONLY, never
+        # the --var values: a --var is a verdict or an ask the recipe tells the
+        # model to place, and the exemplar half already has echo_guard_vars.
+        # The threshold is TWO distinct sentences. One quoted back is the
+        # evidence-carrying the reply recipes ask for ("every anchor spelled
+        # exactly as the facts spell it"), and a one-fact context legitimately
+        # comes back as that fact plus an ask; two is the draft giving up on
+        # curating. Opt-in per recipe, warn-only like the rest, and silenced
+        # by DELEGATE_NO_ECHO_CHECK=1 alongside the check it mirrors.
+        if [[ "$cval" == "true" ]] && [[ "${DELEGATE_NO_ECHO_CHECK:-}" != "1" ]]; then
           checks_run=$((checks_run + 1))
-          context_echoed=$(printf '%s\n' "$context" | echo_normalise \
-            | awk 'length($0) >= 40' \
-            | grep -Fxf - <(printf '%s\n' "$output" | echo_normalise) \
-            | sort -u)
-          context_echoed_n=0
-          [[ -n "$context_echoed" ]] && context_echoed_n=$(printf '%s\n' "$context_echoed" | wc -l | tr -d ' ')
+          context_echoed=$(printf '%s\n' "$context" | split_sentences \
+            | echo_matches "$(printf '%s\n' "$output" | split_sentences)")
+          context_echoed_n=$(printf '%s' "$context_echoed" | grep -c '')
           if (( context_echoed_n >= 2 )); then
-            echo "delegate: check 'no_context_echo' FAILED — $context_echoed_n line(s) of the answer reproduce lines of the piped context verbatim, e.g. \"$(printf '%s\n' "$context_echoed" | head -n 1 | cut -c1-120)\"" >&2
+            echo "delegate: check 'no_context_echo' FAILED — $context_echoed_n distinct sentence(s) of the answer reproduce sentences of the piped context verbatim, e.g. \"$(printf '%s\n' "$context_echoed" | head -n 1 | cut -c1-120)\"" >&2
             echo "  The draft restates the facts instead of curating them; carry the anchors inside new sentences." >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_context_echo"

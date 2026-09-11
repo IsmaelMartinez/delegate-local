@@ -6491,6 +6491,9 @@ n/a
 ```
 Reply using only the facts below.
 
+=== VERDICT ===
+{{verdict}}
+
 === FACTS ===
 {{stdin}}
 ```
@@ -6499,12 +6502,14 @@ Reply using only the facts below.
 n/a
 EOF
 ce_facts=$'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.\nThe regression predates the refactor by two releases.'
+ce_verdict='The rework is right and the blank window is not a regression from it at all.'
 run_ce() {
-  # $1 selects the recipe; $ce_facts is always the piped context.
+  # $1 selects the recipe; $ce_facts is always the piped context and
+  # $ce_verdict the one --var, so a test can show which of the two is a pattern.
   printf '%s\n' "$ce_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
     DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
     DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
-    bash "$SCRIPT" --recipe "${1:-ce}" prose "go" 2>&1 >/dev/null
+    bash "$SCRIPT" --recipe "${1:-ce}" --var verdict="$ce_verdict" prose "go" 2>&1 >/dev/null
 }
 
 # 48a. Two supplied lines handed straight back -> FAILED, named, counted.
@@ -6513,13 +6518,40 @@ make_mock_curl_think "$tmp" 'Not a regression.\nThe GPU sandbox flag flip landed
 out=$(run_ce)
 assert_contains "check 'no_context_echo' FAILED" "$out" \
   "context-echo: two supplied lines reproduced verbatim are caught"
-assert_contains "2 line(s)" "$out" \
-  "context-echo: the failure counts the echoed lines"
+assert_contains "2 distinct sentence(s)" "$out" \
+  "context-echo: the failure counts the distinct echoed sentences"
 row=$(tail -1 "$metrics")
 assert_contains '"checks_failed_names":["no_context_echo"]' "$row" \
   "context-echo: named on the metrics row"
 assert_contains '"checks_run":2' "$row" \
   "context-echo: counted in checks_run beside the default echo check"
+
+# 48a-ii. The regression anchor. The rejected drafts this check was measured
+# against are ONE paragraph line each: row 2026-09-10T20:00:01Z has
+# context_chars 1687 and a stored body of one 1687-char line, and 21 of the
+# 45 stored maintainer-review-reply drafts in the window have exactly three
+# lines (verdict, body, ask). Facts are piped one per line and come back
+# joined into a paragraph, so a whole-line compare finds nothing on the very
+# failure it exists for. The unit has to be the sentence.
+make_mock_curl_think "$tmp" 'Not a regression. The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412. All 531 tests pass on the branch with the flag forced back on, see PR #2632. Could you add a test?'
+out=$(run_ce)
+assert_contains "check 'no_context_echo' FAILED" "$out" \
+  "context-echo: two facts joined into one paragraph line are still caught"
+
+# 48a-iii. A --var value is not a pattern. The verdict is text the recipe
+# tells the model to place, so reproducing it is correct; only the piped
+# context counts. Verdict verbatim as its own sentence plus ONE fact is one
+# echoed sentence; were --var values patterns it would be two.
+: > "$metrics"
+make_mock_curl_think "$tmp" "${ce_verdict} The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412. Could you add a test?"
+out=$(run_ce)
+if [[ "$out" == *"no_context_echo"* ]]; then
+  echo "  FAIL  context-echo: a reproduced --var value must not count as an echo"; fail=$((fail+1))
+else
+  echo "  PASS  context-echo: a reproduced --var value does not count as an echo"; pass=$((pass+1))
+fi
+assert_contains '"checks_run":2' "$(tail -1 "$metrics")" \
+  "context-echo: the --var case still ran the check"
 
 # 48b. The anchors carried inside NEW sentences is exactly what the recipes
 # ask for, and must never flag. This is the guard that matters: a false
@@ -6611,6 +6643,27 @@ fi
 assert_contains '"checks_run":1' "$(tail -1 "$metrics")" \
   "context-echo: undeclared, only the default echo check is counted"
 
+# 48f-ii. DELEGATE_NO_ECHO_CHECK=1 is documented as the echo opt-out and this
+# check is the mirror of the one it was written for, so it silences both.
+# Left uncovered, an opted-out call still fired this check and paid for the
+# retry it triggers.
+: > "$metrics"
+make_mock_curl_think "$tmp" 'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.'
+out=$(printf '%s\n' "$ce_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_ECHO_CHECK=1 DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe ce --var verdict="$ce_verdict" prose "go" 2>&1 >/dev/null)
+if [[ "$out" == *"no_context_echo"* ]]; then
+  echo "  FAIL  context-echo: DELEGATE_NO_ECHO_CHECK=1 must silence it too"; fail=$((fail+1))
+else
+  echo "  PASS  context-echo: DELEGATE_NO_ECHO_CHECK=1 silences it too"; pass=$((pass+1))
+fi
+if [[ "$(tail -1 "$metrics")" == *'"checks_run"'* ]]; then
+  echo "  FAIL  context-echo: an opted-out call must not count either echo check"; fail=$((fail+1))
+else
+  echo "  PASS  context-echo: an opted-out call counts neither echo check"; pass=$((pass+1))
+fi
+
 # 48g. The retry path fires with the constraint named, so the second request
 # tells the model to carry the anchors rather than the lines.
 counter="$tmp/calls"
@@ -6620,12 +6673,12 @@ make_mock_curl_seq "$tmp" "$counter" \
 : > "$metrics"
 out=$(printf '%s\n' "$ce_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
-  bash "$SCRIPT" --recipe ce prose "go" 2>/dev/null)
+  bash "$SCRIPT" --recipe ce --var verdict="$ce_verdict" prose "go" 2>/dev/null)
 assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
   "context-echo: a failed check costs exactly two dispatches"
 assert_contains "so PR #2632 is clear" "$out" \
   "context-echo: the caller receives the retried output"
-assert_contains "no_context_echo: do not copy lines of the supplied facts" "$(cat "$tmp/payload.2.json")" \
+assert_contains "no_context_echo: do not copy sentences of the supplied facts" "$(cat "$tmp/payload.2.json")" \
   "context-echo: the second request carries the constraint sentence"
 assert_contains '"retried":true' "$(tail -1 "$metrics")" \
   "context-echo: the retry is marked on the metrics row"

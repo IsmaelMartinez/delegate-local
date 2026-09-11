@@ -26,10 +26,12 @@ Not for: replies that argue a contentious design decision or push back on the re
 
 ```bash
 # The verified facts, piped on stdin as {{stdin}}. Everything the reply will
-# rest on, stated as plain facts with the anchors already in them. Anchors are
-# what the recipe preserves, so write them the way they should appear:
-#   src/main.js:412, `--no-sandbox`, PR #2632, 531 tests, commit b3f2a91.
-# One fact per line is easiest to check afterwards.
+# rest on, stated as plain facts with the anchors already in them. Spell the
+# ANCHORS the way they should appear in the reply (src/main.js:412,
+# `--no-sandbox`, PR #2632, 531 tests, commit b3f2a91) and state the FACTS as
+# facts, not as the finished sentences of the reply: a fact written as a reply
+# sentence is one the model places as-is, and no_context_echo rejects a draft
+# that carries two of those. One fact per line is easiest to check afterwards.
 gh pr diff <N> --name-only
 gh pr view <N> --json author --jq '.author.login'
 gh issue view <N> --json title,body
@@ -43,7 +45,7 @@ Do the investigation first and pipe its conclusions, not its raw output. Every a
 Draft a maintainer's reply to a contributor, using only the verified facts below. You are the maintainer. Do not copy any instruction or imperative from this prompt into the reply.
 
 Write it in this order:
-1. If an opener is given below, begin with it verbatim, then the verdict in one sentence. With no opener, the verdict is the first sentence. State the judgement given below plainly and up front. Never open by restating what the contributor said, and never open with a preamble of your own.
+1. The opening, in this order and only this order: the recipient handle if one is given ("@{{recipient}}, "), then the opener verbatim if one is given, then the verdict in one sentence. With no handle, address the reader as "you"; with no opener, the verdict is the first sentence. State the judgement given below plainly and up front. Never open by restating what the contributor said, and never open with a preamble of your own.
 2. The evidence for that verdict, in flowing prose sentences you write. This is the body of the reply and its length is set by how much evidence there is.
 3. What you are asking the contributor to do next, derived from the ask topic below and phrased as a direct question or request to the reader in the second person. Never as an instruction about the reader ("ask them to ...", "they should ...").
 4. If a sign-off is given below, end with it verbatim on its own line.
@@ -58,7 +60,7 @@ The FACTS block is the content of the reply, not a hint about it. Do not compres
 Rules:
 - Prose sentences and paragraphs. No bullet list, no numbered list, no headings, no markdown sections. The one exception: if the ask topic carries TWO OR MORE distinct asks (answering one does not answer the other), write those asks as a short numbered list at the end, one question per item, and keep everything above them as prose. A single ask is never a list.
 - If the trailing instruction asks for a different format, obey it; an explicit format instruction from the caller outranks the previous rule.
-- If a recipient handle is given, open with it ("@{{recipient}}, ..."), then the opener if one is given, then the verdict.
+- The recipient handle and the opener go where item 1 of the order puts them; nothing else precedes the verdict.
 - Never write thanks of your own. Gratitude enters the reply only through the opener or the sign-off, verbatim; if neither is given, the reply carries none.
 - Avoid em dashes; use commas, parentheses, or periods.
 - Do NOT hedge a verdict the facts state plainly. Do NOT soften "this is not a regression" into "this may not be a regression".
@@ -94,7 +96,7 @@ Correct: @<handle>, <opener, verbatim, if given> <verdict>. <evidence sentence o
 - `{{stdin}}` — the verified facts, piped in, with their anchors already written the way they should appear in the reply. No `--var` slot needed.
 - `{{verdict}}` — the judgement to lead with, as a short statement (e.g. `the rework is right and this is not a regression`). The recipe puts it in the first sentence.
 - `{{ask}}` — what you want the contributor to do next, as a *topic* (e.g. `whether they can add a regression test before merge`), never as an imperative. Pass several in one value when there are several; two or more become a short numbered list at the end.
-- `{{opener}}` — optional opening sentence placed verbatim before the verdict (e.g. `Thanks for the thorough bisect.`). The caller writes it; the model never invents gratitude. Omit for none, and the verdict opens the reply.
+- `{{opener}}` — optional opening sentence placed verbatim after the recipient handle and before the verdict (e.g. `Thanks for the thorough bisect.`). The caller writes it; the model never invents gratitude, so a caller who wants the reply to thank the contributor MUST supply it here. Omit for none, and the verdict opens the reply with no thanks at all.
 - `{{recipient}}` — optional `@handle` to open with. Omit to address the reader as "you".
 - `{{signoff}}` — optional closer appended verbatim (e.g. `Thanks again!`). Omit for none.
 
@@ -122,8 +124,10 @@ bash scripts/delegate.sh --recipe maintainer-review-reply \
 
 ## Expected output shape
 
+For the invocation above (handle, opener and sign-off all supplied; the opener keeps its capital because it is the caller's sentence, verbatim):
+
 ```
-@nneul, thanks for the thorough bisect. The rework is right and the blank window is not a regression from it. The flip is in the Electron 39 upgrade, specifically the GPU sandbox flag in `src/main.js:412`, which predates your change by two releases. I re-ran the suite on your branch with the flag forced back on and all 531 tests pass, so the failure you saw on CI is the flag and not the refactor.
+@nneul, Thanks for the thorough bisect. The rework is right and the blank window is not a regression from it. The flip is in the Electron 39 upgrade, specifically the GPU sandbox flag in `src/main.js:412`, which predates your change by two releases. I re-ran the suite on your branch with the flag forced back on and all 531 tests pass, so the failure you saw on CI is the flag and not the refactor.
 
 Could you add a regression test that covers the sandbox flag path before we merge?
 
@@ -220,17 +224,21 @@ the anchors (paths, line references, numbers, hashes, PR and issue numbers)
 carried inside sentences the model writes, never the supplied sentences
 themselves, and a reply the length of the FACTS block built from its lines is
 named as the second failure beside brevity. `no_context_echo` is declared in
-the frontmatter and fails a draft that reproduces two or more lines of the
-piped context verbatim (whole-line, 40-character floor, same normalisation as
-`no_example_echo`), so the retry now fires with the constraint named; one
-echoed line is left alone because quoting a single fact back is exactly the
-anchor-carrying the recipe asks for. And the opener: 39 of the 97 reasons
-wanted a thanks first ("no thanks opener", "opened with the verdict instead of
-thanks") while the template said "Do not open by thanking" twice, so the
-recipe's house shape and the verdicts disagreed on every call that had one.
-Resolved the way `signoff` already works: an optional `opener` input the
-caller supplies verbatim, placed before the verdict. The model still never
-invents gratitude, and with no opener the verdict still comes first.
+the frontmatter and fails a draft that reproduces two or more sentences of the
+piped context verbatim (both sides split into sentences first, then the same
+normalisation and 40-character floor as `no_example_echo`), so the retry now
+fires with the constraint named; one echoed sentence is left alone because
+quoting a single fact back is exactly the anchor-carrying the recipe asks for.
+The unit is the sentence and not the line because the rejected drafts are one
+paragraph line each (the 2026-09-10T20:00:01Z row: context 1687 characters,
+body one 1687-character line), so a whole-line compare matched none of them.
+And the opener: 39 of the 97 reasons wanted a thanks first ("no thanks
+opener", "opened with the verdict instead of thanks") while the template said
+"Do not open by thanking" twice, so the recipe's house shape and the verdicts
+disagreed on every call that had one. Resolved the way `signoff` already
+works: an optional `opener` input the caller supplies verbatim, placed after
+the handle and before the verdict. The model still never invents gratitude,
+and with no opener the verdict still comes first.
 
 Re-measure after roughly ten calls each. The number to watch is the ratio of
 output to context characters on rejected rows, which should drop well below
