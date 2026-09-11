@@ -91,7 +91,8 @@ marker="$marker_dir/$session_id"
 # fallback the boundary hook had, so a Stop in a parent folder of checkouts
 # scanned for rows under that folder's name, which delegate.sh never writes.
 # An empty project scans the projectless rows, which is what delegate.sh
-# records from that same cwd. A missing lib leaves it empty too: fail open.
+# records from that same cwd — but only those THIS session wrote (see the
+# selector below). A missing lib leaves it empty too: fail open.
 [[ -n "$hook_cwd" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
 project=""
 if [[ -f "$script_dir/lib/otel.sh" ]]; then
@@ -106,16 +107,26 @@ fi
 # sweep is process-wide, but a Stop in repo A must not surface repo B's work.
 # The feedback-ref map stays global (a feedback row references a ts regardless
 # of which project recorded it). No tty step: the agent is the consumer here.
+#
+# A named project is scoped by name alone, as it always was. No project
+# (#476) is scoped by SESSION instead: the metrics file is shared by every
+# session on the machine, and "no project" would otherwise select every
+# scratch-cwd delegation there is, so a Stop in one such session would block
+# on another session's drafts. delegate.sh records CLAUDE_CODE_SESSION_ID as
+# `session` (#479), the same UUID this payload carries; a projectless row with
+# no session cannot be scoped and is left alone rather than surfaced.
 cutoff_iso=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - $ARGV[0]*3600))' "$window_hours" 2>/dev/null) || exit 0
 [[ -z "$cutoff_iso" ]] && exit 0
 
-rows=$(jq -rs --arg cutoff "$cutoff_iso" --arg proj "$project" '
+rows=$(jq -rs --arg cutoff "$cutoff_iso" --arg proj "$project" --arg sid "$session_id" '
   def src: .source // "delegate";
+  def in_scope: if $proj != "" then (.project // "") == $proj
+                else (.project // "") == "" and (.session // "") == $sid end;
   (reduce (.[] | select(src == "feedback" and .ref_ts != null)) as $f ({}; .[$f.ref_ts] = true)) as $fb
   | map(select(src == "delegate"
         and (.ts != null)
         and ((.exit_status // 0) == 0)
-        and ((.project // "") == $proj)
+        and in_scope
         and (.ts >= $cutoff)
         and ($fb[.ts] | not)))
   | .[]

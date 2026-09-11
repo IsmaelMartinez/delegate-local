@@ -48,9 +48,13 @@ unset DELEGATE_PROJECT
 trap 'rm -rf "$tmpcwd" "$METRICS" "$gitroot" "$norepo"' EXIT
 nowts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-payload() { # cmd  cwd
-  jq -nc --arg cmd "$1" --arg cwd "$2" \
-    '{hook_event_name:"PreToolUse", tool_name:"Bash", cwd:$cwd, tool_input:{command:$cmd}}'
+# The harness hands every hook the session id (the transcript UUID); the same
+# value reaches delegate.sh as CLAUDE_CODE_SESSION_ID and is written on its
+# row as `session` (#479). Tests that need another session pass it as $3; an
+# explicit "" is kept (so `${3-…}`, not `${3:-…}`) to model a payload without one.
+payload() { # cmd  cwd  [session_id]
+  jq -nc --arg cmd "$1" --arg cwd "$2" --arg sid "${3-sess-A}" \
+    '{hook_event_name:"PreToolUse", tool_name:"Bash", cwd:$cwd, session_id:$sid, tool_input:{command:$cmd}}'
 }
 last_row() { tail -1 "$METRICS"; }
 nrows() { local n; n=$(grep -c . "$METRICS" 2>/dev/null) || true; echo "${n:-0}"; }
@@ -713,12 +717,51 @@ assert_contains '--project "repo-b"' "$ctx" "no-repo cwd + --repo: nudge renders
 
 # 41c. A delegation issued from the same non-repo cwd carries no project
 # either, and it is this session's delegation: it must credit the boundary
-# rather than leave the session nudged for work it did.
-: > "$METRICS"
-jq -nc --arg ts "$nowts" '{ts:$ts, source:"delegate", tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+# rather than leave the session nudged for work it did. "This session" is
+# literal: the metrics file is shared by every session on the machine, so a
+# projectless row is credited only when its `session` (delegate.sh writes
+# CLAUDE_CODE_SESSION_ID, #479) equals the session_id the harness hands the
+# hook. Anything else would pool every scratch-cwd session's credits.
+seed_projectless() { # session|"" recipe
+  jq -nc --arg ts "$nowts" --arg s "$1" --arg r "$2" \
+    '{ts:$ts, source:"delegate", tier:"prose", recipe:$r} + (if $s != "" then {session:$s} else {} end)' >> "$METRICS"
+}
+: > "$METRICS"; seed_projectless sess-A commit-message
 out=$(payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
-assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd: a projectless delegation credits the boundary"
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd: a projectless delegation from THIS session credits the boundary"
 assert_eq "" "$out" "no-repo cwd: credited, so no nudge"
+assert_eq sess-A "$(jq -r .session <<<"$(last_row)")" "no-repo cwd: the opportunity row records the session too"
+
+# 41c-ii. Another session's projectless delegation does not credit it, and
+# neither does one carrying no session at all (written before #479, or by a
+# caller outside Claude): fail safe and nudge.
+: > "$METRICS"; seed_projectless sess-B commit-message
+out=$(payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd: another session's projectless delegation does not credit"
+assert_contains 'additionalContext' "$out" "no-repo cwd: ...and the nudge fires"
+: > "$METRICS"; seed_projectless "" commit-message
+payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd: a projectless delegation with no session does not credit"
+
+# 41c-iii. Consumption is per session as well: this session's credited post
+# spends this session's credit, another session's credited post does not.
+: > "$METRICS"; seed_projectless sess-A commit-message; seed_projectless sess-A commit-message
+payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd: two delegations credit two posts"
+payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd: the third post finds both credits spent"
+: > "$METRICS"; seed_projectless sess-A commit-message
+jq -nc --arg ts "$nowts" '{ts:$ts, source:"opportunity", boundary:"git-commit", suggested_recipe:"commit-message", delegated:true, session:"sess-B"}' >> "$METRICS"
+payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd: another session's credited post does not spend this session's credit"
+
+# 41c-iv. A payload with no session_id can scope nothing, so a projectless
+# row credits nothing even when it carries a session.
+: > "$METRICS"; seed_projectless sess-A commit-message
+payload 'git commit -m x' "$norepo" "" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd: no session_id in the payload credits nothing"
+assert_eq false "$(jq 'has("session")' <<<"$(last_row)")" "no-repo cwd: no session_id in the payload writes no session field"
 
 # 41d. A delegation filed under a real project does not credit a projectless
 # boundary — no project is not a wildcard.
@@ -728,12 +771,11 @@ assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd: a delegatio
 
 # 41e. A `cd <repo> &&` from the non-repo cwd still files the boundary under
 # the cd target, and the empty session-cwd candidate still matches a
-# projectless delegation issued before the cd.
-: > "$METRICS"
-jq -nc --arg ts "$nowts" '{ts:$ts, source:"delegate", tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+# projectless delegation this session issued before the cd.
+: > "$METRICS"; seed_projectless sess-A commit-message
 payload "cd $gitroot/repo-b && git commit -m x" "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq repo-b "$(jq -r .project <<<"$(last_row)")" "no-repo cwd + cd: project taken from the cd target"
-assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd + cd: projectless delegation still credits"
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd + cd: projectless same-session delegation still credits"
 
 # 41f. Inside a repository nothing moves: the project is recorded and named.
 : > "$METRICS"
@@ -776,6 +818,17 @@ assert_contains '--project \"explicit-name\"' "$out" "DELEGATE_PROJECT: the nudg
 payload "cd $gitroot/repo-b && git commit -m x" "$gitroot/repo-a" \
   | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_PROJECT=explicit-name bash "$HOOK" >/dev/null
 assert_eq explicit-name "$(jq -r .project <<<"$(last_row)")" "DELEGATE_PROJECT: wins over the cd target too"
+# ...and once it wins, neither the physical repository nor the cd target is a
+# LOOKUP candidate any more: delegate.sh under the same override records the
+# override, so a delegation filed under either name is not this session's.
+: > "$METRICS"; seed_delegation repo-a commit-message
+payload 'git commit -m x' "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_PROJECT=explicit-name bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "DELEGATE_PROJECT: the physical repo is not a candidate under the override"
+: > "$METRICS"; seed_delegation repo-b commit-message
+payload "cd $gitroot/repo-b && git commit -m x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_PROJECT=explicit-name bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "DELEGATE_PROJECT: the cd target is not a candidate under the override"
 
 # --- an explicit --repo widens the LOOKUP only ------------------------------
 # `gh issue comment --repo owner/other` carries no cd, so the boundary is filed

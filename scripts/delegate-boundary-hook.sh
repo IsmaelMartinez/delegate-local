@@ -67,6 +67,10 @@ command -v jq >/dev/null 2>&1 || exit 0
 cmd=$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null) || exit 0
 [[ -z "$cmd" ]] && exit 0
 hook_cwd=$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null) || hook_cwd=""
+# The session id (the transcript UUID) is the same value delegate.sh sees as
+# CLAUDE_CODE_SESSION_ID and writes on its row as `session` (#479). It scopes
+# the projectless lookup below and is recorded on the opportunity row.
+session_id=$(jq -r '.session_id // empty' <<<"$input" 2>/dev/null) || session_id=""
 
 # --- cheap pre-filter (the common path exits here) ------------------------
 # One linear-time grep over the raw string. Everything below is gated on it, so
@@ -575,21 +579,33 @@ if [[ -f "$metrics_file" ]]; then
   # `recent` is delegate rows MINUS already-credited posts (delegated:true
   # opportunity rows for the same project+recipe in the same window), so a
   # boundary is credited only while an unspent delegation remains.
-  recent_out=$(tail -n 2000 "$metrics_file" 2>/dev/null | jq -rs --argjson win "$((window_min * 60))" --arg proj "$project" --arg proj2 "$cwd_project" --arg proj3 "$repo_project" --arg recipe "$recipe" --argjson now "$now_epoch" '
-    # Any of the three candidates counts. With no `cd`, $proj and $proj2 are
-    # equal, so $proj3 is load-bearing rather than decorative. $proj3 is
-    # guarded against being empty: 3 delegate rows in the current file carry
-    # no project at all, and an unguarded `== ""` would let them match every
-    # boundary. $proj and $proj2 are NOT guarded, on purpose: they are empty
-    # only when the session cwd is outside a git repository (#476), and a
-    # delegation issued from that same cwd carries no project either, so
-    # empty-matches-empty is how the delegation that session issued credits
-    # the post it makes. A boundary inside a repository has a non-empty
-    # $proj, so the projectless rows still cannot reach it. (No apostrophes
-    # here: this comment sits inside the single-quoted jq program.)
-    def matches_proj: (.project // "") == $proj
-                      or (.project // "") == $proj2
-                      or ($proj3 != "" and (.project // "") == $proj3);
+  recent_out=$(tail -n 2000 "$metrics_file" 2>/dev/null | jq -rs --argjson win "$((window_min * 60))" --arg proj "$project" --arg proj2 "$cwd_project" --arg proj3 "$repo_project" --arg sid "$session_id" --arg recipe "$recipe" --argjson now "$now_epoch" '
+    # Any of the three NAMED candidates counts, each guarded against being
+    # empty. With no `cd`, $proj and $proj2 are equal, so $proj3 is
+    # load-bearing rather than decorative.
+    #
+    # A PROJECTLESS row (no .project) is a different case. It is what
+    # delegate.sh writes when its cwd is outside a git repository (#476), so
+    # it can only belong to a boundary whose session cwd is likewise outside
+    # one ($proj2 == "") — a boundary inside a repository has a non-empty
+    # $proj2 and the projectless rows never reach it. But the metrics file is
+    # shared by every session on the machine, and "no project" would name one
+    # pool across all of them: an unrelated scratch-cwd session could credit
+    # this post, silence its nudge, and have its draft filed as the shipped
+    # form of a reply it never wrote (PR #477 review). So a projectless row
+    # is credited only when its `session` — CLAUDE_CODE_SESSION_ID as
+    # delegate.sh records it (#479), the same UUID the harness hands this
+    # hook as .session_id — equals this session. A projectless row with no
+    # session (written before #479, or by a caller outside Claude) credits
+    # nothing: fail safe, nudge. The same predicate scopes the delegated:true
+    # opportunity rows that SPEND credits, which is why the opportunity row
+    # below records the session too, and the ADR 0029 draft capture inherits
+    # the scoping for free. (No apostrophes here: this comment sits inside
+    # the single-quoted jq program.)
+    def named($c): $c != "" and (.project // "") == $c;
+    def same_session: $sid != "" and (.session // "") == $sid;
+    def matches_proj: named($proj) or named($proj2) or named($proj3)
+                      or ((.project // "") == "" and $proj2 == "" and same_session);
     def in_window: ((.ts | fromdateiso8601?) // 0) > ($now - $win);
     # A delegation that failed (exit_status:3 is the pre-flight stall, #110)
     # produced no draft this post could be the shipped form of, so it earns
@@ -663,14 +679,19 @@ fi
 # message text — only boundary type, suggested recipe, project and the flag.
 # The project field is omitted, not emptied, when there is none (#476), the
 # same shape delegate.sh writes; metrics-summary.sh reports those rows on one
-# `(no project)` line rather than under a name.
+# `(no project)` line rather than under a name. The session is recorded on
+# the same terms as delegate.sh records it (present when known, omitted
+# otherwise): a delegated:true row spends a credit, and the projectless
+# lookup above only counts spends from the same session, so a row without it
+# could never spend one.
 if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
   jq -nc --arg ts "$ts" --arg project "$project" --arg boundary "$boundary" \
-     --arg recipe "$recipe" --argjson delegated "$delegated" '
+     --arg recipe "$recipe" --arg sid "$session_id" --argjson delegated "$delegated" '
      {ts:$ts, source:"opportunity", boundary:$boundary, suggested_recipe:$recipe, delegated:$delegated}
-     + (if $project != "" then {project:$project} else {} end)' \
+     + (if $project != "" then {project:$project} else {} end)
+     + (if $sid != "" then {session:$sid} else {} end)' \
      >> "$metrics_file" 2>/dev/null || true
 fi
 

@@ -200,20 +200,38 @@ rm -rf "$tmp"
 # from a parent folder of checkouts scanned for rows under that folder's name
 # — a project delegate.sh never writes. It now shares delegate_project_name:
 # a row filed under the folder basename is not this cwd's, while a projectless
-# row (what delegate.sh records from that same cwd) is, and the reason must
-# not print an empty project name.
+# row (what delegate.sh records from that same cwd) is — but only one THIS
+# session wrote. The metrics file is shared by every session on the machine,
+# so the projectless rows are scoped by the `session` delegate.sh records
+# (CLAUDE_CODE_SESSION_ID, #479) against the payload's session_id; a Stop in
+# one scratch session must not block on another session's drafts, and a row
+# with no session cannot be scoped, so it is left alone (fail open). The
+# reason must not print an empty project name.
 tmp=$(mktemp -d); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s14" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
 assert_eq 0 "$ec" "T14: non-repo cwd → exit 0"
 assert_empty "$(cat "$tmp/out")" "T14: non-repo cwd does not derive the folder basename as the project"
-printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0}\n' "$NOW" > "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"session":"s14b"}\n' "$NOW" > "$tmp/m.jsonl"
 run_hook "s14b" "$tmp" "$tmp/m.jsonl" "$tmp/out"
-assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T14: non-repo cwd surfaces a projectless delegation"
+assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T14: non-repo cwd surfaces this session's projectless delegation"
 case "$(jq -r .reason "$tmp/out")" in
   *"project ''"*) assert_eq "absent" "present" "T14: reason does not print an empty project name" ;;
   *)              assert_eq "absent" "absent"  "T14: reason does not print an empty project name" ;;
 esac
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"session":"someone-else"}\n' "$NOW" > "$tmp/m.jsonl"
+run_hook "s14c" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
+assert_eq 0 "$ec" "T14: another session's projectless row → exit 0"
+assert_empty "$(cat "$tmp/out")" "T14: another session's projectless untracked row does not block this Stop"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0}\n' "$NOW" > "$tmp/m.jsonl"
+run_hook "s14d" "$tmp" "$tmp/m.jsonl" "$tmp/out"
+assert_empty "$(cat "$tmp/out")" "T14: a projectless row with no session cannot be scoped and is left alone"
+# Named projects are scoped by name alone, exactly as before: a row under this
+# repo's name from another session is still this repo's backlog.
+rm -rf "$tmp"; tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"someone-else"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+run_hook "s14e" "$tmp" "$tmp/m.jsonl" "$tmp/out"
+assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T14: a named-project row is not session-scoped"
 rm -rf "$tmp"
 
 # --- T15. DELEGATE_PROJECT wins, as it does for delegate.sh and feedback -----
