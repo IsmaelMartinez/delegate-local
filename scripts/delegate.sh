@@ -1648,11 +1648,15 @@ echo_matches() {
 # was measured against are one paragraph line each (row 2026-09-10T20:00:01Z:
 # context 1687 chars, body one 1687-char line), because facts arrive one per
 # line and come back joined, so a whole-line compare found nothing on the very
-# failure it was built for. The terminator keeps its trailing whitespace on the
-# unit it closes; echo_normalise trims it. Abbreviations and dotted names split
-# the same way on both sides, and a fragment that shape falls under the floor.
+# failure it was built for. The terminator is DROPPED from the unit, at a split
+# and at the end of the line alike: a facts file states each fact as a bare
+# line and the model closes it with a full stop, so keeping the terminator
+# made `<fact>` and `<fact>.` different units and the common case never
+# matched (0 of 2 caught, 2 of 2 once the facts carried their own full stops).
+# Abbreviations and dotted names split the same way on both sides, and a
+# fragment that shape falls under the floor.
 split_sentences() {
-  awk '{ gsub(/[.?!][[:space:]]+/, "&\n") } 1'
+  awk '{ gsub(/[.?!]+[[:space:]]+/, "\n"); sub(/[.?!]+[[:space:]]*$/, "") } 1'
 }
 
 run_output_checks() {

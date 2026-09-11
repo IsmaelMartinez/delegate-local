@@ -6568,6 +6568,21 @@ out=$(run_ce)
 assert_contains "check 'no_context_echo' FAILED" "$out" \
   "context-echo: two facts joined into one paragraph line are still caught"
 
+# 48a-iv. Facts arrive without terminators. A facts file states each fact as
+# a bare line, and the model turns it into a sentence by adding the full stop,
+# so the unit on the context side is `<fact>` and on the output side
+# `<fact>.` — a compare that keeps the terminator on the unit never matches
+# the common case. Same two facts as 48a, minus their full stops.
+ce_facts_bare=$(printf "%s\n" "$ce_facts" | sed "s/\.$//")
+: > "$metrics"
+make_mock_curl_think "$tmp" "Not a regression. The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412. All 531 tests pass on the branch with the flag forced back on, see PR #2632. Could you add a test?"
+out=$(printf "%s\n" "$ce_facts_bare" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe ce --var verdict="$ce_verdict" prose "go" 2>&1 >/dev/null)
+assert_contains "check 'no_context_echo' FAILED" "$out" \
+  "context-echo: facts piped without full stops are caught when echoed as sentences"
+
 # 48a-iii. A --var value is not a pattern. The verdict is text the recipe
 # tells the model to place, so reproducing it is correct; only the piped
 # context counts. Verdict verbatim as its own sentence plus ONE fact is one
