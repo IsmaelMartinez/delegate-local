@@ -374,6 +374,37 @@ case "$out" in
 esac
 rm -f "$predraft"
 
+# 12c. Opportunity rows with no project (#476). The boundary hook records none
+# outside a git repository, mirroring delegate.sh, so such rows are real and
+# recurring — a session started in the parent folder that holds the checkouts.
+# They must not be dropped, must not print as `null`, and must not be ranked
+# among the projects by count: one `(no project)` line AFTER the per-project
+# rows, whose own numbers are untouched. Fixture: alpha has 1 boundary, the
+# projectless bucket has 3 (so a count-ranked sort would put it first).
+noproj=$(mktemp)
+cat > "$noproj" <<'EOF'
+{"ts":"2026-06-08T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true}
+{"ts":"2026-06-08T10:30:00Z","source":"opportunity","boundary":"comment-reply","suggested_recipe":"maintainer-reply","delegated":false}
+{"ts":"2026-06-08T10:31:00Z","source":"opportunity","boundary":"comment-reply","suggested_recipe":"maintainer-reply","delegated":false}
+{"ts":"2026-06-08T10:32:00Z","source":"opportunity","boundary":"issue-create","suggested_recipe":"github-issue-body","delegated":true}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$noproj" 2>&1) || EC=$?
+assert_eq 0 "$EC" "no-project opportunities: exits 0"
+trig=$(sed -n '/^Trigger rate/,/^$/p' <<<"$out")
+assert_contains "opportunities=1  delegated=1  missed=0  rate=100%" "$trig" \
+  "no-project opportunities: the per-project row is unaffected"
+noproj_line=$(grep -F '(no project)' <<<"$trig")
+assert_contains "opportunities=3  delegated=1  missed=2  rate=33%" "$noproj_line" \
+  "no-project opportunities: one labelled (no project) line carries their counts"
+case "$trig" in
+  *null*) assert_eq "absent" "present" "no-project opportunities: never printed as null" ;;
+  *)      assert_eq "absent" "absent"  "no-project opportunities: never printed as null" ;;
+esac
+assert_contains "(no project)" "$(grep -v '^$' <<<"$trig" | tail -1)" \
+  "no-project opportunities: listed after the per-project rows, not ranked by count"
+rm -f "$noproj"
+
 # 16. Phase E agent-observed verdict tier. Fixture: 4 commit-message recipe
 # delegations — D1 human HIT, D2 agent HIT (used), D3 agent MISS (rewrote),
 # D4 untracked. The honesty property: the human hit-rate counts D1 only (NOT

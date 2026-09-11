@@ -22,9 +22,20 @@ assert_contains() {
   else echo "  FAIL  $name (missing '$needle' in '$haystack')"; fail=$((fail+1)); fi
 }
 
-# A throwaway cwd that is NOT inside any git repo, so the hook's project
-# derivation falls back to its basename — a stable, known project name.
+# A throwaway cwd that IS a git repository, so the hook derives its basename
+# as the project — a stable, known name. Until #476 this directory was
+# deliberately NOT a repository and the suite leaned on the fallback that
+# invented a project out of `pwd`; that fallback is the bug, and outside a
+# repository the hook now records no project at all (asserted in the #476
+# block below). `mk_repo` makes a real one with a commit, which the #385
+# worktree case needs.
+mk_repo() { # dir
+  mkdir -p "$1" && ( cd "$1" && git init -q . \
+    && git config user.email t@t.t && git config user.name t \
+    && : > f && git add f && git commit -qm init )
+}
 tmpcwd=$(mktemp -d)
+mk_repo "$tmpcwd" >/dev/null 2>&1
 proj=$(basename "$tmpcwd")
 METRICS=$(mktemp)
 trap 'rm -rf "$tmpcwd" "$METRICS"' EXIT
@@ -540,24 +551,20 @@ assert_contains '--var why=' "$out" "relative invocation: still resolves prompts
 # 18. The project value is quoted in the rendered command. A checkout directory
 # with a space in its name would otherwise split into two arguments and the
 # printed command would not run — the exact failure this change exists to end.
+# Its own repository (nested repos resolve to the innermost .git), since a bare
+# subdirectory of $tmpcwd would now resolve to $tmpcwd's name.
 spacedir="$tmpcwd/a project"
-mkdir -p "$spacedir"
+mk_repo "$spacedir" >/dev/null 2>&1
 : > "$METRICS"
 out=$(payload 'git commit -m "fix: thing"' "$spacedir" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
 ctx=$(jq -r '.hookSpecificOutput.additionalContext' <<<"$out")
 assert_contains '--project "a project"' "$ctx" "spaced project: quoted in the rendered command"
 
 # --- #385: the boundary's repo is the one the command cd's into -------------
-# Every test above runs in a cwd that is NOT a git repo, so the git-aware branch
-# of the derivation never executes there and a basename-of-path implementation
-# would pass all of them while being wrong in production. These build real
-# repositories on purpose.
+# These need two distinct repositories plus a linked worktree, so that a
+# basename-of-path implementation (which would record the worktree directory
+# and the cd target's parent alike) cannot pass by accident.
 gitroot=$(mktemp -d)
-mk_repo() { # dir
-  mkdir -p "$1" && ( cd "$1" && git init -q . \
-    && git config user.email t@t.t && git config user.name t \
-    && : > f && git add f && git commit -qm init )
-}
 mk_repo "$gitroot/repo-a" >/dev/null 2>&1
 mk_repo "$gitroot/repo-b" >/dev/null 2>&1
 mkdir -p "$gitroot/repo-b/sub"
@@ -593,8 +600,9 @@ assert_eq repo-b "$(jq -r .project <<<"$(last_row)")" "cd: worktree resolves to 
 # 33. A cd to a path that is not a git repository is NOT accepted: recording
 # `project:"tmp"` would fragment the trigger-rate denominator across scratch
 # keys rather than merely misattributing it to one real repo.
+mkdir -p "$gitroot/not-a-repo"
 : > "$METRICS"
-payload "cd $tmpcwd && git commit -m x" "$gitroot/repo-a" \
+payload "cd $gitroot/not-a-repo && git commit -m x" "$gitroot/repo-a" \
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq repo-a "$(jq -r .project <<<"$(last_row)")" "cd: non-repo target falls back to the cwd"
 
@@ -654,6 +662,68 @@ payload "git commit -F - <<'EOF'
 cd $gitroot/repo-b && git commit -m x
 EOF" "$gitroot/repo-a" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq repo-a "$(jq -r .project <<<"$(last_row)")" "heredoc mentioning cd: not retargeted"
+
+# --- #476: a session cwd outside any repository has NO project ---------------
+# `/Users/x/projects/gitlab` is the parent folder holding checkouts, not a
+# repository. 14 boundaries recorded there on 2026-09-07/08 were filed under
+# `project:"gitlab"` at a permanent rate=0%: delegate.sh (delegate_project_name)
+# records NO project outside a repository, so a lookup keyed on "gitlab" could
+# never match one and every post there was counted as a miss and nudged. The
+# #385 refusal above guards the `cd <path> &&` branch; until this fix the
+# session-cwd fallback still invented a project out of `pwd`.
+norepo=$(mktemp -d)
+
+# 41a. The recorded row carries no project field at all — not the basename,
+# not an empty string — the same shape delegate.sh writes from that cwd.
+: > "$METRICS"
+out=$(payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq false "$(jq 'has("project")' <<<"$(last_row)")" "no-repo cwd: row carries no project field"
+assert_eq git-commit "$(jq -r .boundary <<<"$(last_row)")" "no-repo cwd: the boundary is still recorded"
+
+# 41b. The nudge names neither the directory nor an empty --project "".
+ctx=$(jq -r '.hookSpecificOutput.additionalContext' <<<"$out")
+case "$ctx" in
+  *"$(basename "$norepo")"*) assert_eq "absent" "present" "no-repo cwd: nudge does not name the directory" ;;
+  *)                          assert_eq "absent" "absent"  "no-repo cwd: nudge does not name the directory" ;;
+esac
+case "$ctx" in
+  *'--project ""'*) assert_eq "absent" "present" "no-repo cwd: nudge does not render an empty --project" ;;
+  *)                assert_eq "absent" "absent"  "no-repo cwd: nudge does not render an empty --project" ;;
+esac
+assert_contains '--project <name>' "$ctx" "no-repo cwd: nudge asks for --project <name>"
+assert_contains 'commit-message' "$ctx" "no-repo cwd: nudge still names the recipe"
+
+# 41c. A delegation issued from the same non-repo cwd carries no project
+# either, and it is this session's delegation: it must credit the boundary
+# rather than leave the session nudged for work it did.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" '{ts:$ts, source:"delegate", tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+out=$(payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd: a projectless delegation credits the boundary"
+assert_eq "" "$out" "no-repo cwd: credited, so no nudge"
+
+# 41d. A delegation filed under a real project does not credit a projectless
+# boundary — no project is not a wildcard.
+: > "$METRICS"; seed_delegation repo-a commit-message
+payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd: a delegation under a real project does not credit it"
+
+# 41e. A `cd <repo> &&` from the non-repo cwd still files the boundary under
+# the cd target, and the empty session-cwd candidate still matches a
+# projectless delegation issued before the cd.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" '{ts:$ts, source:"delegate", tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+payload "cd $gitroot/repo-b && git commit -m x" "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq repo-b "$(jq -r .project <<<"$(last_row)")" "no-repo cwd + cd: project taken from the cd target"
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd + cd: projectless delegation still credits"
+
+# 41f. Inside a repository nothing moves: the project is recorded and named.
+: > "$METRICS"
+out=$(payload 'git commit -m x' "$gitroot/repo-a" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq repo-a "$(jq -r .project <<<"$(last_row)")" "repo cwd: project still recorded"
+assert_contains "for project 'repo-a'" "$out" "repo cwd: nudge still names the project"
+assert_contains '--project \"repo-a\"' "$out" "repo cwd: nudge still renders --project"
+rm -rf "$norepo"
 
 # --- an explicit --repo widens the LOOKUP only ------------------------------
 # `gh issue comment --repo owner/other` carries no cd, so the boundary is filed
@@ -1014,7 +1084,7 @@ assert_eq pr-review-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" \
 # ---------------------------------------------------------------------------
 cap_setup() { # -> sets capdir capm capcwd capproj; seeds one delegate row
   capdir=$(mktemp -d); capm="$capdir/metrics.jsonl"
-  capcwd=$(mktemp -d); capproj=$(basename "$capcwd")
+  capcwd=$(mktemp -d); mk_repo "$capcwd" >/dev/null 2>&1; capproj=$(basename "$capcwd")
   capts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","project":"%s","draft_file":"20260827T100000Z-aaaa1111.draft.txt"}\n' \
     "$capts" "$capproj" > "$capm"
@@ -1103,7 +1173,7 @@ rm -rf "$capdir" "$capcwd"
 # ---------------------------------------------------------------------------
 cap_setup_recipe() { # $1 = recipe to seed, so a non-comment-reply boundary credits
   capdir=$(mktemp -d); capm="$capdir/metrics.jsonl"
-  capcwd=$(mktemp -d); capproj=$(basename "$capcwd")
+  capcwd=$(mktemp -d); mk_repo "$capcwd" >/dev/null 2>&1; capproj=$(basename "$capcwd")
   capts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   printf '{"ts":"%s","source":"delegate","recipe":"%s","project":"%s","draft_file":"20260827T100000Z-aaaa1111.draft.txt"}\n' \
     "$capts" "$1" "$capproj" > "$capm"

@@ -448,21 +448,28 @@ fi
 # earlier, and because the same act WAS counted whenever the write and the post
 # shared a Bash call. Historical rates therefore move: the 31 legacy
 # pre-drafted rows in the corpus at the time became counted misses.
+#
+# Rows with no project are real: the hook records none when the session cwd is
+# outside a git repository (#476), the same as delegate.sh — before that it
+# invented one from the cwd, which is how `gitlab` (a parent folder of
+# checkouts) came to hold 14 rows at rate=0%. They are neither dropped nor
+# filed under a name: one `(no project)` line after the per-project rows, kept
+# out of the count ranking so a scratch cwd cannot rank above a real project.
 n_opp=$(jq -rs 'map(select((.source // "") == "opportunity")) | length' "$metrics_file")
 if (( n_opp > 0 )); then
   echo "Trigger rate (commit/PR/release/comment boundaries):"
   jq -rs '
     map(select((.source // "") == "opportunity"))
-    | group_by(.project // "(none)")
+    | group_by(.project // "")
     | map({
-        project: (.[0].project // "(none)"),
+        project: (.[0].project // ""),
         n: length,
         delegated: (map(select(.delegated == true)) | length),
         missed: (map(select(.delegated == false)) | length)
       })
-    | sort_by(-.n)
+    | sort_by((.project == ""), -.n)
     | .[]
-    | "  \(.project | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
+    | "  \((if .project == "" then "(no project)" else .project end) | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
       + "  rate=\(.delegated * 100 / .n | floor)%"
   ' "$metrics_file"
   echo

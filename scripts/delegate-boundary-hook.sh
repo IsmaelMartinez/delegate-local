@@ -428,6 +428,14 @@ done <<<"$scan"
 [[ -z "$boundary" ]] && exit 0
 
 # --- derive the project name (mirror delegate.sh / lib/otel.sh) -----------
+# Outside a git repository there is NO project and cwd_project stays empty —
+# never the cwd's basename (#476). The old `|| pwd` fallback filed 14
+# boundaries from `~/projects/gitlab`, the parent folder holding the checkouts,
+# under `project:"gitlab"`: delegate_project_name records no project from that
+# same cwd, so the lookup keyed on "gitlab" could never match a delegation
+# there, and the row sat at rate=0% for a name that names nothing while every
+# post nudged a session that may well have delegated. The #385 refusal below
+# had guarded only the `cd <path> &&` branch against this.
 [[ -n "$hook_cwd" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
 cwd_project=""
 common=$(git rev-parse --git-common-dir 2>/dev/null || true)
@@ -435,7 +443,8 @@ if [[ -n "$common" ]]; then
   common_dir=$(cd "$common" 2>/dev/null && pwd || true)
   [[ -n "$common_dir" ]] && cwd_project=$(basename "$(dirname "$common_dir")")
 else
-  cwd_project=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+  toplevel=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  [[ -n "$toplevel" ]] && cwd_project=$(basename "$toplevel")
 fi
 
 # --- which repository is this boundary actually about? (#385) -------------
@@ -561,11 +570,16 @@ if [[ -f "$metrics_file" ]]; then
   # boundary is credited only while an unspent delegation remains.
   recent_out=$(tail -n 2000 "$metrics_file" 2>/dev/null | jq -rs --argjson win "$((window_min * 60))" --arg proj "$project" --arg proj2 "$cwd_project" --arg proj3 "$repo_project" --arg recipe "$recipe" --argjson now "$now_epoch" '
     # Any of the three candidates counts. With no `cd`, $proj and $proj2 are
-    # equal, so $proj3 is load-bearing rather than decorative. $proj3 is the
-    # only candidate that can be empty, and it is guarded: 3 delegate rows in
-    # the current file carry no project at all, and an unguarded `== ""` would
-    # let them match every boundary. They are saved today only by the recipe
-    # predicate also failing, which is an accident, not a design.
+    # equal, so $proj3 is load-bearing rather than decorative. $proj3 is
+    # guarded against being empty: 3 delegate rows in the current file carry
+    # no project at all, and an unguarded `== ""` would let them match every
+    # boundary. $proj and $proj2 are NOT guarded, on purpose: they are empty
+    # only when the session cwd is outside a git repository (#476), and a
+    # delegation issued from that same cwd carries no project either, so
+    # empty-matches-empty is how the delegation that session issued credits
+    # the post it makes. A boundary inside a repository has a non-empty
+    # $proj, so the projectless rows still cannot reach it. (No apostrophes
+    # here: this comment sits inside the single-quoted jq program.)
     def matches_proj: (.project // "") == $proj
                       or (.project // "") == $proj2
                       or ($proj3 != "" and (.project // "") == $proj3);
@@ -635,6 +649,9 @@ fi
 # --- record the opportunity (the trigger-rate sensor) ---------------------
 # One row per boundary so trigger rate has a denominator. Stores no command or
 # message text — only boundary type, suggested recipe, project and the flag.
+# The project field is omitted, not emptied, when there is none (#476), the
+# same shape delegate.sh writes; metrics-summary.sh reports those rows on one
+# `(no project)` line rather than under a name.
 if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -683,7 +700,20 @@ fi
 # delegate.sh's own cwd, so an agent that cd's into the skill checkout to run
 # the command records project=delegate-local and never matches this lookup,
 # which is the nag loop #342 describes. The hook already knows the right value.
-reminder="delegate-local: about to author a ${boundary} message inline with no local delegation recorded in the last ${window_min}m for project '${project}'. Draft it on-device first — bash ~/.claude/skills/delegate-local/scripts/delegate.sh --project \"${project}\" --recipe ${recipe}${var_hint}${stdin_hint} — then record the verdict with ~/.claude/skills/delegate-local/scripts/delegate-feedback.sh --source agent. Set DELEGATE_BOUNDARY_MODE=off to silence."
+#
+# Outside a git repository it knows no value (#476), and must not render
+# `--project ""` or name the directory it refused to record: the agent is asked
+# for `--project <name>` instead. That still credits the post, because a
+# boundary issued from a non-repo cwd carries a `cd <repo> &&` or `--repo`
+# (git and gh cannot run there without one), and both are lookup candidates.
+if [[ -n "$project" ]]; then
+  where="for project '${project}'"
+  project_flag="--project \"${project}\""
+else
+  where="from a cwd outside any git repository"
+  project_flag="--project <name>"
+fi
+reminder="delegate-local: about to author a ${boundary} message inline with no local delegation recorded in the last ${window_min}m ${where}. Draft it on-device first — bash ~/.claude/skills/delegate-local/scripts/delegate.sh ${project_flag} --recipe ${recipe}${var_hint}${stdin_hint} — then record the verdict with ~/.claude/skills/delegate-local/scripts/delegate-feedback.sh --source agent. Set DELEGATE_BOUNDARY_MODE=off to silence."
 
 if [[ "$mode" == "enforce" ]]; then
   jq -nc --arg r "$reminder" \
