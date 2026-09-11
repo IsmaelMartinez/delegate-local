@@ -1899,6 +1899,34 @@ else
 fi
 rm -rf "$tmp" "$stderr_file"
 
+# 19d. The delegate row is stamped with the Claude Code session id when the
+# environment carries one. The boundary and Stop hooks receive the same UUID
+# as `.session_id` in their payload, so a projectless boundary can be
+# credited only to a projectless delegation from the same session instead of
+# to any delegation on the machine (#476, #477). Same conditional shape as
+# `project`: present when set, absent when unset — never an empty string.
+tmp=$(mktemp -d)
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" CLAUDE_CODE_SESSION_ID="0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b" \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1
+assert_eq "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b" "$(jq -r '.session // ""' "$metrics")" \
+  "session: the row carries CLAUDE_CODE_SESSION_ID when it is set"
+: > "$metrics"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1
+assert_eq "false" "$(jq -r 'has("session")' "$metrics")" \
+  "session: the field is absent when CLAUDE_CODE_SESSION_ID is unset"
+: > "$metrics"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" CLAUDE_CODE_SESSION_ID= \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1
+assert_eq "false" "$(jq -r 'has("session")' "$metrics")" \
+  "session: an empty CLAUDE_CODE_SESSION_ID is treated as unset"
+rm -rf "$tmp" "$metrics"
+
 # 19b. With metrics off there is no row, so the meta line names no ts: a
 # value that matches nothing would only send the caller to a --ts refusal.
 tmp=$(mktemp -d)

@@ -199,6 +199,13 @@
 #                                           #   never matches the boundary
 #                                           #   hook's own (correct) derivation.
 #                                           #   --project NAME wins over this.
+#   CLAUDE_CODE_SESSION_ID=<uuid>           # set by Claude Code; when non-empty
+#                                           #   it is stamped on the metrics row
+#                                           #   as `session`, so the boundary
+#                                           #   and Stop hooks (which receive
+#                                           #   the same id as `.session_id`)
+#                                           #   can credit a boundary to this
+#                                           #   session's own delegation (#476).
 #   DELEGATE_PROMPTS_DIR=<path>             # override prompts/ directory
 #                                           #   (default: <script_dir>/../prompts)
 #   DELEGATE_THINK=true|false               # default false; set true if the
@@ -633,9 +640,15 @@ log_metric() {
   # recipe joins the other optional fields as a conditional append, so the row
   # shape (recipe present iff this was a --recipe call) holds without a second
   # jq block.
+  # session is the Claude Code session id (CLAUDE_CODE_SESSION_ID), the same
+  # UUID the boundary and Stop hooks receive as `.session_id`, so a hook can
+  # credit a projectless boundary only to a delegation from its own session
+  # rather than to any delegation on the machine (#476, #477). Same
+  # conditional shape as project: present when the variable is set, absent
+  # otherwise.
   jq -nc \
     --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" --arg model "$model" \
-    --arg recipe "$recipe_name" --arg project "$project" \
+    --arg recipe "$recipe_name" --arg project "$project" --arg session "${CLAUDE_CODE_SESSION_ID:-}" \
     --arg trace_id "$trace_id" --arg span_id "$span_id" \
     --arg s_temp "$s_temp" --arg s_top_p "$s_top_p" --arg s_top_k "$s_top_k" --arg s_pp "$s_pp" \
     --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
@@ -647,6 +660,7 @@ log_metric() {
     '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
      + (if $recipe != "" then {recipe:$recipe} else {} end)
      + (if $project != "" then {project:$project} else {} end)
+     + (if $session != "" then {session:$session} else {} end)
      + (if $trace_id != "" then {otel_trace_id:$trace_id} else {} end)
      + (if $span_id != "" then {otel_span_id:$span_id} else {} end)
      + (if $s_temp != "" then {sampling_temperature:($s_temp|tonumber)} else {} end)
