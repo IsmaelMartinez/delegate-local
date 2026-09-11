@@ -427,24 +427,28 @@ while IFS= read -r seg; do
 done <<<"$scan"
 [[ -z "$boundary" ]] && exit 0
 
-# --- derive the project name (mirror delegate.sh / lib/otel.sh) -----------
-# Outside a git repository there is NO project and cwd_project stays empty —
-# never the cwd's basename (#476). The old `|| pwd` fallback filed 14
-# boundaries from `~/projects/gitlab`, the parent folder holding the checkouts,
-# under `project:"gitlab"`: delegate_project_name records no project from that
-# same cwd, so the lookup keyed on "gitlab" could never match a delegation
-# there, and the row sat at rate=0% for a name that names nothing while every
-# post nudged a session that may well have delegated. The #385 refusal below
-# had guarded only the `cd <path> &&` branch against this.
+# --- derive the project name (shared with delegate.sh via lib/otel.sh) -----
+# The SAME function delegate.sh and delegate-feedback.sh call, not a copy of
+# it: the row this hook writes and the rows its lookup reads then agree by
+# construction. The inline mirror that lived here drifted twice — it ignored
+# DELEGATE_PROJECT, which both of those scripts honour, and it fell back to
+# the cwd's basename outside a git repository (#476), filing 14 boundaries
+# from `~/projects/gitlab` (the parent folder holding the checkouts) under
+# `project:"gitlab"`. delegate_project_name records no project from that same
+# cwd, so a lookup keyed on "gitlab" could never match a delegation there, and
+# the row sat at rate=0% for a name that names nothing while every post nudged
+# a session that may well have delegated. The #385 refusal below had guarded
+# only the `cd <path> &&` branch against this. Sourcing the lib is documented
+# side-effect free; it is done here, after the boundary is known, so the
+# common path pays nothing for it. $script_dir was resolved before the cd,
+# and through the ~/.claude/skills symlink it names the symlinked tree, which
+# is where lib/ is. A missing lib leaves cwd_project empty: fail open.
 [[ -n "$hook_cwd" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
 cwd_project=""
-common=$(git rev-parse --git-common-dir 2>/dev/null || true)
-if [[ -n "$common" ]]; then
-  common_dir=$(cd "$common" 2>/dev/null && pwd || true)
-  [[ -n "$common_dir" ]] && cwd_project=$(basename "$(dirname "$common_dir")")
-else
-  toplevel=$(git rev-parse --show-toplevel 2>/dev/null || true)
-  [[ -n "$toplevel" ]] && cwd_project=$(basename "$toplevel")
+if [[ -n "$script_dir" && -f "$script_dir/lib/otel.sh" ]]; then
+  # shellcheck source=lib/otel.sh
+  . "$script_dir/lib/otel.sh"
+  cwd_project=$(delegate_project_name 2>/dev/null) || cwd_project=""
 fi
 
 # --- which repository is this boundary actually about? (#385) -------------
@@ -487,7 +491,10 @@ if [[ "$cmd" =~ $_cd_sq ]] || [[ "$cmd" =~ $_cd_dq ]] || [[ "$cmd" =~ $_cd_bare 
       basename "$(dirname "$d")")
   fi
 fi
-project="${cd_project:-$cwd_project}"
+# An explicit DELEGATE_PROJECT outranks the cd target as well: delegate.sh run
+# after that same `cd` inherits the variable and records it, so the row has to
+# be filed where the lookup will find it.
+project="${DELEGATE_PROJECT:-${cd_project:-$cwd_project}}"
 
 # --- a boundary that names its repo explicitly (#393 follow-up) ------------
 # `gh issue comment --repo owner/name` carries no `cd`, so it is filed under the
@@ -584,8 +591,13 @@ if [[ -f "$metrics_file" ]]; then
                       or (.project // "") == $proj2
                       or ($proj3 != "" and (.project // "") == $proj3);
     def in_window: ((.ts | fromdateiso8601?) // 0) > ($now - $win);
+    # A delegation that failed (exit_status:3 is the pre-flight stall, #110)
+    # produced no draft this post could be the shipped form of, so it earns
+    # no credit. metrics-summary.sh and the Stop hook already join on
+    # exit_status 0; until PR #477 this lookup was the odd one out.
     ([ .[]
        | select((.source // "delegate") == "delegate")
+       | select((.exit_status // 0) == 0)
        | select(matches_proj)
        | select((.recipe // "") == $recipe)
        | select(in_window) ] | sort_by(.ts)) as $d
@@ -701,19 +713,28 @@ fi
 # the command records project=delegate-local and never matches this lookup,
 # which is the nag loop #342 describes. The hook already knows the right value.
 #
-# Outside a git repository it knows no value (#476), and must not render
-# `--project ""` or name the directory it refused to record: the agent is asked
-# for `--project <name>` instead. That still credits the post, because a
-# boundary issued from a non-repo cwd carries a `cd <repo> &&` or `--repo`
-# (git and gh cannot run there without one), and both are lookup candidates.
+# Outside a git repository it knows no value (#476). The command must still
+# run as printed (docs/boundary-hook.md), so neither `--project ""` nor a
+# `--project <name>` placeholder — bash reads that as a redirection — can
+# appear. When the command names its repo (`--repo owner/name`) that value is
+# rendered, because it is a lookup candidate here. Otherwise the flag is left
+# out entirely: a delegation issued from this same cwd is projectless, which
+# is exactly what the empty session-cwd candidate matches, whereas one
+# carrying ANY name could never credit this boundary. Not every non-repo
+# boundary carries a `cd` or `--repo` — `gh api ... -F in_reply_to=`,
+# `git -C <path>` and a `~` path all reach here without one — so the no-flag
+# form is the only advice that matches the lookup in every case.
 if [[ -n "$project" ]]; then
   where="for project '${project}'"
-  project_flag="--project \"${project}\""
+  project_flag=" --project \"${project}\""
+elif [[ -n "$repo_project" ]]; then
+  where="from a cwd outside any git repository"
+  project_flag=" --project \"${repo_project}\""
 else
   where="from a cwd outside any git repository"
-  project_flag="--project <name>"
+  project_flag=""
 fi
-reminder="delegate-local: about to author a ${boundary} message inline with no local delegation recorded in the last ${window_min}m ${where}. Draft it on-device first — bash ~/.claude/skills/delegate-local/scripts/delegate.sh ${project_flag} --recipe ${recipe}${var_hint}${stdin_hint} — then record the verdict with ~/.claude/skills/delegate-local/scripts/delegate-feedback.sh --source agent. Set DELEGATE_BOUNDARY_MODE=off to silence."
+reminder="delegate-local: about to author a ${boundary} message inline with no local delegation recorded in the last ${window_min}m ${where}. Draft it on-device first — bash ~/.claude/skills/delegate-local/scripts/delegate.sh${project_flag} --recipe ${recipe}${var_hint}${stdin_hint} — then record the verdict with ~/.claude/skills/delegate-local/scripts/delegate-feedback.sh --source agent. Set DELEGATE_BOUNDARY_MODE=off to silence."
 
 if [[ "$mode" == "enforce" ]]; then
   jq -nc --arg r "$reminder" \

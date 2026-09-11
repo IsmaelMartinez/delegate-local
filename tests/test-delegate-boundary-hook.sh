@@ -38,7 +38,14 @@ tmpcwd=$(mktemp -d)
 mk_repo "$tmpcwd" >/dev/null 2>&1
 proj=$(basename "$tmpcwd")
 METRICS=$(mktemp)
-trap 'rm -rf "$tmpcwd" "$METRICS"' EXIT
+# The #385 and #476 blocks below create $gitroot and $norepo; initialised
+# here so the trap owns their cleanup too, and a failing assertion or an
+# early exit cannot leave them behind (`set -u` would otherwise fault on the
+# expansion). The suite's own environment must not leak in either:
+# DELEGATE_PROJECT would rename every row the hook records.
+gitroot="" norepo=""
+unset DELEGATE_PROJECT
+trap 'rm -rf "$tmpcwd" "$METRICS" "$gitroot" "$norepo"' EXIT
 nowts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 payload() { # cmd  cwd
@@ -680,18 +687,29 @@ out=$(payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bas
 assert_eq false "$(jq 'has("project")' <<<"$(last_row)")" "no-repo cwd: row carries no project field"
 assert_eq git-commit "$(jq -r .boundary <<<"$(last_row)")" "no-repo cwd: the boundary is still recorded"
 
-# 41b. The nudge names neither the directory nor an empty --project "".
+# 41b. The nudge names neither the directory nor any --project at all: the
+# command must run as printed (docs/boundary-hook.md), so no `--project ""`
+# and no `--project <name>` — bash reads the latter as a redirection — and a
+# delegation carrying ANY name could never credit this projectless boundary
+# (41d), so omitting the flag is also the only advice that matches.
 ctx=$(jq -r '.hookSpecificOutput.additionalContext' <<<"$out")
 case "$ctx" in
   *"$(basename "$norepo")"*) assert_eq "absent" "present" "no-repo cwd: nudge does not name the directory" ;;
   *)                          assert_eq "absent" "absent"  "no-repo cwd: nudge does not name the directory" ;;
 esac
 case "$ctx" in
-  *'--project ""'*) assert_eq "absent" "present" "no-repo cwd: nudge does not render an empty --project" ;;
-  *)                assert_eq "absent" "absent"  "no-repo cwd: nudge does not render an empty --project" ;;
+  *'--project'*) assert_eq "absent" "present" "no-repo cwd: nudge omits --project when it has no value" ;;
+  *)             assert_eq "absent" "absent"  "no-repo cwd: nudge omits --project when it has no value" ;;
 esac
-assert_contains '--project <name>' "$ctx" "no-repo cwd: nudge asks for --project <name>"
+assert_contains 'delegate.sh --recipe commit-message' "$ctx" "no-repo cwd: the rendered command is still contiguous"
 assert_contains 'commit-message' "$ctx" "no-repo cwd: nudge still names the recipe"
+
+# 41b-ii. When the command names its repo, the nudge has a value to offer and
+# renders it quoted: a delegation under that name is a lookup candidate here.
+: > "$METRICS"
+out=$(payload 'gh issue comment 1 --repo owner/repo-b --body x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+ctx=$(jq -r '.hookSpecificOutput.additionalContext' <<<"$out")
+assert_contains '--project "repo-b"' "$ctx" "no-repo cwd + --repo: nudge renders the --repo candidate as --project"
 
 # 41c. A delegation issued from the same non-repo cwd carries no project
 # either, and it is this session's delegation: it must credit the boundary
@@ -723,7 +741,41 @@ out=$(payload 'git commit -m x' "$gitroot/repo-a" | DELEGATE_METRICS_FILE="$METR
 assert_eq repo-a "$(jq -r .project <<<"$(last_row)")" "repo cwd: project still recorded"
 assert_contains "for project 'repo-a'" "$out" "repo cwd: nudge still names the project"
 assert_contains '--project \"repo-a\"' "$out" "repo cwd: nudge still renders --project"
-rm -rf "$norepo"
+
+# 41g. The converse of 41c, which the lookup comment relies on: a projectless
+# delegation does NOT credit a boundary whose session cwd is inside a
+# repository. Empty matches empty and nothing else.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" '{ts:$ts, source:"delegate", tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+payload 'git commit -m x' "$gitroot/repo-a" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "repo cwd: a projectless delegation does not credit it"
+
+# 41h. A delegation that FAILED produced no draft to post, so it credits
+# nothing. delegate.sh writes exit_status:3 for a pre-flight stall and the
+# summary already joins on exit_status 0; the hook was the odd one out.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" '{ts:$ts, source:"delegate", project:"repo-a", tier:"prose", recipe:"commit-message", exit_status:3}' >> "$METRICS"
+payload 'git commit -m x' "$gitroot/repo-a" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "repo cwd: a failed delegation (exit_status 3) does not credit"
+
+# 41i. DELEGATE_PROJECT is the same override delegate.sh and
+# delegate-feedback.sh honour, so a session that sets it records every row
+# under one name — including from a non-repo cwd, where it is the ONLY way
+# to name the project — and a delegation recorded under it credits the post.
+: > "$METRICS"; seed_delegation explicit-name commit-message
+out=$(payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_PROJECT=explicit-name bash "$HOOK")
+assert_eq explicit-name "$(jq -r .project <<<"$(last_row)")" "DELEGATE_PROJECT: recorded as the project from a non-repo cwd"
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "DELEGATE_PROJECT: a delegation under it credits the post"
+: > "$METRICS"
+out=$(payload 'git commit -m x' "$gitroot/repo-a" | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_PROJECT=explicit-name bash "$HOOK")
+assert_eq explicit-name "$(jq -r .project <<<"$(last_row)")" "DELEGATE_PROJECT: wins over the repo cwd, as it does in delegate.sh"
+assert_contains '--project \"explicit-name\"' "$out" "DELEGATE_PROJECT: the nudge names it"
+# ...and over a cd target: delegate.sh run after that same cd inherits the
+# variable and records it, so the row has to be filed where the lookup looks.
+: > "$METRICS"
+payload "cd $gitroot/repo-b && git commit -m x" "$gitroot/repo-a" \
+  | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_PROJECT=explicit-name bash "$HOOK" >/dev/null
+assert_eq explicit-name "$(jq -r .project <<<"$(last_row)")" "DELEGATE_PROJECT: wins over the cd target too"
 
 # --- an explicit --repo widens the LOOKUP only ------------------------------
 # `gh issue comment --repo owner/other` carries no cd, so the boundary is filed
@@ -878,7 +930,6 @@ payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$
 assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "tail depth: delegate row under 600 filler rows still credits"
 
 ( cd "$gitroot/repo-b" && git worktree remove --force "$gitroot/wt-x" ) >/dev/null 2>&1
-rm -rf "$gitroot"
 
 # 56. pr-review-body — a maintainer's PR review body routes to
 # maintainer-review-reply, not maintainer-reply. Before 2026-08-26 `gh pr review`

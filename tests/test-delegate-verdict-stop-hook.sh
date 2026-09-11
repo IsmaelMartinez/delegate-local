@@ -30,8 +30,18 @@ assert_empty() {
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 OLD=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 48*3600))')
 
-# Build a Stop payload. project is derived by the hook from cwd; we point cwd
-# at a non-repo temp dir so the project resolves to its basename deterministically.
+# Build a Stop payload. project is derived by the hook from cwd the way
+# delegate.sh derives it (lib/otel.sh delegate_project_name), so each test's
+# cwd is a real git repository whose basename is the project. Until #476 the
+# hook fell back to the cwd basename outside a repository and the suite leaned
+# on that; T14 now pins the opposite. DELEGATE_PROJECT is unset so the suite's
+# own environment cannot rename every row.
+unset DELEGATE_PROJECT
+mk_tmp_repo() {  # -> prints the path of a fresh temp git repository
+  local d; d=$(mktemp -d)
+  ( cd "$d" && git init -q . ) >/dev/null 2>&1
+  printf '%s\n' "$d"
+}
 payload() {  # <session_id> <cwd>
   jq -nc --arg s "$1" --arg c "$2" '{session_id:$s, cwd:$c, hook_event_name:"Stop"}'
 }
@@ -50,7 +60,7 @@ assert_empty "$(cat "$tmp/out")" "T1: no metrics file → no output"
 rm -rf "$tmp"
 
 # --- T2. Untracked delegation in project → decision:block + marker ---------
-tmp=$(mktemp -d); proj=$(basename "$tmp")
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s2" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
 assert_eq 0 "$ec" "T2: untracked delegation → exit 0"
@@ -64,7 +74,7 @@ rm -rf "$tmp"
 # --- T3. The injected instruction ALWAYS carries --source agent ------------
 # Load-bearing: if the tier tag silently dropped to the human default, the
 # agent verdict would contaminate the quality signal.
-tmp=$(mktemp -d); proj=$(basename "$tmp")
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s3" "$tmp" "$tmp/m.jsonl" "$tmp/out"
 assert_contains "--source agent" "$(jq -r .reason "$tmp/out")" "T3: instruction records with --source agent"
@@ -75,7 +85,7 @@ rm -rf "$tmp"
 # The regression test for the decision:block re-inject loop. After T's inject
 # writes the marker, a second Stop in the same session must NOT re-inject even
 # though the delegation is still untracked.
-tmp=$(mktemp -d); proj=$(basename "$tmp")
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "sLoop" "$tmp" "$tmp/m.jsonl" "$tmp/out1"
 assert_eq "block" "$(jq -r .decision "$tmp/out1" 2>/dev/null)" "T4: first Stop injects"
@@ -87,7 +97,7 @@ rm -rf "$tmp"
 # --- T4b. A DIFFERENT session surfaces the still-untracked batch once -------
 # The marker is per-session, so a fresh agent is offered the batch (and leaves
 # what it doesn't recognise) rather than the item being lost — not a loop.
-tmp=$(mktemp -d); proj=$(basename "$tmp")
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "sA" "$tmp" "$tmp/m.jsonl" "$tmp/outA"
 run_hook "sB" "$tmp" "$tmp/m.jsonl" "$tmp/outB"
@@ -95,7 +105,7 @@ assert_eq "block" "$(jq -r .decision "$tmp/outB" 2>/dev/null)" "T4b: a new sessi
 rm -rf "$tmp"
 
 # --- T5. off mode → exit 0, no output --------------------------------------
-tmp=$(mktemp -d); proj=$(basename "$tmp")
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s5" "$tmp" "$tmp/m.jsonl" "$tmp/out" DELEGATE_VERDICT_STOP_MODE=off; ec=$?
 assert_eq 0 "$ec" "T5: off mode → exit 0"
@@ -104,7 +114,7 @@ assert_empty "$(cat "$tmp/out")" "T5: off mode → no output"
 rm -rf "$tmp"
 
 # --- T6. Window exclusion: a delegation older than the window is not surfaced --
-tmp=$(mktemp -d); proj=$(basename "$tmp")
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$OLD" "$proj" > "$tmp/m.jsonl"
 run_hook "s6" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
 assert_eq 0 "$ec" "T6: out-of-window delegation → exit 0"
@@ -112,7 +122,7 @@ assert_empty "$(cat "$tmp/out")" "T6: out-of-window delegation not surfaced"
 rm -rf "$tmp"
 
 # --- T7. Already-tracked: a delegation with a feedback row is not surfaced --
-tmp=$(mktemp -d); proj=$(basename "$tmp")
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 {
   printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj"
   printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":true}\n' "$NOW" "$NOW"
@@ -123,7 +133,7 @@ assert_empty "$(cat "$tmp/out")" "T7: already-tracked delegation not surfaced"
 rm -rf "$tmp"
 
 # --- T7b. An AGENT verdict also counts as tracked (not re-surfaced) ---------
-tmp=$(mktemp -d); proj=$(basename "$tmp")
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 {
   printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj"
   printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":true,"verdict_source":"agent"}\n' "$NOW" "$NOW"
@@ -133,7 +143,7 @@ assert_empty "$(cat "$tmp/out")" "T7b: a recorded agent verdict drops the delega
 rm -rf "$tmp"
 
 # --- T8. Per-project scoping: a delegation in another project is not surfaced --
-tmp=$(mktemp -d)  # cwd → project = basename(tmp); the row carries a different project
+tmp=$(mk_tmp_repo)  # cwd → project = basename(tmp); the row carries a different project
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"some-other-repo"}\n' "$NOW" > "$tmp/m.jsonl"
 run_hook "s8" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
 assert_eq 0 "$ec" "T8: other-project delegation → exit 0"
@@ -141,7 +151,7 @@ assert_empty "$(cat "$tmp/out")" "T8: other-project delegation not surfaced"
 rm -rf "$tmp"
 
 # --- T9. Failed delegation (exit_status != 0) is not surfaced --------------
-tmp=$(mktemp -d); proj=$(basename "$tmp")
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":3,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s9" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
 assert_eq 0 "$ec" "T9: failed delegation → exit 0"
@@ -149,7 +159,7 @@ assert_empty "$(cat "$tmp/out")" "T9: failed delegation (no output) not surfaced
 rm -rf "$tmp"
 
 # --- T10. A bare / no-recipe untracked delegation is still surfaced --------
-tmp=$(mktemp -d); proj=$(basename "$tmp")
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s10" "$tmp" "$tmp/m.jsonl" "$tmp/out"
 assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T10: bare delegation surfaced"
@@ -165,7 +175,7 @@ assert_empty "$(cat "$tmp/out")" "T11: corrupt metrics file → no output"
 rm -rf "$tmp"
 
 # --- T12. Empty stdin / no payload → exit 0 (fail open) --------------------
-tmp=$(mktemp -d); proj=$(basename "$tmp")
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 out=$(printf '' | DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" 2>/dev/null); ec=$?
 assert_eq 0 "$ec" "T12: empty payload → exit 0"
@@ -176,13 +186,41 @@ rm -rf "$tmp"
 # The marker is the loop guard and it is keyed by session_id; without one the
 # hook cannot guard against a re-inject loop, so it must NOT inject at all even
 # when an untracked delegation exists (fail open to a clean stop).
-tmp=$(mktemp -d); proj=$(basename "$tmp")
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 no_sid_payload=$(jq -nc --arg c "$tmp" '{cwd:$c, hook_event_name:"Stop"}')
 out=$(printf '%s' "$no_sid_payload" | DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" 2>/dev/null); ec=$?
 assert_eq 0 "$ec" "T13: no session_id → exit 0"
 assert_empty "$out" "T13: no session_id → no inject (guardless re-inject would loop)"
 [[ -d "$tmp/.verdict-stop-markers" ]] && { fail=$((fail+1)); echo "  FAIL  T13: no marker dir should be created without a session_id"; } || { pass=$((pass+1)); echo "  PASS  T13: no marker written without a session_id"; }
+rm -rf "$tmp"
+
+# --- T14. A cwd outside any git repository derives NO project (#476) --------
+# The hook carried the same `|| pwd` fallback the boundary hook had, so a Stop
+# from a parent folder of checkouts scanned for rows under that folder's name
+# — a project delegate.sh never writes. It now shares delegate_project_name:
+# a row filed under the folder basename is not this cwd's, while a projectless
+# row (what delegate.sh records from that same cwd) is, and the reason must
+# not print an empty project name.
+tmp=$(mktemp -d); proj=$(basename "$tmp")
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+run_hook "s14" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
+assert_eq 0 "$ec" "T14: non-repo cwd → exit 0"
+assert_empty "$(cat "$tmp/out")" "T14: non-repo cwd does not derive the folder basename as the project"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0}\n' "$NOW" > "$tmp/m.jsonl"
+run_hook "s14b" "$tmp" "$tmp/m.jsonl" "$tmp/out"
+assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T14: non-repo cwd surfaces a projectless delegation"
+case "$(jq -r .reason "$tmp/out")" in
+  *"project ''"*) assert_eq "absent" "present" "T14: reason does not print an empty project name" ;;
+  *)              assert_eq "absent" "absent"  "T14: reason does not print an empty project name" ;;
+esac
+rm -rf "$tmp"
+
+# --- T15. DELEGATE_PROJECT wins, as it does for delegate.sh and feedback -----
+tmp=$(mk_tmp_repo)
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"explicit-name"}\n' "$NOW" > "$tmp/m.jsonl"
+run_hook "s15" "$tmp" "$tmp/m.jsonl" "$tmp/out" DELEGATE_PROJECT=explicit-name
+assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T15: DELEGATE_PROJECT scopes the scan"
 rm -rf "$tmp"
 
 echo

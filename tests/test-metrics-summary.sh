@@ -248,8 +248,8 @@ assert_contains "beta                  n=1  hits=0  misses=0  untracked=1  p50=6
 rm -f "$multiproj"
 
 # 12. Per-project negative gate: single distinct project -> section hidden.
-# Also covers rows missing the project field bucketing to "(none)" (still one
-# distinct value, so still hidden).
+# (Rows missing the project field form their own `(no project)` bucket, so a
+# fixture mixing them with one named project is two distinct values — see 12d.)
 singleproj=$(mktemp)
 cat > "$singleproj" <<'EOF'
 {"ts":"2026-05-25T10:00:00Z","source":"delegate","project":"alpha","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -404,6 +404,32 @@ esac
 assert_contains "(no project)" "$(grep -v '^$' <<<"$trig" | tail -1)" \
   "no-project opportunities: listed after the per-project rows, not ranked by count"
 rm -f "$noproj"
+
+# 12d. The per-project DELEGATE section carries the same projectless rows
+# (#476): delegate.sh records no project outside a repository, so they are
+# current and deliberate, not a legacy artefact. Same label and same
+# placement as the trigger-rate section — `(no project)`, after the named
+# projects, never count-ranked above one. Fixture: alpha has 1 delegation,
+# the projectless bucket 2.
+noprojdel=$(mktemp)
+cat > "$noprojdel" <<'EOF'
+{"ts":"2026-06-08T10:00:00Z","source":"delegate","project":"alpha","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-06-08T10:05:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":110}
+{"ts":"2026-06-08T10:10:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":4400,"exit_status":0,"estimated_tokens_avoided":120}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$noprojdel" 2>&1) || EC=$?
+assert_eq 0 "$EC" "no-project delegations: exits 0"
+perproj=$(sed -n '/^Per-project (delegate)/,/^$/p' <<<"$out")
+assert_contains "(no project)" "$perproj" "no-project delegations: labelled (no project), not (none)"
+case "$perproj" in
+  *"(none)"*) assert_eq "absent" "present" "no-project delegations: the old (none) label is gone" ;;
+  *)          assert_eq "absent" "absent"  "no-project delegations: the old (none) label is gone" ;;
+esac
+assert_contains "n=2" "$(grep -F '(no project)' <<<"$perproj")" "no-project delegations: the line carries their count"
+assert_contains "(no project)" "$(grep -v '^$' <<<"$perproj" | tail -1)" \
+  "no-project delegations: listed after the named projects, not ranked by count"
+rm -f "$noprojdel"
 
 # 16. Phase E agent-observed verdict tier. Fixture: 4 commit-message recipe
 # delegations — D1 human HIT, D2 agent HIT (used), D3 agent MISS (rewrote),
