@@ -1627,8 +1627,10 @@ echo_normalise() {
 
 # echo_matches — the ONE comparison both echo checks run, so the 40-char floor
 # and the output-side normalisation cannot be applied to one check and not the
-# other. Pattern units arrive on stdin, the answer as $1; each side goes
-# through echo_normalise, units under the floor are dropped from the pattern
+# other. Pattern units arrive on stdin RAW, the answer as $1 RAW; each side
+# goes through echo_normalise here and nowhere else (it is not idempotent, so
+# a caller that pre-normalises hands in a pattern the output can never match),
+# units under the floor are dropped from the pattern
 # side (an exact match cannot be shorter than its pattern, so one floor
 # suffices), and the distinct answer units that reproduce a pattern unit are
 # printed. Whole-unit, fixed-string (grep -F, linear), sorted for a stable
@@ -1724,14 +1726,26 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
   fi
   # The comparison itself is echo_matches (above run_output_checks, shared
   # with no_context_echo), which normalises both sides and applies the floor.
-  # The exemplar lines are normalised once more here, BEFORE uniq -u, because
-  # the convention filter has to see `ci: X` and `chore(deps): X (#253)` as the
-  # same line; the helper's pass over them is then a no-op.
+  # Every pattern source reaches it RAW and is normalised there exactly once.
+  # The convention filter still has to judge on the normalised form, so that
+  # `ci: X` and `chore(deps): X (#253)` count as one line repeated, but it
+  # must not hand the helper the normalised text: echo_normalise is not
+  # idempotent (the type-prefix strip takes one prefix per pass), so an
+  # exemplar `chore: fix: X` normalised twice became the pattern `X` while the
+  # same line echoed in the output normalised once to `fix: X`, and the most
+  # literal echo of all was the one that slipped through. So each raw line is
+  # paired with its normalised form (US-separated; paste keeps them aligned
+  # because echo_normalise never drops a line), the form is counted, and the
+  # RAW line of every form seen exactly once goes to the helper. Anything
+  # repeated is convention the output is meant to reproduce.
   echoed_line=$( { printf '%s\n' "$recipe_template_raw"
     if [[ -n "$echo_exemplars" ]]; then
-      # uniq -u keeps only lines appearing exactly once across the exemplars;
-      # anything repeated is convention the output is meant to reproduce.
-      printf '%s' "$echo_exemplars" | echo_normalise | sort | uniq -u
+      paste -d "$(printf '\037')" \
+        <(printf '%s' "$echo_exemplars" | echo_normalise) \
+        <(printf '%s' "$echo_exemplars") \
+        | awk -F "$(printf '\037')" '
+            { seen[$1]++; form[NR] = $1; raw[NR] = $2 }
+            END { for (i = 1; i <= NR; i++) if (seen[form[i]] == 1) print raw[i] }'
     fi; } | echo_matches "$output" | head -n 1)
   if [[ -n "$echoed_line" ]]; then
     echo "delegate: check 'no_example_echo' FAILED — REJECT this draft. The model" >&2

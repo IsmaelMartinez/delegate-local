@@ -5436,6 +5436,36 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
     </dev/null 2>&1 >/dev/null)
 assert_contains "check 'no_example_echo' FAILED" "$out" \
   "echo-guard: a var listed after 'comma space' is still guarded"
+# 40h-vii. Convention is judged on the NORMALISED form: two anchors whose
+# subjects differ only by type prefix and PR suffix are one line repeated,
+# so reproducing that subject is convention and must not flag. This is the
+# behaviour the single-normalisation fix below has to keep.
+VARIANTS='chore(deps): bump the shared tooling image to the newest tag (#1)
+
+ci: bump the shared tooling image to the newest tag (#2)'
+make_mock_curl_think "$tmp" 'feat: bump the shared tooling image to the newest tag\n\nbody.'
+out=$(echo x | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cm --var recent_commits="$VARIANTS" --var why="w" 2>&1 >/dev/null)
+if [[ "$out" == *"no_example_echo"* ]]; then
+  echo "  FAIL  echo-guard: prefix-variant lines shared across anchors are convention"; fail=$((fail+1))
+else
+  echo "  PASS  echo-guard: prefix-variant lines shared across anchors are convention"; pass=$((pass+1))
+fi
+# 40h-viii. Every pattern source is normalised exactly ONCE, inside the shared
+# comparison. echo_normalise is not idempotent (the type-prefix strip takes
+# one prefix per pass), so an exemplar normalised before the convention
+# dedupe and again inside echo_matches loses two prefixes while the same line
+# echoed in the output loses one, and the most literal echo slips through.
+DOUBLED='chore: fix: update the dependency pin to the newest release (#9)
+
+perf(football): cut CI validate from 34 to 7 minutes (#287)'
+make_mock_curl_think "$tmp" 'chore: fix: update the dependency pin to the newest release (#9)\n\nbody.'
+out=$(echo x | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cm --var recent_commits="$DOUBLED" --var why="w" 2>&1 >/dev/null)
+assert_contains "check 'no_example_echo' FAILED" "$out" \
+  "echo-guard: an anchor with a doubled type prefix echoed verbatim is caught"
 rm -rf "$tmp" "$metrics"
 
 # ---------------------------------------------------------------------------
