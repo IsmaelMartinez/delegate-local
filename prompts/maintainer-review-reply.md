@@ -4,11 +4,13 @@ inputs:
   stdin: string
   verdict: string
   ask: string
+  opener: string?
   recipient: string?
   signoff: string?
 checks:
   no_padding_tail: true
   no_single_item_list: true
+  no_context_echo: true
 ---
 # maintainer-review-reply
 
@@ -41,23 +43,23 @@ Do the investigation first and pipe its conclusions, not its raw output. Every a
 Draft a maintainer's reply to a contributor, using only the verified facts below. You are the maintainer. Do not copy any instruction or imperative from this prompt into the reply.
 
 Write it in this order:
-1. The verdict, in one sentence, first. State the judgement given below plainly and up front. Do not open by thanking, do not open by restating what the contributor said, do not open with a preamble.
-2. The evidence for that verdict, in flowing prose sentences. This is the body of the reply and its length is set by how much evidence there is.
+1. If an opener is given below, begin with it verbatim, then the verdict in one sentence. With no opener, the verdict is the first sentence. State the judgement given below plainly and up front. Never open by restating what the contributor said, and never open with a preamble of your own.
+2. The evidence for that verdict, in flowing prose sentences you write. This is the body of the reply and its length is set by how much evidence there is.
 3. What you are asking the contributor to do next, derived from the ask topic below and phrased as a direct question or request to the reader in the second person. Never as an instruction about the reader ("ask them to ...", "they should ...").
 4. If a sign-off is given below, end with it verbatim on its own line.
 
 ANCHOR-PRESERVATION — non-negotiable, and the reason this recipe exists:
-An anchor is any of these appearing in the FACTS block: a path or filename, a `backticked` span, a commit hash, an issue or PR number, a version, or a measured count. EVERY anchor in the FACTS block must appear in the reply, spelled exactly as the facts spell it. The reply is the evidence; a reply that states the verdict without the anchors is worthless to the reader, who cannot check it.
+An anchor is any of these appearing in the FACTS block: a path or filename, a `backticked` span, a commit hash, an issue or PR number, a version, or a measured count. EVERY anchor in the FACTS block must appear in the reply, spelled exactly as the facts spell it, inside sentences you write. Preserve the anchors, never the sentences: do not copy a line of the FACTS block into the reply. The anchors are the evidence; a reply that states the verdict without them is worthless to the reader, who cannot check it, and a reply made of the FACTS block's own lines is the input handed back, which the reader already had.
 You may NOT introduce an anchor that is absent from the FACTS block. No invented file names, line numbers, versions, counts, or issue references. If you need one and it is not there, write around it.
 
 LENGTH — read this before deciding how long the reply is:
-The FACTS block is the content of the reply, not a hint about it. Do not compress it to a sentence or two. Match the reply to the evidence: a handful of facts is a short paragraph, a dozen is three or four. Brevity that drops a fact is the failure this recipe exists to prevent, not the goal.
+The FACTS block is the content of the reply, not a hint about it. Do not compress it to a sentence or two. Match the reply to the evidence: a handful of facts is a short paragraph, a dozen is three or four. Brevity that drops an anchor is one failure; a reply the length of the FACTS block, built from its lines, is the other. Curate: order the facts by what supports the verdict, join the ones that belong together, and drop framing that was written for you rather than for the reader.
 
 Rules:
 - Prose sentences and paragraphs. No bullet list, no numbered list, no headings, no markdown sections. The one exception: if the ask topic carries TWO OR MORE distinct asks (answering one does not answer the other), write those asks as a short numbered list at the end, one question per item, and keep everything above them as prose. A single ask is never a list.
 - If the trailing instruction asks for a different format, obey it; an explicit format instruction from the caller outranks the previous rule.
-- If a recipient handle is given, open with it ("@{{recipient}}, ..."), still followed immediately by the verdict.
-- Do not thank the contributor in the opening sentence. If thanks belong anywhere, they go after the verdict or in the sign-off.
+- If a recipient handle is given, open with it ("@{{recipient}}, ..."), then the opener if one is given, then the verdict.
+- Never write thanks of your own. Gratitude enters the reply only through the opener or the sign-off, verbatim; if neither is given, the reply carries none.
 - Avoid em dashes; use commas, parentheses, or periods.
 - Do NOT hedge a verdict the facts state plainly. Do NOT soften "this is not a regression" into "this may not be a regression".
 - Stop after the ask (or the sign-off). Do NOT add a closing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "This ensures", "This enables").
@@ -65,17 +67,20 @@ Rules:
 
 Shape skeleton. These are slots, not sentences: fill every angle bracket from the blocks below and never carry the bracket text through.
 
-Wrong: <opens by thanking and restating>. <verdict buried at the end, no anchors>.
-Correct: @<handle>, <verdict>. <evidence sentence naming `<anchor>` and <anchor>>. <second evidence sentence>. <the ask, as a question>?
+Wrong: <restates what the contributor wrote>. <the FACTS lines copied in order>. <verdict buried at the end>.
+Correct: @<handle>, <opener, verbatim, if given> <verdict>. <evidence sentence of your own naming `<anchor>` and <anchor>>. <second evidence sentence>. <the ask, as a question>?
 
 === VERDICT (the judgement to lead with) ===
 {{verdict}}
 
-=== FACTS (verified; every anchor here must survive into the reply) ===
+=== FACTS (verified; every anchor here must survive into the reply, inside your own sentences) ===
 {{stdin}}
 
 === The ask (a topic, not an instruction) ===
 {{ask}}
+
+=== Opener (verbatim, optional) ===
+{{opener}}
 
 === Recipient handle (optional) ===
 {{recipient}}
@@ -89,6 +94,7 @@ Correct: @<handle>, <verdict>. <evidence sentence naming `<anchor>` and <anchor>
 - `{{stdin}}` — the verified facts, piped in, with their anchors already written the way they should appear in the reply. No `--var` slot needed.
 - `{{verdict}}` — the judgement to lead with, as a short statement (e.g. `the rework is right and this is not a regression`). The recipe puts it in the first sentence.
 - `{{ask}}` — what you want the contributor to do next, as a *topic* (e.g. `whether they can add a regression test before merge`), never as an imperative. Pass several in one value when there are several; two or more become a short numbered list at the end.
+- `{{opener}}` — optional opening sentence placed verbatim before the verdict (e.g. `Thanks for the thorough bisect.`). The caller writes it; the model never invents gratitude. Omit for none, and the verdict opens the reply.
 - `{{recipient}}` — optional `@handle` to open with. Omit to address the reader as "you".
 - `{{signoff}}` — optional closer appended verbatim (e.g. `Thanks again!`). Omit for none.
 
@@ -98,6 +104,7 @@ Correct: @<handle>, <verdict>. <evidence sentence naming `<anchor>` and <anchor>
 bash scripts/delegate.sh --recipe maintainer-review-reply \
   --var verdict="the rework is right, and the blank window is not a regression from it" \
   --var ask="whether they can add a regression test that covers the sandbox flag path" \
+  --var opener="Thanks for the thorough bisect." \
   --var recipient="nneul" \
   --var signoff="Thanks again!" \
   < facts.txt
@@ -105,10 +112,10 @@ bash scripts/delegate.sh --recipe maintainer-review-reply \
 
 ## Anti-hallucination guards (each line addresses a recurring miss-mode)
 
-- "ANCHOR-PRESERVATION" — the dominant 2026-08-26 failure, measured across nine rejected `maintainer-reply` drafts on `pr-agent` and `teams-for-linux`: "dropped all verified specifics (file:line anchors, the 4-step pin-removal experiment and its exact outputs)", "dropped every measured fact from the context", "dropped the null-element finding and the thanks entirely". Inputs of 7-9 KB came back as 96 to 470 characters. Naming the anchor classes explicitly, and stating that the reply IS the evidence, is what the generic "do not drop facts" phrasing failed to convey.
+- "ANCHOR-PRESERVATION" — the dominant 2026-08-26 failure, measured across nine rejected `maintainer-reply` drafts on `pr-agent` and `teams-for-linux`: "dropped all verified specifics (file:line anchors, the 4-step pin-removal experiment and its exact outputs)", "dropped every measured fact from the context", "dropped the null-element finding and the thanks entirely". Inputs of 7-9 KB came back as 96 to 470 characters. Naming the anchor classes explicitly is what the generic "do not drop facts" phrasing failed to convey. Reworded 2026-09-11 so that preservation means the anchors inside new sentences and never the supplied sentences themselves: the original "the reply IS the evidence" line was read as licence to return the FACTS block wholesale (see the calibration note of that date), and `no_context_echo` now rejects a draft that copies two or more of its lines.
 - "You may NOT introduce an anchor that is absent from the FACTS block" — the symmetric failure: "invented a mechanic: claimed the corridor change stops bashers colliding with each other", and "misread the 531-test suite total as tests added by this PR". Preservation without an invention ceiling just moves the error.
-- "LENGTH — the FACTS block is the content, not a hint" — the prose tier treats a long input as something to summarise. Every adjacent recipe caps length; this one has to say the opposite out loud, or the model applies the cap it has seen everywhere else.
-- "The verdict, in one sentence, first" plus "Do not thank the contributor in the opening sentence" — "opened by thanking and restating, gave no verdict", "dropped the verdict and the thanks entirely, and collapsed the whole reply into three bare imperative questions". Verdict-first is the house shape and the model reverts to a support-desk opener without it.
+- "LENGTH — the FACTS block is the content, not a hint" — the prose tier treats a long input as something to summarise. Every adjacent recipe caps length; this one has to say the opposite out loud, or the model applies the cap it has seen everywhere else. The "built from its lines" clause and the "Curate" sentence were added 2026-09-11 because, said alone, "do not compress" had produced the mirror failure: a reply the same length as its input, made of the input.
+- "If an opener is given below, begin with it verbatim, then the verdict" plus "Never write thanks of your own" — the 2026-08-26 reasons were "opened by thanking and restating, gave no verdict" and "dropped the verdict and the thanks entirely", so the recipe forbade an opening thanks outright. By 2026-09-11, 39 of 97 rejections wanted exactly that thanks ("no thanks opener", "opened with the verdict instead of thanks"). The two are reconciled the way `signoff` already works: the caller supplies the opener verbatim, so the model never invents gratitude and never restates, and with no opener the verdict still comes first.
 - "Prose sentences and paragraphs. No bullet list, no numbered list" with the two-or-more exception — "emitted a numbered list despite an explicit no-list instruction", "rendered a single request as a numbered list" (twice the same day). The exception is scoped tightly so the fix does not simply invert the defect.
 - "Do NOT hedge a verdict the facts state plainly" — a verdict softened into a maybe reads as no verdict at all, and the reader then has to ask again.
 - Angle-bracket skeletons rather than written-out example sentences — see the `maintainer-reply.md` 2026-08-26 calibration note: a fluent example sentence is something the model returns verbatim when the real input is long. `no_example_echo` (ADR 0029) backstops it.
@@ -116,12 +123,14 @@ bash scripts/delegate.sh --recipe maintainer-review-reply \
 ## Expected output shape
 
 ```
-@nneul, the rework is right and the blank window is not a regression from it. The flip is in the Electron 39 upgrade, specifically the GPU sandbox flag in `src/main.js:412`, which predates your change by two releases. I re-ran the suite on your branch with the flag forced back on and all 531 tests pass, so the failure you saw on CI is the flag and not the refactor.
+@nneul, thanks for the thorough bisect. The rework is right and the blank window is not a regression from it. The flip is in the Electron 39 upgrade, specifically the GPU sandbox flag in `src/main.js:412`, which predates your change by two releases. I re-ran the suite on your branch with the flag forced back on and all 531 tests pass, so the failure you saw on CI is the flag and not the refactor.
 
 Could you add a regression test that covers the sandbox flag path before we merge?
 
 Thanks again!
 ```
+
+Verify before recording verdict: the opener (if any) and the sign-off (if any) are present verbatim and are the only gratitude in the reply; the verdict is the first sentence after them; every anchor from the facts appears, spelled as supplied, inside sentences the model wrote; no line of the facts is reproduced as written (that is what `no_context_echo` rejects); no anchor appears that the facts did not supply.
 
 ## Calibration notes
 
@@ -182,3 +191,49 @@ min 8, p25 573, median 950, p75 1417, max 2522 — and the split sends 19 of the
 27 to this recipe. That is the traffic
 this recipe has been waiting for, so the next reading of its keep rate has a
 denominator to work with. Still `n=0` calls at the time of writing.
+
+### 2026-09-11 — the reply was the input handed back, and the opener rule was fighting the verdicts
+
+The traffic arrived and the recipe failed it in one shape. Measured on live
+rows from 2026-08-28 to 2026-09-11 (agent verdicts, `--source agent`): 46
+rejections here and 51 on `maintainer-reply`, 97 in all, with
+`self-improve.sh --peek --days 14` reporting usable rates of 71% here
+(kept=0, scaffold=33, rewrote=13) and 66% there (kept=0, scaffold=34,
+rewrote=17). Not one draft in the window was kept as-is on either recipe. 63
+of the 97 rejection reasons said the draft restated the supplied context back:
+"restated the whole stdin context verbatim as three long paragraphs", "copied
+the context brief sentence for sentence, including internal framing", "echoed
+all eleven stdin fact lines verbatim". The size signature says the same thing
+without any reading: rejected output here ran p50 1637 characters against a
+context p50 of 1627. The draft was its input (#475).
+
+That is the 2026-08-26 failure inverted. The ANCHOR-PRESERVATION note above
+was written from nine drafts that had compressed 7-9 KB of facts to under 500
+characters, and "the reply IS the evidence" fixed that by being read
+literally: the model now returned the evidence wholesale instead of curating
+it. No check caught it because `no_example_echo` compares against the
+pre-substitution template only, on purpose, so every one of the 46 rejections
+here carried `checks_failed=0` and none took the #384 retry.
+
+Three changes. ANCHOR-PRESERVATION and LENGTH now say what preservation means:
+the anchors (paths, line references, numbers, hashes, PR and issue numbers)
+carried inside sentences the model writes, never the supplied sentences
+themselves, and a reply the length of the FACTS block built from its lines is
+named as the second failure beside brevity. `no_context_echo` is declared in
+the frontmatter and fails a draft that reproduces two or more lines of the
+piped context verbatim (whole-line, 40-character floor, same normalisation as
+`no_example_echo`), so the retry now fires with the constraint named; one
+echoed line is left alone because quoting a single fact back is exactly the
+anchor-carrying the recipe asks for. And the opener: 39 of the 97 reasons
+wanted a thanks first ("no thanks opener", "opened with the verdict instead of
+thanks") while the template said "Do not open by thanking" twice, so the
+recipe's house shape and the verdicts disagreed on every call that had one.
+Resolved the way `signoff` already works: an optional `opener` input the
+caller supplies verbatim, placed before the verdict. The model still never
+invents gratitude, and with no opener the verdict still comes first.
+
+Re-measure after roughly ten calls each. The number to watch is the ratio of
+output to context characters on rejected rows, which should drop well below
+1.0, and whether `no_context_echo` appears in `checks_failed_names` at all: if
+the retry clears it, the row shows `retried:true` with no failed check; if it
+does not, the model cannot curate this input and the reply is hand-written.

@@ -6461,6 +6461,181 @@ assert_contains "check 'no_invented_headings' FAILED" \
   "no_invented_headings: a fenced comment in the examples is not a heading either"
 rm -rf "$tmp" "$metrics"
 
+# ---------------------------------------------------------------------------
+# 48. no_context_echo (#475) — the caller-supplied half of the echo problem.
+# no_example_echo compares against the recipe's own prompt and deliberately
+# never against the piped context, so a draft that hands the facts straight
+# back passes every declared check and never takes the #384 retry. Measured
+# 2026-09-11: 63 of 97 reply-recipe rejections said the draft restated the
+# context, and rejected maintainer-review-reply output ran p50 1637 chars
+# against a context p50 of 1627. Opt-in per recipe. The threshold is TWO
+# lines: quoting one supplied fact back is legitimate evidence-carrying, and
+# the recipes tell the model to spell every anchor exactly as the facts do.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/ce.md" <<'EOF'
+---
+tier: prose
+checks:
+  no_context_echo: true
+---
+# ce
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+Reply using only the facts below.
+
+=== FACTS ===
+{{stdin}}
+```
+
+## Calibration notes
+n/a
+EOF
+ce_facts=$'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.\nThe regression predates the refactor by two releases.'
+run_ce() {
+  # $1 selects the recipe; $ce_facts is always the piped context.
+  printf '%s\n' "$ce_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe "${1:-ce}" prose "go" 2>&1 >/dev/null
+}
+
+# 48a. Two supplied lines handed straight back -> FAILED, named, counted.
+: > "$metrics"
+make_mock_curl_think "$tmp" 'Not a regression.\nThe GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.\nCould you add a test?'
+out=$(run_ce)
+assert_contains "check 'no_context_echo' FAILED" "$out" \
+  "context-echo: two supplied lines reproduced verbatim are caught"
+assert_contains "2 line(s)" "$out" \
+  "context-echo: the failure counts the echoed lines"
+row=$(tail -1 "$metrics")
+assert_contains '"checks_failed_names":["no_context_echo"]' "$row" \
+  "context-echo: named on the metrics row"
+assert_contains '"checks_run":2' "$row" \
+  "context-echo: counted in checks_run beside the default echo check"
+
+# 48b. The anchors carried inside NEW sentences is exactly what the recipes
+# ask for, and must never flag. This is the guard that matters: a false
+# positive here would reject every good evidence-led reply.
+make_mock_curl_think "$tmp" 'Not a regression.\nThe flip is in the Electron 39 upgrade, specifically the sandbox flag at src/main.js:412, two releases before the refactor.\nI re-ran the suite with the flag forced back on and all 531 tests pass, so PR #2632 is not the cause.\nCould you add a test?'
+: > "$metrics"
+out=$(run_ce)
+if [[ "$out" == *"no_context_echo"* ]]; then
+  echo "  FAIL  context-echo: anchors carried in new sentences must not flag"; fail=$((fail+1))
+else
+  echo "  PASS  context-echo: anchors carried in new sentences do not flag"; pass=$((pass+1))
+fi
+# Silence must mean "ran and passed", not "never ran": on the unfixed tree the
+# unknown-check warning carried the name and every silent case failed for
+# that reason alone.
+assert_contains '"checks_run":2' "$(tail -1 "$metrics")" \
+  "context-echo: the silent case still ran the check"
+
+# 48c. ONE echoed line is quoting a fact, which the recipes permit. Below the
+# threshold, so silent.
+make_mock_curl_think "$tmp" 'Not a regression.\nThe GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nThe refactor is two releases newer, so the failure is the flag.\nCould you add a test?'
+out=$(run_ce)
+if [[ "$out" == *"no_context_echo"* ]]; then
+  echo "  FAIL  context-echo: a single echoed line must stay below the threshold"; fail=$((fail+1))
+else
+  echo "  PASS  context-echo: a single echoed line stays below the threshold"; pass=$((pass+1))
+fi
+
+# 48c-i. The same line echoed twice is still one supplied line.
+make_mock_curl_think "$tmp" 'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nThe GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.'
+out=$(run_ce)
+if [[ "$out" == *"no_context_echo"* ]]; then
+  echo "  FAIL  context-echo: one line repeated is one line, not two"; fail=$((fail+1))
+else
+  echo "  PASS  context-echo: one line repeated is one line, not two"; pass=$((pass+1))
+fi
+
+# 48d. Short lines sit below the same 40-char floor as no_example_echo, so a
+# reply may share a sign-off or a heading with the facts without colliding.
+ce_facts_saved="$ce_facts"
+ce_facts=$'Thanks again!\n=== FACTS ===\nA third short line.'
+make_mock_curl_think "$tmp" 'Thanks again!\n=== FACTS ===\nA third short line.'
+out=$(run_ce)
+if [[ "$out" == *"no_context_echo"* ]]; then
+  echo "  FAIL  context-echo: short shared lines must stay below the length floor"; fail=$((fail+1))
+else
+  echo "  PASS  context-echo: short shared lines stay below the length floor"; pass=$((pass+1))
+fi
+ce_facts="$ce_facts_saved"
+
+# 48e. Same normalisation as no_example_echo: surrounding whitespace and a
+# `Correct:` label do not hide an echo.
+make_mock_curl_think "$tmp" '   The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.  \nCorrect: All 531 tests pass on the branch with the flag forced back on, see PR #2632.'
+out=$(run_ce)
+assert_contains "check 'no_context_echo' FAILED" "$out" \
+  "context-echo: whitespace and a label prefix are normalised away before comparing"
+
+# 48f. Opt-in: a recipe that does not declare it never runs it, so the
+# default-on echo check is the only one on the row.
+cat > "$prompts/ce_off.md" <<'EOF'
+---
+tier: prose
+---
+# ce_off
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+Reply using only the facts below.
+
+=== FACTS ===
+{{stdin}}
+```
+
+## Calibration notes
+n/a
+EOF
+: > "$metrics"
+make_mock_curl_think "$tmp" 'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.'
+out=$(run_ce ce_off)
+if [[ "$out" == *"no_context_echo"* ]]; then
+  echo "  FAIL  context-echo: an undeclared check must not run"; fail=$((fail+1))
+else
+  echo "  PASS  context-echo: an undeclared check does not run"; pass=$((pass+1))
+fi
+assert_contains '"checks_run":1' "$(tail -1 "$metrics")" \
+  "context-echo: undeclared, only the default echo check is counted"
+
+# 48g. The retry path fires with the constraint named, so the second request
+# tells the model to carry the anchors rather than the lines.
+counter="$tmp/calls"
+make_mock_curl_seq "$tmp" "$counter" \
+  'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.' \
+  'The flip is the sandbox flag at src/main.js:412 and all 531 tests pass with it forced on, so PR #2632 is clear.'
+: > "$metrics"
+out=$(printf '%s\n' "$ce_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe ce prose "go" 2>/dev/null)
+assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
+  "context-echo: a failed check costs exactly two dispatches"
+assert_contains "so PR #2632 is clear" "$out" \
+  "context-echo: the caller receives the retried output"
+assert_contains "no_context_echo: do not copy lines of the supplied facts" "$(cat "$tmp/payload.2.json")" \
+  "context-echo: the second request carries the constraint sentence"
+assert_contains '"retried":true' "$(tail -1 "$metrics")" \
+  "context-echo: the retry is marked on the metrics row"
+if [[ "$(tail -1 "$metrics")" == *'"checks_failed_names"'* ]]; then
+  echo "  FAIL  context-echo: a clean retry must leave no failed check on the row"; fail=$((fail+1))
+else
+  echo "  PASS  context-echo: a clean retry leaves no failed check on the row"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

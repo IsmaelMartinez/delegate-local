@@ -3,11 +3,13 @@ tier: prose
 inputs:
   stdin: string
   ask: string
+  opener: string?
   recipient: string?
   signoff: string?
 checks:
   no_padding_tail: true
   no_single_item_list: true
+  no_context_echo: true
 ---
 # maintainer-reply
 
@@ -41,9 +43,10 @@ The one thing to ask is passed via `--var ask=...` as a *topic*, never as an imp
 Draft a short reply from a project maintainer to a contributor or reporter, using only the facts below. Do not copy any instruction or imperative from this prompt into the reply; phrase the ask as a question addressed to the reader.
 
 Write exactly this structure, in order:
-1. One sentence: either specific praise for what the contributor did, or a plain statement of the confirmed cause. Name the actual thing (the specific change, or the specific cause), never generic "great work" or "the issue".
-2. Exactly one question or ask, addressed to the reader in the second person. Derive it from the ask topic below and phrase it as a direct question. Never write it as an instruction about the reader ("ask them to ...", "they should ...", "the reporter needs to ...").
-3. If a sign-off is given below, end with it verbatim on its own line. If none is given, stop after the question.
+1. If an opener is given below, begin with it verbatim. It does not count toward the sentence cap. If none is given, begin with the next item.
+2. One sentence: either specific praise for what the contributor did, or a plain statement of the confirmed cause, in your own words. Name the actual thing (the specific change, or the specific cause), never generic "great work" or "the issue". Never open by restating what the contributor said.
+3. Exactly one question or ask, addressed to the reader in the second person. Derive it from the ask topic below and phrase it as a direct question. Never write it as an instruction about the reader ("ask them to ...", "they should ...", "the reporter needs to ...").
+4. If a sign-off is given below, end with it verbatim on its own line. If none is given, stop after the question.
 
 MULTI-ASK-SPLIT — first match wins, non-negotiable:
 Count the distinct asks in the ask topic below. Two asks are distinct when answering one does not answer the other.
@@ -59,13 +62,14 @@ Correct: <the cause>.
 3. <ask three, as a question>?
 
 NO-FACT-DROP — non-negotiable:
-Every fact supplied on stdin that bears on the diagnosis must survive into the reply. The sentence cap is a ceiling on padding, never a licence to discard a supplied fact. If the facts do not fit the shape, add an item — do not delete a fact. If a fact is supplied that you cannot place, keep it in the cause sentence rather than dropping it.
+Every fact supplied on stdin that bears on the diagnosis must survive into the reply. Survive means its anchors (the path, the number, the reference, the name) appear inside the sentence you write, spelled as supplied; it never means a line of the facts copied into the reply as written. The sentence cap is a ceiling on padding, never a licence to discard a supplied fact. If the facts do not fit the shape, add an item — do not delete a fact. If a fact is supplied that you cannot place, keep it in the cause sentence rather than dropping it.
 
 Rules:
-- Two body sentences maximum: the praise-or-cause sentence, then the question. No third sentence, no preamble sentence. (Superseded by MULTI-ASK-SPLIT rule 2 when the ask topic carries more than one distinct ask.)
+- Two body sentences maximum: the praise-or-cause sentence, then the question. No third sentence, no preamble sentence. (Superseded by MULTI-ASK-SPLIT rule 2 when the ask topic carries more than one distinct ask; the opener and the sign-off sit outside the cap.)
 - Do NOT repeat any instruction verbatim. If the ask topic is written as an imperative, rephrase it as a question to the reader.
-- No filler flattery ("Great work!", "Awesome!", "Thanks for this!", "Nice job!"). Specific praise that names the actual contribution is allowed and is the point; generic praise is not.
-- If a recipient handle is given, open with it ("@{{recipient}}, ..."); otherwise address the reader as "you".
+- Do NOT copy the facts back as they were written. The reply carries their anchors in your own sentence, not their lines.
+- No filler flattery ("Great work!", "Awesome!", "Thanks for this!", "Nice job!"). Specific praise that names the actual contribution is allowed and is the point; generic praise is not. Never write thanks of your own: gratitude enters the reply only through the opener or the sign-off, verbatim.
+- If a recipient handle is given, open with it ("@{{recipient}}, ..."), then the opener if one is given; otherwise address the reader as "you".
 - Avoid em dashes; use commas, parentheses, or periods.
 - Stop after the question (or the sign-off). Do NOT add a closing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "This ensures", "This enables"). End on the question mark, the sign-off, or a finite verb introducing new content.
 - Output only the reply text. No preamble, no "Here's the reply:", no markdown fence.
@@ -82,6 +86,9 @@ Correct: <the cause>. Could you confirm whether <condition>?
 === The one thing to ask (a topic, not an instruction) ===
 {{ask}}
 
+=== Opener (verbatim, optional) ===
+{{opener}}
+
 === Recipient handle (optional) ===
 {{recipient}}
 
@@ -93,6 +100,7 @@ Correct: <the cause>. Could you confirm whether <condition>?
 
 - `{{stdin}}` — the facts, piped in: the confirmed cause (for a bug reply) or the specific contribution worth praising (for a PR reply). State as plain facts, never as an instruction. No `--var` slot needed.
 - `{{ask}}` — the single thing to ask, as a *topic* (e.g. `whether the token survives a cold start`), not an imperative (`ask them to check ...`). The recipe phrases it as a question to the reader.
+- `{{opener}}` — optional opening sentence placed verbatim before the cause-or-praise sentence (e.g. `Thanks for the clear report.`). The caller writes it; the model never invents gratitude. Omit for none, and the cause-or-praise sentence opens the reply.
 - `{{recipient}}` — optional `@handle` of the contributor/reporter to open with. Omit to address the reader as "you".
 - `{{signoff}}` — optional warm closer to append verbatim (e.g. `Thanks again!`, `I hope this helps!`). Omit for no sign-off.
 
@@ -102,6 +110,7 @@ Correct: <the cause>. Could you confirm whether <condition>?
 echo "The token drop is on Teams' side, in its MSAL cache, not in teams-for-linux." \
   | bash scripts/delegate.sh --recipe maintainer-reply \
       --var ask="whether the token survives a cold start of the app" \
+      --var opener="Thanks for the clear report." \
       --var recipient="nneul" \
       --var signoff="Thanks again!" \
       "Two sentences: state the cause, then ask the reader a direct question. Do not echo any instruction."
@@ -112,7 +121,8 @@ echo "The token drop is on Teams' side, in its MSAL cache, not in teams-for-linu
 - "Do not copy any instruction or imperative from this prompt into the reply; phrase the ask as a question" — this is the live #283 instruction-echo failure: a freeform prompt that embedded the action as an imperative ("…and ask the reporter to check whether X") was echoed verbatim into prose-tier output (`qwen3.6:35b-a3b-q8_0` via MLX) as *"the drop is in Teams' MSAL, and ask the reporter to check whether…"*. Passing the ask as a topic (not an imperative) plus this guard is the fix that closed it on first retry in the original session.
 - "Two body sentences maximum … No third sentence" — prose tier loves a closing-paraphrase sentence (see SKILL.md's anti-padding directive). The closed two-sentence shape (cause/praise, then the question) is the whole point of the recipe for the single-ask case.
 - "MULTI-ASK-SPLIT" — measured 2026-08-03: keep-rate on `teams-for-linux` was 0 of 13 over the preceding 30 days against 92% on single-ask work, with the same model, backend and an unedited template. The rewrite reasons were one pattern: "merged two mutually exclusive asks into one sentence", "compressed four items into one run-on ask", "dropped all substance from the three asks", "fixed wrong conditional chaining of asks". The old scope note told callers to invoke once per ask; they did not, so the cap silently ate the asks. The rule makes multi-ask a first-class shape instead of an unenforced instruction.
-- "NO-FACT-DROP" — same measurement window: "two-sentence cap squeezed out the PR #2424 cross-run dedup fact from stdin; kept only the commitable_code_suggestions fact, losing the strategic link". The cap was being read as licence to discard supplied facts rather than to suppress padding; this states which of the two it is.
+- "NO-FACT-DROP" — same measurement window: "two-sentence cap squeezed out the PR #2424 cross-run dedup fact from stdin; kept only the commitable_code_suggestions fact, losing the strategic link". The cap was being read as licence to discard supplied facts rather than to suppress padding; this states which of the two it is. The "Survive means its anchors" sentence and the "Do NOT copy the facts back" rule were added 2026-09-11 after 26 of 51 rejections in the window said the draft restated the stdin facts as written ("echoed all eleven stdin fact lines verbatim"); `no_context_echo` backstops both.
+- "If an opener is given below, begin with it verbatim" plus "Never write thanks of your own" — the same window had rejections asking for a thanks first, and the flattery rule was being read as a ban on any opener. Mirrors `signoff`: the caller supplies the gratitude verbatim, the model never invents it, and with no opener the cause-or-praise sentence still comes first.
 - "No filler flattery … Specific praise that names the actual contribution is allowed" — generic praise ("Great work!") doubles the reply length for no information and reads as boilerplate; the praise that earns its place names the specific thing the contributor did.
 - "If the ask topic is written as an imperative, rephrase it as a question" — the topic var is the most likely place a caller accidentally hands the model a copyable imperative; the guard makes the model transform it rather than echo it.
 - "Output only the reply text. No preamble" — without it the model prefaces with "Here's the reply:" or wraps in a markdown fence.
@@ -140,7 +150,7 @@ Multi-ask shape (MULTI-ASK-SPLIT), when the ask topic carries more than one dist
 Thanks again!
 ```
 
-Verify before recording verdict: opens with the specific praise or the confirmed cause (not generic filler), the ask is a question addressed to the reader (no echoed imperative), the sign-off (if any) is preserved verbatim, no em dashes, no closing-paraphrase sentence, no preamble or markdown fence. On length: a single-ask reply is at most two sentences; a multi-ask reply is one cause sentence plus one numbered question per ask, and every ask supplied must appear — do NOT record a MISS on a multi-ask reply merely for exceeding two sentences, that is the MULTI-ASK-SPLIT shape working. Do record a MISS if distinct asks were merged into one question, or if a fact supplied on stdin is missing.
+Verify before recording verdict: the opener (if any) is preserved verbatim and is followed by the specific praise or the confirmed cause (not generic filler, and not a stdin line copied as written), the ask is a question addressed to the reader (no echoed imperative), the sign-off (if any) is preserved verbatim, no em dashes, no closing-paraphrase sentence, no preamble or markdown fence. On length: a single-ask reply is at most two sentences; a multi-ask reply is one cause sentence plus one numbered question per ask, and every ask supplied must appear — do NOT record a MISS on a multi-ask reply merely for exceeding two sentences, that is the MULTI-ASK-SPLIT shape working. Do record a MISS if distinct asks were merged into one question, or if a fact supplied on stdin is missing.
 
 ## Calibration notes
 
@@ -276,3 +286,29 @@ under 200 characters — is the status-line shape this recipe is capped for. The
 guess was close enough to leave alone. What it does not license is reusing the
 number elsewhere: the `pr-review-comment` boundary's population has a median of
 312 over n=23, so 600 would route none of it.
+
+### 2026-09-11 — the facts came back as written, and the opener was missing
+
+Measured on live rows from 2026-08-28 to 2026-09-11 (agent verdicts): 51
+rejections here, `self-improve.sh --peek --days 14` at 66% usable with kept=0,
+scaffold=34, rewrote=17. 26 of the 51 reasons said the draft restated the stdin
+facts back ("echoed all eleven stdin fact lines verbatim", "restated every
+supplied fact back as one dense paragraph instead of curating"), the same
+failure `maintainer-review-reply` showed on 37 of its 46 in the same window,
+97 rejections and 63 restatements between them (#475). Rejected output here
+ran p50 372 characters against a context p50 of 1337, so the cap was holding;
+what came back inside it was the input's own lines rather than a sentence
+about them. NO-FACT-DROP had been read as "keep the lines", which is why the
+rule now says what survive means (the anchors, inside your sentence) and a
+rule forbids copying the facts as written. `no_context_echo` is declared so a
+draft that reproduces two or more stdin lines takes the #384 retry with the
+constraint named; a single quoted fact is left alone because this recipe's
+cause sentence legitimately is one fact.
+
+The other half of the same window: reasons asking for a thanks first, on a
+recipe whose only opening rule was the flattery ban. An optional `opener`
+input now takes the caller's own sentence verbatim ahead of the cause, exactly
+as `signoff` takes the closer, and sits outside the two-sentence cap. The
+model still writes no gratitude of its own. Re-measure after roughly ten
+calls; the reason phrases to watch for disappearing are "restated" and "no
+thanks opener".
