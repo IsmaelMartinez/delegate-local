@@ -1924,6 +1924,29 @@ done < <(jq -r 'select(.source=="feedback") | [.reason, .final_file] | join("\u0
 assert_eq 0 "$mismatch" "parallel finals: every row's file holds that writer's own text"
 rm -rf "$tmp"
 
+# A claim that succeeds but a copy that fails is not a collision. The source
+# passed the -f check and then became unreadable (permissions, a file that was
+# a pipe, a disappearing tmp dir); the exclusive redirect had already created
+# the name, so treating "the file exists" as "someone else got there first"
+# advanced the number and created an empty file at every step, without end
+# (PR #479 review). The claim is released, the loop stops, the verdict lands
+# without a final_file and says so.
+adopt_setup
+printf "unreadable after the check" > "$tmp/locked.txt"
+chmod 000 "$tmp/locked.txt"
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  perl -e "alarm 10; exec @ARGV" bash "$SCRIPT" --id dddddddddddddddd --source agent miss "copy fails" --final "$tmp/locked.txt" 2>&1)
+assert_eq 0 "$(ls "$tmp/drafts" | grep -c "aaaa1111\.final")" \
+  "failed copy: no final file is left behind, numbered or bare"
+assert_contains "could not store --final" "$out" \
+  "failed copy: the caller is told the final was not stored"
+assert_eq 1 "$(jq -c "select(.source==\"feedback\")" "$tmp/m.jsonl" | grep -c "")" \
+  "failed copy: the verdict row is still written"
+assert_eq "null" "$(jq -r "select(.source==\"feedback\") | .final_file" "$tmp/m.jsonl")" \
+  "failed copy: the row carries no final_file"
+chmod 600 "$tmp/locked.txt"
+rm -rf "$tmp"
+
 # Adopting a final that an earlier verdict on the same row supplied by hand
 # is not inferring one from a post. The adoption path used to label any
 # existing `<stem>.final.txt` as `final_source:"posted"`; when a feedback row

@@ -446,9 +446,15 @@ if [[ -n "$final_src" ]]; then
   # `>` fail on an existing file at the redirect, before `cat` runs — so stdin
   # is untouched on a failed claim and the next number can be tried. A
   # check-then-truncate allocation let 12 parallel writers on one stem leave
-  # 2 files and 11 rows all naming S.final.txt (PR #479 review). A claim that
-  # fails for a reason other than the file existing (unwritable directory)
-  # ends the loop, and the verdict lands without the field. Same sensitivity
+  # 2 files and 11 rows all naming S.final.txt (PR #479 review). The claim and
+  # the copy are two steps, because they fail for different reasons: a claim
+  # that fails on an existing name means try the next number; a claim that
+  # fails otherwise (unwritable directory) ends the loop; and a copy that
+  # fails after a successful claim (the source passed -f and then became
+  # unreadable) releases the claim and ends the loop — folding the two into
+  # one subshell had the empty claimed file read as a collision, and the loop
+  # created an empty numbered file at every step without end (PR #479 review).
+  # Either way the verdict lands without the field. Same sensitivity
   # as the draft it sits beside, and more of it: this is verbatim what went
   # out, anchors included. 700 on the directory, 600 on the file, written
   # under `umask 077` so there is no permissive window.
@@ -457,10 +463,14 @@ if [[ -n "$final_src" ]]; then
     final_n=1
     while :; do
       if (( final_n == 1 )); then final_name="$final_stem.final.txt"; else final_name="$final_stem.final.$final_n.txt"; fi
-      if [[ "$final_src" == "-" ]]; then
-        ( umask 077; set -C; cat > "$drafts_dir/$final_name" ) 2>/dev/null && { final_file="$final_name"; break; }
-      else
-        ( umask 077; set -C; cat "$final_src" > "$drafts_dir/$final_name" ) 2>/dev/null && { final_file="$final_name"; break; }
+      if ( umask 077; set -C; : > "$drafts_dir/$final_name" ) 2>/dev/null; then
+        if [[ "$final_src" == "-" ]]; then
+          cat > "$drafts_dir/$final_name" 2>/dev/null && final_file="$final_name"
+        else
+          cat "$final_src" > "$drafts_dir/$final_name" 2>/dev/null && final_file="$final_name"
+        fi
+        [[ -n "$final_file" ]] || rm -f "$drafts_dir/$final_name"
+        break
       fi
       [[ -e "$drafts_dir/$final_name" ]] || break
       final_n=$((final_n + 1))
