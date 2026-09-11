@@ -959,7 +959,7 @@ assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge: pri
 # rejections carried the shipped text, and the nudge mentioned neither.
 assert_contains "scaffold" "$stderr_content" "verdict-nudge: names the scaffold verdict"
 assert_contains "--final" "$stderr_content" "verdict-nudge: names --final so the pair gets captured"
-assert_contains "delegate-feedback.sh --source agent --ts " "$stderr_content" "verdict-nudge: names --source agent and --ts"
+assert_contains "delegate-feedback.sh --source agent --id " "$stderr_content" "verdict-nudge: names --source agent and --id"
 assert_contains " hit | scaffold" "$stderr_content" "verdict-nudge: names hit (agent-sourced)"
 assert_contains "miss" "$stderr_content" "verdict-nudge: names miss"
 assert_contains "drop --source" "$stderr_content" "verdict-nudge: names human-default (drop --source)"
@@ -1855,9 +1855,49 @@ else
 fi
 meta_ts=$(grep '^delegate-meta:' "$stderr_file" | grep -oE 'ts="[^"]*"' | cut -d'"' -f2)
 assert_eq "$row_ts" "$meta_ts" "delegate-meta ts: ts field is the metrics row's ts, byte for byte"
-assert_contains "--ts $row_ts " "$(grep 'record verdict' "$stderr_file")" \
-  "verdict-nudge: the copyable command already carries --ts with the row's ts"
+# ts is second-precision and parallel delegations share it, so the pin the
+# nudge hands out is the row's otel_span_id (16 hex, generated on every row
+# whether or not the exporter is on). ts stays on the meta line for humans.
+row_id=$(jq -r '.otel_span_id' "$metrics")
+if [[ "$row_id" =~ ^[0-9a-f]{16}$ ]]; then
+  echo "  PASS  delegate-meta id: the metrics row carries a 16-hex otel_span_id ($row_id)"; pass=$((pass+1))
+else
+  echo "  FAIL  delegate-meta id: metrics row otel_span_id missing or malformed ('$row_id')"; fail=$((fail+1))
+fi
+meta_id=$(grep '^delegate-meta:' "$stderr_file" | grep -oE 'id="[^"]*"' | cut -d'"' -f2)
+assert_eq "$row_id" "$meta_id" "delegate-meta id: id field is the metrics row's otel_span_id, byte for byte"
+assert_contains "--id $row_id " "$(grep 'record verdict' "$stderr_file")" \
+  "verdict-nudge: the copyable command already carries --id with the row's span id"
 rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 19c. A row that could not be appended is not a row. log_metric's append
+# used to fail silently (`>> ... 2>/dev/null || true`) while the meta line
+# and nudge went on naming a ts and id that matched nothing, sending the
+# caller into a --id refusal. A metrics path under a file cannot be created,
+# so the append fails; the call still succeeds, but names no row and does
+# not nudge for a verdict there is nothing to attach to.
+tmp=$(mktemp -d)
+make_mock_curl_ok "$tmp"
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE=/dev/null/metrics.jsonl \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "delegate-meta unwritable: the delegation still succeeds"
+assert_contains "mock-model-output" "$out" "delegate-meta unwritable: model output still on stdout"
+meta_line=$(grep '^delegate-meta:' "$stderr_file")
+assert_contains 'model="' "$meta_line" "delegate-meta unwritable: meta line still printed"
+if [[ "$meta_line" == *' ts="'* || "$meta_line" == *' id="'* ]]; then
+  echo "  FAIL  delegate-meta unwritable: names a row that was never appended"; fail=$((fail+1))
+else
+  echo "  PASS  delegate-meta unwritable: no ts/id when the append failed"; pass=$((pass+1))
+fi
+if grep -q 'record verdict' "$stderr_file"; then
+  echo "  FAIL  delegate-meta unwritable: nudges for a row that was never appended"; fail=$((fail+1))
+else
+  echo "  PASS  delegate-meta unwritable: no verdict nudge when the append failed"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$stderr_file"
 
 # 19b. With metrics off there is no row, so the meta line names no ts: a
 # value that matches nothing would only send the caller to a --ts refusal.

@@ -585,8 +585,15 @@ capture_draft() {
   printf '%s' "$stem.draft.txt"
 }
 
+# Returns 0 only when a row was appended: 1 under DELEGATE_LOCAL_NO_METRICS=1
+# and when the append fails (unwritable path). The append used to be
+# `|| true`, and the meta line and verdict nudge went on naming a ts and id
+# for a row that did not exist, which sends the caller straight into a --id
+# refusal; both are gated on this status now (#474). Failure is still
+# non-fatal for the delegation itself — the model output is on stdout either
+# way.
 log_metric() {
-  [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
+  [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 1
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
     s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}" \
     checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}" checks_failed_names="${22:-}" \
@@ -650,7 +657,7 @@ log_metric() {
      + (if $cnames != "" then {checks_failed_names:($cnames|split(","))} else {} end)
      + (if $draft != "" then {draft_file:$draft} else {} end)
      + (if $retried != "" then {retried:true, retry_chars:($retry_chars|tonumber)} else {} end)' \
-    >> "$metrics_file" 2>/dev/null || true
+    >> "$metrics_file" 2>/dev/null
 }
 
 # OTel ID generation and OTLP/HTTP span emission live in scripts/lib/otel.sh —
@@ -670,7 +677,9 @@ log_metric() {
 # the project from the *hook's* cwd, i.e. the real repo) never matched the row
 # and nudged despite compliance (#342). Explicit flag beats env beats cwd.
 # The flag is exported rather than kept local so delegate_project_name resolves
-# it, and so a delegate-feedback.sh run in the same shell inherits it.
+# it. delegate-feedback.sh does not read it: the verdict copies its project
+# off the delegate row it references (#474), so the value recorded here is
+# the one the verdict carries whatever shell records it.
 [[ -n "$project_override" ]] && export DELEGATE_PROJECT="$project_override"
 delegate_project=$(delegate_project_name)
 
@@ -2317,7 +2326,10 @@ draft_file=""
 if (( status == 0 )); then
   draft_file=$(capture_draft "$output" "$ts_start")
 fi
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}"
+# row_written is what the meta line's ts/id and the verdict nudge are gated
+# on: they name the row this call wrote, so they are only true when one was.
+row_written=false
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}" && row_written=true
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project" "${retry_chars:-}"
 
 # Structured stderr contract — the line SKILL.md teaches the assistant to
@@ -2342,14 +2354,17 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] \
   # Integer fields (tokens_local, duration_ms) stay bare to avoid visual
   # noise on the line.
   meta="model=\"$model\" tier=\"$tier\" backend=\"$backend\" tokens_local=$tokens_local duration_ms=$duration_ms"
-  # ts names the metrics row this call wrote, byte for byte, so the caller can
-  # pin its verdict with `delegate-feedback.sh --ts` (#474). Before it was
-  # shown, the feedback script's refusals said "pass --ts" for a value nobody
-  # had, and every verdict went to whichever delegation was newest — 20
-  # ref_ts carried two or more verdicts within three weeks of the corpus
-  # reset. Omitted with metrics off: there is no row for it to name.
-  if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
-    meta="$meta ts=\"$ts_start\""
+  # ts and id name the metrics row this call wrote, byte for byte (#474). id
+  # is the row's otel_span_id and the pin `delegate-feedback.sh --id` takes:
+  # ts has second precision and parallel delegations share it, so it is kept
+  # for humans skimming the line, not as the key. Before either was shown,
+  # the feedback script's refusals said "pass --ts" for a value nobody had,
+  # and every verdict went to whichever delegation was newest — 20 ref_ts
+  # carried two or more verdicts within three weeks of the corpus reset.
+  # Omitted when no row was written (metrics off, or the append failed):
+  # there is no row for them to name.
+  if [[ "$row_written" == "true" ]]; then
+    meta="$meta ts=\"$ts_start\" id=\"$otel_span_id\""
   fi
   if [[ -n "$recipe" ]]; then
     meta="$meta recipe=\"$recipe\""
@@ -2373,15 +2388,16 @@ fi
 # — proved higher than the cost of an extra stderr line in CI logs. Lifetime
 # coverage was 47.8% under the TTY-gate approach; removing the gate is the
 # fix for issue #149. The three escape hatches stay: NO_VERDICT_NUDGE (opt
-# out per call), NO_METRICS (no metrics row → nothing to verdict against),
-# and non-zero exit (failed calls have no model output to judge). Issue #139
+# out per call), no row written (NO_METRICS, or the append failed → nothing
+# to verdict against), and non-zero exit (failed calls have no model output
+# to judge). Issue #139
 # (parallel-capture callers contaminating stdout via 2>&1) is addressed
 # without re-introducing the coverage-losing gate by routing the nudge to a
 # caller-chosen file descriptor via DELEGATE_LOCAL_VERDICT_NUDGE_FD=N
 # (default 2 = back-compat); the caller-side recipe is to redirect fd N
 # alongside the 2>&1 capture so coverage tracking stays intact while stdout
 # stays clean.
-if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] \
+if [[ "$row_written" == "true" ]] \
    && [[ "${DELEGATE_LOCAL_NO_VERDICT_NUDGE:-}" != "1" ]] \
    && (( status == 0 )); then
   # nudge_fd was validated up-front (see "Validate the verdict-nudge FD"
@@ -2404,12 +2420,13 @@ if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] \
   # same reason — a draft you edited and shipped is not a miss, and recording
   # it as one both understates quality and fires the recurrence nudge on a
   # non-defect.
-  # The command carries `--ts` with this call's row ts already filled in
-  # (#474). Without it the verdict attaches to whichever delegate row is
-  # newest, which with parallel sessions is routinely someone else's; the
-  # feedback script now refuses that lookup when more than one row is fresh,
-  # so a caller who copies this line never hits the refusal.
-  nudge_msg="delegate: record verdict → bash scripts/delegate-feedback.sh --source agent --ts $ts_start hit | scaffold \"<reason>\" | miss \"<reason>\"
+  # The command carries `--id` with this call's row otel_span_id already
+  # filled in (#474). Without a pin the verdict attaches to whichever
+  # delegate row is newest, which with parallel sessions is routinely someone
+  # else's; the feedback script now refuses that lookup when more than one
+  # row is fresh, so a caller who copies this line never hits the refusal.
+  # The id, not the ts: ts is second-precision and siblings share it.
+  nudge_msg="delegate: record verdict → bash scripts/delegate-feedback.sh --source agent --id $otel_span_id hit | scaffold \"<reason>\" | miss \"<reason>\"
 delegate:   on scaffold/miss also pass --final <path|-> naming what you shipped instead. The draft is already saved; the pair is what calibrates the recipe.
 delegate:   scaffold = you edited it and shipped it, miss = you threw it away; drop --source if you are a human recording a taste judgment"
   if (( nudge_fd == 2 )); then
