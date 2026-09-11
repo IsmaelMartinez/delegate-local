@@ -52,10 +52,10 @@ delegate_project_name() {
   local common common_dir toplevel
   # An explicit DELEGATE_PROJECT wins over any derivation: the cwd is only the
   # right answer when the script runs inside the repo the delegation is FOR
-  # (#342). Honouring it here rather than in delegate.sh alone means
-  # delegate-feedback.sh attributes the verdict to the same project as the
-  # delegate row it references, which docs/otel-schema.md states as an
-  # invariant and the calibration dashboard's $project filter relies on.
+  # (#342). delegate-feedback.sh does not call this at all: the verdict
+  # copies its project off the delegate row it references (#474), which is
+  # what makes the docs/otel-schema.md invariant — verdict and row on the
+  # same project — hold from whatever directory the verdict is recorded in.
   if [[ -n "${DELEGATE_PROJECT:-}" ]]; then
     printf '%s\n' "${DELEGATE_PROJECT}"
     return 0

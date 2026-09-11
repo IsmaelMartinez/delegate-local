@@ -334,6 +334,32 @@ assert_contains "trimmed it" "$out" \
   "the unlabelled row still shows its reason"
 rm -rf "$tmp"
 
+# ---------------------------------------------------------------------------
+# A numbered final (`<stem>.final.2.txt`, written when the stem already had
+# one — #474) still pairs with its own draft by name. Two delegations share
+# the second here, so the INDEX(.ts) fallback would hand back the OTHER
+# delegation's draft; only the final's own name says which draft it belongs
+# to.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+nt=$(iso_ago 600)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$nt","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","exit_status":0,"draft_file":"N1.draft.txt"}
+{"ts":"$nt","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","exit_status":0,"draft_file":"N2.draft.txt"}
+{"ts":"$(iso_ago 590)","source":"feedback","ref_ts":"$nt","kept":false,"reason":"second verdict on the stem","verdict_source":"agent","final_file":"N1.final.2.txt"}
+EOF
+printf 'the commit draft\n' > "$tmp/drafts/N1.draft.txt"
+printf 'the reply draft\n' > "$tmp/drafts/N2.draft.txt"
+printf 'the commit that shipped\n' > "$tmp/drafts/N1.final.2.txt"
+out=$(bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_contains "draft:  $tmp/drafts/N1.draft.txt" "$out" \
+  "a numbered final pairs with the draft its own name points at"
+assert_not_contains "N2.draft.txt" "$out" \
+  "a numbered final does not fall back to the other delegation sharing the second"
+assert_contains "final:  $tmp/drafts/N1.final.2.txt" "$out" \
+  "the numbered final itself is read"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

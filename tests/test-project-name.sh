@@ -99,8 +99,8 @@ assert_eq 0 "$?" "T4e: returning no project is exit status 0"
 # T5: an explicit DELEGATE_PROJECT wins over every derivation. The cwd answer
 # is only right when the script runs inside the repo the delegation is FOR, so
 # delegating on behalf of repo X from the skill checkout has to be statable
-# (#342). Resolving it here rather than in delegate.sh alone is what keeps
-# delegate-feedback.sh's verdict row on the same project as the delegate row.
+# (#342). The verdict row does not go through this: delegate-feedback.sh
+# copies the project off the delegate row it references (#474).
 assert_eq "teams-for-linux" "$(cd "$repo" && DELEGATE_PROJECT=teams-for-linux delegate_project_name)" \
   "T5: DELEGATE_PROJECT overrides the repo derivation"
 assert_eq "teams-for-linux" "$(cd "$outside" && DELEGATE_PROJECT=teams-for-linux delegate_project_name)" \

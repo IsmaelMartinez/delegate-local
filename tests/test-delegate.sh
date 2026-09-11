@@ -959,7 +959,8 @@ assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge: pri
 # rejections carried the shipped text, and the nudge mentioned neither.
 assert_contains "scaffold" "$stderr_content" "verdict-nudge: names the scaffold verdict"
 assert_contains "--final" "$stderr_content" "verdict-nudge: names --final so the pair gets captured"
-assert_contains "delegate-feedback.sh --source agent hit" "$stderr_content" "verdict-nudge: names hit (agent-sourced)"
+assert_contains "delegate-feedback.sh --source agent --ts " "$stderr_content" "verdict-nudge: names --source agent and --ts"
+assert_contains " hit | scaffold" "$stderr_content" "verdict-nudge: names hit (agent-sourced)"
 assert_contains "miss" "$stderr_content" "verdict-nudge: names miss"
 assert_contains "drop --source" "$stderr_content" "verdict-nudge: names human-default (drop --source)"
 # Nudge stays on stderr — stdout should hold only the model output, so
@@ -1830,6 +1831,50 @@ else
   fail=$((fail+1))
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 19a. The meta line names the row it wrote, and the nudge hands that ts back
+# as the --ts argument (#474). Until then the staleness refusal in
+# delegate-feedback.sh told the caller to "pass --ts" for a value the caller
+# had never been shown, so nobody did, and every verdict landed on whichever
+# delegation was newest: 20 ref_ts carried two or more verdicts within three
+# weeks of the corpus reset. The value has to be the row's ts byte for byte —
+# a reformatted or re-read clock would match no row and send the caller
+# straight into the --ts refusal.
+tmp=$(mktemp -d)
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>"$stderr_file"
+row_ts=$(jq -r '.ts' "$metrics")
+if [[ "$row_ts" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+  echo "  PASS  delegate-meta ts: the metrics row carries an ISO 8601 ts ($row_ts)"; pass=$((pass+1))
+else
+  echo "  FAIL  delegate-meta ts: metrics row ts missing or malformed ('$row_ts')"; fail=$((fail+1))
+fi
+meta_ts=$(grep '^delegate-meta:' "$stderr_file" | grep -oE 'ts="[^"]*"' | cut -d'"' -f2)
+assert_eq "$row_ts" "$meta_ts" "delegate-meta ts: ts field is the metrics row's ts, byte for byte"
+assert_contains "--ts $row_ts " "$(grep 'record verdict' "$stderr_file")" \
+  "verdict-nudge: the copyable command already carries --ts with the row's ts"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 19b. With metrics off there is no row, so the meta line names no ts: a
+# value that matches nothing would only send the caller to a --ts refusal.
+tmp=$(mktemp -d)
+make_mock_curl_ok "$tmp"
+stderr_file=$(mktemp)
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_LOCAL_NO_METRICS=1 \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>"$stderr_file"
+meta_line=$(grep '^delegate-meta:' "$stderr_file")
+assert_contains 'model="' "$meta_line" "delegate-meta ts: meta line still printed with metrics off"
+if [[ "$meta_line" == *' ts="'* ]]; then
+  echo "  FAIL  delegate-meta ts: names a ts although no row was written"; fail=$((fail+1))
+else
+  echo "  PASS  delegate-meta ts: no ts field when no row was written"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$stderr_file"
 
 # 20. DELEGATE_LOCAL_NO_META=1 silences the meta line but the rest of
 # the delegation still runs (metrics row written, model output on stdout,

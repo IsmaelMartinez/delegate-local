@@ -16,8 +16,11 @@
 #   DELEGATE_METRICS_FILE                 override default metrics path
 #   DELEGATE_FEEDBACK_STALE_SECONDS       max age of the implicit "most recent
 #                                         delegate row" before this script
-#                                         refuses to attach without --ts
-#                                         (default 300; set 0 to disable).
+#                                         refuses to attach without --ts, and
+#                                         the window inside which a second
+#                                         delegate row makes that lookup
+#                                         ambiguous and refused (#474)
+#                                         (default 300; set 0 to disable both).
 #   DELEGATE_FEEDBACK_NO_NUDGE            set to 1 to silence the trigger-on-
 #                                         MISS recurrence nudge.
 #   DELEGATE_FEEDBACK_NUDGE_AT            minimum total similar MISSes (this
@@ -97,10 +100,15 @@ usage: delegate-feedback.sh [--ts <iso8601>] [--source human|agent]
   the final result). scaffold is recorded distinct from both and never fires the
   MISS-recurrence nudge.
   Without --ts, the verdict attaches to the most recent delegate row in
-  the metrics JSONL — but only if that row is fresh (default 300 s).
-  Pass --ts to pin the verdict to a specific delegate row when metrics
-  were off, or the delegation was killed before its row was written, or
-  enough time has passed that the most recent row is no longer "yours".
+  the metrics JSONL — but only if that row is fresh (default 300 s) and
+  no other delegate row is inside that window; with parallel sessions
+  "most recent" is routinely someone else's, so two fresh rows refuse and
+  list the candidates. delegate.sh prints the row ts on its delegate-meta
+  line (ts="...") and in the verdict nudge: pass --ts <that value> to pin
+  the verdict to the row it is about. --ts is also the way in when
+  metrics were off, or the delegation was killed before its row was
+  written, or enough time has passed that the most recent row is stale.
+  The verdict's project is copied from the row it references.
   --source records the verdict tier: human (default, a maintainer taste
   judgment) or agent (the agent's record of whether it used its own
   delegated output). Reporting keeps the two tiers separate.
@@ -292,17 +300,6 @@ if [[ -n "$override_ts" ]]; then
     exit 1
   fi
   ref_ts="$override_ts"
-  # Capture model + trace/span IDs + recipe from the pinned delegate row so
-  # the OTel feedback span (Phase 11 Track A) can name the parent and
-  # carry delegate.recipe (#187). Empty fields are tolerated — the parent
-  # IDs and recipe are absent when the row pre-dates the exporter
-  # (Track E #157 backfills the IDs later) or when the delegation was a
-  # bare-tier call without --recipe.
-  parent_meta=$(jq -r --arg ts "$override_ts" \
-    'select((.source // "delegate") == "delegate" and .ts == $ts)
-     | [(.otel_trace_id // ""), (.otel_span_id // ""), (.model // ""), (.recipe // "")]
-     | @tsv' \
-    "$metrics_file" | head -n 1)
 else
   # Find the most recent delegate event ts. Stream the JSONL through jq
   # (no `-s` slurp) and pipe the matching ts column through `tail -n 1`.
@@ -313,25 +310,40 @@ else
     echo "no recent delegate event found in $metrics_file" >&2
     exit 1
   fi
-  # Look up the matched delegate row's trace/span IDs, model, and recipe
-  # for the OTel feedback-as-linked-span (Phase 11 Track A) plus the
-  # delegate.recipe attribute (#187). Rows that pre-date the exporter
-  # return empty strings for the IDs; the OTel emission code path treats
-  # empty parent IDs as "no link" and still emits the feedback span
-  # (Track E #157 backfills the parent IDs later). Bare-tier delegations
-  # return empty recipe and the attribute is omitted from the payload.
-  parent_meta=$(jq -r --arg ts "$ref_ts" \
-    'select((.source // "delegate") == "delegate" and .ts == $ts)
-     | [(.otel_trace_id // ""), (.otel_span_id // ""), (.model // ""), (.recipe // "")]
-     | @tsv' \
-    "$metrics_file" | tail -n 1)
   # Stale-window check: refuse to silently attach to a row that almost
   # certainly isn't the delegation the caller meant. The 5-minute default
   # bounds "I just delegated" without forcing tight clock discipline; set
   # DELEGATE_FEEDBACK_STALE_SECONDS=0 to disable for back-compat scripts.
   if [[ "$stale_seconds" -gt 0 ]]; then
-    ref_epoch=$(iso_to_epoch "$ref_ts" 2>/dev/null || true)
     now_epoch=$(perl -e 'print time')
+    # The window bounds age; it cannot tell siblings apart. Measured
+    # 2026-09-11 (#474): the pr-agent sweeps and the parallel background jobs
+    # delegate seconds apart from different sessions, and whichever session
+    # recorded next hit whatever row was newest — one ref_ts carried four
+    # verdicts from four different drafts within 12 seconds while its five
+    # siblings stayed untracked, and 59 of 254 feedback rows named a project
+    # other than the row they reference. More than one delegate row inside
+    # the window is therefore an ambiguity, not a choice: list them and make
+    # the caller pin. Every delegate-meta line and verdict nudge now carries
+    # the row ts, so a caller who copies the nudge never lands here. The
+    # cutoff is resolved in jq (fromdateiso8601) as metrics-summary.sh does,
+    # so there is no BSD-vs-GNU `date` split.
+    candidates=$(jq -r --argjson cutoff "$((now_epoch - stale_seconds))" \
+      'select((.source // "delegate") == "delegate")
+       | select(((.ts // "") | fromdateiso8601?) >= $cutoff)
+       | [.ts, (.recipe // "(bare)"), (.project // "-")] | @tsv' \
+      "$metrics_file")
+    n_candidates=$(printf '%s' "$candidates" | grep -c '')
+    if (( n_candidates > 1 )); then
+      cat >&2 <<MSG
+delegate-feedback: $n_candidates delegate rows are within the last ${stale_seconds}s, so
+  "the most recent one" is ambiguous. Pass --ts <iso8601> naming the one this
+  verdict is about (delegate-meta prints it as ts="..."):
+MSG
+      printf '%s\n' "$candidates" | awk -F'\t' '{ printf "    %s  %s  %s\n", $1, $2, $3 }' >&2
+      exit 1
+    fi
+    ref_epoch=$(iso_to_epoch "$ref_ts" 2>/dev/null || true)
     if [[ -n "$ref_epoch" ]] && (( now_epoch - ref_epoch > stale_seconds )); then
       age=$(( now_epoch - ref_epoch ))
       cat >&2 <<MSG
@@ -343,6 +355,32 @@ MSG
       exit 1
     fi
   fi
+fi
+
+# Read the referenced row's trace/span IDs, model, recipe and project once,
+# whichever way ref_ts was chosen. The IDs let the OTel feedback span (Phase
+# 11 Track A) link its parent; recipe rides along as delegate.recipe (#187);
+# project is copied onto the feedback row and span (#474) — it used to be
+# re-derived from the cwd at verdict time, which is how 59 of 254 verdicts
+# came to name a project other than the row they judge. Empty fields are
+# tolerated: the IDs are absent on rows that pre-date the exporter (Track E
+# #157 backfills them), recipe on bare-tier calls, project outside a repo.
+# The separator is US (\037), not a tab: tab is IFS whitespace to bash, so
+# `read` collapses a run of them and an empty recipe would shift project
+# into parent_recipe. `tail -n 1` matches the draft lookup below, so every
+# field comes off the same row when several share a second.
+parent_meta=$(jq -r --arg ts "$ref_ts" \
+  'select((.source // "delegate") == "delegate" and .ts == $ts)
+   | [(.otel_trace_id // ""), (.otel_span_id // ""), (.model // ""), (.recipe // ""), (.project // "")]
+   | join("\u001f")' \
+  "$metrics_file" | tail -n 1)
+parent_trace_id=""
+parent_span_id=""
+parent_model=""
+parent_recipe=""
+feedback_project=""
+if [[ -n "${parent_meta:-}" ]]; then
+  IFS=$'\037' read -r parent_trace_id parent_span_id parent_model parent_recipe feedback_project <<< "$parent_meta"
 fi
 
 ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -388,17 +426,37 @@ if [[ -n "$final_src" ]]; then
   else
     final_stem="$(printf '%s' "$ref_ts" | tr -d ':-')-nodraft"
   fi
+  # Never overwrite a final that is already there (#474). A second final on
+  # the same stem is either the boundary hook's capture (which an explicit
+  # --final outranks but must not destroy) or a second verdict on the row —
+  # and on 2026-09-11 that second verdict was another session's, so a
+  # commit-message draft was left paired with a D-Bus badge reply as its
+  # "shipped" half and the real commit message was gone. Each further final
+  # takes the next free number and the row names the file it actually wrote,
+  # so a pair is always one delegation's; self-improve.sh maps
+  # `<stem>.final.N.txt` back to `<stem>.draft.txt` the same way as the bare
+  # name. The existing file is worth a line on stderr because it usually
+  # means this is not the delegation the caller thinks it is.
+  final_name="$final_stem.final.txt"
+  final_n=2
+  while [[ -e "$drafts_dir/$final_name" ]]; do
+    final_name="$final_stem.final.$final_n.txt"
+    final_n=$((final_n + 1))
+  done
+  if [[ "$final_name" != "$final_stem.final.txt" ]]; then
+    echo "delegate-feedback: $final_stem.final.txt already exists (a final was already stored against ts=$ref_ts); storing this one as $final_name" >&2
+  fi
   if mkdir -p "$drafts_dir" 2>/dev/null; then
     # Same sensitivity as the draft it sits beside, and more of it: this is
     # verbatim what went out, anchors included. 700 on the directory, 600 on
     # the file, written under `umask 077` so there is no permissive window.
     chmod 700 "$drafts_dir" 2>/dev/null || true
     if [[ "$final_src" == "-" ]]; then
-      if ( umask 077; cat > "$drafts_dir/$final_stem.final.txt" ) 2>/dev/null; then
-        final_file="$final_stem.final.txt"
+      if ( umask 077; cat > "$drafts_dir/$final_name" ) 2>/dev/null; then
+        final_file="$final_name"
       fi
-    elif ( umask 077; cat "$final_src" > "$drafts_dir/$final_stem.final.txt" ) 2>/dev/null; then
-      final_file="$final_stem.final.txt"
+    elif ( umask 077; cat "$final_src" > "$drafts_dir/$final_name" ) 2>/dev/null; then
+      final_file="$final_name"
     fi
     [[ -n "$final_file" ]] && chmod 600 "$drafts_dir/$final_file" 2>/dev/null
   fi
@@ -413,18 +471,15 @@ elif [[ -n "$parent_draft" ]]; then
   # is posted inline and never reaches a file the caller could name — before it
   # existed, `maintainer-reply` had 32 rejections and not one captured pair.
   #
-  # An explicit --final is handled above and always wins. `final_source` marks
-  # which of the two produced the file, so a pair inferred from a post is never
-  # mistaken for one the caller vouched for.
+  # An explicit --final is handled above and always wins (it is stored beside
+  # this file, never over it). `final_source` marks which of the two produced
+  # the file, so a pair inferred from a post is never mistaken for one the
+  # caller vouched for.
   if [[ -f "$drafts_dir/${parent_draft%.draft.txt}.final.txt" ]]; then
     final_file="${parent_draft%.draft.txt}.final.txt"
     final_source="posted"
   fi
 fi
-# Main repo basename, even inside a git worktree (delegate_project_name from
-# lib/otel.sh, sourced above) — so a verdict recorded in a worktree attributes
-# to the same repo as the delegation it scores.
-feedback_project=$(delegate_project_name)
 
 # Build the feedback row in one jq call. Each optional field is appended only
 # when present, so an empty `reason` is omitted (no empty-string entries to
@@ -432,7 +487,10 @@ feedback_project=$(delegate_project_name)
 # `verdict_source` is written only for the "agent" tier — a human verdict
 # (default) omits the field, so it is indistinguishable from the legacy rows
 # written before this tier existed, and the reporting partition maps both to
-# human. Only the agent tier carries the marker.
+# human. Only the agent tier carries the marker. `project` is the referenced
+# row's (read with parent_meta above), never the cwd's: DELEGATE_PROJECT is
+# not consulted here, because the verdict has to land where the delegation
+# did whatever shell it is recorded from.
 jq -nc --arg ts "$ts" --arg ref "$ref_ts" --argjson kept "$kept" --argjson scaffold "$is_scaffold" --arg reason "${reason:-}" --arg project "$feedback_project" --arg vsource "$verdict_source" --arg final "$final_file" --arg finalsrc "$final_source" \
   '{ts:$ts, source:"feedback", ref_ts:$ref, kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + (if $reason != "" then {reason:$reason} else {} end) + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end) + (if $final != "" then {final_file:$final} else {} end) + (if $finalsrc != "" then {final_source:$finalsrc} else {} end)' \
   >> "$metrics_file"
@@ -443,21 +501,14 @@ case "$verdict" in
   scaffold) verdict_word="SCAFFOLD" ;;
 esac
 
-# Emit OTel feedback-as-linked-span (Phase 11 Track A #134). The split
-# variables come from the parent_meta TSV captured during the ref_ts lookup
-# above. Empty fields are tolerated — emit_otel_feedback_span omits the
-# `links` array when the parent IDs are unknown (row pre-dates the exporter)
-# and omits delegate.recipe (#187) when the parent was a bare-tier call.
-# delegate.project is the basename of the repo the verdict was recorded in
-# (same derivation as delegate.sh), so per-project calibration dashboards can
-# scope feedback spans the same way they scope delegation spans.
-parent_trace_id=""
-parent_span_id=""
-parent_model=""
-parent_recipe=""
-if [[ -n "${parent_meta:-}" ]]; then
-  IFS=$'\t' read -r parent_trace_id parent_span_id parent_model parent_recipe <<< "$parent_meta"
-fi
+# Emit OTel feedback-as-linked-span (Phase 11 Track A #134). The parent
+# fields were read off the referenced row after the ref_ts lookup above.
+# Empty fields are tolerated — emit_otel_feedback_span omits the `links`
+# array when the parent IDs are unknown (row pre-dates the exporter) and
+# omits delegate.recipe (#187) when the parent was a bare-tier call.
+# delegate.project is the referenced row's project, the same value the JSONL
+# row above carries, so per-project calibration dashboards can scope feedback
+# spans the same way they scope delegation spans.
 # $verdict is already the lowercase wire form (hit|miss|scaffold); the OTel
 # span carries it verbatim as the delegate.feedback.verdict attribute.
 emit_otel_feedback_span "$ts" "$verdict" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model" "$parent_recipe" "$feedback_project" "$verdict_source"

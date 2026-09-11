@@ -2342,6 +2342,15 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] \
   # Integer fields (tokens_local, duration_ms) stay bare to avoid visual
   # noise on the line.
   meta="model=\"$model\" tier=\"$tier\" backend=\"$backend\" tokens_local=$tokens_local duration_ms=$duration_ms"
+  # ts names the metrics row this call wrote, byte for byte, so the caller can
+  # pin its verdict with `delegate-feedback.sh --ts` (#474). Before it was
+  # shown, the feedback script's refusals said "pass --ts" for a value nobody
+  # had, and every verdict went to whichever delegation was newest — 20
+  # ref_ts carried two or more verdicts within three weeks of the corpus
+  # reset. Omitted with metrics off: there is no row for it to name.
+  if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
+    meta="$meta ts=\"$ts_start\""
+  fi
   if [[ -n "$recipe" ]]; then
     meta="$meta recipe=\"$recipe\""
   fi
@@ -2395,9 +2404,14 @@ if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] \
   # same reason — a draft you edited and shipped is not a miss, and recording
   # it as one both understates quality and fires the recurrence nudge on a
   # non-defect.
-  nudge_msg='delegate: record verdict → bash scripts/delegate-feedback.sh --source agent hit | scaffold "<reason>" | miss "<reason>"
+  # The command carries `--ts` with this call's row ts already filled in
+  # (#474). Without it the verdict attaches to whichever delegate row is
+  # newest, which with parallel sessions is routinely someone else's; the
+  # feedback script now refuses that lookup when more than one row is fresh,
+  # so a caller who copies this line never hits the refusal.
+  nudge_msg="delegate: record verdict → bash scripts/delegate-feedback.sh --source agent --ts $ts_start hit | scaffold \"<reason>\" | miss \"<reason>\"
 delegate:   on scaffold/miss also pass --final <path|-> naming what you shipped instead. The draft is already saved; the pair is what calibrates the recipe.
-delegate:   scaffold = you edited it and shipped it, miss = you threw it away; drop --source if you are a human recording a taste judgment'
+delegate:   scaffold = you edited it and shipped it, miss = you threw it away; drop --source if you are a human recording a taste judgment"
   if (( nudge_fd == 2 )); then
     echo "$nudge_msg" >&2
   else
