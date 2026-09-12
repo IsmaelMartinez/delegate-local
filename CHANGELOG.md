@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.33.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.32.0...v0.33.0) (2026-09-12)
+
+
+### Features
+
+* add no_context_echo check and caller-supplied opener input ([#478](https://github.com/IsmaelMartinez/delegate-local/issues/478)) ([6235869](https://github.com/IsmaelMartinez/delegate-local/commit/62358695c5a082e3ab94b2d9750c0acaf445a78b))
+
+
+### Bug Fixes
+
+* omit project field when session cwd is outside a git repository ([#477](https://github.com/IsmaelMartinez/delegate-local/issues/477)) ([5a921c0](https://github.com/IsmaelMartinez/delegate-local/commit/5a921c04443180921732d4582778d2961bc23f2d))
+* pin every verdict to the delegate row it judges ([#479](https://github.com/IsmaelMartinez/delegate-local/issues/479)) ([b2ca720](https://github.com/IsmaelMartinez/delegate-local/commit/b2ca720071882f2e44eea839057ee4020a9a3c0b))
+
+
+### Documentation
+
+* approve the held release run instead of merging with --admin ([#467](https://github.com/IsmaelMartinez/delegate-local/issues/467)) ([8109fa6](https://github.com/IsmaelMartinez/delegate-local/commit/8109fa6dfa49fe2bd63c28e49ab0bd3e0856dab0))
+
 ## [0.32.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.31.0...v0.32.0) (2026-08-28)
 
 
