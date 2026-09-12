@@ -657,7 +657,10 @@ fi
 # Store it beside the draft under the draft's own stem, so the two halves are
 # guaranteed to belong together, and let `delegate-feedback.sh` adopt it when
 # the caller passed no `--final`. An existing file is never overwritten: a
-# hand-supplied final outranks an inferred one.
+# hand-supplied final outranks an inferred one. The `-e` check is only the
+# cheap way to skip parsing the body; the guarantee is the `set -C` on the
+# write, which makes the redirect itself fail if a feedback call claimed the
+# bare name between the check and the write (PR #479 review).
 #
 # The capture is PRE-post, so a post that then fails leaves a final for text
 # that never shipped. The verdict is recorded by whoever ran the command and
@@ -669,7 +672,7 @@ if [[ "$delegated" == "true" && -n "${credit_draft:-}" \
   if [[ ! -e "$final_path" ]] && body_text=$(posted_body_text "$cmd"); then
     if mkdir -p "$drafts_dir" 2>/dev/null; then
       chmod 700 "$drafts_dir" 2>/dev/null || true
-      ( umask 077; printf '%s' "$body_text" > "$final_path" ) 2>/dev/null || true
+      ( umask 077; set -C; printf '%s' "$body_text" > "$final_path" ) 2>/dev/null || true
       [[ -f "$final_path" ]] && chmod 600 "$final_path" 2>/dev/null
     fi
   fi

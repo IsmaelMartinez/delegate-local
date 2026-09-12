@@ -24,25 +24,31 @@ assert_contains() {
 }
 
 # Seed a metrics JSONL with two delegate calls and one experiment call.
-# Timestamps are derived from `date` so the rows are within the default
+# Timestamps are derived from `date` so the latest row is within the default
 # stale window (300 s) — the existing assertions about ref_ts equality
 # need stable values, so we capture them in TS_OLDEST / TS_LATEST.
 TS_OLDEST=""
 TS_LATEST=""
 seed_metrics() {
   local file="$1"
-  # Two fresh timestamps 2 min apart — both inside the default 300 s
-  # stale window, yet distinct so "picks latest delegate" assertions are
-  # meaningful. Generated via perl so the format is consistent across BSD
-  # and GNU date.
-  TS_OLDEST=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-120))')
+  # One stale and one fresh timestamp: the oldest sits outside the default
+  # 300 s window so the implicit lookup sees exactly one candidate (two fresh
+  # rows are an ambiguity and refuse since #474), while the "picks latest
+  # delegate" assertions still have a distinct older row to be wrong about.
+  # Generated via perl so the format is consistent across BSD and GNU date.
+  # The fresh row carries a project so the verdict's copy of it is checkable,
+  # and both rows carry the otel_span_id every real row has (ID_OLDEST /
+  # ID_LATEST), the key --id pins by.
+  TS_OLDEST=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-400))')
   TS_LATEST=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   cat > "$file" <<EOF
-{"ts":"$TS_OLDEST","source":"delegate","tier":"prose","model":"q","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
+{"ts":"$TS_OLDEST","source":"delegate","tier":"prose","model":"q","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_span_id":"$ID_OLDEST"}
 {"ts":"$TS_OLDEST","source":"experiment","session":"foo","model":"q","duration_ms":1000,"exit_status":0,"estimated_tokens_avoided":10}
-{"ts":"$TS_LATEST","source":"delegate","tier":"reasoning","model":"d","duration_ms":7000,"exit_status":0,"estimated_tokens_avoided":60}
+{"ts":"$TS_LATEST","source":"delegate","tier":"reasoning","model":"d","project":"seed-project","duration_ms":7000,"exit_status":0,"estimated_tokens_avoided":60,"otel_span_id":"$ID_LATEST"}
 EOF
 }
+ID_OLDEST="0000000000000001"
+ID_LATEST="0000000000000002"
 
 # 1. usage: no args -> exit 2.
 EC=0
@@ -87,8 +93,30 @@ last=$(tail -1 "$tmp/m.jsonl")
 assert_contains '"source":"feedback"' "$last" "hit: source field"
 assert_contains '"kept":true' "$last" "hit: kept=true"
 assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "hit: ref_ts is latest delegate"
-assert_contains '"project":"' "$last" "hit: project field present"
+assert_contains '"project":"seed-project"' "$last" "hit: project is copied from the referenced delegate row"
 [[ "$last" == *'"reason"'* ]] && { fail=$((fail+1)); echo "  FAIL  hit (no reason): reason field absent"; } || { pass=$((pass+1)); echo "  PASS  hit (no reason): reason field absent"; }
+rm -rf "$tmp"
+
+# 5b. The project is the referenced row's, never re-derived from the cwd at
+# verdict time (#474): 59 of 254 feedback rows since the corpus reset named a
+# project that differed from the row they reference, because the verdict was
+# recorded from a different repo than the delegation. A row with no project
+# yields a verdict with no project — there is nothing to copy.
+tmp=$(mktemp -d)
+T_FRESH=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0}\n' "$T_FRESH" > "$tmp/m.jsonl"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit >/dev/null 2>&1
+assert_eq "false" "$(tail -1 "$tmp/m.jsonl" | jq -r 'has("project")')" \
+  "project: a referenced row with no project yields a verdict with no project"
+rm -rf "$tmp"
+
+# 5c. DELEGATE_PROJECT in the recording shell does not override the copy. It
+# used to win (delegate_project_name checks it first), which is exactly how a
+# verdict ended up filed under the recorder's repo rather than the row's.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_PROJECT=other-repo bash "$SCRIPT" hit >/dev/null 2>&1
+assert_eq "seed-project" "$(tail -1 "$tmp/m.jsonl" | jq -r '.project // ""')" \
+  "project: DELEGATE_PROJECT in the recording shell does not override the row's project"
 rm -rf "$tmp"
 
 # 6. miss with reason: kept=false and reason field present.
@@ -102,18 +130,158 @@ assert_contains '"reason":"bullets when prose was wanted"' "$last" "miss: reason
 assert_contains "MISS recorded" "$out" "miss: stdout reports MISS"
 rm -rf "$tmp"
 
-# 7. ref_ts picks the LATEST delegate event when multiple exist.
+# 7. ref_ts picks the one delegate row inside the stale window; an older
+# delegate row outside it is not a candidate and does not make the lookup
+# ambiguous.
 tmp=$(mktemp -d)
-T_EARLY=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-200))')
+T_EARLY=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-400))')
 T_LATE=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-10))')
 cat > "$tmp/m.jsonl" <<EOF
 {"ts":"$T_EARLY","source":"delegate","tier":"prose","model":"q","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
 {"ts":"$T_EARLY","source":"experiment","session":"foo","model":"q","duration_ms":1000,"exit_status":0,"estimated_tokens_avoided":10}
 {"ts":"$T_LATE","source":"delegate","tier":"long-context","model":"q","duration_ms":9000,"exit_status":0,"estimated_tokens_avoided":80}
 EOF
-DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit >/dev/null
+EC=0
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit >/dev/null 2>&1 || EC=$?
+assert_eq 0 "$EC" "ref_ts: one fresh candidate plus a stale row -> exit 0"
 last=$(tail -1 "$tmp/m.jsonl")
-assert_contains "\"ref_ts\":\"$T_LATE\"" "$last" "ref_ts: picks latest delegate, not earliest"
+assert_contains "\"ref_ts\":\"$T_LATE\"" "$last" "ref_ts: picks the fresh delegate, not the stale one"
+rm -rf "$tmp"
+
+# 7b. Two delegate rows inside the window is an ambiguity, not a choice
+# (#474). "Most recent" cannot tell sibling delegations apart: the pr-agent
+# sweeps and the parallel background jobs delegate seconds apart from
+# different sessions, and whichever session recorded next hit whatever row
+# was newest — one ref_ts carried four verdicts from four different drafts
+# within 12 seconds while its five siblings stayed untracked. The refusal
+# lists every candidate as `ts  recipe  project` so the caller can pin.
+tmp=$(mktemp -d)
+T_A=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-40))')
+T_B=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-10))')
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$T_A","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"repo-butler","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_span_id":"aaaaaaaaaaaaaaa1"}
+{"ts":"$T_B","source":"delegate","tier":"prose","model":"q","duration_ms":9000,"exit_status":0,"estimated_tokens_avoided":80,"otel_span_id":"aaaaaaaaaaaaaaa2"}
+EOF
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit 2>&1) || EC=$?
+assert_eq 1 "$EC" "ambiguous window: exit 1 when two delegate rows are inside the window"
+assert_contains "aaaaaaaaaaaaaaa1  $T_A  commit-message  repo-butler" "$out" \
+  "ambiguous window: each candidate is listed as id, ts, recipe, project"
+assert_contains "aaaaaaaaaaaaaaa2  $T_B  (bare)  -" "$out" \
+  "ambiguous window: a bare-tier row with no project is listed with placeholders"
+assert_contains "--id" "$out" "ambiguous window: the refusal names --id as the pin"
+assert_eq 2 "$(grep -c '' "$tmp/m.jsonl")" "ambiguous window: no row appended on refuse"
+# Pinning resolves it — to the pinned row, not the newest.
+EC=0
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts "$T_A" hit >/dev/null 2>&1 || EC=$?
+assert_eq 0 "$EC" "ambiguous window: --ts resolves the ambiguity"
+assert_contains "\"ref_ts\":\"$T_A\"" "$(tail -1 "$tmp/m.jsonl")" \
+  "ambiguous window: the pinned verdict lands on the pinned row"
+# DELEGATE_FEEDBACK_STALE_SECONDS=0 keeps the unbounded most-recent path for
+# back-compat scripts, ambiguity included.
+EC=0
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_STALE_SECONDS=0 bash "$SCRIPT" hit >/dev/null 2>&1 || EC=$?
+assert_eq 0 "$EC" "ambiguous window: STALE_SECONDS=0 keeps the unbounded most-recent lookup"
+assert_contains "\"ref_ts\":\"$T_B\"" "$(tail -1 "$tmp/m.jsonl")" \
+  "ambiguous window: STALE_SECONDS=0 attaches to the newest row as before"
+rm -rf "$tmp"
+
+# 7c. The pin is the row's otel_span_id, not its ts. ts is second-precision
+# and parallel delegations share it; a --ts pin on a shared second validated
+# with `head -n 1` and read with `tail -n 1`, so caller A's verdict, project,
+# draft pairing and OTel parent all came from sibling B and A's commit
+# message was stored as B's final (PR #479 review). Two draft-bearing rows
+# share one second here, and the pin names the FIRST — the case a
+# last-row-wins lookup gets wrong.
+same_second_setup() {
+  tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+  T_SHARED=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$T_SHARED","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"repo-butler","exit_status":0,"otel_trace_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1","otel_span_id":"aaaaaaaaaaaaaaa1","draft_file":"20260911T054711Z-first000.draft.txt"}
+{"ts":"$T_SHARED","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"teams-for-linux","exit_status":0,"otel_trace_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2","otel_span_id":"aaaaaaaaaaaaaaa2","draft_file":"20260911T054711Z-second00.draft.txt"}
+EOF
+}
+same_second_setup
+printf 'the commit message that shipped' > "$tmp/mine.txt"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id aaaaaaaaaaaaaaa1 --source agent --final "$tmp/mine.txt" miss "r" 2>&1) || EC=$?
+assert_eq 0 "$EC" "--id: pins a row on a shared second"
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "$T_SHARED" "$(printf '%s' "$last" | jq -r '.ref_ts // ""')" "--id: ref_ts is the pinned row's ts"
+assert_eq "aaaaaaaaaaaaaaa1" "$(printf '%s' "$last" | jq -r '.ref_id // ""')" "--id: the row records ref_id beside ref_ts"
+assert_eq "repo-butler" "$(printf '%s' "$last" | jq -r '.project // ""')" "--id: project comes off the pinned (first) row, not the last row on that second"
+assert_eq "20260911T054711Z-first000.final.txt" "$(printf '%s' "$last" | jq -r '.final_file // ""')" \
+  "--id: the final is named after the pinned row's draft, not its sibling's"
+assert_eq "the commit message that shipped" "$(cat "$tmp/drafts/20260911T054711Z-first000.final.txt" 2>/dev/null)" \
+  "--id: the shipped text sits beside the pinned row's draft"
+assert_eq "false" "$([[ -e "$tmp/drafts/20260911T054711Z-second00.final.txt" ]] && echo true || echo false)" \
+  "--id: nothing is written under the sibling's stem"
+rm -rf "$tmp"
+
+# --ts on a shared second is the same ambiguity as the implicit window: it
+# refuses and lists the candidates with their ids, so the caller can pin.
+same_second_setup
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts "$T_SHARED" hit 2>&1) || EC=$?
+assert_eq 1 "$EC" "--ts on a shared second: exit 1"
+assert_contains "aaaaaaaaaaaaaaa1  $T_SHARED  commit-message  repo-butler" "$out" \
+  "--ts on a shared second: lists the first candidate with its id"
+assert_contains "aaaaaaaaaaaaaaa2  $T_SHARED  maintainer-reply  teams-for-linux" "$out" \
+  "--ts on a shared second: lists the second candidate with its id"
+assert_contains "--id" "$out" "--ts on a shared second: tells the caller to pin with --id"
+assert_eq 2 "$(grep -c '' "$tmp/m.jsonl")" "--ts on a shared second: no row appended"
+rm -rf "$tmp"
+
+# An unknown id refuses, like an unknown ts.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --id ffffffffffffffff hit 2>&1) || EC=$?
+assert_eq 1 "$EC" "--id: unknown id -> exit 1"
+assert_contains "does not match any delegate row" "$out" "--id: unknown id names the mismatch"
+assert_eq 3 "$(grep -c '' "$tmp/m.jsonl")" "--id: unknown id appends no row"
+# --id needs a value, and cannot be combined with --ts (two pins, one row).
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" "--id=" hit 2>&1) || EC=$?
+assert_eq 2 "$EC" "--id= (empty value) -> exit 2"
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --id "$ID_LATEST" --ts "$TS_LATEST" hit 2>&1) || EC=$?
+assert_eq 2 "$EC" "--id with --ts -> exit 2 (one pin)"
+# A row with no otel_span_id yields a verdict with no ref_id — there is
+# nothing to copy — and the implicit path still records ref_id when the row
+# has one.
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit >/dev/null 2>&1
+assert_eq "$ID_LATEST" "$(tail -1 "$tmp/m.jsonl" | jq -r '.ref_id // ""')" \
+  "ref_id: the implicit path records the referenced row's otel_span_id"
+rm -rf "$tmp"
+tmp=$(mktemp -d)
+T_FRESH=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0}\n' "$T_FRESH" > "$tmp/m.jsonl"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit >/dev/null 2>&1
+assert_eq "false" "$(tail -1 "$tmp/m.jsonl" | jq -r 'has("ref_id")')" \
+  "ref_id: a referenced row with no otel_span_id yields a verdict with no ref_id"
+rm -rf "$tmp"
+
+# 7d. Rows are appended at completion but ts is the start time, so one
+# fresh candidate need not be the file's last delegate line: a long
+# delegation started before a short one lands after it. The implicit path
+# used to count candidates over the window and then take ref_ts from
+# `tail -n 1` of the whole file, so this shape — one fresh candidate, one
+# stale row appended after it — was refused as stale.
+tmp=$(mktemp -d)
+T_SHORT=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-10))')
+T_LONG=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-400))')
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$T_SHORT","source":"delegate","tier":"prose","model":"q","exit_status":0,"otel_span_id":"bbbbbbbbbbbbbbb1"}
+{"ts":"$T_LONG","source":"delegate","tier":"prose","model":"q","exit_status":0,"otel_span_id":"bbbbbbbbbbbbbbb2"}
+EOF
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit 2>&1) || EC=$?
+assert_eq 0 "$EC" "single fresh candidate not on the last line: exit 0"
+assert_eq "$T_SHORT" "$(tail -1 "$tmp/m.jsonl" | jq -r '.ref_ts // ""')" \
+  "single fresh candidate not on the last line: the verdict lands on the fresh row"
+assert_eq "bbbbbbbbbbbbbbb1" "$(tail -1 "$tmp/m.jsonl" | jq -r '.ref_id // ""')" \
+  "single fresh candidate not on the last line: ref_id is the fresh row's"
 rm -rf "$tmp"
 
 # 8. Output is valid JSON (jq can parse it back).
@@ -569,7 +737,7 @@ seed_metrics_with_otel() {
   local sid="${3:-feedface12345678}"
   TS_LATEST=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   cat > "$file" <<EOF
-{"ts":"$TS_LATEST","source":"delegate","tier":"prose","model":"qwen3.6:35b","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$tid","otel_span_id":"$sid"}
+{"ts":"$TS_LATEST","source":"delegate","tier":"prose","model":"qwen3.6:35b","project":"otel-project","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$tid","otel_span_id":"$sid"}
 EOF
 }
 
@@ -634,19 +802,16 @@ assert_contains '"delegate.feedback.parent_trace_id"' "$otel_body" "FB-OT2: pare
 assert_contains "\"$PARENT_TID\"" "$otel_body" "FB-OT2: parent_trace_id value matches delegate row"
 assert_contains '"delegate.feedback.parent_span_id"' "$otel_body" "FB-OT2: parent_span_id attribute"
 assert_contains "\"$PARENT_SID\"" "$otel_body" "FB-OT2: parent_span_id value matches delegate row"
-# delegate.project (#246 follow-up): the feedback span carries the repo
-# basename so per-project calibration dashboards can scope feedback spans the
-# same way they scope delegation spans. Computed from the cwd/git toplevel, so
-# assert presence rather than a fixed value.
+# delegate.project (#246 follow-up): the feedback span carries the project so
+# per-project calibration dashboards can scope feedback spans the same way
+# they scope delegation spans. It is the referenced delegate row's project,
+# copied (#474) — not the cwd the verdict happened to be recorded from — so
+# the span and the JSONL row carry the same value.
 assert_contains '"delegate.project"' "$otel_body" "FB-OT2: delegate.project attribute present on feedback span"
 fb_project=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].attributes | map(select(.key == "delegate.project")) | .[0].value.stringValue // ""')
-if [[ -n "$fb_project" ]]; then
-  echo "  PASS  FB-OT2: delegate.project value is non-empty ($fb_project)"
-  pass=$((pass+1))
-else
-  echo "  FAIL  FB-OT2: delegate.project value is empty"
-  fail=$((fail+1))
-fi
+assert_eq "otel-project" "$fb_project" "FB-OT2: delegate.project is the referenced delegate row's project"
+assert_eq "otel-project" "$(tail -1 "$tmp/m.jsonl" | jq -r '.project // ""')" \
+  "FB-OT2: the feedback row carries the same project as the span"
 # Track F default-redaction: reason attribute is OMITTED when the flag is unset.
 case "$otel_body" in
   *'delegate.feedback.reason'*)
@@ -1211,6 +1376,25 @@ recipe_attr=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0
 assert_eq "commit-message" "$recipe_attr" "FB-OT19: delegate.recipe pulled from --ts pinned row, not most-recent"
 rm -rf "$tmp"
 
+# FB-OT20. --id pinning + OTel on a shared second: the link and the project
+# come off the pinned (first) row, not the last row carrying that ts. Uses
+# the same_second_setup fixture from 7c.
+same_second_setup
+invocations="$tmp/invocations"; : > "$invocations"
+otel_sniff="$tmp/otel.json"
+make_mock_curl_fb_otel "$tmp" "$otel_sniff" "$invocations" "ok"
+env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" --id aaaaaaaaaaaaaaa1 hit "verbatim" >/dev/null 2>&1
+assert_eq "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" \
+  "$(jq -r '.resourceSpans[0].scopeSpans[0].spans[0].links[0].traceId' "$otel_sniff" 2>/dev/null)" \
+  "FB-OT20: --id on a shared second links the pinned row's trace, not its sibling's"
+assert_eq "repo-butler" \
+  "$(jq -r '.resourceSpans[0].scopeSpans[0].spans[0].attributes[] | select(.key=="delegate.project") | .value.stringValue' "$otel_sniff" 2>/dev/null)" \
+  "FB-OT20: --id on a shared second carries the pinned row's project"
+rm -rf "$tmp"
+
 # ---------------------------------------------------------------------------
 # Phase E — agent-observed verdict tier (--source human|agent)
 # The default is human (a maintainer taste judgment); --source agent records
@@ -1448,14 +1632,16 @@ rm -rf "$tmp"
 # not after ref_ts. Timestamps are second-precision and parallel delegations
 # share them, so a ts-derived name would overwrite another delegation's
 # shipped text; naming off draft_file also proves the two halves belong to the
-# same delegation.
+# same delegation. The appended row shares the seed's fresh second, which is
+# exactly the ambiguity both the implicit lookup and --ts refuse, so the
+# verdict is pinned by id.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 mkdir -p "$tmp/drafts"
-printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"draft_file":"20260826T101206Z-a1b2c3d4.draft.txt"}\n' \
+printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"otel_span_id":"dddddddddddddddd","draft_file":"20260826T101206Z-a1b2c3d4.draft.txt"}\n' \
   "$TS_LATEST" >> "$tmp/m.jsonl"
 printf 'shipped\n' > "$tmp/f.txt"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
-  bash "$SCRIPT" --final "$tmp/f.txt" miss "r" >/dev/null 2>&1
+  bash "$SCRIPT" --id dddddddddddddddd --final "$tmp/f.txt" miss "r" >/dev/null 2>&1
 assert_eq "20260826T101206Z-a1b2c3d4.final.txt" \
   "$(tail -1 "$tmp/m.jsonl" | jq -r '.final_file // ""')" \
   "--final: named after the row's draft_file, not after ref_ts"
@@ -1561,11 +1747,11 @@ rm -rf "$tmp"
 # ---------------------------------------------------------------------------
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 mkdir -p "$tmp/drafts"
-printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"draft_file":"20260827T090000Z-abcd1234.draft.txt"}\n' \
+printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"otel_span_id":"dddddddddddddddd","draft_file":"20260827T090000Z-abcd1234.draft.txt"}\n' \
   "$TS_LATEST" >> "$tmp/m.jsonl"
 printf 'the reply that actually shipped\n' > "$tmp/shipped.txt"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
-  bash "$SCRIPT" scaffold "body ran long" --final "$tmp/shipped.txt" >/dev/null 2>&1
+  bash "$SCRIPT" --id dddddddddddddddd scaffold "body ran long" --final "$tmp/shipped.txt" >/dev/null 2>&1
 last=$(tail -1 "$tmp/m.jsonl")
 assert_eq "20260827T090000Z-abcd1234.final.txt" "$(printf '%s' "$last" | jq -r '.final_file // ""')" \
   "trailing --final: the shipped text is stored"
@@ -1640,17 +1826,19 @@ rm -rf "$tmp"
 # it. `final_source` keeps an inferred pair distinguishable from one the caller
 # vouched for.
 # ---------------------------------------------------------------------------
+# The appended row shares the seed's fresh second — the ambiguity the implicit
+# lookup and --ts both refuse — so every call below pins with --id.
 adopt_setup() { # -> tmp with a delegate row naming a draft, and drafts/
   tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
   mkdir -p "$tmp/drafts"
-  printf '{"ts":"%s","source":"delegate","tier":"prose","recipe":"maintainer-reply","exit_status":0,"draft_file":"20260827T100000Z-aaaa1111.draft.txt"}\n' \
+  printf '{"ts":"%s","source":"delegate","tier":"prose","recipe":"maintainer-reply","exit_status":0,"otel_span_id":"dddddddddddddddd","draft_file":"20260827T100000Z-aaaa1111.draft.txt"}\n' \
     "$TS_LATEST" >> "$tmp/m.jsonl"
 }
 
 adopt_setup
 printf 'what the hook saw go out' > "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
-  bash "$SCRIPT" --source agent scaffold "trimmed the second paragraph" >/dev/null 2>&1
+  bash "$SCRIPT" --id dddddddddddddddd --source agent scaffold "trimmed the second paragraph" >/dev/null 2>&1
 last=$(tail -1 "$tmp/m.jsonl")
 assert_eq "20260827T100000Z-aaaa1111.final.txt" "$(printf '%s' "$last" | jq -r '.final_file // ""')" \
   "adopt: a hook-captured final is adopted when --final was not passed"
@@ -1658,18 +1846,123 @@ assert_eq "posted" "$(printf '%s' "$last" | jq -r '.final_source // ""')" \
   "adopt: the row records that the pair was inferred from a post"
 rm -rf "$tmp"
 
-# An explicit --final is the caller vouching for the pair, so it wins and is
-# not relabelled as inferred.
+# An explicit --final is the caller vouching for the pair, so the row names
+# it and it is not relabelled as inferred. It does not overwrite the hook's
+# capture, though: an existing final is never overwritten (#474), so the
+# caller's text lands in a numbered sibling and the hook's stays on disk.
 adopt_setup
 printf 'what the hook saw go out' > "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt"
 printf 'what the caller says shipped' > "$tmp/mine.txt"
-DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
-  bash "$SCRIPT" --source agent scaffold "r" --final "$tmp/mine.txt" >/dev/null 2>&1
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id dddddddddddddddd --source agent scaffold "r" --final "$tmp/mine.txt" 2>&1)
 last=$(tail -1 "$tmp/m.jsonl")
-assert_eq "what the caller says shipped" "$(cat "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt")" \
-  "adopt: an explicit --final overwrites the hook's capture"
+assert_eq "20260827T100000Z-aaaa1111.final.2.txt" "$(printf '%s' "$last" | jq -r '.final_file // ""')" \
+  "adopt: an explicit --final beside a hook capture is stored as a numbered sibling"
+assert_eq "what the caller says shipped" "$(cat "$tmp/drafts/20260827T100000Z-aaaa1111.final.2.txt" 2>/dev/null)" \
+  "adopt: the sibling holds the caller's text"
+assert_eq "what the hook saw go out" "$(cat "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt")" \
+  "adopt: the hook's capture is left untouched"
 assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_source")')" \
   "adopt: an explicit --final is not labelled as inferred"
+assert_contains "20260827T100000Z-aaaa1111.final.txt already exists" "$out" \
+  "adopt: the caller is told the stem already had a final"
+rm -rf "$tmp"
+
+# The overwrite this replaces was silent and destructive. Measured 2026-09-11:
+# two verdicts from two sessions both named final_file
+# 20260911T054711Z-22a06549.final.txt, so a commit-message draft sat beside a
+# D-Bus badge reply as its "shipped" half and the real commit message was
+# gone. Each further final on the same stem takes the next free number, and
+# every row names the file it actually wrote, so a pair is never two
+# different delegations.
+adopt_setup
+printf 'first shipped' > "$tmp/one.txt"
+printf 'second shipped' > "$tmp/two.txt"
+printf 'third shipped' > "$tmp/three.txt"
+for f in one two three; do
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+    bash "$SCRIPT" --id dddddddddddddddd --source agent miss "r $f" --final "$tmp/$f.txt" >/dev/null 2>&1
+done
+assert_eq "first shipped" "$(cat "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt" 2>/dev/null)" \
+  "numbered final: the first final keeps the bare name and its text"
+assert_eq "second shipped" "$(cat "$tmp/drafts/20260827T100000Z-aaaa1111.final.2.txt" 2>/dev/null)" \
+  "numbered final: the second final is .final.2.txt"
+assert_eq "third shipped" "$(cat "$tmp/drafts/20260827T100000Z-aaaa1111.final.3.txt" 2>/dev/null)" \
+  "numbered final: the third final is .final.3.txt"
+assert_eq "20260827T100000Z-aaaa1111.final.txt 20260827T100000Z-aaaa1111.final.2.txt 20260827T100000Z-aaaa1111.final.3.txt" \
+  "$(jq -r 'select(.source=="feedback") | .final_file' "$tmp/m.jsonl" | tr '\n' ' ' | sed 's/ $//')" \
+  "numbered final: each row names the file it wrote"
+rm -rf "$tmp"
+
+# The name is claimed by the open, not by a stat: a check-then-truncate
+# allocation let 12 parallel `--final` writers on one stem leave 2 files and
+# 11 rows all naming S.final.txt (PR #479 review). Several writers race on
+# one stem here; every one must end up with its own file, and every row must
+# name a distinct file whose content is that writer's.
+adopt_setup
+writers=8
+for i in $(seq 1 $writers); do
+  printf 'writer %s shipped' "$i" > "$tmp/w$i.txt"
+done
+for i in $(seq 1 $writers); do
+  ( DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+      bash "$SCRIPT" --id dddddddddddddddd --source agent miss "w $i" --final "$tmp/w$i.txt" >/dev/null 2>&1 ) &
+done
+wait
+assert_eq "$writers" "$(ls "$tmp/drafts" | grep -c 'aaaa1111\.final')" \
+  "parallel finals: as many files as writers"
+assert_eq "$writers" "$(jq -r 'select(.source=="feedback") | .final_file' "$tmp/m.jsonl" | sort -u | grep -c '')" \
+  "parallel finals: every row names a distinct final_file"
+assert_eq "$writers" "$(jq -r 'select(.source=="feedback") | .final_file' "$tmp/m.jsonl" | grep -c '')" \
+  "parallel finals: every writer recorded a final_file"
+# Each row's file holds that writer's own text (reason "w N" ↔ "writer N").
+mismatch=0
+while IFS=$'\037' read -r r f; do
+  n="${r#w }"
+  [[ "$(cat "$tmp/drafts/$f")" == "writer $n shipped" ]] || mismatch=$((mismatch+1))
+done < <(jq -r 'select(.source=="feedback") | [.reason, .final_file] | join("\u001f")' "$tmp/m.jsonl")
+assert_eq 0 "$mismatch" "parallel finals: every row's file holds that writer's own text"
+rm -rf "$tmp"
+
+# A claim that succeeds but a copy that fails is not a collision. The source
+# passed the -f check and then became unreadable (permissions, a file that was
+# a pipe, a disappearing tmp dir); the exclusive redirect had already created
+# the name, so treating "the file exists" as "someone else got there first"
+# advanced the number and created an empty file at every step, without end
+# (PR #479 review). The claim is released, the loop stops, the verdict lands
+# without a final_file and says so.
+adopt_setup
+printf "unreadable after the check" > "$tmp/locked.txt"
+chmod 000 "$tmp/locked.txt"
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  perl -e "alarm 10; exec @ARGV" bash "$SCRIPT" --id dddddddddddddddd --source agent miss "copy fails" --final "$tmp/locked.txt" 2>&1)
+assert_eq 0 "$(ls "$tmp/drafts" | grep -c "aaaa1111\.final")" \
+  "failed copy: no final file is left behind, numbered or bare"
+assert_contains "could not store --final" "$out" \
+  "failed copy: the caller is told the final was not stored"
+assert_eq 1 "$(jq -c "select(.source==\"feedback\")" "$tmp/m.jsonl" | grep -c "")" \
+  "failed copy: the verdict row is still written"
+assert_eq "null" "$(jq -r "select(.source==\"feedback\") | .final_file" "$tmp/m.jsonl")" \
+  "failed copy: the row carries no final_file"
+chmod 600 "$tmp/locked.txt"
+rm -rf "$tmp"
+
+# Adopting a final that an earlier verdict on the same row supplied by hand
+# is not inferring one from a post. The adoption path used to label any
+# existing `<stem>.final.txt` as `final_source:"posted"`; when a feedback row
+# on this ref already names the file, the later verdict carries the name
+# with no label.
+adopt_setup
+printf 'what the caller shipped' > "$tmp/mine.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id dddddddddddddddd --source agent miss "first verdict" --final "$tmp/mine.txt" >/dev/null 2>&1
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id dddddddddddddddd --source agent scaffold "second verdict, same row" >/dev/null 2>&1
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "20260827T100000Z-aaaa1111.final.txt" "$(printf '%s' "$last" | jq -r '.final_file // ""')" \
+  "adopt after --final: the later verdict carries the hand-supplied final's name"
+assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_source")')" \
+  "adopt after --final: a hand-supplied final is not relabelled as posted"
 rm -rf "$tmp"
 
 # A hit means the draft shipped as-is, so there is no difference to diff and
@@ -1677,16 +1970,21 @@ rm -rf "$tmp"
 adopt_setup
 printf 'what the hook saw go out' > "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
-  bash "$SCRIPT" --source agent hit >/dev/null 2>&1
-assert_eq "false" "$(tail -1 "$tmp/m.jsonl" | jq -r 'has("final_file")')" \
+  bash "$SCRIPT" --id dddddddddddddddd --source agent hit >/dev/null 2>&1
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "feedback" "$(printf '%s' "$last" | jq -r '.source')" \
+  "adopt: the hit verdict was recorded"
+assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_file")')" \
   "adopt: a hit does not adopt a captured final"
 rm -rf "$tmp"
 
 # No capture, no field: every reader written before this existed keeps working.
 adopt_setup
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
-  bash "$SCRIPT" --source agent scaffold "r" >/dev/null 2>&1
+  bash "$SCRIPT" --id dddddddddddddddd --source agent scaffold "r" >/dev/null 2>&1
 last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "feedback" "$(printf '%s' "$last" | jq -r '.source')" \
+  "adopt: the scaffold verdict was recorded"
 assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_file")')" \
   "adopt: nothing captured means no final_file"
 assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_source")')" \
@@ -1698,11 +1996,11 @@ rm -rf "$tmp"
 # stored final outside the drafts directory; a rejected value falls through to
 # the ts-derived stem, the same path a row with no draft takes.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
-printf '{"ts":"%s","source":"delegate","tier":"prose","exit_status":0,"draft_file":"../escaped.draft.txt"}\n' \
+printf '{"ts":"%s","source":"delegate","tier":"prose","exit_status":0,"otel_span_id":"dddddddddddddddd","draft_file":"../escaped.draft.txt"}\n' \
   "$TS_LATEST" >> "$tmp/m.jsonl"
 printf 'shipped\n' > "$tmp/f.txt"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
-  bash "$SCRIPT" --final "$tmp/f.txt" miss "r" >/dev/null 2>&1
+  bash "$SCRIPT" --id dddddddddddddddd --final "$tmp/f.txt" miss "r" >/dev/null 2>&1
 assert_eq "false" "$([[ -e "$tmp/escaped.final.txt" ]] && echo true || echo false)" \
   "traversing draft_file: nothing is written outside the drafts directory"
 assert_eq "$(printf '%s' "$TS_LATEST" | tr -d ':-')-nodraft.final.txt" \

@@ -959,7 +959,8 @@ assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge: pri
 # rejections carried the shipped text, and the nudge mentioned neither.
 assert_contains "scaffold" "$stderr_content" "verdict-nudge: names the scaffold verdict"
 assert_contains "--final" "$stderr_content" "verdict-nudge: names --final so the pair gets captured"
-assert_contains "delegate-feedback.sh --source agent hit" "$stderr_content" "verdict-nudge: names hit (agent-sourced)"
+assert_contains "delegate-feedback.sh --source agent --id " "$stderr_content" "verdict-nudge: names --source agent and --id"
+assert_contains " hit | scaffold" "$stderr_content" "verdict-nudge: names hit (agent-sourced)"
 assert_contains "miss" "$stderr_content" "verdict-nudge: names miss"
 assert_contains "drop --source" "$stderr_content" "verdict-nudge: names human-default (drop --source)"
 # Nudge stays on stderr — stdout should hold only the model output, so
@@ -1830,6 +1831,118 @@ else
   fail=$((fail+1))
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 19a. The meta line names the row it wrote, and the nudge hands that ts back
+# as the --ts argument (#474). Until then the staleness refusal in
+# delegate-feedback.sh told the caller to "pass --ts" for a value the caller
+# had never been shown, so nobody did, and every verdict landed on whichever
+# delegation was newest: 20 ref_ts carried two or more verdicts within three
+# weeks of the corpus reset. The value has to be the row's ts byte for byte —
+# a reformatted or re-read clock would match no row and send the caller
+# straight into the --ts refusal.
+tmp=$(mktemp -d)
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+stderr_file=$(mktemp)
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>"$stderr_file"
+row_ts=$(jq -r '.ts' "$metrics")
+if [[ "$row_ts" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+  echo "  PASS  delegate-meta ts: the metrics row carries an ISO 8601 ts ($row_ts)"; pass=$((pass+1))
+else
+  echo "  FAIL  delegate-meta ts: metrics row ts missing or malformed ('$row_ts')"; fail=$((fail+1))
+fi
+meta_ts=$(grep '^delegate-meta:' "$stderr_file" | grep -oE 'ts="[^"]*"' | cut -d'"' -f2)
+assert_eq "$row_ts" "$meta_ts" "delegate-meta ts: ts field is the metrics row's ts, byte for byte"
+# ts is second-precision and parallel delegations share it, so the pin the
+# nudge hands out is the row's otel_span_id (16 hex, generated on every row
+# whether or not the exporter is on). ts stays on the meta line for humans.
+row_id=$(jq -r '.otel_span_id' "$metrics")
+if [[ "$row_id" =~ ^[0-9a-f]{16}$ ]]; then
+  echo "  PASS  delegate-meta id: the metrics row carries a 16-hex otel_span_id ($row_id)"; pass=$((pass+1))
+else
+  echo "  FAIL  delegate-meta id: metrics row otel_span_id missing or malformed ('$row_id')"; fail=$((fail+1))
+fi
+meta_id=$(grep '^delegate-meta:' "$stderr_file" | grep -oE 'id="[^"]*"' | cut -d'"' -f2)
+assert_eq "$row_id" "$meta_id" "delegate-meta id: id field is the metrics row's otel_span_id, byte for byte"
+assert_contains "--id $row_id " "$(grep 'record verdict' "$stderr_file")" \
+  "verdict-nudge: the copyable command already carries --id with the row's span id"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
+# 19c. A row that could not be appended is not a row. log_metric's append
+# used to fail silently (`>> ... 2>/dev/null || true`) while the meta line
+# and nudge went on naming a ts and id that matched nothing, sending the
+# caller into a --id refusal. A metrics path under a file cannot be created,
+# so the append fails; the call still succeeds, but names no row and does
+# not nudge for a verdict there is nothing to attach to.
+tmp=$(mktemp -d)
+make_mock_curl_ok "$tmp"
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE=/dev/null/metrics.jsonl \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "delegate-meta unwritable: the delegation still succeeds"
+assert_contains "mock-model-output" "$out" "delegate-meta unwritable: model output still on stdout"
+meta_line=$(grep '^delegate-meta:' "$stderr_file")
+assert_contains 'model="' "$meta_line" "delegate-meta unwritable: meta line still printed"
+if [[ "$meta_line" == *' ts="'* || "$meta_line" == *' id="'* ]]; then
+  echo "  FAIL  delegate-meta unwritable: names a row that was never appended"; fail=$((fail+1))
+else
+  echo "  PASS  delegate-meta unwritable: no ts/id when the append failed"; pass=$((pass+1))
+fi
+if grep -q 'record verdict' "$stderr_file"; then
+  echo "  FAIL  delegate-meta unwritable: nudges for a row that was never appended"; fail=$((fail+1))
+else
+  echo "  PASS  delegate-meta unwritable: no verdict nudge when the append failed"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$stderr_file"
+
+# 19d. The delegate row is stamped with the Claude Code session id when the
+# environment carries one. The boundary and Stop hooks receive the same UUID
+# as `.session_id` in their payload, so a projectless boundary can be
+# credited only to a projectless delegation from the same session instead of
+# to any delegation on the machine (#476, #477). Same conditional shape as
+# `project`: present when set, absent when unset — never an empty string.
+tmp=$(mktemp -d)
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" CLAUDE_CODE_SESSION_ID="0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b" \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1
+assert_eq "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b" "$(jq -r '.session // ""' "$metrics")" \
+  "session: the row carries CLAUDE_CODE_SESSION_ID when it is set"
+: > "$metrics"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1
+assert_eq "false" "$(jq -r 'has("session")' "$metrics")" \
+  "session: the field is absent when CLAUDE_CODE_SESSION_ID is unset"
+: > "$metrics"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" CLAUDE_CODE_SESSION_ID= \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1
+assert_eq "false" "$(jq -r 'has("session")' "$metrics")" \
+  "session: an empty CLAUDE_CODE_SESSION_ID is treated as unset"
+rm -rf "$tmp" "$metrics"
+
+# 19b. With metrics off there is no row, so the meta line names no ts: a
+# value that matches nothing would only send the caller to a --ts refusal.
+tmp=$(mktemp -d)
+make_mock_curl_ok "$tmp"
+stderr_file=$(mktemp)
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_LOCAL_NO_METRICS=1 \
+  bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>"$stderr_file"
+meta_line=$(grep '^delegate-meta:' "$stderr_file")
+assert_contains 'model="' "$meta_line" "delegate-meta ts: meta line still printed with metrics off"
+if [[ "$meta_line" == *' ts="'* ]]; then
+  echo "  FAIL  delegate-meta ts: names a ts although no row was written"; fail=$((fail+1))
+else
+  echo "  PASS  delegate-meta ts: no ts field when no row was written"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$stderr_file"
 
 # 20. DELEGATE_LOCAL_NO_META=1 silences the meta line but the rest of
 # the delegation still runs (metrics row written, model output on stdout,

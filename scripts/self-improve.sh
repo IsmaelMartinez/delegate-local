@@ -254,10 +254,12 @@ jq -rs --arg prev "$prev_ts" '
       ($d[.ref_ts].recipe // "(bare)"),
       # Prefer the draft the FEEDBACK row names: final_file is derived from
       # draft_file, so the two halves are provably the same delegation even
-      # when several share a second-precision ts. The $d lookup is the
+      # when several share a second-precision ts. A numbered final
+      # (`<stem>.final.2.txt`, written when the stem already had one — #474)
+      # belongs to the same draft as the bare name. The $d lookup is the
       # fallback for rejections recorded without --final.
-      (if $fin != "" and ($fin | endswith(".final.txt"))
-       then ($fin | sub("\\.final\\.txt$"; ".draft.txt"))
+      (if $fin != "" and ($fin | test("\\.final(\\.[0-9]+)?\\.txt$"))
+       then ($fin | sub("\\.final(\\.[0-9]+)?\\.txt$"; ".draft.txt"))
        else ($d[.ref_ts].draft_file // "") end),
       $fin,
       (.final_source // ""),
