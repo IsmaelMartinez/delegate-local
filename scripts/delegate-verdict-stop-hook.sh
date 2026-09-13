@@ -174,11 +174,20 @@ batch=$(printf '%s\n' "$rows" | awk -F'\t' 'NF>=2 && $2!="" {
 # Outside a repository there is no name to print; say so rather than `''`.
 if [[ -n "$project" ]]; then scope="project '${project}'"
 else scope="no project: cwd outside any git repository"; fi
+# Each verdict is a complete command on its own line, because the line is
+# copied as printed with the row's pin in place of <pin>: `a | b | c` ran as
+# a pipeline and `a, b or c` passed `hit,` as the verdict, and
+# delegate-feedback.sh rejected both. The note after each command is a shell
+# comment so a whole-line copy still runs.
 reason=$(cat <<EOF
 delegate-local verdict sweep (${scope}): ${count} delegation(s) from this session produced output but carry no verdict. Before you stop, record for each one whether you USED the delegated output as-is (hit), edited it and shipped it (scaffold), or rewrote/discarded it (miss) — a fact about what you did. scaffold and miss need a reason, and --final <path|-> naming what you shipped instead:
 
 ${batch}
-  DELEGATE_METRICS_FILE="${metrics_file}" bash "${script_dir}/delegate-feedback.sh" <pin from the line above> --source agent hit, scaffold "<reason>" or miss "<reason>"
+
+Run one of these per row, with <pin> replaced by the --id or --ts shown on its line:
+  DELEGATE_METRICS_FILE="${metrics_file}" bash "${script_dir}/delegate-feedback.sh" <pin> --source agent hit                  # shipped as-is
+  DELEGATE_METRICS_FILE="${metrics_file}" bash "${script_dir}/delegate-feedback.sh" <pin> --source agent scaffold "<reason>"  # edited and shipped
+  DELEGATE_METRICS_FILE="${metrics_file}" bash "${script_dir}/delegate-feedback.sh" <pin> --source agent miss "<reason>"      # thrown away
 
 This prompt is shown once per session; recording what you can and then stopping is fine. Set DELEGATE_VERDICT_STOP_MODE=off to silence.
 EOF

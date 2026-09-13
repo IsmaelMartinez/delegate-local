@@ -86,7 +86,8 @@ reason=$(jq -r .reason "$tmp/out")
 assert_contains "--source agent" "$reason" "T3: instruction records with --source agent"
 assert_contains "delegate-feedback.sh" "$reason" "T3: instruction names delegate-feedback.sh"
 assert_contains "  - --id abcdef0123456789  " "$reason" "T3: a row with a span id is pinned by --id on its batch line"
-case "$reason" in
+# Scoped to the batch lines: the prose beneath names both pin forms on purpose.
+case "$(printf '%s\n' "$reason" | grep -E '^  - ')" in
   *"--ts "*) echo "  FAIL  T3: a row with a span id is not offered a --ts pin"; fail=$((fail+1));;
   *) echo "  PASS  T3: a row with a span id is not offered a --ts pin"; pass=$((pass+1));;
 esac
@@ -94,13 +95,21 @@ case "$reason" in
   *"verdict-sweep"*) echo "  FAIL  T3: no hand-off to an interactive sweep"; fail=$((fail+1));;
   *) echo "  PASS  T3: no hand-off to an interactive sweep"; pass=$((pass+1));;
 esac
-# The command line is copied as printed, so the three verdicts are spelled as
-# alternatives, not with `|`, which reads (and runs) as a shell pipeline.
-cmd_line=$(printf '%s\n' "$reason" | grep -F 'delegate-feedback.sh')
-assert_contains ' hit, scaffold "<reason>" or miss "<reason>"' "$cmd_line" "T3: the verdicts are spelled as alternatives"
-case "$cmd_line" in
-  *" | "*) echo "  FAIL  T3: the command line is not a shell pipeline"; fail=$((fail+1));;
-  *) echo "  PASS  T3: the command line is not a shell pipeline"; pass=$((pass+1));;
+# Each verdict is its own complete command on its own line, copied as printed
+# with the row's pin substituted for <pin>. `a | b | c` ran as a pipeline and
+# `a, b or c` passed `hit,` as the verdict; delegate-feedback.sh rejected both.
+# The annotation after each command is a shell comment so a whole-line copy
+# still runs.
+cmd_lines=$(printf '%s\n' "$reason" | grep -F 'delegate-feedback.sh')
+assert_eq 3 "$(printf '%s\n' "$cmd_lines" | grep -c '')" "T3: three verdict commands, one per line"
+cmd_re='delegate-feedback\.sh" <pin> --source agent (hit|scaffold "<reason>"|miss "<reason>")( +# [a-z -]+)?$'
+assert_eq 3 "$(printf '%s\n' "$cmd_lines" | grep -Ec "$cmd_re")" "T3: every line is one complete command plus an optional # note"
+assert_eq 1 "$(printf '%s\n' "$cmd_lines" | grep -Ec -- '--source agent hit( |$)')" "T3: a hit command"
+assert_eq 1 "$(printf '%s\n' "$cmd_lines" | grep -Ec -- '--source agent scaffold "<reason>"')" "T3: a scaffold command"
+assert_eq 1 "$(printf '%s\n' "$cmd_lines" | grep -Ec -- '--source agent miss "<reason>"')" "T3: a miss command"
+case "$cmd_lines" in
+  *","*|*" | "*|*" or "*) echo "  FAIL  T3: no command line joins alternatives with ',', '|' or 'or'"; fail=$((fail+1));;
+  *) echo "  PASS  T3: no command line joins alternatives with ',', '|' or 'or'"; pass=$((pass+1));;
 esac
 # Same session, a row with no otel_span_id: the pin on its line is --ts.
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s3b"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"

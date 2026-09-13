@@ -960,13 +960,21 @@ assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge: pri
 assert_contains "scaffold" "$stderr_content" "verdict-nudge: names the scaffold verdict"
 assert_contains "--final" "$stderr_content" "verdict-nudge: names --final so the pair gets captured"
 assert_contains "delegate-feedback.sh --source agent --id " "$stderr_content" "verdict-nudge: names --source agent and --id"
-assert_contains ' hit, scaffold "<reason>" or miss "<reason>"' "$stderr_content" "verdict-nudge: names the three verdicts as alternatives"
-# The command line is copied as printed, so the alternatives must not be
-# spelled with `|` — that reads (and runs) as a shell pipeline.
-nudge_cmd=$(printf '%s\n' "$stderr_content" | grep -F 'record verdict')
-case "$nudge_cmd" in
-  *" | "*) echo "  FAIL  verdict-nudge: the command line is not a shell pipeline"; fail=$((fail+1));;
-  *) echo "  PASS  verdict-nudge: the command line is not a shell pipeline"; pass=$((pass+1));;
+# Each verdict is its own complete command on its own line, copied as printed.
+# `a | b | c` ran as a pipeline and `a, b or c` passed `hit,` as the verdict;
+# both were rejected by delegate-feedback.sh. The only placeholder left is
+# <reason>, which cannot be pre-filled, and the annotation after each command
+# is a shell comment so a whole-line copy still runs.
+nudge_cmds=$(printf '%s\n' "$stderr_content" | grep -F 'delegate-feedback.sh')
+assert_eq 3 "$(printf '%s\n' "$nudge_cmds" | grep -c '')" "verdict-nudge: three verdict commands, one per line"
+nudge_re='bash scripts/delegate-feedback\.sh --source agent --id [0-9a-f]{16} (hit|scaffold "<reason>"|miss "<reason>")( +# [a-z -]+)?$'
+assert_eq 3 "$(printf '%s\n' "$nudge_cmds" | grep -Ec "$nudge_re")" "verdict-nudge: every line is one complete command plus an optional # note"
+assert_eq 1 "$(printf '%s\n' "$nudge_cmds" | grep -Ec -- '--id [0-9a-f]{16} hit( |$)')" "verdict-nudge: a hit command"
+assert_eq 1 "$(printf '%s\n' "$nudge_cmds" | grep -Ec -- '--id [0-9a-f]{16} scaffold "<reason>"')" "verdict-nudge: a scaffold command"
+assert_eq 1 "$(printf '%s\n' "$nudge_cmds" | grep -Ec -- '--id [0-9a-f]{16} miss "<reason>"')" "verdict-nudge: a miss command"
+case "$nudge_cmds" in
+  *","*|*" | "*|*" or "*) echo "  FAIL  verdict-nudge: no command line joins alternatives with ',', '|' or 'or'"; fail=$((fail+1));;
+  *) echo "  PASS  verdict-nudge: no command line joins alternatives with ',', '|' or 'or'"; pass=$((pass+1));;
 esac
 # One tier (ADR 0030): there is no human taste judgment to drop the flag for.
 case "$stderr_content" in
