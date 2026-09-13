@@ -77,7 +77,7 @@ export DELEGATE_OTEL_ENDPOINT="http://localhost:3000/api/public/otel/v1/traces"
 export DELEGATE_OTEL_HEADERS="Authorization: Basic <base64-encoded-public-key:secret-key>"
 ```
 
-Substitute the base64 string from the auth step. Once exported, the next `delegate.sh` call posts one span per invocation; the matching `delegate-feedback.sh hit|miss` call posts the feedback span, and Langfuse renders it as a [score](https://langfuse.com/docs/scores/overview) attached to the parent trace via the OTLP span `links` field — making the hit/miss verdict a first-class object in the UI rather than a buried attribute.
+Substitute the base64 string from the auth step. Once exported, the next `delegate.sh` call posts one span per invocation; the matching `delegate-feedback.sh hit | miss "<reason>"` call posts the feedback span, and Langfuse renders it as a [score](https://langfuse.com/docs/scores/overview) attached to the parent trace via the OTLP span `links` field — making the hit/miss verdict a first-class object in the UI rather than a buried attribute.
 
 ## Backfill historical metrics
 

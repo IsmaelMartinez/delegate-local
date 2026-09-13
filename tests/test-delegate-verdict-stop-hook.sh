@@ -61,7 +61,7 @@ rm -rf "$tmp"
 
 # --- T2. Untracked delegation in project → decision:block + marker ---------
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
-printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s2"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s2" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
 assert_eq 0 "$ec" "T2: untracked delegation → exit 0"
 jq -e . "$tmp/out" >/dev/null 2>&1 && { pass=$((pass+1)); echo "  PASS  T2: output is valid JSON"; } || { fail=$((fail+1)); echo "  FAIL  T2: output is not valid JSON"; }
@@ -72,27 +72,36 @@ assert_contains "commit-message" "$(jq -r .reason "$tmp/out")" "T2: reason names
 rm -rf "$tmp"
 
 # --- T3. The injected instruction names delegate-feedback.sh, --source agent,
-# and pins by --id --------------------------------------------------------
+# and a pin the agent can copy off each batch line ---------------------------
 # --source agent is what every caller passes and the recorder's default. The
-# pin is the row's otel_span_id, not its ts: ts is second-precision and
+# pin is the row's otel_span_id where it has one: ts is second-precision and
 # parallel delegations share it, so a --ts pin refuses on a shared second
-# while --id cannot name two rows. The batch line carries the id so the
-# command can be copied.
+# while --id cannot name two rows. A row with no span id is pinned by --ts
+# instead — a `--id -` copied off such a line would match nothing, and with
+# the session marker written the row would never be surfaced again.
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
-printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","otel_span_id":"abcdef0123456789"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","otel_span_id":"abcdef0123456789","session":"s3"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s3" "$tmp" "$tmp/m.jsonl" "$tmp/out"
 reason=$(jq -r .reason "$tmp/out")
 assert_contains "--source agent" "$reason" "T3: instruction records with --source agent"
 assert_contains "delegate-feedback.sh" "$reason" "T3: instruction names delegate-feedback.sh"
-assert_contains "--id <id>" "$reason" "T3: the recommended command pins by --id"
-assert_contains "id=abcdef0123456789" "$reason" "T3: the batch line carries the row's otel_span_id"
+assert_contains "  - --id abcdef0123456789  " "$reason" "T3: a row with a span id is pinned by --id on its batch line"
 case "$reason" in
-  *"--ts <ts>"*) echo "  FAIL  T3: the recommended command no longer pins by --ts"; fail=$((fail+1));;
-  *) echo "  PASS  T3: the recommended command no longer pins by --ts"; pass=$((pass+1));;
+  *"--ts "*) echo "  FAIL  T3: a row with a span id is not offered a --ts pin"; fail=$((fail+1));;
+  *) echo "  PASS  T3: a row with a span id is not offered a --ts pin"; pass=$((pass+1));;
 esac
 case "$reason" in
   *"verdict-sweep"*) echo "  FAIL  T3: no hand-off to an interactive sweep"; fail=$((fail+1));;
   *) echo "  PASS  T3: no hand-off to an interactive sweep"; pass=$((pass+1));;
+esac
+# Same session, a row with no otel_span_id: the pin on its line is --ts.
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s3b"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+run_hook "s3b" "$tmp" "$tmp/m.jsonl" "$tmp/out"
+reason=$(jq -r .reason "$tmp/out")
+assert_contains "  - --ts $NOW  " "$reason" "T3: a row with no span id is pinned by --ts on its batch line"
+case "$reason" in
+  *"--id -"*|*"id=-"*) echo "  FAIL  T3: a row with no span id is not offered an empty --id"; fail=$((fail+1));;
+  *) echo "  PASS  T3: a row with no span id is not offered an empty --id"; pass=$((pass+1));;
 esac
 rm -rf "$tmp"
 
@@ -101,7 +110,7 @@ rm -rf "$tmp"
 # writes the marker, a second Stop in the same session must NOT re-inject even
 # though the delegation is still untracked.
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
-printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"sLoop"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "sLoop" "$tmp" "$tmp/m.jsonl" "$tmp/out1"
 assert_eq "block" "$(jq -r .decision "$tmp/out1" 2>/dev/null)" "T4: first Stop injects"
 run_hook "sLoop" "$tmp" "$tmp/m.jsonl" "$tmp/out2"; ec=$?
@@ -109,19 +118,21 @@ assert_eq 0 "$ec" "T4: second Stop (same session) → exit 0"
 assert_empty "$(cat "$tmp/out2")" "T4: second Stop (same session) → no re-inject (loop guard)"
 rm -rf "$tmp"
 
-# --- T4b. A DIFFERENT session surfaces the still-untracked batch once -------
-# The marker is per-session, so a fresh agent is offered the batch (and leaves
-# what it doesn't recognise) rather than the item being lost — not a loop.
+# --- T4b. A DIFFERENT session in the same repo is not offered the batch -----
+# The marker is per-session, but so is the scan: sB never delegated this row,
+# so it is not asked about it and no marker is written for sB.
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
-printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"sA"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "sA" "$tmp" "$tmp/m.jsonl" "$tmp/outA"
+assert_eq "block" "$(jq -r .decision "$tmp/outA" 2>/dev/null)" "T4b: the owning session is offered the batch"
 run_hook "sB" "$tmp" "$tmp/m.jsonl" "$tmp/outB"
-assert_eq "block" "$(jq -r .decision "$tmp/outB" 2>/dev/null)" "T4b: a new session re-surfaces the untracked batch once"
+assert_empty "$(cat "$tmp/outB")" "T4b: another session in the same repo is not offered sA's row"
+[[ -f "$tmp/.verdict-stop-markers/sB" ]] && { fail=$((fail+1)); echo "  FAIL  T4b: no marker for a session with nothing to verdict"; } || { pass=$((pass+1)); echo "  PASS  T4b: no marker for a session with nothing to verdict"; }
 rm -rf "$tmp"
 
 # --- T5. off mode → exit 0, no output --------------------------------------
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
-printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s5"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s5" "$tmp" "$tmp/m.jsonl" "$tmp/out" DELEGATE_VERDICT_STOP_MODE=off; ec=$?
 assert_eq 0 "$ec" "T5: off mode → exit 0"
 assert_empty "$(cat "$tmp/out")" "T5: off mode → no output"
@@ -130,7 +141,7 @@ rm -rf "$tmp"
 
 # --- T6. Window exclusion: a delegation older than the window is not surfaced --
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
-printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$OLD" "$proj" > "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s6"}\n' "$OLD" "$proj" > "$tmp/m.jsonl"
 run_hook "s6" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
 assert_eq 0 "$ec" "T6: out-of-window delegation → exit 0"
 assert_empty "$(cat "$tmp/out")" "T6: out-of-window delegation not surfaced"
@@ -139,7 +150,7 @@ rm -rf "$tmp"
 # --- T7. Already-tracked: a delegation with a feedback row is not surfaced --
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 {
-  printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj"
+  printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s7"}\n' "$NOW" "$proj"
   printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":true}\n' "$NOW" "$NOW"
 } > "$tmp/m.jsonl"
 run_hook "s7" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
@@ -150,7 +161,7 @@ rm -rf "$tmp"
 # --- T7b. An AGENT verdict also counts as tracked (not re-surfaced) ---------
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 {
-  printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj"
+  printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s7b"}\n' "$NOW" "$proj"
   printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":true,"verdict_source":"agent"}\n' "$NOW" "$NOW"
 } > "$tmp/m.jsonl"
 run_hook "s7b" "$tmp" "$tmp/m.jsonl" "$tmp/out"
@@ -159,7 +170,7 @@ rm -rf "$tmp"
 
 # --- T8. Per-project scoping: a delegation in another project is not surfaced --
 tmp=$(mk_tmp_repo)  # cwd → project = basename(tmp); the row carries a different project
-printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"some-other-repo"}\n' "$NOW" > "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"some-other-repo","session":"s8"}\n' "$NOW" > "$tmp/m.jsonl"
 run_hook "s8" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
 assert_eq 0 "$ec" "T8: other-project delegation → exit 0"
 assert_empty "$(cat "$tmp/out")" "T8: other-project delegation not surfaced"
@@ -167,7 +178,7 @@ rm -rf "$tmp"
 
 # --- T9. Failed delegation (exit_status != 0) is not surfaced --------------
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
-printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":3,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":3,"project":"%s","session":"s9"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s9" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
 assert_eq 0 "$ec" "T9: failed delegation → exit 0"
 assert_empty "$(cat "$tmp/out")" "T9: failed delegation (no output) not surfaced"
@@ -175,7 +186,7 @@ rm -rf "$tmp"
 
 # --- T10. A bare / no-recipe untracked delegation is still surfaced --------
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
-printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s10"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s10" "$tmp" "$tmp/m.jsonl" "$tmp/out"
 assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T10: bare delegation surfaced"
 assert_contains "(bare/no-recipe)" "$(jq -r .reason "$tmp/out")" "T10: bare delegation labelled in the batch"
@@ -247,9 +258,10 @@ rm -rf "$tmp"
 # #477 scoped only the projectless rows by session, so a row under this repo's
 # name from another session was still listed here as "this repo's backlog".
 # With no human sweep to pick those up (ADR 0030) that asks an agent about a
-# draft it never saw. A row that names a session is listed only in that
-# session; a row with no session field (written before #479) keeps the
-# project-only match so the pre-#479 backlog is not orphaned.
+# draft it never saw. Only a row whose session is this session's is listed. A
+# row with no session field at all cannot be anyone's: surfacing it to every
+# session in the repo is the same wrong question, and #479 merged 2026-09-12,
+# so the sessionless backlog sits outside the 24 h window anyway.
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s16"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s16" "$tmp" "$tmp/m.jsonl" "$tmp/out"
@@ -259,13 +271,43 @@ run_hook "s16b" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
 assert_eq 0 "$ec" "T16: another session's named-project row → exit 0"
 assert_empty "$(cat "$tmp/out")" "T16: another session's named-project row is not listed"
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
-run_hook "s16c" "$tmp" "$tmp/m.jsonl" "$tmp/out"
-assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T16: a named-project row with no session field keeps the project-only match"
+run_hook "s16c" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
+assert_eq 0 "$ec" "T16: a named-project row with no session field → exit 0"
+assert_empty "$(cat "$tmp/out")" "T16: a named-project row with no session field is nobody's and is not listed"
+rm -rf "$tmp"
+
+# --- T17. Same-second siblings: a verdict on one does not track the other (#481)
+# The feedback map used to be keyed on ts alone, so a --id-pinned verdict on
+# sibling A marked sibling B as tracked too and B was never surfaced. The map
+# is keyed on ref_id where the feedback row carries one, on ref_ts otherwise.
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
+{
+  printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s17","otel_span_id":"aaaa000000000001"}\n' "$NOW" "$proj"
+  printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s17","otel_span_id":"aaaa000000000002"}\n' "$NOW" "$proj"
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","ref_id":"aaaa000000000001","kept":true,"verdict_source":"agent"}\n' "$NOW" "$NOW"
+} > "$tmp/m.jsonl"
+run_hook "s17" "$tmp" "$tmp/m.jsonl" "$tmp/out"
+reason=$(jq -r .reason "$tmp/out" 2>/dev/null)
+assert_contains "1 delegation(s)" "$reason" "T17: exactly the unverdicted sibling is surfaced"
+assert_contains "--id aaaa000000000002" "$reason" "T17: the surfaced row is the sibling without a verdict"
+case "$reason" in
+  *"aaaa000000000001"*) echo "  FAIL  T17: the verdicted sibling is not re-surfaced"; fail=$((fail+1));;
+  *) echo "  PASS  T17: the verdicted sibling is not re-surfaced"; pass=$((pass+1));;
+esac
+# A legacy feedback row (ref_ts only) still tracks by ts: both siblings drop
+# out, which is the best a row with no ref_id can do.
+{
+  printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s17b","otel_span_id":"aaaa000000000003"}\n' "$NOW" "$proj"
+  printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s17b","otel_span_id":"aaaa000000000004"}\n' "$NOW" "$proj"
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":true}\n' "$NOW" "$NOW"
+} > "$tmp/m.jsonl"
+run_hook "s17b" "$tmp" "$tmp/m.jsonl" "$tmp/out"
+assert_empty "$(cat "$tmp/out")" "T17: a legacy ref_ts-only verdict still tracks every row of its second"
 rm -rf "$tmp"
 
 # --- T15. DELEGATE_PROJECT wins, as it does for delegate.sh and feedback -----
 tmp=$(mk_tmp_repo)
-printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"explicit-name"}\n' "$NOW" > "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"explicit-name","session":"s15"}\n' "$NOW" > "$tmp/m.jsonl"
 run_hook "s15" "$tmp" "$tmp/m.jsonl" "$tmp/out" DELEGATE_PROJECT=explicit-name
 assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T15: DELEGATE_PROJECT scopes the scan"
 rm -rf "$tmp"

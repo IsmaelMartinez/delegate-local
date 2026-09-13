@@ -102,33 +102,42 @@ fi
 # Delegate rows with exit_status 0 and no referencing feedback row, inside the
 # window, filtered to the project (a Stop in repo A must not surface repo B's
 # work) and to the session. The feedback-ref map stays global (a feedback row
-# references a ts regardless of which project recorded it). No tty step: the
-# agent is the consumer here.
+# references a delegation regardless of which project recorded it). No tty
+# step: the agent is the consumer here.
+#
+# "Referencing" is by otel_span_id first and ts second (#481). ts is
+# second-precision and parallel delegations share it, so a map keyed on ts
+# alone marked a verdicted row's same-second sibling as tracked and the
+# sibling was never surfaced. A feedback row written since #479 carries
+# ref_id, the delegate row's otel_span_id, and is keyed on that; one written
+# before carries ref_ts only and is keyed on the ts, which still reaches every
+# delegate row of that second — the best a legacy row can do.
 #
 # The metrics file is shared by every session on the machine, and delegate.sh
 # records CLAUDE_CODE_SESSION_ID as `session` (#479), the same UUID this
-# payload carries. A row that names a session is listed only in that session,
-# named project or not: #477 scoped only the projectless rows this way, so a
-# row under this repo's name from a parallel session was still listed here,
-# and with no human sweep to pick it up (ADR 0030) that asked an agent about
-# a draft it never saw. A row with no session field (written before #479)
-# keeps the project-only match so that backlog is not orphaned — unless it is
-# projectless too, in which case nothing can scope it and it is left alone
-# rather than surfaced to every scratch-cwd session there is.
+# payload carries. Only a row whose session is this one is listed, named
+# project or not: #477 scoped only the projectless rows this way, so a row
+# under this repo's name from a parallel session was still listed here, and
+# with no human sweep to pick it up (ADR 0030) that asked an agent about a
+# draft it never saw. A row with no session field is nobody's — surfacing it
+# to every session in the repo is the same wrong question — so it stays
+# untracked; #479 merged 2026-09-12, so the rows that predate the field sit
+# outside the 24 h window in any case.
 cutoff_iso=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - $ARGV[0]*3600))' "$window_hours" 2>/dev/null) || exit 0
 [[ -z "$cutoff_iso" ]] && exit 0
 
 rows=$(jq -rs --arg cutoff "$cutoff_iso" --arg proj "$project" --arg sid "$session_id" '
   def src: .source // "delegate";
-  def in_scope: (.project // "") == $proj
-                and (if (.session // "") != "" then .session == $sid else $proj != "" end);
-  (reduce (.[] | select(src == "feedback" and .ref_ts != null)) as $f ({}; .[$f.ref_ts] = true)) as $fb
-  | map(select(src == "delegate"
+  def in_scope: (.project // "") == $proj and (.session // "") == $sid;
+  def fbkey: if (.ref_id // "") != "" then "id:" + .ref_id else "ts:" + .ref_ts end;
+  (reduce (.[] | select(src == "feedback" and (.ref_id != null or .ref_ts != null))) as $f ({}; .[$f | fbkey] = true)) as $fb
+  | def tracked: $fb["id:" + (.otel_span_id // "")] // $fb["ts:" + .ts] // false;
+  map(select(src == "delegate"
         and (.ts != null)
         and ((.exit_status // 0) == 0)
         and in_scope
         and (.ts >= $cutoff)
-        and ($fb[.ts] | not)))
+        and (tracked | not)))
   | .[]
   | [(.otel_span_id // "-"), .ts, (.recipe // "(bare/no-recipe)"), (.tier // "-")] | @tsv
 ' "$metrics_file" 2>/dev/null) || exit 0   # corrupt file → fail open, never wedge
@@ -150,12 +159,17 @@ mkdir -p "$marker_dir" 2>/dev/null || exit 0
 find "$marker_dir" -type f -mtime +7 -delete 2>/dev/null || true
 
 # --- surface the batch and hand it back to the agent ----------------------
-# The pin is the row's otel_span_id, not its ts: ts is second-precision and
-# parallel delegations share it, so delegate-feedback.sh refuses a --ts pin on
-# a shared second while --id cannot name two rows. Every row since the corpus
-# reset carries one; a row without prints `-` and has to be pinned by ts.
+# Each batch line leads with the pin to copy. It is the row's otel_span_id
+# where the row has one: ts is second-precision and parallel delegations share
+# it, so delegate-feedback.sh refuses a --ts pin on a shared second while --id
+# cannot name two rows. A row with no span id is pinned by --ts instead — one
+# recommended `--id <id>` for every row would have the agent copy `--id -` off
+# such a line, which matches nothing, and with the session marker written the
+# row would never be surfaced again.
 count=$(printf '%s\n' "$rows" | grep -c '')
-batch=$(printf '%s\n' "$rows" | awk -F'\t' 'NF>=2 && $2!="" {printf "  - id=%s  ts=%s  recipe=%s  tier=%s\n", $1, $2, $3, $4}')
+batch=$(printf '%s\n' "$rows" | awk -F'\t' 'NF>=2 && $2!="" {
+  if ($1 == "-") printf "  - --ts %s  recipe=%s  tier=%s\n", $2, $3, $4;
+  else           printf "  - --id %s  ts=%s  recipe=%s  tier=%s\n", $1, $2, $3, $4 }')
 
 # Outside a repository there is no name to print; say so rather than `''`.
 if [[ -n "$project" ]]; then scope="project '${project}'"
@@ -164,7 +178,7 @@ reason=$(cat <<EOF
 delegate-local verdict sweep (${scope}): ${count} delegation(s) from this session produced output but carry no verdict. Before you stop, record for each one whether you USED the delegated output as-is (hit), edited it and shipped it (scaffold), or rewrote/discarded it (miss) — a fact about what you did. scaffold and miss need a reason, and --final <path|-> naming what you shipped instead:
 
 ${batch}
-  DELEGATE_METRICS_FILE="${metrics_file}" bash "${script_dir}/delegate-feedback.sh" --id <id> --source agent hit | scaffold "<reason>" | miss "<reason>"
+  DELEGATE_METRICS_FILE="${metrics_file}" bash "${script_dir}/delegate-feedback.sh" <pin from the line above> --source agent hit | scaffold "<reason>" | miss "<reason>"
 
 This prompt is shown once per session; recording what you can and then stopping is fine. Set DELEGATE_VERDICT_STOP_MODE=off to silence.
 EOF

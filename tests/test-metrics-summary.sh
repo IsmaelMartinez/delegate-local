@@ -756,6 +756,62 @@ assert_contains "Recipe delegations (calibration signal): n=3  hits=1  misses=2 
   "one tier: a tagged/untagged pair on one delegation resolves to the later verdict"
 rm -f "$sf"
 
+# A feedback row with no ref_ts (and no ref_id) cannot be joined to anything.
+# The verdict map used to index by .ref_ts without a null guard in three of
+# its four passes, so one such row aborted the jq and the whole section
+# vanished while the script exited 0. Two projects so Per-project prints too.
+nullref=$(mktemp)
+cat > "$nullref" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","project":"a","exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-06-01T09:01:00Z","source":"delegate","recipe":"commit-message","tier":"prose","project":"b","exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":true,"verdict_source":"agent"}
+{"ts":"2026-06-01T10:01:00Z","source":"feedback","kept":false,"reason":"orphan row with no ref","verdict_source":"agent"}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$nullref" 2>&1) || EC=$?
+assert_eq 0 "$EC" "null ref_ts: exits 0"
+assert_contains "Recipe delegations (calibration signal): n=2  hits=1  misses=0  untracked=1  coverage=50%" "$out" "null ref_ts: the headline survives an unjoinable feedback row"
+assert_contains "  a                     n=1  hits=1  misses=0  untracked=0" "$out" "null ref_ts: the per-project section survives"
+assert_contains "  commit-message        n=2  hits=1  misses=0  untracked=1" "$out" "null ref_ts: the per-recipe section survives"
+assert_contains "shipped as-is     tokens≈100  50.0%  n=1" "$out" "null ref_ts: the tokens decomposition survives"
+case "$out" in
+  *"Cannot use null"*|*"jq: error"*) assert_eq "no jq error" "jq error" "null ref_ts: no jq abort leaks to the output" ;;
+  *) assert_eq "no jq error" "no jq error" "null ref_ts: no jq abort leaks to the output" ;;
+esac
+rm -f "$nullref"
+
+# Join by ref_id first, ref_ts second (#481). Two delegations share a second;
+# a verdict pinned by --id carries ref_id, and must land on its own row only.
+# A legacy feedback row (ref_ts, no ref_id) still joins by ts — and on a shared
+# second still reaches both siblings, which is the best a row with no id can do.
+sib=$(mktemp)
+cat > "$sib" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","project":"p","exit_status":0,"estimated_tokens_avoided":100,"otel_span_id":"aaaa000000000001"}
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","project":"p","exit_status":0,"estimated_tokens_avoided":300,"otel_span_id":"aaaa000000000002"}
+{"ts":"2026-06-01T09:05:00Z","source":"delegate","recipe":"commit-message","tier":"prose","project":"p","exit_status":0,"estimated_tokens_avoided":50,"otel_span_id":"aaaa000000000003"}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","ref_id":"aaaa000000000001","kept":true,"verdict_source":"agent"}
+{"ts":"2026-06-01T10:01:00Z","source":"feedback","ref_ts":"2026-06-01T09:05:00Z","kept":false,"reason":"legacy row: ref_ts only","verdict_source":"agent"}
+EOF
+out=$(bash "$SCRIPT" --file "$sib" 2>&1)
+assert_contains "Recipe delegations (calibration signal): n=3  hits=1  misses=1  untracked=1  coverage=66%" "$out" \
+  "ref_id join: the --id verdict lands on its own row, the same-second sibling stays untracked, a ref_ts-only row still joins"
+assert_contains "shipped as-is     tokens≈100  22.2%  n=1" "$out" "ref_id join: the decomposition credits only the verdicted sibling's tokens"
+assert_contains "no verdict        tokens≈300  66.7%  n=1" "$out" "ref_id join: the sibling's tokens are unverdicted"
+recipe_line=$(printf '%s\n' "$out" | grep -E "^  commit-message" | tail -1)
+assert_contains "n=3  hits=1  misses=1  untracked=1" "$recipe_line" "ref_id join: the per-recipe row agrees"
+rm -f "$sib"
+
+sib2=$(mktemp)
+cat > "$sib2" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","project":"p","exit_status":0,"otel_span_id":"aaaa000000000001"}
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","project":"p","exit_status":0,"otel_span_id":"aaaa000000000002"}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":true}
+EOF
+out=$(bash "$SCRIPT" --file "$sib2" 2>&1)
+assert_contains "Recipe delegations (calibration signal): n=2  hits=2  misses=0  untracked=0  coverage=100%" "$out" \
+  "ref_id join: a legacy ref_ts-only verdict on a shared second still reaches both siblings"
+rm -f "$sib2"
+
 # Captured-pair coverage (#461 follow-up). The two ways a rejection acquires its
 # shipped half are not interchangeable — `--final` needs the caller to remember,
 # the boundary hook infers it from a credited post — so the line splits them.

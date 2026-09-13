@@ -232,6 +232,80 @@ assert_not_contains "usable=" "$(printf '%s\n' "$out" | grep -F 'Verdicts on tho
 rm -rf "$tmp"
 
 # ---------------------------------------------------------------------------
+# A revised verdict counts once, under its latest. The tally and the per-recipe
+# ranking used to count raw feedback rows, so kept:false then kept:true on one
+# delegation read `n=2 usable=50%` while metrics-summary.sh printed `n=1
+# hits=1` for the same file.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+r1=$(iso_ago 3600)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$r1","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","exit_status":0,"otel_span_id":"bbbb000000000001"}
+{"ts":"$(iso_ago 3590)","source":"feedback","ref_ts":"$r1","ref_id":"bbbb000000000001","kept":false,"reason":"first look: too long","verdict_source":"agent"}
+{"ts":"$(iso_ago 3580)","source":"feedback","ref_ts":"$r1","ref_id":"bbbb000000000001","kept":true,"verdict_source":"agent"}
+EOF
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
+assert_contains "Verdicts on those delegations: n=1  kept=1  scaffold=0  rewrote=0  usable=100%" "$out" \
+  "revision: the tally counts the delegation once, under its latest verdict"
+assert_contains "  commit-message  n=1  kept=1  scaffold=0  rewrote=0  usable=100%" "$out" \
+  "revision: the per-recipe row counts the delegation once, under its latest verdict"
+rm -rf "$tmp"
+
+# ---------------------------------------------------------------------------
+# Join by ref_id first, ref_ts second (#481). Two delegations share a second;
+# the verdict names the FIRST by ref_id. INDEX(.ts) kept the second, so the
+# rejection was filed under the wrong recipe and project and its draft
+# fallback pointed at the sibling's file. There is nothing ambiguous about a
+# ref_id row, so the AMBIGUOUS warning stays quiet; a ref_ts-only row on a
+# shared second is still ambiguous and still says so.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+st=$(iso_ago 600)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$st","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"first-project","exit_status":0,"draft_file":"S1.draft.txt","otel_span_id":"cccc000000000001"}
+{"ts":"$st","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"second-project","exit_status":0,"draft_file":"S2.draft.txt","otel_span_id":"cccc000000000002"}
+{"ts":"$(iso_ago 590)","source":"feedback","ref_ts":"$st","ref_id":"cccc000000000001","kept":false,"reason":"verdict on the first sibling","verdict_source":"agent"}
+EOF
+printf 'the commit draft\n' > "$tmp/drafts/S1.draft.txt"
+printf 'the reply draft\n' > "$tmp/drafts/S2.draft.txt"
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_contains "project=first-project  recipe=commit-message" "$out" \
+  "ref_id join: the rejection is filed under the row its ref_id names"
+assert_contains "draft:  $tmp/drafts/S1.draft.txt" "$out" \
+  "ref_id join: the draft fallback follows ref_id, not the last row of the second"
+assert_not_contains "S2.draft.txt" "$out" "ref_id join: the sibling's draft is not shown"
+assert_not_contains "AMBIGUOUS" "$out" "ref_id join: a ref_id verdict on a shared second is not ambiguous"
+assert_contains "Verdicts on those delegations: n=1  kept=0  scaffold=0  rewrote=1  usable=0%" "$out" \
+  "ref_id join: the tally counts the one verdict"
+assert_contains "  commit-message  n=1  kept=0  scaffold=0  rewrote=1  usable=0%" "$out" \
+  "ref_id join: the per-recipe row is the ref_id row's recipe"
+# The same second with a legacy ref_ts-only verdict: attribution is a guess
+# and the bundle says so.
+perl -pi -e 's/,"ref_id":"cccc000000000001"//' "$tmp/m.jsonl"
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_contains "AMBIGUOUS: 1 verdict(s)" "$out" "ref_id join: a ref_ts-only verdict on a shared second is flagged"
+rm -rf "$tmp"
+
+# A feedback row with neither ref_id nor ref_ts joins nothing. It must not
+# abort the join (indexing by null does), and it still counts as a verdict
+# and a rejection, because it is one — it just cannot be attributed.
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+o1=$(iso_ago 600)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$o1","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","exit_status":0,"otel_span_id":"dddd000000000001"}
+{"ts":"$(iso_ago 595)","source":"feedback","kept":false,"reason":"orphan: no reference at all","verdict_source":"agent"}
+{"ts":"$(iso_ago 590)","source":"feedback","ref_ts":"$o1","ref_id":"dddd000000000001","kept":true,"verdict_source":"agent"}
+EOF
+EC=0
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1) || EC=$?
+assert_eq 0 "$EC" "orphan: a feedback row with no reference does not abort the bundle"
+assert_contains "Verdicts on those delegations: n=2  kept=1  scaffold=0  rewrote=1  usable=50%" "$out" \
+  "orphan: the unattributable verdict still counts"
+assert_contains "orphan: no reference at all" "$out" "orphan: the rejection is still listed with its reason"
+assert_not_contains "jq: error" "$out" "orphan: no jq error leaks into the bundle"
+rm -rf "$tmp"
+
+# ---------------------------------------------------------------------------
 # 12. CUT vs INVENTED. A salient token present in the draft and absent from the
 # shipped text has two causes that need opposite responses, and calling both
 # INVENTED made the loop's own instrument report a hallucination on the most

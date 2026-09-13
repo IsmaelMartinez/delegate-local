@@ -6,7 +6,7 @@ This is documentation-as-code: when a maintainer updates the Grafana dashboards,
 
 ## Prerequisite — exporter wired
 
-Before any of the views below populate, the OTLP exporter has to be pointed at the Langfuse instance per [`docs/observability/langfuse-self-host.md`](../../docs/observability/langfuse-self-host.md). The runbook covers the docker-compose bring-up, API-key extraction, and the `DELEGATE_OTEL_ENDPOINT` / `DELEGATE_OTEL_HEADERS` env vars. Once those are exported, every `delegate.sh` call posts one span and every `delegate-feedback.sh hit|miss` call posts a linked feedback span — and the views below filter against attributes those spans already carry.
+Before any of the views below populate, the OTLP exporter has to be pointed at the Langfuse instance per [`docs/observability/langfuse-self-host.md`](../../docs/observability/langfuse-self-host.md). The runbook covers the docker-compose bring-up, API-key extraction, and the `DELEGATE_OTEL_ENDPOINT` / `DELEGATE_OTEL_HEADERS` env vars. Once those are exported, every `delegate.sh` call posts one span and every `delegate-feedback.sh hit | miss "<reason>"` call posts a linked feedback span — and the views below filter against attributes those spans already carry.
 
 The exporter emits the attribute schema in [`docs/otel-schema.md`](../../docs/otel-schema.md). Langfuse renders OTLP spans as traces under the project the API key belongs to, with attributes available as filter and group-by keys in the UI. The `delegate.feedback.verdict` attribute on feedback spans is recognised by Langfuse's [scores API](https://langfuse.com/docs/scores/overview) as a first-class score object via the `links` field — meaning HIT/MISS appears as a score on the parent trace in the UI, not just as a buried attribute.
 

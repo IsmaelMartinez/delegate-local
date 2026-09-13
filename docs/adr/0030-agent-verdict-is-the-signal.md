@@ -65,14 +65,16 @@ column. The calibration dashboard shows hit / scaffold / miss from all rows
 instead of a human gauge beside an adoption gauge.
 
 The Stop hook drops the hand-off sentence and, with no human sweep behind it,
-lists only this session's rows: a delegate row that carries the `session`
-field `delegate.sh` writes from `CLAUDE_CODE_SESSION_ID` (#479) is surfaced
-only in the session whose `session_id` matches, named project or not. #477 had
-scoped only the projectless rows that way, so a named-project row from a
-parallel session was still listed, and an agent was asked about a draft it
-never saw. Rows with no `session` field keep the project-only match. The
-recommended command pins by `--id <otel_span_id>`, read off the row, rather
-than `--ts`.
+lists only this session's rows: a delegate row is surfaced only in the
+session whose `session_id` matches the `session` field `delegate.sh` writes
+from `CLAUDE_CODE_SESSION_ID` (#479), named project or not. #477 had scoped
+only the projectless rows that way, so a named-project row from a parallel
+session was still listed, and an agent was asked about a draft it never saw.
+A row with no `session` field is nobody's and stays untracked — surfacing it
+to every session in the repo is the same wrong question, and #479 merged on
+2026-09-12, so those rows sit outside the 24-hour window in any case. Each
+batch line leads with the pin to copy: `--id <otel_span_id>` read off the
+row, or `--ts` for a row that has no span id.
 
 `scripts/verdict-sweep.sh` and `tests/test-verdict-sweep.sh` are archived out
 of `main`, the same way commit `22395b2` archived the research and

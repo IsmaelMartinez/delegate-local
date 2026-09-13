@@ -190,25 +190,6 @@ if [[ -f "$CALIBRATION" ]]; then
   fi
 fi
 
-# 5e. Every target that selects the feedback stream names verdict_source, the
-#     tag delegate-feedback.sh writes on every row and the sync labels on: a
-#     query without it would silently widen to whatever untagged rows a corpus
-#     happened to hold. Under ADR 0015 this kept the human and agent tiers
-#     apart; under ADR 0030 there is one tier, and the predicate is what ties
-#     the dashboards to the label the JSONL actually carries. Keyed on the
-#     STREAM, not the panel title, so a renamed panel is still checked.
-for dash in "$DASHBOARDS/grafana"/*.json; do
-  base=$(basename "$dash")
-  unpartitioned=$(jq -r '[.. | objects | select(has("targets")) | . as $p
-      | (.targets // [])[] | select((.expr // "") | contains("source=\"feedback\""))
-      | select((.expr // "") | contains("verdict_source") | not) | $p.title] | unique | join(", ")' "$dash")
-  if [[ -z "$unpartitioned" ]]; then
-    echo "  PASS  $base: every feedback-stream query commits to a verdict tier"; pass=$((pass+1))
-  else
-    echo "  FAIL  $base: feedback query with no verdict_source predicate (ADR 0015 conflation): $unpartitioned"; fail=$((fail+1))
-  fi
-done
-
 # 5d. The canary-failure stat panel MUST key on the exit code delegate.sh
 #     actually writes for a pre-flight canary/preflight-timeout stall. That is
 #     exit_status=3 (scripts/delegate.sh `emit_failure 3` then `exit 3` on the

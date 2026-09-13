@@ -1516,6 +1516,15 @@ src_attr=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].a
 assert_eq "agent" "$src_attr" "FB-SRC9: default source attribute value is agent"
 rm -rf "$tmp"
 
+# FB-SRC10. The lib's own defaults agree. delegate-feedback.sh always passes
+# the argument, so the defaults in scripts/lib/otel.sh are reached only by
+# other emitters (backfill-otel.sh), and a "human" left there would label
+# rows with the retired tier. The lib has no suite of its own; pin it here.
+assert_eq 0 "$(grep -c ':-human}' "$REPO/scripts/lib/otel.sh")" \
+  "FB-SRC10: scripts/lib/otel.sh no longer defaults any verdict_source to human"
+assert_eq 2 "$(grep -c 'verdict_source="\${\(9\|11\):-agent}"' "$REPO/scripts/lib/otel.sh")" \
+  "FB-SRC10: both emit_otel_feedback_span entry points default verdict_source to agent"
+
 # ---------------------------------------------------------------------------
 # Scaffold verdict (supervised-draft-delegation G1)
 # A third outcome distinct from hit and miss: the draft was discarded but

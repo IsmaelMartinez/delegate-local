@@ -89,7 +89,7 @@ The trailing prompt arg is the voice + reinforcement reminder; the recipe templa
  every technical object from the source preserved as a distinct noun phrase>
 ```
 
-Verify before recording verdict via `bash scripts/delegate-feedback.sh hit|miss [reason]`:
+Verify before recording verdict via `bash scripts/delegate-feedback.sh hit | scaffold "<reason>" | miss "<reason>"`:
 
 - Sentence count is exactly `{{sentence_count}}`.
 - No US spelling drift: search the output for `-ize`, `-ized`, `-izing`, `-ization`, `behavior`, `favor`, `favorite`, `analyze`, `optimize`, `utilize`. Any hit is a MISS.

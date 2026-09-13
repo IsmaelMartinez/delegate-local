@@ -109,16 +109,42 @@ echo "Watermark:  ${prev_ts:-(none — first run, reporting the whole corpus)}"
 echo "Newest row: $newest_ts"
 echo "New delegations since watermark: $new_count"
 
-# INDEX(.ts) keeps one row per key, and delegate timestamps are second-
-# precision, so parallel callers can share one. Where that happens a feedback
-# row's ref_ts cannot say which delegation it scored, and the recipe/project
-# shown below is whichever row INDEX kept. Say so rather than reporting an
-# attribution that might be wrong; the draft/final pair itself stays exact,
-# because it is named after the draft rather than after the timestamp.
-dupe_ts=$(jq -r 'select((.source // "delegate") == "delegate") | .ts' "$metrics_file" 2>/dev/null | sort | uniq -d)
-if [[ -n "$dupe_ts" ]]; then
-  echo "AMBIGUOUS: $(printf '%s\n' "$dupe_ts" | grep -c '') timestamp(s) are shared by more than one delegation;"
-  echo "  recipe and project attribution for verdicts on those is a guess. Captured pairs are unaffected."
+# The join from a feedback row to the delegation it scored, defined once and
+# interpolated into every jq program below. `parent` is evaluated with a
+# feedback row as `.` and returns the delegate row, or null for an orphan.
+# The key is the delegate row's otel_span_id first and its ts second (#481):
+# ts is second-precision and parallel delegations share it, so INDEX(.ts)
+# kept one row per second and a verdict on the other sibling was filed under
+# the wrong recipe and project, with its draft fallback pointing at the
+# sibling's file. A feedback row written since #479 carries ref_id and joins
+# by it; one written before carries ref_ts only and joins by ts, reaching
+# whichever row of that second INDEX kept — the best a legacy row can do.
+# `pkey` is the delegation's identity as seen from a feedback row, so that
+# several verdicts on one delegation collapse to the latest (an orphan keys
+# on its own reference and is kept).
+parent_join='
+  (map(select((.source // "delegate") == "delegate" and .ts != null))) as $dl
+  | (($dl | INDEX("ts:" + .ts)) + ($dl | map(select(.otel_span_id != null)) | INDEX("id:" + .otel_span_id))) as $d
+  | def parent: $d["id:" + (.ref_id // "")] // $d["ts:" + (.ref_ts // "")];
+  def pkey: parent as $p
+    | if $p == null then (if (.ref_id // "") != "" then "id:" + .ref_id else "ts:" + (.ref_ts // "") end)
+      elif $p.otel_span_id != null then "id:" + $p.otel_span_id
+      else "ts:" + $p.ts end;
+  def latest_verdicts: [.[] | select(.source == "feedback")] | sort_by(.ts) | INDEX(pkey) | [.[]];
+'
+
+# A ref_ts-only verdict on a second that more than one delegation shares
+# cannot say which one it scored, and the recipe/project shown below is
+# whichever row INDEX kept. Say so rather than reporting an attribution that
+# might be wrong; a ref_id verdict on the same second is exact, and the
+# draft/final pair is always exact because it is named after the draft.
+ambiguous=$(jq -rs '
+  (map(select((.source // "delegate") == "delegate")) | group_by(.ts) | map(select(length > 1) | .[0].ts)) as $shared
+  | [.[] | select(.source == "feedback" and (.ref_id // "") == "" and (.ref_ts as $t | $shared | index($t) != null))] | length
+' "$metrics_file" 2>/dev/null)
+if [[ -n "$ambiguous" && "$ambiguous" != "0" ]]; then
+  echo "AMBIGUOUS: $ambiguous verdict(s) name a second shared by more than one delegation and carry no ref_id;"
+  echo "  recipe and project attribution for those is a guess. Captured pairs are unaffected."
 fi
 echo
 
@@ -128,12 +154,15 @@ echo
 # "usage" line, and with no human verdicts the quality line said there was no
 # keep rate to quote — true under that ADR, and useless, because the agent's
 # rows were the only signal there was going to be. Untagged rows (written
-# before the tier tag existed) count the same as tagged ones. `usable` is
-# kept plus scaffold over n, the same ranking key the per-recipe section uses,
-# and is omitted rather than printed as 0% when there are no verdicts at all.
+# before the tier tag existed) count the same as tagged ones. A delegation
+# counts once, under its latest verdict, as metrics-summary.sh counts it —
+# counting rows read a revised verdict as two. `usable` is kept plus scaffold
+# over n, the same ranking key the per-recipe section uses, and is omitted
+# rather than printed as 0% when there are no verdicts at all.
 jq -rs --arg prev "$prev_ts" '
-  (map(select((.source // "delegate") == "delegate")) | INDEX(.ts)) as $d
-  | map(select(.source == "feedback" and ($prev == "" or ($d[.ref_ts].ts // "") > $prev)))
+  '"$parent_join"'
+  latest_verdicts
+  | map(select($prev == "" or (parent.ts // "") > $prev))
   | (map(select(.kept)) | length) as $kept
   | (map(select(.scaffold)) | length) as $scaffold
   | (map(select((.kept | not) and (.scaffold | not))) | length) as $rewrote
@@ -153,10 +182,10 @@ echo
 echo "--- per-recipe outcomes, last ${window_days}d (worst usable-rate first) ---"
 jq -rs --argjson days "$window_days" '
   (now - ($days * 86400)) as $cut
-  | (map(select((.source // "delegate") == "delegate")) | INDEX(.ts)) as $d
-  | map(select(.source == "feedback"))
-  | map(select((($d[.ref_ts].ts // "") | if . == "" then 0 else (fromdateiso8601? // 0) end) > $cut))
-  | map({r: ($d[.ref_ts].recipe // "(bare)"),
+  | '"$parent_join"'
+  latest_verdicts
+  | map(select(((parent.ts // "") | if . == "" then 0 else (fromdateiso8601? // 0) end) > $cut))
+  | map({r: (parent.recipe // "(bare)"),
          u: (if .kept then "kept" elif .scaffold then "scaffold" else "rewrote" end)})
   | group_by(.r)
   | map({recipe: .[0].r,
@@ -237,23 +266,24 @@ list_markers() {
 # the two frequently-empty fields (draft_file, final_file) silently shift every
 # later field left.
 jq -rs --arg prev "$prev_ts" '
-  (map(select((.source // "delegate") == "delegate")) | INDEX(.ts)) as $d
-  | map(select(.source == "feedback" and (.kept | not)))
-  | map(select($prev == "" or ($d[.ref_ts].ts // "") > $prev))
+  '"$parent_join"'
+  map(select(.source == "feedback" and (.kept | not)))
+  | map(select($prev == "" or (parent.ts // "") > $prev))
   | .[]
   | (.final_file // "") as $fin
+  | parent as $p
   | [ .ref_ts,
-      ($d[.ref_ts].project // "-"),
-      ($d[.ref_ts].recipe // "(bare)"),
+      ($p.project // "-"),
+      ($p.recipe // "(bare)"),
       # Prefer the draft the FEEDBACK row names: final_file is derived from
       # draft_file, so the two halves are provably the same delegation even
       # when several share a second-precision ts. A numbered final
       # (`<stem>.final.2.txt`, written when the stem already had one — #474)
-      # belongs to the same draft as the bare name. The $d lookup is the
+      # belongs to the same draft as the bare name. The parent lookup is the
       # fallback for rejections recorded without --final.
       (if $fin != "" and ($fin | test("\\.final(\\.[0-9]+)?\\.txt$"))
        then ($fin | sub("\\.final(\\.[0-9]+)?\\.txt$"; ".draft.txt"))
-       else ($d[.ref_ts].draft_file // "") end),
+       else ($p.draft_file // "") end),
       $fin,
       (.final_source // ""),
       (if .scaffold then "scaffold" else "rewrote" end),
@@ -325,10 +355,10 @@ echo
 # ---------------------------------------------------------------------------
 echo "--- capture coverage since watermark ---"
 jq -rs --arg prev "$prev_ts" '
-  (map(select((.source // "delegate") == "delegate")) | INDEX(.ts)) as $d
-  | map(select(.source == "feedback" and (.kept | not)))
-  | map(select($prev == "" or ($d[.ref_ts].ts // "") > $prev))
-  | (map(select(($d[.ref_ts].draft_file // "") != "")) | length) as $wd
+  '"$parent_join"'
+  map(select(.source == "feedback" and (.kept | not)))
+  | map(select($prev == "" or (parent.ts // "") > $prev))
+  | (map(select((parent.draft_file // "") != "")) | length) as $wd
   | (map(select((.final_file // "") != "")) | length) as $wf
   | (map(select((.reason // "") == "")) | length) as $nr
   | "  rejections=\(length)  with draft=\($wd)  with final=\($wf)  with no reason=\($nr)"

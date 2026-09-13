@@ -101,7 +101,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"true\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
           "queryType": "instant"
         }
       ]
@@ -162,7 +162,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" [$__range])) or vector(0)",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range])) or vector(0)",
           "queryType": "instant"
         }
       ]
@@ -223,7 +223,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"true\" [$__range])) or vector(0)",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__range])) or vector(0)",
           "queryType": "instant"
         }
       ]
@@ -284,7 +284,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | scaffold=\"true\" [$__range])) or vector(0)",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | scaffold=\"true\" [$__range])) or vector(0)",
           "queryType": "instant"
         }
       ]
@@ -345,7 +345,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"false\" | scaffold!=\"true\" [$__range])) or vector(0)",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" | scaffold!=\"true\" [$__range])) or vector(0)",
           "queryType": "instant"
         }
       ]
@@ -354,7 +354,7 @@
       "id": 30,
       "type": "stat",
       "title": "Untracked delegations",
-      "description": "Delegations in range minus verdict rows in range. A delegation whose verdict was revised counts twice on the right, so read it as an approximation; metrics-summary.sh has the exact untracked count.",
+      "description": "Successful delegations (exit_status 0) in range minus verdict rows in range. A delegation whose verdict was revised counts twice on the right, so read it as an approximation; metrics-summary.sh has the exact untracked count.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -406,7 +406,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" [$__range])) - (sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" [$__range])) or vector(0))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status=\"0\" [$__range])) - (sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range])) or vector(0))",
           "queryType": "instant"
         }
       ]
@@ -465,7 +465,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"true\" [$__auto])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" [$__auto]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__auto])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "hit rate"
         }
@@ -525,7 +525,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"true\" [$__auto]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "hit"
         },
@@ -536,7 +536,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | scaffold=\"true\" [$__auto]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | scaffold=\"true\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "scaffold"
         },
@@ -547,7 +547,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"false\" | scaffold!=\"true\" [$__auto]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" | scaffold!=\"true\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "miss"
         }
@@ -610,7 +610,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"true\" | recipe!=\"\" [$__auto])) / sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | recipe!=\"\" [$__auto]))",
+          "expr": "sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | recipe!=\"\" [$__auto])) / sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | recipe!=\"\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "{{recipe}}"
         }
@@ -671,7 +671,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"true\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\")) / sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))",
+          "expr": "sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\")) / sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))",
           "queryType": "instant",
           "legendFormat": "{{project}}"
         }
@@ -710,7 +710,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | kept=\"false\" | scaffold!=\"true\" | line_format \"{{.project}} recipe={{.recipe}} \u2014 {{.reason}}\"",
+          "expr": "{service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" | scaffold!=\"true\" | line_format \"{{.project}} recipe={{.recipe}} \u2014 {{.reason}}\"",
           "queryType": "range"
         }
       ]
@@ -748,7 +748,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | verdict_source=\"agent\" | scaffold=\"true\" | line_format \"{{.project}} recipe={{.recipe}} \u2014 {{.reason}}\"",
+          "expr": "{service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | scaffold=\"true\" | line_format \"{{.project}} recipe={{.recipe}} \u2014 {{.reason}}\"",
           "queryType": "range"
         }
       ]

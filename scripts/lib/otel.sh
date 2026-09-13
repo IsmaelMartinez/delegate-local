@@ -326,12 +326,12 @@ emit_otel_span() {
 #   <parent_span_id> <parent_model> [<parent_recipe>] [<project>]
 #   [<verdict_source>]
 #
-# verdict_source is the agent-observed-verdict tier tag (Phase E): "human"
-# (default) for a maintainer-recorded verdict, "agent" for one the agent
-# auto-recorded about its own use of the output. It is metadata, not content,
-# so it always travels — unaffected by DELEGATE_OTEL_INCLUDE_CONTENT. Without
-# it, an OTel-backed dashboard could not reproduce the human-only hit-rate
-# partition and the agent tier would contaminate the quality signal downstream.
+# verdict_source is the verdict tier tag: "agent", the one tier there is (ADR
+# 0030) and the default — the agent that used or rewrote the draft records
+# the verdict. It is metadata, not content, so it always travels — unaffected
+# by DELEGATE_OTEL_INCLUDE_CONTENT — and it is the label the dashboards filter
+# on, so a span carrying the retired "human" value would fall out of every
+# panel.
 #
 # Emit a feedback-as-linked-span per ADR 0007: NEW trace, NEW span, with
 # `links: [{traceId, spanId}]` pointing at the parent delegation when the
@@ -349,7 +349,7 @@ emit_otel_feedback_span() {
   [[ -z "${DELEGATE_OTEL_ENDPOINT:-}" ]] && return 0
   local fb_ts="$1" verdict="$2" reason="$3" parent_trace_id="$4"
   local parent_span_id="$5" parent_model="$6" parent_recipe="${7:-}"
-  local project="${8:-}" verdict_source="${9:-human}"
+  local project="${8:-}" verdict_source="${9:-agent}"
 
   # Generate this span's own identifiers. Per ADR 0007, the feedback is in a
   # new trace because the parent trace has already been flushed by the time
@@ -383,7 +383,7 @@ emit_otel_feedback_span_with_ids() {
   local parent_trace_id="$6" parent_span_id="$7" parent_model="$8"
   local parent_recipe="${9:-}"
   local project="${10:-}"
-  local verdict_source="${11:-human}"
+  local verdict_source="${11:-agent}"
   local include_content="${DELEGATE_OTEL_INCLUDE_CONTENT:-0}"
 
   # Convert the feedback row's ISO ts to nanoseconds and derive end_ns

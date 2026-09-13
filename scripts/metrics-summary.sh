@@ -152,25 +152,52 @@ echo "Tokens avoided (≈):  $total_avoided"
 # and every percentage is guarded on a non-zero denominator (jq aborts the whole
 # program on divide-by-zero, which under `set -uo pipefail` would silently drop
 # the section and still exit 0).
+#
+# The feedback join is defined once here and interpolated into every jq
+# program that needs a delegate row's current verdict (this pass, the
+# feedback rollup, per-project, per-recipe), so the four sections cannot
+# disagree on what "the verdict" is. `verdict` is evaluated with a delegate
+# row as `.` and returns hit / miss / scaffold, or null when none references
+# it.
+#
+# The key is the row's otel_span_id first and its ts second (#481). ts is
+# second-precision and parallel delegations share it, so a map keyed on ts
+# alone handed one verdict to both same-second siblings. A feedback row
+# written since #479 carries ref_id, the delegate row's otel_span_id, and is
+# keyed on that; one written before carries ref_ts only and is keyed on the
+# ts, which still reaches every delegate row of that second — the best a
+# legacy row can do. A feedback row with neither key cannot be joined and is
+# skipped: without the guard, indexing an object by null aborts the jq, and
+# under `set -uo pipefail` the whole section vanished while the script exited
+# 0. The latest verdict per key wins (verdict revision); sort_by(.ts) is a
+# guard, not a correction — the 994 feedback rows this was first written
+# against were perfectly chronological, but delegate-feedback.sh appends
+# without checking, so a concurrent or backfilled write breaks "latest wins"
+# unless it means latest in time.
+verdict_join='
+  def fbv: if (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
+  def fbkey: if (.ref_id // "") != "" then "id:" + .ref_id else "ts:" + .ref_ts end;
+  (reduce ([.[] | select((.source // "delegate") == "feedback" and (.ref_id != null or .ref_ts != null))] | sort_by(.ts) | .[]) as $i
+     ({}; .[$i | fbkey] = ($i | fbv))) as $vmap
+  | def verdict: $vmap["id:" + (.otel_span_id // "")] // $vmap["ts:" + .ts];
+'
 jq -rs '
   def src: .source // "delegate";
-  def fbv: if (.scaffold // false) then "scaffold" elif .kept then "kept" else "rewritten" end;
   # One decimal always, so the column does not go ragged on a whole number.
   def pct($n; $d):
     if $d > 0 then ((($n * 1000 / $d) | round) as $t | "\($t / 10 | floor).\($t % 10)")
     else "0.0" end;
-  (reduce ([.[] | select(src == "feedback" and .ref_ts != null)] | sort_by(.ts) | .[]) as $i
-     ({}; .[$i.ref_ts] = ($i | fbv))) as $vmap
-  | (map(select(src == "experiment")) | map(.estimated_tokens_avoided // 0) | add // 0) as $exp_tok
+  '"$verdict_join"'
+  (map(select(src == "experiment")) | map(.estimated_tokens_avoided // 0) | add // 0) as $exp_tok
   | (map(select(src == "experiment")) | length) as $exp_n
   | (map(select(src == "delegate"))) as $dl
   | ($dl | map(select((.exit_status // 0) != 0))) as $bad
   | ($dl | map(select((.exit_status // 0) == 0))
-        | map({t: (.estimated_tokens_avoided // 0), v: ($vmap[.ts] // "none")})) as $ok
+        | map({t: (.estimated_tokens_avoided // 0), v: (verdict // "none")})) as $ok
   | ($ok | map(.t) | add // 0) as $ok_tok
   | (def bucket($k): ($ok | map(select(.v == $k)));
-     [ ["shipped as-is",   "kept"],
-       ["rewritten",       "rewritten"],
+     [ ["shipped as-is",   "hit"],
+       ["rewritten",       "miss"],
        ["used as scaffold","scaffold"],
        ["no verdict",      "none"] ]
      | map(. as [$label, $key]
@@ -282,19 +309,12 @@ if (( n_feedback > 0 )); then
   fi
   jq -rs --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
-    # fbv maps a feedback row to its verdict string. scaffold (the discarded-
-    # but-useful third outcome, G1) is checked first because it also carries
-    # kept:false; a legacy row with no scaffold field falls through to the
-    # hit/miss read of kept, so historical rows derive exactly as before.
-    def fbv: if (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
-    # One map, ref_ts -> verdict. The latest verdict wins (verdict revision).
-    # sort_by(.ts) is a guard, not a correction: the 994 feedback rows in the
-    # corpus this was written against were perfectly chronological, so it moved
-    # no number there. Nothing enforces that ordering: delegate-feedback.sh
-    # appends without checking, so a concurrent or backfilled write breaks
-    # "latest wins" unless it means latest in time.
-    (reduce ([.[] | select(src == "feedback")] | sort_by(.ts) | .[]) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $vmap
-    | (map(select(src == "delegate" and (.exit_status // 0) == 0) | {recipe, tier, v: $vmap[.ts]})) as $d
+    # verdict_join: fbv maps a feedback row to hit / miss / scaffold (scaffold
+    # is checked first because it also carries kept:false; a legacy row with no
+    # scaffold field falls through to the hit/miss read of kept), and verdict
+    # looks a delegate row up by otel_span_id, then ts.
+    '"$verdict_join"'
+    (map(select(src == "delegate" and (.exit_status // 0) == 0) | {recipe, tier, v: verdict})) as $d
     | ($d | map(select(.recipe != null))) as $rx
     | ($d | map(select(.recipe == null))) as $raw
     | ($rx | length) as $rn
@@ -344,9 +364,8 @@ if (( n_projects > 1 )); then
   echo "Per-project (delegate):"
   jq -rs --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
-    def fbv: if (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
-    (reduce ([.[] | select(src == "feedback")] | sort_by(.ts) | .[]) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $vmap
-    | map(select(src == "delegate" and (.exit_status // 0) == 0) | {ts, project: (.project // ""), duration_ms, v: $vmap[.ts]})
+    '"$verdict_join"'
+    map(select(src == "delegate" and (.exit_status // 0) == 0) | {ts, project: (.project // ""), duration_ms, v: verdict})
     | group_by(.project)
     | map({
         project: .[0].project,
@@ -376,9 +395,8 @@ if (( n_recipe > 0 )); then
   echo "Per-recipe (delegate):"
   jq -rs --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
-    def fbv: if (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
-    (reduce ([.[] | select(src == "feedback")] | sort_by(.ts) | .[]) as $i ({}; .[$i.ref_ts] = ($i | fbv))) as $vmap
-    | map(select(src == "delegate" and .recipe != null and (.exit_status // 0) == 0) | {ts, recipe, v: $vmap[.ts]})
+    '"$verdict_join"'
+    map(select(src == "delegate" and .recipe != null and (.exit_status // 0) == 0) | {ts, recipe, v: verdict})
     | group_by(.recipe)
     | map({
         recipe: .[0].recipe,

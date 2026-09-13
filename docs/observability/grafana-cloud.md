@@ -78,7 +78,7 @@ export DELEGATE_OTEL_ENDPOINT="https://otlp-gateway-prod-<region>.grafana.net/ot
 export DELEGATE_OTEL_HEADERS="Authorization: Basic <base64-encoded-instance-id:token>"
 ```
 
-Substitute your region (e.g. `us-central-0`, `eu-west-0`) and the base64 string from the auth step. Once exported, the next `delegate.sh` call posts one span per invocation; the matching `delegate-feedback.sh hit|miss` call posts the feedback span with `links` to the parent.
+Substitute your region (e.g. `us-central-0`, `eu-west-0`) and the base64 string from the auth step. Once exported, the next `delegate.sh` call posts one span per invocation; the matching `delegate-feedback.sh hit | miss "<reason>"` call posts the feedback span with `links` to the parent.
 
 ## Backfill historical metrics
 
