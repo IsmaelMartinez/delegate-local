@@ -31,13 +31,13 @@ Latency and tokens-avoided trends:
 
 ## View 2 — Calibration (counterpart to `delegate-calibration.json`)
 
-Surface: Langfuse's **Scores** view, which natively models the HIT/MISS verdict because the feedback span's `delegate.feedback.verdict` attribute is recognised through the `links` field on the parent trace.
+Surface: Langfuse's **Scores** view, which natively models the hit / scaffold / miss verdict because the feedback span's `delegate.feedback.verdict` attribute is recognised through the `links` field on the parent trace.
 
 Recreate in Langfuse:
 
 1. Open **Tracing → Scores**. Each row is one feedback event joined to its parent delegation through the OTLP `links` field. Langfuse renders the join automatically.
-2. Filter on **Score name** = `delegate.feedback.verdict`. Two values are present: `hit` and `miss`.
-3. Switch the score chart to **Aggregation by score value** and the time range to last 7 days. The two stacked series (HIT count and MISS count) are the calibration view's headline.
+2. Filter on **Score name** = `delegate.feedback.verdict`. Three values are present: `hit`, `scaffold` and `miss`.
+3. Switch the score chart to **Aggregation by score value** and the time range to last 7 days. The three stacked series (hit, scaffold and miss counts) are the calibration view's headline; scaffold is usable-with-edits and counts toward the usable rate, not the hit rate.
 4. Save the filter as `delegate-local — calibration`.
 5. Add a second filter clone scoped to `score value = miss` and group by `delegate.recipe` (joined through the link to the parent span). The bar chart shows MISSes per recipe — the recurring-MISS detection signal that the runtime nudge in `delegate-feedback.sh` keys off when it prints the draft `gh issue create` command.
 
@@ -50,6 +50,7 @@ SELECT
   s.metadata->>'delegate.recipe' AS recipe,
   COUNT(*) FILTER (WHERE s.value = 'hit') * 1.0 / NULLIF(COUNT(*), 0) AS hit_rate,
   COUNT(*) FILTER (WHERE s.value = 'hit') AS hits,
+  COUNT(*) FILTER (WHERE s.value = 'scaffold') AS scaffolds,
   COUNT(*) FILTER (WHERE s.value = 'miss') AS misses
 FROM scores s
 JOIN traces t ON t.id = s.trace_id
