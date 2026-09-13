@@ -458,22 +458,40 @@ fi
 # checkouts) came to hold 14 rows at rate=0%. They are neither dropped nor
 # filed under a name: one `(no project)` line after the per-project rows, kept
 # out of the count ranking so a scratch cwd cannot rank above a real project.
+#
+# Two kinds of row leave the ratio since #483, and one line under the table
+# says how many. `below_floor:true` is a body the hook measured under
+# DELEGATE_BOUNDARY_MIN_CHARS (an applied-in hash, a dependabot command, one
+# word); no recipe should draft it, so it is neither a hit nor a miss — inline
+# review comments read 3% while those were counted. `denied:true` is an
+# attempt the hook blocked: the post did not happen, and the delegated retry
+# that follows is the row that counts, so counting the attempt too would
+# record every enforced boundary as a miss and then a hit. An
+# `enforce_skipped` row (no provider answered, the post went through
+# undrafted) is a real miss and counts as it always did. The floor named on
+# the line is the one in force for this shell, since the rows carry the
+# verdict, not the threshold it was made against.
 n_opp=$(jq -rs 'map(select((.source // "") == "opportunity")) | length' "$metrics_file")
 if (( n_opp > 0 )); then
   echo "Trigger rate (commit/PR/release/comment boundaries):"
-  jq -rs '
+  jq -rs --arg floor "${DELEGATE_BOUNDARY_MIN_CHARS:-120}" '
     map(select((.source // "") == "opportunity"))
-    | group_by(.project // "")
-    | map({
-        project: (.[0].project // ""),
-        n: length,
-        delegated: (map(select(.delegated == true)) | length),
-        missed: (map(select(.delegated == false)) | length)
-      })
-    | sort_by((.project == ""), -.n)
-    | .[]
-    | "  \((if .project == "" then "(no project)" else .project end) | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
-      + "  rate=\(.delegated * 100 / .n | floor)%"
+    | (map(select(.below_floor == true)) | length) as $floored
+    | (map(select(.denied == true)) | length) as $denied
+    | map(select(.below_floor != true and .denied != true))
+    | (group_by(.project // "")
+      | map({
+          project: (.[0].project // ""),
+          n: length,
+          delegated: (map(select(.delegated == true)) | length),
+          missed: (map(select(.delegated == false)) | length)
+        })
+      | sort_by((.project == ""), -.n)
+      | .[]
+      | "  \((if .project == "" then "(no project)" else .project end) | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
+        + "  rate=\(.delegated * 100 / .n | floor)%"),
+      "  excluded \($floored) boundaries under \($floor) chars",
+      (if $denied > 0 then "  excluded \($denied) denied attempts (the post did not happen; the retry is what counts)" else empty end)
   ' "$metrics_file"
   echo
 fi

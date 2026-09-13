@@ -401,9 +401,54 @@ case "$trig" in
   *null*) assert_eq "absent" "present" "no-project opportunities: never printed as null" ;;
   *)      assert_eq "absent" "absent"  "no-project opportunities: never printed as null" ;;
 esac
-assert_contains "(no project)" "$(grep -v '^$' <<<"$trig" | tail -1)" \
+# Among the project rows (the `excluded …` footer since #483 is not one).
+assert_contains "(no project)" "$(grep -F 'opportunities=' <<<"$trig" | tail -1)" \
   "no-project opportunities: listed after the per-project rows, not ranked by count"
 rm -f "$noproj"
+
+# 12e. #483: the rate is about real drafting. A row the hook marked
+# `below_floor:true` (a body under DELEGATE_BOUNDARY_MIN_CHARS — an applied-in
+# hash, a dependabot command) is neither a hit nor a miss and leaves both
+# halves of the ratio; a `denied:true` row is an attempt the hook blocked, so
+# the post did not happen and the delegated retry that follows is the row
+# that counts. An `enforce_skipped` row (no provider answered, the post went
+# through undrafted) is a real miss and counts as before. Fixture: alpha has
+# 1 delegated, 1 plain miss, 1 no-provider miss, 1 below-floor row and 1
+# denied attempt — 1/3, not 1/5.
+floor=$(mktemp)
+cat > "$floor" <<'EOF'
+{"ts":"2026-09-13T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312}
+{"ts":"2026-09-13T10:02:00Z","source":"opportunity","project":"alpha","boundary":"comment-reply","suggested_recipe":"maintainer-reply","delegated":false,"body_chars":280}
+{"ts":"2026-09-13T10:03:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":200,"enforce_skipped":"no-provider"}
+{"ts":"2026-09-13T10:04:00Z","source":"opportunity","project":"alpha","boundary":"pr-review-comment","suggested_recipe":"pr-review-reply","delegated":false,"body_chars":23,"below_floor":true}
+{"ts":"2026-09-13T10:05:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$floor" 2>&1) || EC=$?
+assert_eq 0 "$EC" "body floor: exits 0"
+trig=$(sed -n '/^Trigger rate/,/^$/p' <<<"$out")
+assert_contains "opportunities=3  delegated=1  missed=2  rate=33%" "$trig" \
+  "body floor: below-floor and denied rows leave the ratio, the no-provider miss stays"
+assert_contains "excluded 1 boundaries under 120 chars" "$trig" \
+  "body floor: one line under the table names the excluded count and the floor"
+assert_contains "excluded 1 denied attempts" "$trig" \
+  "body floor: denied attempts are reported on their own, not as misses"
+# The floor named is the one in force, so a re-tuned floor reads correctly.
+out=$(DELEGATE_BOUNDARY_MIN_CHARS=80 bash "$SCRIPT" --file "$floor" 2>&1)
+assert_contains "under 80 chars" "$out" "body floor: the line reads DELEGATE_BOUNDARY_MIN_CHARS"
+rm -f "$floor"
+# With nothing excluded the line still prints, so the floor is never silent.
+opp2=$(mktemp)
+cat > "$opp2" <<'EOF'
+{"ts":"2026-09-13T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true}
+EOF
+out=$(bash "$SCRIPT" --file "$opp2" 2>&1)
+assert_contains "excluded 0 boundaries under 120 chars" "$out" "body floor: the excluded line prints even at zero"
+case "$out" in
+  *"denied attempts"*) assert_eq "absent" "present" "body floor: no denied line when nothing was denied" ;;
+  *)                   assert_eq "absent" "absent"  "body floor: no denied line when nothing was denied" ;;
+esac
+rm -f "$opp2"
 
 # 12d. The per-project DELEGATE section carries the same projectless rows
 # (#476): delegate.sh records no project outside a repository, so they are

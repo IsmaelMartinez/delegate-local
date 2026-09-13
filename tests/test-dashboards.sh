@@ -41,13 +41,17 @@ fi
 # Allowlist of JSONL field names the dashboards may reference. These are the
 # fields scripts/delegate.sh, delegate-feedback.sh, embed.sh and the eval
 # harness write to metrics.jsonl (plus recipe/tier, which the sync script
-# enriches onto feedback rows from the parent delegation). A LogQL reference
-# to anything outside this set is almost certainly a typo or schema drift.
+# enriches onto feedback rows from the parent delegation), and the fields of
+# the source:"opportunity" row scripts/delegate-boundary-hook.sh writes
+# (boundary, suggested_recipe, delegated, and since #483 body_chars,
+# below_floor, denied, enforce_skipped). A LogQL reference to anything
+# outside this set is almost certainly a typo or schema drift.
 KNOWN_FIELDS="ts source project tier recipe backend model service \
 prompt_chars context_chars output_chars duration_ms queue_wait_ms \
 generation_ms exit_status estimated_tokens_avoided kept reason ref_ts \
 embedding_dim input_chars eval_tokens prompt_tokens output_bytes session \
-verdict_source scaffold"
+verdict_source scaffold \
+boundary suggested_recipe delegated body_chars below_floor denied enforce_skipped"
 
 is_known() {
   local needle="$1" f
@@ -172,6 +176,26 @@ if [[ -f "$CALIBRATION" ]]; then
   fi
 else
   echo "  FAIL  delegate-calibration.json missing"; fail=$((fail+1))
+fi
+
+# 5f. The Overview dashboard keeps a trigger-rate panel (#483). Volume and
+#     latency were charted from the start; the rate was not, so 15% over 680
+#     boundaries went unseen in the browser. The panel reads the opportunity
+#     stream and leaves out the rows the hook marks below_floor and denied —
+#     the first is not drafting, the second never posted — so a panel that
+#     drops either filter would quietly reintroduce the distortion.
+OVERVIEW="$DASHBOARDS/grafana/delegate-overview.json"
+if [[ -f "$OVERVIEW" ]]; then
+  trigger_panel=$(jq -r '[.panels[] | select((.targets // []) | map(.expr // "") | join(" ")
+      | (contains("source=\"opportunity\"") and contains("delegated=\"true\"")
+         and contains("below_floor!=\"true\"") and contains("denied!=\"true\"")))] | length' "$OVERVIEW" 2>/dev/null)
+  if [[ "$trigger_panel" -ge 1 ]]; then
+    echo "  PASS  delegate-overview.json: trigger-rate panel present, excluding below-floor and denied rows"; pass=$((pass+1))
+  else
+    echo "  FAIL  delegate-overview.json: no trigger-rate panel on the opportunity stream with the below_floor/denied exclusions"; fail=$((fail+1))
+  fi
+else
+  echo "  FAIL  delegate-overview.json missing"; fail=$((fail+1))
 fi
 
 # 5c. The per-recipe adoption-rate panel is a percentunit ratio time series. Its

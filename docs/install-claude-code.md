@@ -29,7 +29,7 @@ bash ~/.claude/skills/delegate-local/scripts/audit-models.sh
 
 ## Trigger reliability on commits and PRs (optional hook)
 
-Standalone asks ("summarise this log") fire the skill reliably, but a commit message or PR body buried inside a larger "implement X, commit, open a PR" instruction often gets written inline instead — the agent never re-runs skill selection mid-task. If you notice that pattern, install the opt-in `PreToolUse` boundary hook, which fires at the `git commit` / `gh pr create` / `gh release create` moment itself and reminds the agent (or, in enforce mode, requires it) to draft the artifact locally. It also records a per-project trigger-rate metric so you can see the gap close. See [`docs/boundary-hook.md`](boundary-hook.md).
+Standalone asks ("summarise this log") fire the skill reliably, but a commit message or PR body buried inside a larger "implement X, commit, open a PR" instruction often gets written inline instead — the agent never re-runs skill selection mid-task. If you notice that pattern, install the opt-in `PreToolUse` boundary hook, which fires at the `git commit` / `gh pr create` / `gh release create` moment itself and requires the agent to draft the artifact locally where the recipe is proven (commit messages, issue bodies, comment and review replies) and reminds it elsewhere; `DELEGATE_BOUNDARY_MODE=warn` makes every boundary a reminder. It also records a per-project trigger-rate metric so you can see the gap close. See [`docs/boundary-hook.md`](boundary-hook.md).
 
 ## Per-machine routing override
 

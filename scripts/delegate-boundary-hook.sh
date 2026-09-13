@@ -25,24 +25,48 @@
 #   3. Log one source:"opportunity" row per boundary with delegated:true|false so
 #      metrics-summary.sh can report trigger rate = delegated / opportunities per
 #      project — the number #277 is about, previously unmeasured.
-#   4. When delegated:false, surface a reminder naming the exact recipe. Mode is
-#      env-controlled: warn (default, non-blocking additionalContext the model
-#      sees), enforce (deny the call so the model re-routes), or off (measure
-#      only, no reminder).
+#   4. When delegated:false, surface a reminder naming the exact recipe. The
+#      four boundaries whose recipe is proven — git-commit, issue-create,
+#      comment-reply, pr-review-comment — are DENIED until a delegation exists
+#      (#483); the rest get the same text as non-blocking additionalContext.
+#      DELEGATE_BOUNDARY_MODE=warn|off overrides that globally, =enforce
+#      denies every boundary, and DELEGATE_BOUNDARY_ENFORCE names the set.
+#
+# Why deny rather than remind (#483). Measured 2026-09-13 over 14 days: 680
+# boundaries, 108 delegated, 15%. The warn-mode nudge is delivered while the
+# `git commit` / `gh pr comment` it is about executes, so the text is already
+# authored and posted by the time the agent reads it; the only boundary it can
+# influence is the next one, and after a nudge the next boundary within 30
+# minutes on the same project was delegated 9% of the time, against 34% after
+# a credit. There is no human in the loop to notice a reminder, so only a
+# mechanism that makes the agent redo the text with a draft moves the rate.
 #
 # Every boundary counts the same way. A body read from an existing file used to
 # be excluded as state:"pre-drafted" (#349), on the theory that the drafting
 # moment had passed; that exclusion was removed in #465 because the hook cannot
 # distinguish it from a body the agent authored one call earlier, and because
 # the identical act was counted when the write and the post shared a Bash call.
+# One exception since #483: a body under DELEGATE_BOUNDARY_MIN_CHARS is neither
+# nudged nor denied, and its row is marked below_floor:true so the summary can
+# leave it out of the rate. Inline review comments sat at 3% because most are
+# one line — an applied-in hash, a dependabot command, one word — and no recipe
+# should draft those.
 #
 # Fails OPEN: any error, missing jq, or unparseable input exits 0 so a commit is
-# never blocked by a hook bug. The only blocking path is the explicit
-# DELEGATE_BOUNDARY_MODE=enforce deny. Install is opt-in — see
+# never blocked by a hook bug, and a deny is issued only after pick-model.sh
+# confirms a provider is serving the recipe's tier — a session with MLX and
+# Ollama down cannot delegate and must still be able to commit (the row then
+# carries enforce_skipped:"no-provider"). Install is opt-in — see
 # docs/boundary-hook.md.
 #
 # Env:
-#   DELEGATE_BOUNDARY_MODE        warn (default) | enforce | off
+#   DELEGATE_BOUNDARY_MODE        unset (default: enforce the set below, warn
+#                                 elsewhere) | warn | enforce | off
+#   DELEGATE_BOUNDARY_ENFORCE     comma-separated boundaries denied by default
+#                                 (default git-commit,issue-create,comment-reply,
+#                                 pr-review-comment; empty means none)
+#   DELEGATE_BOUNDARY_MIN_CHARS   body length under which a boundary is recorded
+#                                 but neither nudged nor denied (default 120)
 #   DELEGATE_BOUNDARY_WINDOW_MIN  look-back window for a prior delegation (default 480)
 #   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
 #                               (default ~/.local/share/delegate-local)
@@ -221,6 +245,14 @@ _posted_body_scan() {
         else if (substr($0, i, 7) == "--body ")         f = 7;
         else if (substr($0, i, 10) == "--message ")     f = 10;
         else if (substr($0, i, 3) == "-b ")             f = 3;
+        # `-m` is `git commit` and `glab … note` alike (no gh command takes
+        # it), and `-am` is the one combined form seen in real commits.
+        # Neither was read until #483, so a commit posted the way Claude
+        # Code posts them — `-m "$(cat <<EOF … EOF)"` — measured nothing and
+        # stored no final. (No apostrophes in these comments: the program
+        # sits inside a single-quoted bash string.)
+        else if (substr($0, i, 3) == "-m ")             f = 3;
+        else if (substr($0, i, 4) == "-am ")            f = 4;
         if (f > 0) {
           j = i + f;
           while (j <= n && substr($0, j, 1) == " ") j++;
@@ -237,6 +269,41 @@ _posted_body_scan() {
           if (d == "\"" || d == "\047") {
             j++;
             while (j <= n && substr($0, j, 1) != d) {
+              # Inside double quotes a $( … ) is opaque to the shell: quotes
+              # nest and the closing " cannot be in there. The shape every
+              # Claude Code commit uses is `-m "$(cat <<EOF … EOF\n)"`, and
+              # its heredoc body can hold any quote or paren, so the body is
+              # copied whole up to its terminator line before the parens are
+              # balanced. Without this a quote in the first line of a commit
+              # message ended the value there, and the floor read a
+              # ten-paragraph commit as a one-liner. Checked before the
+              # backslash rule below so an escaped \$( stays literal.
+              if (d == "\"" && substr($0, j, 2) == "$(") {
+                v = v "$("; j += 2; depth = 1;
+                k = j; while (k <= n && substr($0, k, 1) == " ") k++;
+                if (substr($0, k, 6) == "cat <<") {
+                  k += 6; if (substr($0, k, 1) == "-") k++;
+                  while (k <= n && substr($0, k, 1) == " ") k++;
+                  hq = substr($0, k, 1); hd = "";
+                  if (hq == "\"" || hq == "\047") {
+                    k++;
+                    while (k <= n && substr($0, k, 1) != hq) { hd = hd substr($0, k, 1); k++ }
+                    k++;
+                  } else {
+                    while (k <= n && substr($0, k, 1) ~ /[A-Za-z0-9_]/) { hd = hd substr($0, k, 1); k++ }
+                  }
+                  if (hd != "") {
+                    ht = "\n" hd; hp = index(substr($0, k), ht);
+                    if (hp > 0) { he = k + hp + length(ht) - 2; v = v substr($0, j, he - j + 1); j = he + 1 }
+                  }
+                }
+                while (j <= n && depth > 0) {
+                  ch = substr($0, j, 1);
+                  if (ch == "(") depth++; else if (ch == ")") depth--;
+                  v = v ch; j++;
+                }
+                continue;
+              }
               # A backslash escapes the next character inside double quotes
               # only; inside single quotes the shell takes it literally.
               if (d == "\"" && substr($0, j, 1) == "\\") j++;
@@ -312,6 +379,17 @@ posted_body_text() {
     return 0
   fi
   rest=${out#*$'\n'}
+  # `-m "$(cat <<'EOF' … EOF\n)"` is how Claude Code writes every commit. The
+  # wrapper is shell, not message: the text between the delimiter lines is
+  # what git records, what the floor should measure and what a final should
+  # hold. Only that exact shape is unwrapped; anything else is left as read.
+  local _cs_re=$'^\\$\\(cat[[:space:]]+<<-?[[:space:]]*[\'"]?([A-Za-z0-9_]+)[\'"]?[[:space:]]*\n'
+  if [[ "$rest" =~ $_cs_re ]]; then
+    local _delim="${BASH_REMATCH[1]}" _tail_re
+    rest="${rest:${#BASH_REMATCH[0]}}"
+    _tail_re=$'\n'"${_delim}"$'[[:space:]]*\\)[[:space:]]*$'
+    [[ "$rest" =~ $_tail_re ]] && rest="${rest:0:$(( ${#rest} - ${#BASH_REMATCH[0]} ))}"
+  fi
   [[ -n "$rest" ]] || return 1
   printf '%s' "${rest:0:65536}"
 }
@@ -645,6 +723,29 @@ if [[ -f "$metrics_file" ]]; then
   [[ "${recent:-0}" -gt 0 ]] && delegated=true
 fi
 
+# --- how much is actually being posted? (#483) -----------------------------
+# The body is read once here and serves both the ADR 0029 capture below and
+# the length floor. `body_chars` is a count, never the text, and is recorded
+# only when there is a body to read at PreToolUse time: a `-F -` fed by a
+# heredoc, a file written by the same call, or a `--body-file` that does not
+# exist yet leave it absent, and an absent count keeps the pre-#483 behaviour
+# (nudge or deny as the mode says). Measured 2026-09-13, `pr-review-comment`
+# ran at 3% delegated over n=63 because most inline replies are one line — an
+# applied-in hash, a dependabot rebase command, a one-word acknowledgement —
+# and no recipe should draft those; without a stored length they could not be
+# told from real drafting after the fact, so the floor records them and
+# steps aside. 120 is a first guess a paragraph clears and a status line does
+# not; the rows carry the number so it can be re-tuned from the corpus.
+min_chars="${DELEGATE_BOUNDARY_MIN_CHARS:-120}"
+[[ "$min_chars" =~ ^[0-9]+$ ]] || min_chars=120
+body_chars="" below_floor=false
+if body_text=$(posted_body_text "$cmd"); then
+  body_chars=${#body_text}
+  (( body_chars < min_chars )) && below_floor=true
+else
+  body_text=""
+fi
+
 # --- store the posted body as the shipped half of the pair (ADR 0029) -------
 # `maintainer-reply` was the weakest recipe with any volume (21% usable over
 # n=33) and the only one whose 32 rejections carried no captured final at all,
@@ -669,7 +770,7 @@ if [[ "$delegated" == "true" && -n "${credit_draft:-}" \
       && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
   drafts_dir="$(dirname "$metrics_file")/drafts"
   final_path="$drafts_dir/${credit_draft%.draft.txt}.final.txt"
-  if [[ ! -e "$final_path" ]] && body_text=$(posted_body_text "$cmd"); then
+  if [[ ! -e "$final_path" && -n "$body_text" ]]; then
     if mkdir -p "$drafts_dir" 2>/dev/null; then
       chmod 700 "$drafts_dir" 2>/dev/null || true
       ( umask 077; set -C; printf '%s' "$body_text" > "$final_path" ) 2>/dev/null || true
@@ -677,6 +778,60 @@ if [[ "$delegated" == "true" && -n "${credit_draft:-}" \
     fi
   fi
 fi
+# --- which mode applies to THIS boundary? (#483) ---------------------------
+# Unset (the default) enforces the set in DELEGATE_BOUNDARY_ENFORCE and warns
+# elsewhere. The default set is the four boundaries whose recipe is proven on
+# the corpus: git-commit (commit-message, 92% usable over n=41), issue-create
+# (github-issue-body, 100% over n=12), and the two reply boundaries
+# (pr-review-reply, maintainer-reply). pr-create and pr-review-body stay on
+# warn until pr-description is above 80% usable on more than a handful of
+# rows — denying a post to hand the agent a recipe that fails half the time
+# would teach it to route around the hook. `${VAR-default}` rather than
+# `:-`, so an explicitly empty set means "enforce nothing", which is the
+# documented override.
+#
+# The deny is issued only while a provider is serving the recipe's tier: the
+# same resolution delegate.sh will perform, so a deny never points at a
+# command that cannot run. It costs one pick-model.sh run — the first
+# reachable provider answers in tens of milliseconds, a dead localhost port
+# refuses at once, and a dead remote host costs DELEGATE_PROBE_TIMEOUT (1s)
+# per entry — and it is paid only on the deny path: never on a warn-only
+# boundary, a credited post, or a body under the floor.
+enforce_set="${DELEGATE_BOUNDARY_ENFORCE-git-commit,issue-create,comment-reply,pr-review-comment}"
+enforce_set="${enforce_set// /}"
+case "${DELEGATE_BOUNDARY_MODE:-}" in
+  off)     mode=off ;;
+  warn)    mode=warn ;;
+  enforce) mode=enforce ;;
+  *) case ",${enforce_set}," in
+       *",${boundary},"*) mode=enforce ;;
+       *)                 mode=warn ;;
+     esac ;;
+esac
+prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
+enforce_skipped=""
+if [[ "$mode" == "enforce" && "$delegated" != "true" && "$below_floor" != "true" ]]; then
+  # The tier the recipe declares (every boundary recipe says `prose` today,
+  # but the frontmatter is the source of truth, as it is for delegate.sh).
+  recipe_tier=""
+  if [[ -f "$prompts_dir/$recipe.md" ]]; then
+    recipe_tier=$(awk '/^---[[:space:]]*$/ { d++; if (d == 2) exit; next }
+                       d == 1 && /^tier:[[:space:]]*/ { sub(/^tier:[[:space:]]*/, ""); print; exit }' \
+                  "$prompts_dir/$recipe.md" 2>/dev/null)
+  fi
+  # "No provider" covers both of pick-model.sh's failures — nothing
+  # reachable, or nothing serving this tier — and a missing pick-model.sh
+  # itself; in every one of them the printed command would fail the same
+  # way, and a session that cannot delegate must still be able to commit.
+  if [[ -z "$script_dir" || ! -f "$script_dir/pick-model.sh" ]] \
+     || ! bash "$script_dir/pick-model.sh" "${recipe_tier:-prose}" >/dev/null 2>&1; then
+    enforce_skipped="no-provider"
+    mode=warn
+  fi
+fi
+denied=false
+[[ "$mode" == "enforce" && "$delegated" != "true" && "$below_floor" != "true" ]] && denied=true
+
 # --- record the opportunity (the trigger-rate sensor) ---------------------
 # One row per boundary so trigger rate has a denominator. Stores no command or
 # message text — only boundary type, suggested recipe, project and the flag.
@@ -687,24 +842,40 @@ fi
 # otherwise): a delegated:true row spends a credit, and the projectless
 # lookup above only counts spends from the same session, so a row without it
 # could never spend one.
+#
+# Three #483 fields, each omitted when it does not apply. `body_chars` is the
+# measured length (an integer, never the text). `below_floor:true` marks a
+# row the floor kept out of the nudge, so the summary can keep it out of the
+# rate. `denied:true` marks an attempt this hook blocked: the post did not
+# happen, the agent will delegate and retry, and that retry writes the row
+# that counts — counting the blocked attempt too would record every enforced
+# boundary as a miss followed by a hit and cap the rate near 50%.
+# `enforce_skipped:"no-provider"` marks a deny that fell open; the post went
+# through undrafted, so that row stays a real miss.
 if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
   jq -nc --arg ts "$ts" --arg project "$project" --arg boundary "$boundary" \
-     --arg recipe "$recipe" --arg sid "$session_id" --argjson delegated "$delegated" '
+     --arg recipe "$recipe" --arg sid "$session_id" --argjson delegated "$delegated" \
+     --arg body_chars "$body_chars" --argjson below_floor "$below_floor" \
+     --argjson denied "$denied" --arg skipped "$enforce_skipped" '
      {ts:$ts, source:"opportunity", boundary:$boundary, suggested_recipe:$recipe, delegated:$delegated}
      + (if $project != "" then {project:$project} else {} end)
-     + (if $sid != "" then {session:$sid} else {} end)' \
+     + (if $sid != "" then {session:$sid} else {} end)
+     + (if $body_chars != "" then {body_chars:($body_chars | tonumber)} else {} end)
+     + (if $below_floor then {below_floor:true} else {} end)
+     + (if $denied then {denied:true} else {} end)
+     + (if $skipped != "" then {enforce_skipped:$skipped} else {} end)' \
      >> "$metrics_file" 2>/dev/null || true
 fi
 
 # --- nudge unless the artifact was already delegated ----------------------
 # The only exemption is a credited delegation. Since #465 a file-backed body
 # nudges like an inline one, because a body file is not evidence that the text
-# came from anywhere but this agent a call earlier.
+# came from anywhere but this agent a call earlier. A body under the floor is
+# recorded above and left alone here: it is not drafting.
 [[ "$delegated" == "true" ]] && exit 0
-
-mode="${DELEGATE_BOUNDARY_MODE:-warn}"
+[[ "$below_floor" == "true" ]] && exit 0
 [[ "$mode" == "off" ]] && exit 0
 
 # Every boundary recipe declares required inputs, and a --recipe call that
@@ -715,7 +886,6 @@ mode="${DELEGATE_BOUNDARY_MODE:-warn}"
 # hardcoding them here, so the nudge stays correct as recipes change their
 # inputs. `stdin` is not a --var — it means "pipe the context in" — and a
 # trailing `?` marks an optional input, which the nudge leaves out.
-prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 var_hint="" stdin_hint=""
 if [[ -f "$prompts_dir/$recipe.md" ]]; then
   while IFS= read -r key; do
@@ -758,13 +928,21 @@ else
   where="from a cwd outside any git repository"
   project_flag=""
 fi
-reminder="delegate-local: about to author a ${boundary} message inline with no local delegation recorded in the last ${window_min}m ${where}. Draft it on-device first — bash ~/.claude/skills/delegate-local/scripts/delegate.sh${project_flag} --recipe ${recipe}${var_hint}${stdin_hint} — then record the verdict with ~/.claude/skills/delegate-local/scripts/delegate-feedback.sh --source agent. Set DELEGATE_BOUNDARY_MODE=off to silence."
+reminder="delegate-local: about to author a ${boundary} message inline with no local delegation recorded in the last ${window_min}m ${where}. Draft it on-device first — bash ~/.claude/skills/delegate-local/scripts/delegate.sh${project_flag} --recipe ${recipe}${var_hint}${stdin_hint} — then record the verdict with ~/.claude/skills/delegate-local/scripts/delegate-feedback.sh --source agent."
 
-if [[ "$mode" == "enforce" ]]; then
-  jq -nc --arg r "$reminder" \
+# The same text on both channels; only the closing sentence differs. The
+# hook reads its environment from the harness, not from the command it is
+# judging, so a `DELEGATE_BOUNDARY_MODE=off git commit …` prefix changes
+# nothing — the deny says what does help: delegate, then rerun this call,
+# which the recorded delegation then credits.
+if [[ "$denied" == "true" ]]; then
+  jq -nc --arg r "${reminder} This call was blocked; rerun it once the delegation is recorded, and it is credited. DELEGATE_BOUNDARY_MODE=warn in the hook's environment downgrades this to a reminder." \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+elif [[ -n "$enforce_skipped" ]]; then
+  jq -nc --arg c "${reminder} No local provider answered, so this call proceeds undrafted; start MLX or Ollama to draft the next one." \
+    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",additionalContext:$c}}'
 else
-  jq -nc --arg c "$reminder" \
+  jq -nc --arg c "${reminder} Set DELEGATE_BOUNDARY_MODE=off to silence." \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",additionalContext:$c}}'
 fi
 exit 0
