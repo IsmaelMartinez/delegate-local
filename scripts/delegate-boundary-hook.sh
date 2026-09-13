@@ -836,11 +836,13 @@ if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
     # The dir is visible at mkdir before `ts` is written, so a hook killed in
     # between leaves a lock with no `ts`; treating that as fresh made every
     # later hook wait 2 s and fail open for good (fifth review round). With
-    # no `ts` the DIRECTORY mtime stands in — BSD `stat -f %m` first, GNU
-    # `stat -c %Y` as the fallback, the pattern pick-model.sh already uses.
+    # no `ts` the DIRECTORY mtime stands in. GNU `stat -c %Y` is tried FIRST:
+    # BSD stat rejects `-c` outright, whereas GNU stat accepts `-f %m` as
+    # "file-system mode, print the mount point" and exits 0 with `/`, so the
+    # BSD-first order never reached its fallback on Linux (CI caught it).
     lock_ts=$(cat "$lock_dir/ts" 2>/dev/null)
     if [[ ! "$lock_ts" =~ ^[0-9]+$ ]]; then
-      lock_ts=$(stat -f %m "$lock_dir" 2>/dev/null || stat -c %Y "$lock_dir" 2>/dev/null)
+      lock_ts=$(stat -c %Y "$lock_dir" 2>/dev/null || stat -f %m "$lock_dir" 2>/dev/null)
     fi
     if [[ "$lock_ts" =~ ^[0-9]+$ && $(( now_epoch - lock_ts )) -gt 5 ]]; then
       rm -rf "$lock_dir" 2>/dev/null; continue
