@@ -450,6 +450,28 @@ out=$(DELEGATE_BOUNDARY_WINDOW_MIN=1 bash "$SCRIPT" --file "$floor" 2>&1)
 assert_contains "opportunities=6  delegated=2  missed=4  rate=33%" "$out" \
   "body floor: a denial retried outside DELEGATE_BOUNDARY_WINDOW_MIN counts as a miss"
 rm -f "$floor"
+# 12e-ii. A retry is a later row that is itself a counted post: a denial
+# followed by a below-floor one-liner, or by a retry-cap post (an undrafted
+# post the cap let through), is not "retried" — it stays the miss it is
+# (third review round on PR #484). Fixture: s1 denied then posted a
+# below-floor row; s2 denied then hit the retry cap; s3 denied then posted a
+# real retry. Only s3's denial leaves the ratio.
+notretry=$(mktemp)
+cat > "$notretry" <<'EOF'
+{"ts":"2026-09-13T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s1"}
+{"ts":"2026-09-13T10:02:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":3,"below_floor":true,"session":"s1"}
+{"ts":"2026-09-13T10:03:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s2"}
+{"ts":"2026-09-13T10:04:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"enforce_skipped":"retry-cap","session":"s2"}
+{"ts":"2026-09-13T10:05:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s3"}
+{"ts":"2026-09-13T10:06:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312,"session":"s3"}
+EOF
+out=$(bash "$SCRIPT" --file "$notretry" 2>&1)
+trig=$(sed -n '/^Trigger rate/,/^$/p' <<<"$out")
+assert_contains "opportunities=4  delegated=1  missed=3  rate=25%" "$trig" \
+  "retry: a below-floor or retry-cap row after a denial is not a retry; those denials stay misses"
+assert_contains "excluded 1 denied attempts retried" "$trig" \
+  "retry: only the denial followed by a real post is excluded"
+rm -f "$notretry"
 # With nothing excluded the line still prints, so the floor is never silent.
 opp2=$(mktemp)
 cat > "$opp2" <<'EOF'

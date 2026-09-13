@@ -1812,13 +1812,46 @@ mkdir -p "$lockdir"; printf '%s' "$(( $(date -u +%s) - 60 ))" > "$lockdir/ts"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "lock: a stale lock is broken and the boundary is judged normally"
 assert_eq "absent" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock: the lock is released afterwards"
-# A live lock that is never released fails open to warn after the timeout.
-mkdir -p "$lockdir"; printf '%s' "$(date -u +%s)" > "$lockdir/ts"
+# A live lock that is never released fails open to warn after the timeout,
+# and is never removed by a hook that does not own it.
+mkdir -p "$lockdir"; printf '%s' "$(date -u +%s)" > "$lockdir/ts"; printf 'someone-else' > "$lockdir/owner"
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"allow"' "$out" "lock: an unobtainable lock fails open"
 assert_eq lock-timeout "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "lock: ...recording enforce_skipped=lock-timeout"
+assert_eq "present" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock: a live lock is not removed by a non-owner"
+assert_eq "someone-else" "$(cat "$lockdir/owner" 2>/dev/null)" "lock: ...and its owner file is untouched"
 rm -rf "$lockdir"
+
+# 75. Lock ownership (third review round). A hook whose provider probe keeps
+# it running past the 5 s stale threshold had its lock broken by the next
+# hook, and then its own EXIT cleanup removed the REPLACEMENT lock, so both
+# ran their lookup unserialised and consumed the same credit. The lock dir
+# carries an owner token written on acquisition; release removes the dir
+# only when the token matches. Two mocks whose GET /models sleeps: hook A
+# probes for 9 s, hook B — started 7 s in, so A's lock reads stale — probes
+# for 3 s. A exits at ~9 s while B still holds the lock it took over; the
+# lock must survive A's exit and vanish only when B finishes.
+slow_mock() { # dir seconds
+  mkdir -p "$1"
+  { printf '#!/usr/bin/env bash\nsleep %s\n' "$2"; sed '1d;/^: >> /d' "$MOCKDIR/curl"; } > "$1/curl"
+  chmod +x "$1/curl"
+}
+SLOWA=$(mktemp -d); slow_mock "$SLOWA" 9
+SLOWB=$(mktemp -d); slow_mock "$SLOWB" 3
+slow() { PATH="$1:${PATH#$MOCKDIR:}" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "${@:2}"; }
+: > "$METRICS"; rm -rf "$lockdir"
+payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWA" bash "$HOOK" >/dev/null &
+pid_a=$!
+sleep 7
+payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWB" bash "$HOOK" >/dev/null &
+pid_b=$!
+wait "$pid_a"
+assert_eq "present" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock owner: A's exit leaves B's replacement lock in place"
+wait "$pid_b"
+assert_eq "absent" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock owner: B releases its own lock when it finishes"
+assert_eq 2 "$(grep -c '"denied":true' "$METRICS")" "lock owner: both boundaries were judged (denied, no credit)"
+rm -rf "$SLOWA" "$SLOWB"
 
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"

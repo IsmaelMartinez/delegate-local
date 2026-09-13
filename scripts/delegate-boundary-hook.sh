@@ -709,13 +709,24 @@ now_epoch=$(date -u +%s)
 # unlocked and records enforce_skipped:"lock-timeout" instead of denying.
 # Taken only when metrics are on, since with them off there is nothing to
 # spend. Released on every exit path by the trap.
+#
+# The lock is OWNED. A hook whose provider probe runs past the stale
+# threshold (a dead remote host costs DELEGATE_PROBE_TIMEOUT per entry) has
+# its lock broken and replaced by the next hook; without an ownership check
+# its own EXIT cleanup then removed the REPLACEMENT lock, and both ran their
+# lookup unserialised against the same credit (third review round on #484).
+# An owner token — pid plus a random suffix — is written into the dir on
+# acquisition, and release removes the dir only while the token still
+# matches. Breaking a stale lock removes it and re-runs mkdir, so the breaker
+# owns what it takes.
 lock_dir="$(dirname "$metrics_file")/.boundary-hook.lock"
 lock_held=false lock_failed=false
-# Clears lock_held so the EXIT trap cannot remove a lock another hook has
-# since taken.
+lock_token="$$-${RANDOM}${RANDOM}"
 release_lock() {
   [[ "$lock_held" == "true" ]] || return 0
-  rm -rf "$lock_dir" 2>/dev/null; lock_held=false; return 0
+  lock_held=false
+  [[ "$(cat "$lock_dir/owner" 2>/dev/null)" == "$lock_token" ]] || return 0
+  rm -rf "$lock_dir" 2>/dev/null; return 0
 }
 if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -732,6 +743,7 @@ if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
   if [[ "$lock_failed" != "true" ]]; then
     lock_held=true
     printf '%s' "$now_epoch" > "$lock_dir/ts" 2>/dev/null || true
+    printf '%s' "$lock_token" > "$lock_dir/owner" 2>/dev/null || true
     trap release_lock EXIT
   fi
 fi
