@@ -376,7 +376,7 @@ cat > "$tmp/m.jsonl" <<EOF
 {"ts":"$T_FB","source":"feedback","ref_ts":"$T_DEL","kept":true}
 EOF
 EC=0
-out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts "$T_FB" miss 2>&1) || EC=$?
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts "$T_FB" miss "r" 2>&1) || EC=$?
 assert_eq 1 "$EC" "--ts pointing to a feedback row -> exit 1"
 assert_contains "does not match any delegate row" "$out" "--ts feedback row: error refers to no-match"
 rm -rf "$tmp"
@@ -497,11 +497,12 @@ if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  NO_NUDGE=1: nudg
 else echo "  FAIL  NO_NUDGE=1: nudge still printed"; fail=$((fail+1)); fi
 rm -rf "$tmp"
 
-# n24: MISS with empty reason → no nudge (no tokens to match against).
+# n24: MISS with empty reason is refused before the matcher runs (a rejection
+# needs a reason), so five similar priors fire no nudge.
 tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 5
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss 2>&1) || EC=$?
-assert_eq 0 "$EC" "empty-reason MISS: exit 0"
+assert_eq 2 "$EC" "empty-reason MISS: exit 2"
 if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  empty-reason MISS: nudge silent"; pass=$((pass+1))
 else echo "  FAIL  empty-reason MISS: nudge fired"; fail=$((fail+1)); fi
 rm -rf "$tmp"
@@ -889,9 +890,9 @@ assert_contains '"delegate.feedback.reason"' "$otel_body" "FB-OT3: reason attrib
 assert_contains '"had to rewrite the bullets"' "$otel_body" "FB-OT3: reason text preserved when include-content=1"
 rm -rf "$tmp"
 
-# FB-OT4. miss verdict with NO reason → no delegate.feedback.reason attribute
+# FB-OT4. hit verdict with NO reason → no delegate.feedback.reason attribute
 # (the schema omits the attribute entirely rather than emitting an empty
-# string).
+# string). hit is the one verdict a reason is optional on.
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -901,8 +902,8 @@ EC=0
 out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
   DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
-  bash "$SCRIPT" miss 2>&1) || EC=$?
-assert_eq 0 "$EC" "FB-OT4: miss verdict no-reason → exits 0"
+  bash "$SCRIPT" hit 2>&1) || EC=$?
+assert_eq 0 "$EC" "FB-OT4: hit verdict no-reason → exits 0"
 otel_body=$(cat "$otel_sniff")
 case "$otel_body" in
   *'delegate.feedback.reason'*)
@@ -1396,24 +1397,23 @@ assert_eq "repo-butler" \
 rm -rf "$tmp"
 
 # ---------------------------------------------------------------------------
-# Phase E — agent-observed verdict tier (--source human|agent)
-# The default is human (a maintainer taste judgment); --source agent records
-# the agent's own honest record of whether it used the delegated output. The
-# tier is kept separate from the human hit-rate downstream, so the recorder
-# must (a) default to human, (b) write verdict_source ONLY for the agent tier
-# (so human/legacy rows are indistinguishable and the partition maps both to
-# human), and (c) reject any other value loudly rather than silently
-# contaminate the quality signal.
+# One verdict tier (ADR 0030, superseding ADR 0015). The agent that used or
+# rewrote the draft records the verdict; there is no human tier, because one
+# filled at a few rows a week and the loop never went fast enough. The
+# recorder must (a) default to agent, (b) write verdict_source:"agent" on
+# every row — the dashboards and consumers filter on it — (c) refuse
+# --source human with a pointer at the ADR, and (d) reject any other value
+# loudly rather than silently accept a tier that does not exist.
 # ---------------------------------------------------------------------------
 
-# FB-SRC1. Default (no --source): the feedback row OMITS verdict_source, so it
-# is byte-identical in shape to a pre-tier legacy row.
+# FB-SRC1. Default (no --source): the feedback row carries
+# verdict_source:"agent", the same as an explicit --source agent.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit 2>&1) || EC=$?
 assert_eq 0 "$EC" "FB-SRC1: default source → exits 0"
 last=$(tail -1 "$tmp/m.jsonl")
-[[ "$last" == *'"verdict_source"'* ]] && { fail=$((fail+1)); echo "  FAIL  FB-SRC1: verdict_source MUST be absent by default (human)"; } || { pass=$((pass+1)); echo "  PASS  FB-SRC1: verdict_source absent by default (human)"; }
+assert_contains '"verdict_source":"agent"' "$last" "FB-SRC1: verdict_source is agent by default"
 rm -rf "$tmp"
 
 # FB-SRC2. --source agent: the row carries verdict_source:"agent".
@@ -1427,16 +1427,16 @@ vs=$(echo "$last" | jq -r '.verdict_source')
 assert_eq "agent" "$vs" "FB-SRC2: verdict_source parses back as agent"
 rm -rf "$tmp"
 
-# FB-SRC3. --source human (explicit): still OMITS the field — an explicit
-# human verdict is indistinguishable from a legacy one, which is what the
-# reporting partition assumes.
+# FB-SRC3. --source human is refused: the tier no longer exists, and a row
+# written under it would be the one kind the reporting cannot place. Exit 2,
+# the message names ADR 0030, and nothing is appended.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+before=$(grep -c '' "$tmp/m.jsonl")
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --source human miss "rewrote it" 2>&1) || EC=$?
-assert_eq 0 "$EC" "FB-SRC3: --source human → exits 0"
-last=$(tail -1 "$tmp/m.jsonl")
-[[ "$last" == *'"verdict_source"'* ]] && { fail=$((fail+1)); echo "  FAIL  FB-SRC3: explicit human must still omit verdict_source"; } || { pass=$((pass+1)); echo "  PASS  FB-SRC3: explicit human omits verdict_source (legacy-identical)"; }
-assert_contains '"kept":false' "$last" "FB-SRC3: miss verdict still recorded with --source"
+assert_eq 2 "$EC" "FB-SRC3: --source human → exit 2"
+assert_contains "ADR 0030" "$out" "FB-SRC3: the refusal points at ADR 0030"
+assert_eq "$before" "$(grep -c '' "$tmp/m.jsonl")" "FB-SRC3: the refused verdict writes no row"
 rm -rf "$tmp"
 
 # FB-SRC4. --source=agent (equals form) is accepted the same as the space form.
@@ -1454,7 +1454,7 @@ tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --source robot hit 2>&1) || EC=$?
 assert_eq 2 "$EC" "FB-SRC5: invalid --source → exit 2"
-assert_contains "must be 'human' or 'agent'" "$out" "FB-SRC5: error names the allowed values"
+assert_contains "must be 'agent'" "$out" "FB-SRC5: error names the one allowed value"
 rm -rf "$tmp"
 
 # FB-SRC6. --source with no value (flags parse first, nothing follows) → exit 2.
@@ -1497,9 +1497,9 @@ src_attr=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].a
 assert_eq "agent" "$src_attr" "FB-SRC8: source attribute value is agent"
 rm -rf "$tmp"
 
-# FB-SRC9. OTel: default (no --source) emits delegate.feedback.source=human —
-# the attribute is unconditional metadata so the dashboard can reproduce the
-# human-only partition without it being gated.
+# FB-SRC9. OTel: default (no --source) emits delegate.feedback.source=agent —
+# the attribute is unconditional metadata and carries the same value the JSONL
+# row does, so an OTel-backed dashboard filters on it the same way.
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -1513,7 +1513,7 @@ out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
 assert_eq 0 "$EC" "FB-SRC9: default source + OTel → exits 0"
 otel_body=$(cat "$otel_sniff")
 src_attr=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].attributes[] | select(.key=="delegate.feedback.source") | .value.stringValue')
-assert_eq "human" "$src_attr" "FB-SRC9: default source attribute value is human"
+assert_eq "agent" "$src_attr" "FB-SRC9: default source attribute value is agent"
 rm -rf "$tmp"
 
 # ---------------------------------------------------------------------------
@@ -1558,14 +1558,15 @@ assert_contains '"verdict_source":"agent"' "$last" "scaffold --source agent: ver
 assert_contains '"kept":false' "$last" "scaffold --source agent: kept:false"
 rm -rf "$tmp"
 
-# SC3: scaffold with no reason → one row, scaffold:true, no reason field.
+# SC3: scaffold with no reason is refused like a miss — a draft that was
+# discarded but useful still needs to say what it taught.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+before=$(grep -c '' "$tmp/m.jsonl")
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" scaffold 2>&1) || EC=$?
-assert_eq 0 "$EC" "scaffold no-reason: exit 0"
-last=$(tail -1 "$tmp/m.jsonl")
-assert_contains '"scaffold":true' "$last" "scaffold no-reason: scaffold:true present"
-[[ "$last" == *'"reason"'* ]] && { fail=$((fail+1)); echo "  FAIL  scaffold no-reason: reason field absent"; } || { pass=$((pass+1)); echo "  PASS  scaffold no-reason: reason field absent"; }
+assert_eq 2 "$EC" "scaffold no-reason: exit 2"
+assert_contains "needs a reason" "$out" "scaffold no-reason: the refusal says what is missing"
+assert_eq "$before" "$(grep -c '' "$tmp/m.jsonl")" "scaffold no-reason: no row written"
 rm -rf "$tmp"
 
 # SC4: scaffold does NOT fire the MISS-recurrence nudge even with 5 prior
@@ -1698,12 +1699,13 @@ assert_eq "false" "$(tail -1 "$tmp/m.jsonl" | jq -r 'has("final_file")')" \
 rm -rf "$tmp"
 
 # ---------------------------------------------------------------------------
-# An agent-recorded rejection needs a reason. Measured 2026-08-26: 12 of the 63
-# rejections in the live corpus carried none, every one `verdict_source: agent`,
-# all from a single bulk sweep, all on the recipe that then sat bottom of the
-# per-recipe ranking with nothing behind its position. Scoped to the agent tier:
-# verdict-sweep.sh records reasonless verdicts for a human working through old
-# rows, where not remembering is honest.
+# A rejection needs a reason. Measured 2026-08-26: 12 of the 63 rejections in
+# the live corpus carried none, all from a single bulk sweep, all on the recipe
+# that then sat bottom of the per-recipe ranking with nothing behind its
+# position. The rule used to be scoped to `--source agent`, with the human
+# sweep exempt because "I no longer remember why" was honest there; with one
+# tier (ADR 0030) every verdict is the agent's own just-finished delegation,
+# and it always knows.
 # ---------------------------------------------------------------------------
 tmp=$(mktemp -d); metrics="$tmp/m.jsonl"
 seed_row() { printf '{"ts":"%s","source":"delegate","recipe":"x","tier":"prose","exit_status":0}\n' "$1" > "$metrics"; }
@@ -1729,11 +1731,12 @@ assert_eq 0 "$(fbrc --source agent miss 'dropped every file:line anchor')" \
 seed_row 2026-08-26T23:00:00Z
 assert_eq 0 "$(fbrc --source agent hit)" \
   "reason-required: an agent hit needs no reason"
-# verdict-sweep.sh calls `delegate-feedback.sh --ts <ts> miss` with no --source
-# and no reason. That path is the human tier and must not break.
+# No --source is the agent default, not an exemption: a reasonless miss is
+# refused the same way whether or not the flag was typed.
 seed_row 2026-08-26T23:00:00Z
-assert_eq 0 "$(fbrc miss)" \
-  "reason-required: the human sweep's reasonless miss still records"
+assert_eq 2 "$(fbrc miss)" \
+  "reason-required: a reasonless miss with no --source is refused too"
+assert_eq 1 "$(grep -c . "$metrics")" "reason-required: the refused sourceless row is not written"
 rm -rf "$tmp"
 
 # ---------------------------------------------------------------------------

@@ -431,11 +431,11 @@ assert_contains "(no project)" "$(grep -v '^$' <<<"$perproj" | tail -1)" \
   "no-project delegations: listed after the named projects, not ranked by count"
 rm -f "$noprojdel"
 
-# 16. Phase E agent-observed verdict tier. Fixture: 4 commit-message recipe
-# delegations — D1 human HIT, D2 agent HIT (used), D3 agent MISS (rewrote),
-# D4 untracked. The honesty property: the human hit-rate counts D1 only (NOT
-# the agent HIT), while coverage and untracked count BOTH tiers, and a separate
-# Agent-observed line reports the agent usage rate.
+# 16. One verdict tier (ADR 0030). Fixture: 4 commit-message recipe
+# delegations — D1 HIT on a legacy row with no verdict_source, D2 HIT and D3
+# MISS tagged agent, D4 untracked. Every feedback row is the signal: hits=2,
+# misses=1, untracked=1, coverage=75%, and neither the `agent=` column nor the
+# "Agent-observed (usage, not quality)" line ADR 0015 printed exists any more.
 agenttier=$(mktemp)
 cat > "$agenttier" <<'EOF'
 {"ts":"2026-06-14T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -449,20 +449,22 @@ EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$agenttier" 2>&1) || EC=$?
 assert_eq 0 "$EC" "agent-tier: exits 0"
-# Honesty property: human hits=1 (NOT 2 — the agent HIT must not inflate it),
-# agent column shows 2, untracked=1 (only D4), coverage=75% (3 of 4 covered).
-assert_contains "Recipe delegations (calibration signal): n=4  hits=1  misses=0  agent=2  untracked=1  coverage=75%" "$out" "agent-tier: human hit-rate excludes agent verdicts; coverage+untracked count both"
-# Dedicated agent-observed usage line.
-assert_contains "Agent-observed (usage, not quality): n=2  used=1  rewrote=1  usage_rate=50%" "$out" "agent-tier: agent usage reported as its own figure"
-# Per-recipe rollup gains the agent column.
-assert_contains "commit-message" "$out" "agent-tier: per-recipe lists commit-message"
+assert_contains "Recipe delegations (calibration signal): n=4  hits=2  misses=1  untracked=1  coverage=75%" "$out" "one tier: every feedback row counts in hits/misses, whether or not it carries verdict_source"
+case "$out" in
+  *"agent="*) echo "  FAIL  one tier: the agent= column is gone"; fail=$((fail+1));;
+  *) echo "  PASS  one tier: the agent= column is gone"; pass=$((pass+1));;
+esac
+case "$out" in
+  *"usage, not quality"*|*"Agent-observed"*) echo "  FAIL  one tier: the usage-not-quality line is gone"; fail=$((fail+1));;
+  *) echo "  PASS  one tier: the usage-not-quality line is gone"; pass=$((pass+1));;
+esac
+assert_contains "commit-message" "$out" "one tier: per-recipe lists commit-message"
 recipe_line=$(printf '%s\n' "$out" | grep -E "^  commit-message" | tail -1)
-assert_contains "agent=2" "$recipe_line" "agent-tier: per-recipe row carries agent column"
+assert_contains "n=4  hits=2  misses=1  untracked=1" "$recipe_line" "one tier: per-recipe row counts every verdict"
 rm -f "$agenttier"
 
-# 16b. A delegation carrying BOTH a human and an agent verdict counts in both
-# columns (never merged): the human HIT keeps the quality signal, the agent
-# MISS shows in the agent column, and the delegation is covered (untracked=0).
+# 16b. Two verdicts on one delegation are a revision, not two tiers: the later
+# one by ts wins, and the delegation is covered once (untracked=0).
 bothtier=$(mktemp)
 cat > "$bothtier" <<'EOF'
 {"ts":"2026-06-14T11:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -471,12 +473,11 @@ cat > "$bothtier" <<'EOF'
 EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$bothtier" 2>&1) || EC=$?
-assert_eq 0 "$EC" "both-tier: exits 0"
-assert_contains "Recipe delegations (calibration signal): n=1  hits=1  misses=0  agent=1  untracked=0  coverage=100%" "$out" "both-tier: human hit + agent verdict count in separate columns, delegation covered once"
+assert_eq 0 "$EC" "revision: exits 0"
+assert_contains "Recipe delegations (calibration signal): n=1  hits=0  misses=1  untracked=0  coverage=100%" "$out" "revision: the later verdict wins regardless of which row carries verdict_source"
 rm -f "$bothtier"
 
-# 16c. With NO agent verdicts, the agent column and the Agent-observed line are
-# both absent — single-tier files print exactly as before.
+# 16c. A file of untagged legacy rows prints the same line shape.
 noagent=$(mktemp)
 cat > "$noagent" <<'EOF'
 {"ts":"2026-06-14T12:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -484,16 +485,8 @@ cat > "$noagent" <<'EOF'
 EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$noagent" 2>&1) || EC=$?
-assert_eq 0 "$EC" "no-agent: exits 0"
-case "$out" in
-  *"agent="*) echo "  FAIL  no-agent: agent column must be absent without agent verdicts"; fail=$((fail+1));;
-  *) echo "  PASS  no-agent: agent column absent without agent verdicts"; pass=$((pass+1));;
-esac
-case "$out" in
-  *"Agent-observed"*) echo "  FAIL  no-agent: Agent-observed line must be absent without agent verdicts"; fail=$((fail+1));;
-  *) echo "  PASS  no-agent: Agent-observed line absent without agent verdicts"; pass=$((pass+1));;
-esac
-assert_contains "Recipe delegations (calibration signal): n=1  hits=1  misses=0  untracked=0  coverage=100%" "$out" "no-agent: legacy single-tier line shape unchanged"
+assert_eq 0 "$EC" "legacy rows: exits 0"
+assert_contains "Recipe delegations (calibration signal): n=1  hits=1  misses=0  untracked=0  coverage=100%" "$out" "legacy rows: line shape unchanged"
 rm -f "$noagent"
 
 # 17. --since window: restricts every section to rows at or after the cutoff.
@@ -620,10 +613,8 @@ esac
 assert_contains "Recipe delegations (calibration signal): n=1  hits=1  misses=0  untracked=0  coverage=100%" "$out" "no-scaffold: legacy line shape unchanged"
 rm -f "$noscaf"
 
-# 20c. Agent-tier scaffold coexists with human verdicts. Fixture: D1 human HIT,
-# D2 agent SCAFFOLD. The agent column counts the agent verdict (coverage), the
-# Agent-observed line reports a scaffold count alongside used/rewrote, and the
-# human hit-rate is unaffected by the agent scaffold.
+# 20c. A tagged scaffold beside an untagged hit: one tier, so the scaffold
+# counts in the headline scaffold column and the hit in hits.
 agentscaf=$(mktemp)
 cat > "$agentscaf" <<'EOF'
 {"ts":"2026-06-22T11:00:00Z","source":"delegate","recipe":"code-draft","tier":"code","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -634,8 +625,7 @@ EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$agentscaf" 2>&1) || EC=$?
 assert_eq 0 "$EC" "agent-scaffold: exits 0"
-assert_contains "Recipe delegations (calibration signal): n=2  hits=1  misses=0  scaffold=0  agent=1  untracked=0  coverage=100%" "$out" "agent-scaffold: human hits unaffected; agent scaffold counts in agent+coverage, not human scaffold"
-assert_contains "Agent-observed (usage, not quality): n=1  used=0  rewrote=0  scaffold=1  usage_rate=0%" "$out" "agent-scaffold: Agent-observed line reports scaffold count"
+assert_contains "Recipe delegations (calibration signal): n=2  hits=1  misses=0  scaffold=1  untracked=0  coverage=100%" "$out" "agent-scaffold: a tagged scaffold counts in the headline scaffold column"
 rm -f "$agentscaf"
 
 # Tokens-avoided decomposition (#412). estimated_tokens_avoided is written on
@@ -663,14 +653,14 @@ assert_contains "excluded: experiment rows       tokens≈55  n=1" "$out" "decom
 assert_contains "excluded: failed delegations    tokens≈77  n=1" "$out" "decomposition: failed calls excluded"
 assert_contains "successful delegations          tokens≈1900  n=4" "$out" "decomposition: successful subtotal"
 # 55 + 77 + 1900 = 2032: the sub-lines reconcile to the headline exactly.
-# 1000 (agent hit) + 400 (human hit, no agent verdict) — verdicts pool
-# agent-first then human, so a human-only verdict lands in a real bucket.
-assert_contains "shipped as-is     tokens≈1400  73.7%  n=2" "$out" "decomposition: agent and human hits both count as shipped"
-assert_contains "rewritten         tokens≈200  10.5%  n=1" "$out" "decomposition: agent miss is rewritten"
+# 1000 (tagged hit) + 400 (untagged legacy hit) — one tier, so both land in
+# the same bucket.
+assert_contains "shipped as-is     tokens≈1400  73.7%  n=2" "$out" "decomposition: tagged and untagged hits both count as shipped"
+assert_contains "rewritten         tokens≈200  10.5%  n=1" "$out" "decomposition: miss is rewritten"
 assert_contains "used as scaffold  tokens≈300  15.8%  n=1" "$out" "decomposition: scaffold is its own bucket"
-# The 400-token row carries a HUMAN verdict and no agent one. Filing it under
-# "no verdict" would be the exact mislabel this section exists to remove.
-assert_contains "no verdict        tokens≈0  0.0%  n=0" "$out" "decomposition: a human-only verdict is not 'no verdict'"
+# The 400-token row carries an untagged legacy verdict. Filing it under "no
+# verdict" would be the exact mislabel this section exists to remove.
+assert_contains "no verdict        tokens≈0  0.0%  n=0" "$out" "decomposition: an untagged verdict is not 'no verdict'"
 rm -f "$decomp"
 
 # A delegation carrying several verdicts is counted once, under its LAST.
@@ -722,10 +712,6 @@ case "$decomp_lines" in
 esac
 rm -f "$allfail"
 
-# Agent self-flattery: of the output the agent chose to ship, how much did a
-# person judge not good. Directional on purpose — a symmetric agreement rate
-# between the two tiers measures nothing, because they answer different
-# questions and a human MISS beside an agent HIT is two compatible facts.
 # A file whose delegate rows carry no estimated_tokens_avoided made `add`
 # return null, which @tsv renders as an empty field — and because tab is IFS
 # whitespace, bash read collapsed the double-tab and shifted every later column
@@ -757,40 +743,18 @@ cat > "$sf" <<'EOF'
 {"ts":"2026-06-01T10:07:00Z","source":"feedback","ref_ts":"2026-06-01T09:03:00Z","kept":false}
 EOF
 out=$(bash "$SCRIPT" --file "$sf" 2>&1)
-# Two recipe rows carry agent=hit AND a human verdict: 09:00 (human miss) and
-# 09:01 (human hit). 09:02 is agent=miss so it is not a shipped output. 09:03
-# has no recipe, so it lives in the Raw block and is out of this scope.
-assert_contains "Agent self-flattery (human verdict on agent-shipped output): n=2  human-miss=1  rate=50%" "$out" \
-  "self-flattery: conditional on agent-shipped, scoped to recipe delegations"
+# ADR 0015 printed an "Agent self-flattery" line here, comparing the agent's
+# hits against a human verdict on the same delegation. With one tier there is
+# nothing to compare against; the pairs above are revisions, and the later
+# verdict wins: 09:00 miss, 09:01 hit, 09:02 miss. 09:03 has no recipe and
+# lives in the Raw block.
+case "$out" in
+  *"self-flattery"*) assert_eq "absent" "present" "one tier: no self-flattery comparison line" ;;
+  *)                 assert_eq "absent" "absent"  "one tier: no self-flattery comparison line" ;;
+esac
+assert_contains "Recipe delegations (calibration signal): n=3  hits=1  misses=2  untracked=0  coverage=100%" "$out" \
+  "one tier: a tagged/untagged pair on one delegation resolves to the later verdict"
 rm -f "$sf"
-
-# It is a conditional, not an agreement rate: an agent MISS beside a human MISS
-# is not counted, because the agent did not ship that output.
-sf2=$(mktemp)
-cat > "$sf2" <<'EOF'
-{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","exit_status":0}
-{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":false,"verdict_source":"agent"}
-{"ts":"2026-06-01T10:01:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":false}
-EOF
-out=$(bash "$SCRIPT" --file "$sf2" 2>&1)
-case "$out" in
-  *"self-flattery"*) assert_eq "absent" "present" "self-flattery: an agent MISS pair is not counted" ;;
-  *)                 assert_eq "absent" "absent"  "self-flattery: an agent MISS pair is not counted" ;;
-esac
-rm -f "$sf2"
-
-# Silent when no pair exists, so single-tier files print exactly as before.
-sf3=$(mktemp)
-cat > "$sf3" <<'EOF'
-{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","exit_status":0}
-{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":true,"verdict_source":"agent"}
-EOF
-out=$(bash "$SCRIPT" --file "$sf3" 2>&1)
-case "$out" in
-  *"self-flattery"*) assert_eq "absent" "present" "self-flattery: silent with no human verdict to pair" ;;
-  *)                 assert_eq "absent" "absent"  "self-flattery: silent with no human verdict to pair" ;;
-esac
-rm -f "$sf3"
 
 # Captured-pair coverage (#461 follow-up). The two ways a rejection acquires its
 # shipped half are not interchangeable — `--final` needs the caller to remember,

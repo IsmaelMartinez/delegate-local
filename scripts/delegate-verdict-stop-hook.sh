@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
-# Stop hook (Phase E) — the agent-observed verdict source for #306-era coverage.
+# Stop hook (Phase E) — the backstop for verdicts the agent did not record
+# inline.
 #
 # Auto-delegation (the boundary hook's commit-message nudge, /address-pr-comments
 # maintainer replies, /roadmap status notes) moved the decision-maker from the
-# human to the agent, but verdict recording stayed manual — so recipe coverage
-# slips as auto-delegation rises. The session-end sweep meant to catch the
-# backlog (verdict-sweep.sh) is interactive and never runs on background jobs.
+# human to the agent, and the verdict moved with it: the agent that used or
+# rewrote a draft is the one party that knows what happened to it, and the
+# only judge there is (ADR 0030). It knows only while it is still running. A
+# Stop hook fires when the main agent finishes a turn — the agent is alive,
+# the turn's work is done, and it can judge its own delegations from live
+# memory. This hook surfaces this session's untracked delegations once and
+# hands the batch back to the agent with an instruction to record each with
+# `delegate-feedback.sh --id <id> --source agent`.
 #
-# The agent is the only party that knows whether it used a delegated output, and
-# only while it is still running. A Stop hook fires when the main agent finishes
-# a turn — the agent is alive, the turn's work is done, and it can judge its own
-# delegations from live memory. This hook surfaces the current project's
-# untracked delegations once per session and hands the batch back to the agent
-# with an instruction to record each with `delegate-feedback.sh --source agent`.
-#
-# Honesty boundary: the agent can only report a FACT about its own behaviour
-# ("did I use it"), never the maintainer's taste judgment ("was it good"). The
-# verdicts it records are tagged verdict_source:"agent" and kept in a separate
-# tier — coverage counts them, the headline hit-rate does not (see ADR 0015).
+# The verdict is a fact about the agent's own behaviour — did it use the
+# draft, edit and ship it, or throw it away — and the reason on a scaffold or
+# miss, with the stored draft/final pair, is the calibration signal.
 #
 # On every Stop event:
 #   1. If mode is `off`, exit 0 immediately.
@@ -25,9 +23,9 @@
 #      session_id exists), exit 0 — the session-once guard that stops the
 #      decision:"block" re-inject from looping when the agent declines.
 #   3. Derive the project (same rule as delegate.sh / the boundary hook) and
-#      scan metrics.jsonl for this project's untracked successful delegations
-#      inside the look-back window — verdict-sweep.sh's base join plus a
-#      .project filter, minus the tty prompt.
+#      scan metrics.jsonl for this session's untracked successful delegations
+#      inside the look-back window: delegate rows with exit_status 0 and no
+#      referencing feedback row, filtered to the project and the session.
 #   4. Empty set → exit 0 (cheap path, no marker written, so a later Stop after
 #      a fresh delegation can still surface it).
 #   5. Non-empty set → write the session marker, then emit
@@ -44,8 +42,7 @@
 #
 # Env:
 #   DELEGATE_VERDICT_STOP_MODE   warn (default) | off
-#   DELEGATE_SWEEP_WINDOW_HOURS  look-back in hours (default 24; shared with
-#                                verdict-sweep.sh)
+#   DELEGATE_SWEEP_WINDOW_HOURS  look-back in hours (default 24)
 #   DELEGATE_METRICS_FILE        metrics path (shared with delegate.sh)
 
 set -uo pipefail
@@ -101,27 +98,30 @@ if [[ -f "$script_dir/lib/otel.sh" ]]; then
   project=$(delegate_project_name 2>/dev/null) || project=""
 fi
 
-# --- scan for this project's untracked delegations in the window ----------
-# verdict-sweep.sh's base join (delegate rows with exit_status 0 and no
-# referencing feedback row, inside the window) PLUS a .project filter — the
-# sweep is process-wide, but a Stop in repo A must not surface repo B's work.
-# The feedback-ref map stays global (a feedback row references a ts regardless
-# of which project recorded it). No tty step: the agent is the consumer here.
+# --- scan for this session's untracked delegations in the window ----------
+# Delegate rows with exit_status 0 and no referencing feedback row, inside the
+# window, filtered to the project (a Stop in repo A must not surface repo B's
+# work) and to the session. The feedback-ref map stays global (a feedback row
+# references a ts regardless of which project recorded it). No tty step: the
+# agent is the consumer here.
 #
-# A named project is scoped by name alone, as it always was. No project
-# (#476) is scoped by SESSION instead: the metrics file is shared by every
-# session on the machine, and "no project" would otherwise select every
-# scratch-cwd delegation there is, so a Stop in one such session would block
-# on another session's drafts. delegate.sh records CLAUDE_CODE_SESSION_ID as
-# `session` (#479), the same UUID this payload carries; a projectless row with
-# no session cannot be scoped and is left alone rather than surfaced.
+# The metrics file is shared by every session on the machine, and delegate.sh
+# records CLAUDE_CODE_SESSION_ID as `session` (#479), the same UUID this
+# payload carries. A row that names a session is listed only in that session,
+# named project or not: #477 scoped only the projectless rows this way, so a
+# row under this repo's name from a parallel session was still listed here,
+# and with no human sweep to pick it up (ADR 0030) that asked an agent about
+# a draft it never saw. A row with no session field (written before #479)
+# keeps the project-only match so that backlog is not orphaned — unless it is
+# projectless too, in which case nothing can scope it and it is left alone
+# rather than surfaced to every scratch-cwd session there is.
 cutoff_iso=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - $ARGV[0]*3600))' "$window_hours" 2>/dev/null) || exit 0
 [[ -z "$cutoff_iso" ]] && exit 0
 
 rows=$(jq -rs --arg cutoff "$cutoff_iso" --arg proj "$project" --arg sid "$session_id" '
   def src: .source // "delegate";
-  def in_scope: if $proj != "" then (.project // "") == $proj
-                else (.project // "") == "" and (.session // "") == $sid end;
+  def in_scope: (.project // "") == $proj
+                and (if (.session // "") != "" then .session == $sid else $proj != "" end);
   (reduce (.[] | select(src == "feedback" and .ref_ts != null)) as $f ({}; .[$f.ref_ts] = true)) as $fb
   | map(select(src == "delegate"
         and (.ts != null)
@@ -130,7 +130,7 @@ rows=$(jq -rs --arg cutoff "$cutoff_iso" --arg proj "$project" --arg sid "$sessi
         and (.ts >= $cutoff)
         and ($fb[.ts] | not)))
   | .[]
-  | [.ts, (.recipe // "(bare/no-recipe)"), (.tier // "-")] | @tsv
+  | [(.otel_span_id // "-"), .ts, (.recipe // "(bare/no-recipe)"), (.tier // "-")] | @tsv
 ' "$metrics_file" 2>/dev/null) || exit 0   # corrupt file → fail open, never wedge
 
 # Cheap common path: nothing to verdict. No marker written, so a later Stop
@@ -150,19 +150,23 @@ mkdir -p "$marker_dir" 2>/dev/null || exit 0
 find "$marker_dir" -type f -mtime +7 -delete 2>/dev/null || true
 
 # --- surface the batch and hand it back to the agent ----------------------
+# The pin is the row's otel_span_id, not its ts: ts is second-precision and
+# parallel delegations share it, so delegate-feedback.sh refuses a --ts pin on
+# a shared second while --id cannot name two rows. Every row since the corpus
+# reset carries one; a row without prints `-` and has to be pinned by ts.
 count=$(printf '%s\n' "$rows" | grep -c '')
-batch=$(printf '%s\n' "$rows" | awk -F'\t' 'NF>=1 && $1!="" {printf "  - ts=%s  recipe=%s  tier=%s\n", $1, $2, $3}')
+batch=$(printf '%s\n' "$rows" | awk -F'\t' 'NF>=2 && $2!="" {printf "  - id=%s  ts=%s  recipe=%s  tier=%s\n", $1, $2, $3, $4}')
 
 # Outside a repository there is no name to print; say so rather than `''`.
 if [[ -n "$project" ]]; then scope="project '${project}'"
 else scope="no project: cwd outside any git repository"; fi
 reason=$(cat <<EOF
-delegate-local verdict sweep (${scope}): ${count} delegation(s) from this session produced output but carry no verdict. Before you stop, for each one you recognise from THIS session, record whether you USED the delegated output as-is (hit) or rewrote/discarded it (miss) — this is a fact about what you did, not a judgment of quality:
+delegate-local verdict sweep (${scope}): ${count} delegation(s) from this session produced output but carry no verdict. Before you stop, record for each one whether you USED the delegated output as-is (hit), edited it and shipped it (scaffold), or rewrote/discarded it (miss) — a fact about what you did. scaffold and miss need a reason, and --final <path|-> naming what you shipped instead:
 
 ${batch}
-  DELEGATE_METRICS_FILE="${metrics_file}" bash "${script_dir}/delegate-feedback.sh" --ts <ts> --source agent hit|miss
+  DELEGATE_METRICS_FILE="${metrics_file}" bash "${script_dir}/delegate-feedback.sh" --id <id> --source agent hit | scaffold "<reason>" | miss "<reason>"
 
-Leave any ts you do not recognise (a leftover from a prior session) untouched — the interactive verdict-sweep.sh handles those. This prompt is shown once per session; recording what you can and then stopping is fine. Set DELEGATE_VERDICT_STOP_MODE=off to silence.
+This prompt is shown once per session; recording what you can and then stopping is fine. Set DELEGATE_VERDICT_STOP_MODE=off to silence.
 EOF
 )
 

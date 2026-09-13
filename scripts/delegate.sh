@@ -2442,7 +2442,7 @@ if [[ "$row_written" == "true" ]] \
   # The id, not the ts: ts is second-precision and siblings share it.
   nudge_msg="delegate: record verdict → bash scripts/delegate-feedback.sh --source agent --id $otel_span_id hit | scaffold \"<reason>\" | miss \"<reason>\"
 delegate:   on scaffold/miss also pass --final <path|-> naming what you shipped instead. The draft is already saved; the pair is what calibrates the recipe.
-delegate:   scaffold = you edited it and shipped it, miss = you threw it away; drop --source if you are a human recording a taste judgment"
+delegate:   scaffold = you edited it and shipped it, miss = you threw it away"
   if (( nudge_fd == 2 )); then
     echo "$nudge_msg" >&2
   else

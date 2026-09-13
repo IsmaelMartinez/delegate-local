@@ -71,14 +71,29 @@ assert_contains "commit-message" "$(jq -r .reason "$tmp/out")" "T2: reason names
 [[ -f "$tmp/.verdict-stop-markers/s2" ]] && { pass=$((pass+1)); echo "  PASS  T2: session marker written on inject"; } || { fail=$((fail+1)); echo "  FAIL  T2: session marker not written"; }
 rm -rf "$tmp"
 
-# --- T3. The injected instruction ALWAYS carries --source agent ------------
-# Load-bearing: if the tier tag silently dropped to the human default, the
-# agent verdict would contaminate the quality signal.
+# --- T3. The injected instruction names delegate-feedback.sh, --source agent,
+# and pins by --id --------------------------------------------------------
+# --source agent is what every caller passes and the recorder's default. The
+# pin is the row's otel_span_id, not its ts: ts is second-precision and
+# parallel delegations share it, so a --ts pin refuses on a shared second
+# while --id cannot name two rows. The batch line carries the id so the
+# command can be copied.
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
-printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","otel_span_id":"abcdef0123456789"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s3" "$tmp" "$tmp/m.jsonl" "$tmp/out"
-assert_contains "--source agent" "$(jq -r .reason "$tmp/out")" "T3: instruction records with --source agent"
-assert_contains "delegate-feedback.sh" "$(jq -r .reason "$tmp/out")" "T3: instruction names delegate-feedback.sh"
+reason=$(jq -r .reason "$tmp/out")
+assert_contains "--source agent" "$reason" "T3: instruction records with --source agent"
+assert_contains "delegate-feedback.sh" "$reason" "T3: instruction names delegate-feedback.sh"
+assert_contains "--id <id>" "$reason" "T3: the recommended command pins by --id"
+assert_contains "id=abcdef0123456789" "$reason" "T3: the batch line carries the row's otel_span_id"
+case "$reason" in
+  *"--ts <ts>"*) echo "  FAIL  T3: the recommended command no longer pins by --ts"; fail=$((fail+1));;
+  *) echo "  PASS  T3: the recommended command no longer pins by --ts"; pass=$((pass+1));;
+esac
+case "$reason" in
+  *"verdict-sweep"*) echo "  FAIL  T3: no hand-off to an interactive sweep"; fail=$((fail+1));;
+  *) echo "  PASS  T3: no hand-off to an interactive sweep"; pass=$((pass+1));;
+esac
 rm -rf "$tmp"
 
 # --- T4. Session-once guard: second Stop, SAME session → exit 0, no output --
@@ -204,9 +219,9 @@ rm -rf "$tmp"
 # session wrote. The metrics file is shared by every session on the machine,
 # so the projectless rows are scoped by the `session` delegate.sh records
 # (CLAUDE_CODE_SESSION_ID, #479) against the payload's session_id; a Stop in
-# one scratch session must not block on another session's drafts, and a row
-# with no session cannot be scoped, so it is left alone (fail open). The
-# reason must not print an empty project name.
+# one scratch session must not block on another session's drafts, and a
+# projectless row with no session cannot be scoped, so it is left alone (fail
+# open). The reason must not print an empty project name.
 tmp=$(mktemp -d); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s14" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
@@ -226,12 +241,26 @@ assert_empty "$(cat "$tmp/out")" "T14: another session's projectless untracked r
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0}\n' "$NOW" > "$tmp/m.jsonl"
 run_hook "s14d" "$tmp" "$tmp/m.jsonl" "$tmp/out"
 assert_empty "$(cat "$tmp/out")" "T14: a projectless row with no session cannot be scoped and is left alone"
-# Named projects are scoped by name alone, exactly as before: a row under this
-# repo's name from another session is still this repo's backlog.
-rm -rf "$tmp"; tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
+rm -rf "$tmp"
+
+# --- T16. A named-project row is session-scoped too (#482) ------------------
+# #477 scoped only the projectless rows by session, so a row under this repo's
+# name from another session was still listed here as "this repo's backlog".
+# With no human sweep to pick those up (ADR 0030) that asks an agent about a
+# draft it never saw. A row that names a session is listed only in that
+# session; a row with no session field (written before #479) keeps the
+# project-only match so the pre-#479 backlog is not orphaned.
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s16"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+run_hook "s16" "$tmp" "$tmp/m.jsonl" "$tmp/out"
+assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T16: this session's named-project row is listed"
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"someone-else"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
-run_hook "s14e" "$tmp" "$tmp/m.jsonl" "$tmp/out"
-assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T14: a named-project row is not session-scoped"
+run_hook "s16b" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
+assert_eq 0 "$ec" "T16: another session's named-project row → exit 0"
+assert_empty "$(cat "$tmp/out")" "T16: another session's named-project row is not listed"
+printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
+run_hook "s16c" "$tmp" "$tmp/m.jsonl" "$tmp/out"
+assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T16: a named-project row with no session field keeps the project-only match"
 rm -rf "$tmp"
 
 # --- T15. DELEGATE_PROJECT wins, as it does for delegate.sh and feedback -----

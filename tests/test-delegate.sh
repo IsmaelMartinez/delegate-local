@@ -962,7 +962,11 @@ assert_contains "--final" "$stderr_content" "verdict-nudge: names --final so the
 assert_contains "delegate-feedback.sh --source agent --id " "$stderr_content" "verdict-nudge: names --source agent and --id"
 assert_contains " hit | scaffold" "$stderr_content" "verdict-nudge: names hit (agent-sourced)"
 assert_contains "miss" "$stderr_content" "verdict-nudge: names miss"
-assert_contains "drop --source" "$stderr_content" "verdict-nudge: names human-default (drop --source)"
+# One tier (ADR 0030): there is no human taste judgment to drop the flag for.
+case "$stderr_content" in
+  *"drop --source"*|*"taste judgment"*) echo "  FAIL  verdict-nudge: no human-tier hand-off"; fail=$((fail+1));;
+  *) echo "  PASS  verdict-nudge: no human-tier hand-off"; pass=$((pass+1));;
+esac
 # Nudge stays on stderr — stdout should hold only the model output, so
 # downstream pipes (e.g. `delegate.sh prose "..." | jq ...`) keep working.
 if echo "$out" | grep -q "record verdict"; then

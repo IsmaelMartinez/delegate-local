@@ -159,9 +159,9 @@ fi
 #    breakdown is the load-bearing shape (#187) — it is what makes a bad recipe
 #    visible rather than averaged away; the sync script enriches feedback rows
 #    with the parent recipe so this is a LogQL `by (recipe)` group-by. Pin it so
-#    a future edit cannot silently drop it. Note this measures ADOPTION, not
-#    quality: per ADR 0015 only a human verdict carries a quality judgment, and
-#    assertion 5e is what keeps the two apart.
+#    a future edit cannot silently drop it. The rate is the agent's own hit
+#    verdicts over all its verdicts, which is the one calibration tier there
+#    is (ADR 0030).
 CALIBRATION="$DASHBOARDS/grafana/delegate-calibration.json"
 if [[ -f "$CALIBRATION" ]]; then
   per_recipe=$(jq -r '[.panels[] | select((.targets // []) | map(.expr // "") | join(" ") | (contains("by (recipe)") and contains("kept=")))] | length' "$CALIBRATION" 2>/dev/null)
@@ -190,14 +190,13 @@ if [[ -f "$CALIBRATION" ]]; then
   fi
 fi
 
-# 5e. ADR 0015 partitions feedback into human verdicts (quality) and
-#     verdict_source="agent" (usage). metrics-summary.sh has always honoured it;
-#     the dashboards did not, so `HIT rate 72.7%` was 973 agent-observed rows and
-#     20 human ones aggregated together. Every target that selects the feedback
-#     stream must therefore commit to a population. Keyed on the STREAM, not the
-#     panel title: a title-keyed rule misses `Verdicts recorded` / `Verdict
-#     volume` / `Untracked delegations` (three of the nine conflated panels) and
-#     guards nothing once the panels are renamed to "Adoption".
+# 5e. Every target that selects the feedback stream names verdict_source, the
+#     tag delegate-feedback.sh writes on every row and the sync labels on: a
+#     query without it would silently widen to whatever untagged rows a corpus
+#     happened to hold. Under ADR 0015 this kept the human and agent tiers
+#     apart; under ADR 0030 there is one tier, and the predicate is what ties
+#     the dashboards to the label the JSONL actually carries. Keyed on the
+#     STREAM, not the panel title, so a renamed panel is still checked.
 for dash in "$DASHBOARDS/grafana"/*.json; do
   base=$(basename "$dash")
   unpartitioned=$(jq -r '[.. | objects | select(has("targets")) | . as $p

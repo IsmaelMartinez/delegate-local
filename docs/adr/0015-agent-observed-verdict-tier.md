@@ -4,7 +4,7 @@ Date: 2026-06-15
 
 ## Status
 
-Accepted.
+Superseded by [ADR 0030](0030-agent-verdict-is-the-signal.md) on 2026-09-13. The agent tier this ADR created is now the only tier; the human tier it kept as the headline never filled after the 2026-08-19 corpus reset and was retired, together with `verdict-sweep.sh`.
 
 ## Context
 

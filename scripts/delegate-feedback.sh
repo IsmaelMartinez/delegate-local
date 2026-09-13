@@ -2,16 +2,18 @@
 # Append a hit/miss feedback event to the delegate metrics JSONL, referencing
 # the `source:"delegate"` row pinned by `--id <otel_span_id>` (or `--ts`), or
 # the one row inside the freshness window when no pin is given. Lets the
-# caller record whether they actually used the delegated output (hit) or had
-# to rewrite/discard it (miss), with an optional one-line reason.
+# agent that requested the delegation record whether it used the output as-is
+# (hit), edited it and shipped it (scaffold), or rewrote/discarded it (miss),
+# with a one-line reason that is mandatory on scaffold and miss.
 #
 # The file remains append-only — feedback events join the JSONL as their own
 # rows, keyed by `ref_ts` (and `ref_id`, the row's otel_span_id) to the
 # delegate event they evaluate. `metrics-summary.sh` joins them at read time
-# to compute hit-rate per tier / model.
+# to compute hit-rate per tier / model. Every row carries
+# verdict_source:"agent": there is one verdict tier (ADR 0030), the agent's.
 #
 # Usage:  delegate-feedback.sh [--id <otel_span_id>|--ts <iso8601>]
-#                              [--source human|agent] [--final <path>|-]
+#                              [--source agent] [--final <path>|-]
 #                              hit|miss|scaffold [reason words...]
 # Env:
 #   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
@@ -95,12 +97,15 @@ github_repo="${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}"
 
 usage() {
   cat >&2 <<'EOF'
-usage: delegate-feedback.sh [--id <otel_span_id>|--ts <iso8601>] [--source human|agent]
+usage: delegate-feedback.sh [--id <otel_span_id>|--ts <iso8601>] [--source agent]
                            [--final <path>|-] hit|miss|scaffold [reason words...]
   hit = output kept as-is; miss = rewritten/discarded as useless; scaffold =
   discarded but genuinely useful (a divergent or executable draft that improved
   the final result). scaffold is recorded distinct from both and never fires the
-  MISS-recurrence nudge.
+  MISS-recurrence nudge. A miss or scaffold REQUIRES a reason: the agent
+  recording its own just-finished delegation always knows why it rewrote the
+  draft, and a rejection with no reason counts in every denominator while
+  telling the loop nothing.
   --id pins the verdict to one delegate row by its otel_span_id — the value
   delegate.sh prints on its delegate-meta line as id="..." and in the
   verdict nudge. It is the only pin that cannot name two rows: ts has
@@ -111,13 +116,10 @@ usage: delegate-feedback.sh [--id <otel_span_id>|--ts <iso8601>] [--source human
   routinely someone else's, so two fresh rows refuse and list the
   candidates with their ids, and none refuses as stale. The verdict's
   project is copied from the row it references.
-  --source records the verdict tier: human (default, a maintainer taste
-  judgment) or agent (the agent's record of whether it used its own
-  delegated output). Reporting keeps the two tiers separate.
-  With --source agent, a miss or scaffold REQUIRES a reason: the agent
-  recording its own just-finished delegation always knows why it rewrote
-  the draft, and a rejection with no reason counts in every denominator
-  while telling the loop nothing.
+  --source agent is the default and the only value: the agent that used or
+  rewrote the draft records the verdict (ADR 0030). The flag is accepted so
+  existing callers keep working; --source human is refused, because that
+  tier was retired.
   --final stores the text that ACTUALLY shipped (a file path, or - for
   stdin) beside the captured draft, so a MISS carries the concrete
   (generated, shipped) pair instead of only a prose description of the
@@ -147,7 +149,7 @@ EOF
 # `--source` as prose. `--` ends flag parsing for exactly that case.
 override_ts=""
 override_id=""
-verdict_source="human"
+verdict_source="agent"
 final_src=""
 positional=()
 while (($# > 0)); do
@@ -187,13 +189,13 @@ while (($# > 0)); do
       shift;;
     --source)
       if [[ $# -lt 2 || -z "${2:-}" ]]; then
-        echo 'delegate-feedback: --source requires a value (human|agent)' >&2; exit 2
+        echo 'delegate-feedback: --source requires a value (agent)' >&2; exit 2
       fi
       verdict_source="$2"; shift 2;;
     --source=*)
       verdict_source="${1#--source=}"
       if [[ -z "$verdict_source" ]]; then
-        echo 'delegate-feedback: --source requires a value (human|agent)' >&2; exit 2
+        echo 'delegate-feedback: --source requires a value (agent)' >&2; exit 2
       fi
       shift;;
     -h|--help) usage;;
@@ -207,14 +209,18 @@ done
 # below, not die with "positional: unbound variable".
 set -- ${positional[@]+"${positional[@]}"}
 
-# The agent-observed-verdict tier (Phase E). "human" (default) is a maintainer
-# taste judgment; "agent" is the agent's honest record of whether it used its
-# own delegated output as-is. They are kept as separate tiers downstream — the
-# headline hit-rate counts human verdicts only, coverage counts both — so an
-# invalid value must fail loudly rather than silently contaminate either axis.
+# One verdict tier (ADR 0030). "agent" is the agent's record of whether it used
+# its own delegated output, and it is the calibration signal; every caller
+# passes it and it is the default, so the flag is accepted rather than
+# removed. "human" was the ADR 0015 taste-judgment tier: it filled at a few
+# rows a week, the live corpus holds none, and a row written under it now
+# would be the one kind the reporting cannot place — refuse it, and name the
+# ADR so the caller knows it is retired rather than misspelt. Any other value
+# fails loudly for the same reason.
 case "$verdict_source" in
-  human|agent) ;;
-  *) echo "delegate-feedback: --source must be 'human' or 'agent' (got '$verdict_source')" >&2; exit 2 ;;
+  agent) ;;
+  human) echo "delegate-feedback: --source human is no longer a tier — the agent that used the draft records the verdict (ADR 0030); drop the flag" >&2; exit 2 ;;
+  *) echo "delegate-feedback: --source must be 'agent' (got '$verdict_source')" >&2; exit 2 ;;
 esac
 
 if [[ -n "$final_src" && "$final_src" != "-" && ! -f "$final_src" ]]; then
@@ -243,24 +249,23 @@ esac
 shift
 reason="$*"
 
-# An agent-recorded rejection with no reason is a row that counts in every
-# denominator and tells the loop nothing. Measured 2026-08-26: 12 of the 63
-# rejections in the live corpus carry no reason at all — every one of them
-# `verdict_source: agent`, all written in a single bulk sweep on 2026-08-25, all
-# on the recipe that then sat at the bottom of the per-recipe ranking with no
-# usable evidence behind its position. The loop doc is explicit that a rejection
-# with only a prose reason is already thin; one with none cannot be acted on at
-# all.
+# A rejection with no reason is a row that counts in every denominator and
+# tells the loop nothing. Measured 2026-08-26: 12 of the 63 rejections in the
+# live corpus carry no reason at all — all written in a single bulk sweep on
+# 2026-08-25, all on the recipe that then sat at the bottom of the per-recipe
+# ranking with no usable evidence behind its position. The loop doc is explicit
+# that a rejection with only a prose reason is already thin; one with none
+# cannot be acted on at all.
 #
-# Scoped to the agent tier on purpose. `verdict-sweep.sh` records reasonless
-# verdicts for a human working retrospectively through old rows, where "I no
-# longer remember why" is honest; the agent recording its own just-finished
-# delegation always knows.
-if [[ "$verdict_source" == "agent" && "$kept" == "false" && -z "${reason// }" ]]; then
-  echo "delegate-feedback: an agent-recorded '$verdict' needs a reason." >&2
+# This used to be scoped to `--source agent`, with the human sweep exempt
+# because "I no longer remember why" was honest for someone working through
+# old rows. With one tier (ADR 0030) every verdict is the agent's own
+# just-finished delegation, and it always knows.
+if [[ "$kept" == "false" && -z "${reason// }" ]]; then
+  echo "delegate-feedback: a '$verdict' needs a reason." >&2
   echo "  It is the only thing that makes the row actionable — the rate it moves" >&2
   echo "  is computed either way. Name what was wrong with the draft:" >&2
-  echo "    delegate-feedback.sh --source agent $verdict \"dropped every file:line anchor\"" >&2
+  echo "    delegate-feedback.sh $verdict \"dropped every file:line anchor\"" >&2
   echo "  and on a miss or scaffold add --final <path|-> naming what you shipped." >&2
   exit 2
 fi
@@ -513,19 +518,18 @@ fi
 
 # Build the feedback row in one jq call. Each optional field is appended only
 # when present, so an empty `reason` is omitted (no empty-string entries to
-# pollute future filters), `scaffold` rides only on the scaffold verdict, and
-# `verdict_source` is written only for the "agent" tier — a human verdict
-# (default) omits the field, so it is indistinguishable from the legacy rows
-# written before this tier existed, and the reporting partition maps both to
-# human. Only the agent tier carries the marker. `project` is the referenced
-# row's (selected above), never the cwd's: DELEGATE_PROJECT is not consulted
-# here, because the verdict has to land where the delegation did whatever
-# shell it is recorded from. `ref_id` is the referenced row's otel_span_id,
-# written beside `ref_ts` (omitted on the rare row that has none): every
-# reader still joins on ref_ts today, and ref_id is what lets them join on a
-# key that two delegations cannot share.
+# pollute future filters) and `scaffold` rides only on the scaffold verdict.
+# `verdict_source:"agent"` is written on every row: it is the only tier (ADR
+# 0030), every row in the live corpus already carries it, and the Grafana
+# calibration dashboard and the other consumers filter on it. `project` is the
+# referenced row's (selected above), never the cwd's: DELEGATE_PROJECT is not
+# consulted here, because the verdict has to land where the delegation did
+# whatever shell it is recorded from. `ref_id` is the referenced row's
+# otel_span_id, written beside `ref_ts` (omitted on the rare row that has
+# none): every reader still joins on ref_ts today, and ref_id is what lets
+# them join on a key that two delegations cannot share.
 jq -nc --arg ts "$ts" --arg ref "$ref_ts" --arg refid "$ref_id" --argjson kept "$kept" --argjson scaffold "$is_scaffold" --arg reason "${reason:-}" --arg project "$feedback_project" --arg vsource "$verdict_source" --arg final "$final_file" --arg finalsrc "$final_source" \
-  '{ts:$ts, source:"feedback", ref_ts:$ref} + (if $refid != "" then {ref_id:$refid} else {} end) + {kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + (if $reason != "" then {reason:$reason} else {} end) + (if $project != "" then {project:$project} else {} end) + (if $vsource == "agent" then {verdict_source:$vsource} else {} end) + (if $final != "" then {final_file:$final} else {} end) + (if $finalsrc != "" then {final_source:$finalsrc} else {} end)' \
+  '{ts:$ts, source:"feedback", ref_ts:$ref} + (if $refid != "" then {ref_id:$refid} else {} end) + {kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + (if $reason != "" then {reason:$reason} else {} end) + (if $project != "" then {project:$project} else {} end) + {verdict_source:$vsource} + (if $final != "" then {final_file:$final} else {} end) + (if $finalsrc != "" then {final_source:$finalsrc} else {} end)' \
   >> "$metrics_file"
 
 case "$verdict" in

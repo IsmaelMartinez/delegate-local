@@ -193,7 +193,7 @@ if (( ! interactive )); then
   exit 0
 fi
 
-# --- Interactive layer (verdict-sweep.sh pattern) ----------------------------
+# --- Interactive layer -------------------------------------------------------
 read_answer() {
   if [[ "${DELEGATE_ONBOARD_ASSUME_TTY:-}" == "1" ]]; then
     IFS= read -r _ans
