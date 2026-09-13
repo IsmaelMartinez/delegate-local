@@ -178,7 +178,7 @@ reason=$(cat <<EOF
 delegate-local verdict sweep (${scope}): ${count} delegation(s) from this session produced output but carry no verdict. Before you stop, record for each one whether you USED the delegated output as-is (hit), edited it and shipped it (scaffold), or rewrote/discarded it (miss) — a fact about what you did. scaffold and miss need a reason, and --final <path|-> naming what you shipped instead:
 
 ${batch}
-  DELEGATE_METRICS_FILE="${metrics_file}" bash "${script_dir}/delegate-feedback.sh" <pin from the line above> --source agent hit | scaffold "<reason>" | miss "<reason>"
+  DELEGATE_METRICS_FILE="${metrics_file}" bash "${script_dir}/delegate-feedback.sh" <pin from the line above> --source agent hit, scaffold "<reason>" or miss "<reason>"
 
 This prompt is shown once per session; recording what you can and then stopping is fine. Set DELEGATE_VERDICT_STOP_MODE=off to silence.
 EOF

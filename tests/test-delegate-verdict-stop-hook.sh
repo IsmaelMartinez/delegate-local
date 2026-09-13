@@ -94,6 +94,14 @@ case "$reason" in
   *"verdict-sweep"*) echo "  FAIL  T3: no hand-off to an interactive sweep"; fail=$((fail+1));;
   *) echo "  PASS  T3: no hand-off to an interactive sweep"; pass=$((pass+1));;
 esac
+# The command line is copied as printed, so the three verdicts are spelled as
+# alternatives, not with `|`, which reads (and runs) as a shell pipeline.
+cmd_line=$(printf '%s\n' "$reason" | grep -F 'delegate-feedback.sh')
+assert_contains ' hit, scaffold "<reason>" or miss "<reason>"' "$cmd_line" "T3: the verdicts are spelled as alternatives"
+case "$cmd_line" in
+  *" | "*) echo "  FAIL  T3: the command line is not a shell pipeline"; fail=$((fail+1));;
+  *) echo "  PASS  T3: the command line is not a shell pipeline"; pass=$((pass+1));;
+esac
 # Same session, a row with no otel_span_id: the pin on its line is --ts.
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s3b"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s3b" "$tmp" "$tmp/m.jsonl" "$tmp/out"

@@ -2439,8 +2439,10 @@ if [[ "$row_written" == "true" ]] \
   # delegate row is newest, which with parallel sessions is routinely someone
   # else's; the feedback script now refuses that lookup when more than one
   # row is fresh, so a caller who copies this line never hits the refusal.
-  # The id, not the ts: ts is second-precision and siblings share it.
-  nudge_msg="delegate: record verdict → bash scripts/delegate-feedback.sh --source agent --id $otel_span_id hit | scaffold \"<reason>\" | miss \"<reason>\"
+  # The id, not the ts: ts is second-precision and siblings share it. The
+  # three verdicts are spelled as alternatives rather than `a | b | c`: the
+  # line is copied as printed, and a `|` reads (and runs) as a pipeline.
+  nudge_msg="delegate: record verdict → bash scripts/delegate-feedback.sh --source agent --id $otel_span_id hit, scaffold \"<reason>\" or miss \"<reason>\"
 delegate:   on scaffold/miss also pass --final <path|-> naming what you shipped instead. The draft is already saved; the pair is what calibrates the recipe.
 delegate:   scaffold = you edited it and shipped it, miss = you threw it away"
   if (( nudge_fd == 2 )); then

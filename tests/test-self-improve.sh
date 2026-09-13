@@ -286,22 +286,28 @@ out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tm
 assert_contains "AMBIGUOUS: 1 verdict(s)" "$out" "ref_id join: a ref_ts-only verdict on a shared second is flagged"
 rm -rf "$tmp"
 
-# A feedback row with neither ref_id nor ref_ts joins nothing. It must not
-# abort the join (indexing by null does), and it still counts as a verdict
-# and a rejection, because it is one — it just cannot be attributed.
+# A feedback row with neither ref_id nor ref_ts references nothing, and is
+# skipped everywhere, as metrics-summary.sh skips it: it cannot be attributed
+# to a recipe, paired with a draft, or counted against a delegation. Two of
+# them, so that the skip is a skip and not a collapse — keyed on the empty
+# reference they would have shared one pkey and INDEX would have kept one,
+# counting "a verdict" that nobody recorded on anything.
 tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
 o1=$(iso_ago 600)
 cat > "$tmp/m.jsonl" <<EOF
 {"ts":"$o1","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","exit_status":0,"otel_span_id":"dddd000000000001"}
-{"ts":"$(iso_ago 595)","source":"feedback","kept":false,"reason":"orphan: no reference at all","verdict_source":"agent"}
+{"ts":"$(iso_ago 596)","source":"feedback","kept":false,"reason":"orphan one: no reference at all","verdict_source":"agent"}
+{"ts":"$(iso_ago 595)","source":"feedback","kept":false,"reason":"orphan two: no reference at all","verdict_source":"agent"}
 {"ts":"$(iso_ago 590)","source":"feedback","ref_ts":"$o1","ref_id":"dddd000000000001","kept":true,"verdict_source":"agent"}
 EOF
 EC=0
 out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1) || EC=$?
-assert_eq 0 "$EC" "orphan: a feedback row with no reference does not abort the bundle"
-assert_contains "Verdicts on those delegations: n=2  kept=1  scaffold=0  rewrote=1  usable=50%" "$out" \
-  "orphan: the unattributable verdict still counts"
-assert_contains "orphan: no reference at all" "$out" "orphan: the rejection is still listed with its reason"
+assert_eq 0 "$EC" "orphan: feedback rows with no reference do not abort the bundle"
+assert_contains "Verdicts on those delegations: n=1  kept=1  scaffold=0  rewrote=0  usable=100%" "$out" \
+  "orphan: unreferenced rows are skipped, not collapsed into one phantom verdict"
+assert_not_contains "orphan one" "$out" "orphan: an unreferenced rejection is not listed"
+assert_not_contains "orphan two" "$out" "orphan: nor is the second"
+assert_contains "rejections=0" "$out" "orphan: capture coverage does not count unreferenced rows"
 assert_not_contains "jq: error" "$out" "orphan: no jq error leaks into the bundle"
 rm -rf "$tmp"
 

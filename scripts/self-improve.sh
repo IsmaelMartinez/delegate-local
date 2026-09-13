@@ -120,17 +120,24 @@ echo "New delegations since watermark: $new_count"
 # by it; one written before carries ref_ts only and joins by ts, reaching
 # whichever row of that second INDEX kept — the best a legacy row can do.
 # `pkey` is the delegation's identity as seen from a feedback row, so that
-# several verdicts on one delegation collapse to the latest (an orphan keys
-# on its own reference and is kept).
+# several verdicts on one delegation collapse to the latest; a row whose
+# delegation is missing from the file keys on its own reference and is kept.
+# A feedback row with neither ref_id nor ref_ts references nothing at all and
+# is skipped everywhere (`referenced`), as metrics-summary.sh skips it: it
+# cannot be attributed, paired or counted against a delegation, and keyed on
+# the empty reference every such row would share one pkey, so INDEX would
+# have kept one of them and the tally would have counted a verdict nobody
+# recorded on anything.
 parent_join='
+  def referenced: .source == "feedback" and (.ref_id != null or .ref_ts != null);
   (map(select((.source // "delegate") == "delegate" and .ts != null))) as $dl
   | (($dl | INDEX("ts:" + .ts)) + ($dl | map(select(.otel_span_id != null)) | INDEX("id:" + .otel_span_id))) as $d
   | def parent: $d["id:" + (.ref_id // "")] // $d["ts:" + (.ref_ts // "")];
   def pkey: parent as $p
-    | if $p == null then (if (.ref_id // "") != "" then "id:" + .ref_id else "ts:" + (.ref_ts // "") end)
+    | if $p == null then (if (.ref_id // "") != "" then "id:" + .ref_id else "ts:" + .ref_ts end)
       elif $p.otel_span_id != null then "id:" + $p.otel_span_id
       else "ts:" + $p.ts end;
-  def latest_verdicts: [.[] | select(.source == "feedback")] | sort_by(.ts) | INDEX(pkey) | [.[]];
+  def latest_verdicts: [.[] | select(referenced)] | sort_by(.ts) | INDEX(pkey) | [.[]];
 '
 
 # A ref_ts-only verdict on a second that more than one delegation shares
@@ -267,7 +274,7 @@ list_markers() {
 # later field left.
 jq -rs --arg prev "$prev_ts" '
   '"$parent_join"'
-  map(select(.source == "feedback" and (.kept | not)))
+  map(select(referenced and (.kept | not)))
   | map(select($prev == "" or (parent.ts // "") > $prev))
   | .[]
   | (.final_file // "") as $fin
@@ -356,7 +363,7 @@ echo
 echo "--- capture coverage since watermark ---"
 jq -rs --arg prev "$prev_ts" '
   '"$parent_join"'
-  map(select(.source == "feedback" and (.kept | not)))
+  map(select(referenced and (.kept | not)))
   | map(select($prev == "" or (parent.ts // "") > $prev))
   | (map(select((parent.draft_file // "") != "")) | length) as $wd
   | (map(select((.final_file // "") != "")) | length) as $wf

@@ -960,8 +960,14 @@ assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge: pri
 assert_contains "scaffold" "$stderr_content" "verdict-nudge: names the scaffold verdict"
 assert_contains "--final" "$stderr_content" "verdict-nudge: names --final so the pair gets captured"
 assert_contains "delegate-feedback.sh --source agent --id " "$stderr_content" "verdict-nudge: names --source agent and --id"
-assert_contains " hit | scaffold" "$stderr_content" "verdict-nudge: names hit (agent-sourced)"
-assert_contains "miss" "$stderr_content" "verdict-nudge: names miss"
+assert_contains ' hit, scaffold "<reason>" or miss "<reason>"' "$stderr_content" "verdict-nudge: names the three verdicts as alternatives"
+# The command line is copied as printed, so the alternatives must not be
+# spelled with `|` — that reads (and runs) as a shell pipeline.
+nudge_cmd=$(printf '%s\n' "$stderr_content" | grep -F 'record verdict')
+case "$nudge_cmd" in
+  *" | "*) echo "  FAIL  verdict-nudge: the command line is not a shell pipeline"; fail=$((fail+1));;
+  *) echo "  PASS  verdict-nudge: the command line is not a shell pipeline"; pass=$((pass+1));;
+esac
 # One tier (ADR 0030): there is no human taste judgment to drop the flag for.
 case "$stderr_content" in
   *"drop --source"*|*"taste judgment"*) echo "  FAIL  verdict-nudge: no human-tier hand-off"; fail=$((fail+1));;
