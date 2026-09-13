@@ -1846,23 +1846,26 @@ $body300
 EOF" "$tmpcwd" | dflt bash "$HOOK")
 assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "empty body: no body flag is still no body_chars"
 
-# 75. Lock ownership (third review round). A hook whose provider probe keeps
-# it running past the 5 s stale threshold had its lock broken by the next
-# hook, and then its own EXIT cleanup removed the REPLACEMENT lock, so both
-# ran their lookup unserialised and consumed the same credit. The lock dir
-# carries an owner token written on acquisition; release removes the dir
-# only when the token matches. Two mocks whose GET /models sleeps: hook A
-# probes for 9 s, hook B — started 7 s in, so A's lock reads stale — probes
-# for 3 s. A exits at ~9 s while B still holds the lock it took over; the
-# lock must survive A's exit and vanish only when B finishes.
-slow_mock() { # dir seconds
+# 75. Lock ownership (third review round). A hook that keeps its lock past
+# the 5 s stale threshold has it broken by the next hook; without an
+# ownership check its own EXIT cleanup then removed the REPLACEMENT lock, so
+# both ran their lookup unserialised and consumed the same credit. The lock
+# dir carries an owner token written on acquisition; release removes the dir
+# only when the token matches. Since the fifth round the provider probe runs
+# OUTSIDE the lock — the critical section is the lookup and the append — so
+# the slow holder here is a `jq` wrapper that sleeps on the lookup's `-rs`
+# slurp: hook A holds the lock for 9 s, hook B — started 7 s in, so A's lock
+# reads stale — for 3 s. A exits at ~9 s while B still holds the lock it took
+# over; the lock must survive A's exit and vanish only when B finishes.
+REAL_JQ=$(command -v jq)
+slow_jq() { # dir seconds
   mkdir -p "$1"
-  { printf '#!/usr/bin/env bash\nsleep %s\n' "$2"; sed '1d;/^: >> /d' "$MOCKDIR/curl"; } > "$1/curl"
-  chmod +x "$1/curl"
+  printf '#!/usr/bin/env bash\ncase " $* " in *" -rs "*) sleep %s ;; esac\nexec %q "$@"\n' "$2" "$REAL_JQ" > "$1/jq"
+  chmod +x "$1/jq"
 }
-SLOWA=$(mktemp -d); slow_mock "$SLOWA" 9
-SLOWB=$(mktemp -d); slow_mock "$SLOWB" 3
-slow() { PATH="$1:${PATH#$MOCKDIR:}" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "${@:2}"; }
+SLOWA=$(mktemp -d); slow_jq "$SLOWA" 9
+SLOWB=$(mktemp -d); slow_jq "$SLOWB" 3
+slow() { PATH="$1:$PATH" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "${@:2}"; }
 : > "$METRICS"; rm -rf "$lockdir"
 payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWA" bash "$HOOK" >/dev/null &
 pid_a=$!
@@ -1875,6 +1878,53 @@ wait "$pid_b"
 assert_eq "absent" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock owner: B releases its own lock when it finishes"
 assert_eq 2 "$(grep -c '"denied":true' "$METRICS")" "lock owner: both boundaries were judged (denied, no credit)"
 rm -rf "$SLOWA" "$SLOWB"
+
+# 75b (fifth round). The probe is not in the critical section. With the
+# mock provider sleeping 3 s, a second hook started 1 s later must not wait on
+# the first: the lock is held for the lookup and the append only, so both
+# finish in about one probe's time rather than two.
+SLOWC=$(mktemp -d)
+{ printf '#!/usr/bin/env bash\nsleep 3\n'; sed '1d;/^: >> /d' "$MOCKDIR/curl"; } > "$SLOWC/curl"; chmod +x "$SLOWC/curl"
+slowc() { PATH="$SLOWC:${PATH#$MOCKDIR:}" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "$@"; }
+: > "$METRICS"; rm -rf "$lockdir"
+t0=$(date +%s)
+payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK" >/dev/null &
+pid_a=$!
+sleep 1
+payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK" >/dev/null &
+pid_b=$!
+wait "$pid_a" "$pid_b"
+elapsed=$(( $(date +%s) - t0 ))
+assert_eq "yes" "$([[ $elapsed -le 5 ]] && echo yes || echo "no (${elapsed}s)")" "probe outside lock: two slow probes overlap instead of queueing on the lock"
+assert_eq 2 "$(grep -c '"denied":true' "$METRICS")" "probe outside lock: both boundaries were judged"
+rm -rf "$SLOWC"
+
+# 77 (fifth round). A lock dir with no `ts` — a hook killed between mkdir
+# and the write — was never treated as stale, so every later hook waited 2 s
+# and failed open forever. A ts-less lock is stale once the DIRECTORY is
+# older than the threshold.
+rm -rf "$lockdir"; mkdir -p "$lockdir"; touch -t 202001010000 "$lockdir"
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "incomplete lock: an old ts-less lock dir is broken and the boundary judged"
+assert_eq "absent" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "incomplete lock: ...and released afterwards"
+
+# 78 (fifth round). A relative `--body-file` resolves against the payload
+# cwd, and against a leading `cd <path> &&` target when there is one. The
+# body was read before the hook chdir'd to the payload cwd, so `reply.md`
+# was looked up in the hook process's own cwd, not found, and a readable
+# body was marked unmeasurable and enforced.
+printf '%s' "$body300" > "$tmpcwd/reply.md"
+: > "$METRICS"
+payload 'gh pr comment 1 --body-file reply.md' "$tmpcwd" | dflt bash "$HOOK" >/dev/null
+assert_eq "${#body300}" "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "relative body-file: resolved against the payload cwd"
+mk_repo "$gitroot/repo-c" >/dev/null 2>&1
+printf 'short' > "$gitroot/repo-c/reply.md"
+: > "$METRICS"
+out=$(payload "cd $gitroot/repo-c && gh pr comment 1 --body-file reply.md" "$tmpcwd" | dflt bash "$HOOK")
+assert_eq 5 "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "relative body-file: resolved against the cd target"
+assert_eq "" "$out" "relative body-file: ...so the 5-char reply is under the floor, not enforced as unmeasurable"
+rm -f "$tmpcwd/reply.md"
 
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"

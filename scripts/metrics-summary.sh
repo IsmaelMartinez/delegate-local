@@ -498,9 +498,11 @@ if (( n_opp > 0 )); then
     # "later" as a strictly greater second-precision timestamp counted a
     # denial and its redraft in the same second as both a miss and a hit
     # (fourth round). Later is therefore append order — the row index in the
-    # file — and the window is still measured on ts. Rows with no session
-    # match on project alone, so a pre-#479 corpus still resolves.
-    # O(denied x rows), and the denied set is small.
+    # file — and the window is still measured on ts, bounded below at zero so
+    # an out-of-order or clock-skewed row cannot pass an upper-bound-only
+    # check (fifth round). Rows with no session match on project alone, so a
+    # pre-#479 corpus still resolves. O(denied x rows), and the denied set is
+    # small.
     [ map(select((.source // "") == "opportunity"))
       | range(0; length) as $i | .[$i] + {_i: $i} ] as $all
     | $all
@@ -511,6 +513,7 @@ if (( n_opp > 0 )); then
                 and (.boundary // "") == ($d.boundary // "")
                 and (.session // "") == ($d.session // "")
                 and (.project // "") == ($d.project // "")
+                and (epoch - ($d | epoch)) >= 0
                 and (epoch - ($d | epoch)) <= ($win_min * 60))
           else . end)
     | (map(select(.below_floor == true)) | length) as $floored

@@ -98,6 +98,34 @@ command -v jq >/dev/null 2>&1 || exit 0
 cmd=$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null) || exit 0
 [[ -z "$cmd" ]] && exit 0
 hook_cwd=$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null) || hook_cwd=""
+# Work from the payload's cwd from here on. Relative paths in the command — a
+# `--body-file reply.md` — mean relative to where the Bash tool will run,
+# not to wherever the hook process happened to start; reading the body
+# before this chdir looked `reply.md` up in the wrong directory, found
+# nothing, and enforced a post the hook could have measured (fifth review
+# round on #484). A builtin, so the common path pays nothing.
+[[ -n "$hook_cwd" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
+# A leading `cd <path> &&` retargets those relative paths (and, below, the
+# project) to that directory. Parsed off the RAW command: the scan surface
+# blanks quoted spans, so a quoted path with a space survives there only as
+# `cd   `. The match is ^-anchored, so a heredoc body mentioning `cd /x &&
+# git commit` cannot reach it, and the captured path is only ever a quoted
+# argument to `cd` inside a subshell — never expanded, never eval'd. `cd -`
+# resolves to $OLDPWD, which is not knowable from the payload, and a path
+# carrying $, backtick or ~ would need an expansion the hook must not
+# perform; both are rejected outright rather than sanitised. Kept only when
+# it names a directory.
+cd_path=""
+_cd_sq="^[[:space:]]*cd[[:space:]]+'([^']+)'[[:space:]]*&&"
+_cd_dq="^[[:space:]]*cd[[:space:]]+\"([^\"]+)\"[[:space:]]*&&"
+_cd_bare="^[[:space:]]*cd[[:space:]]+([^[:space:]&'\"]+)[[:space:]]*&&"
+if [[ "$cmd" =~ $_cd_sq ]] || [[ "$cmd" =~ $_cd_dq ]] || [[ "$cmd" =~ $_cd_bare ]]; then
+  cd_path="${BASH_REMATCH[1]}"
+  case "$cd_path" in
+    -*|*'$'*|*'`'*|*'~'*) cd_path="" ;;
+  esac
+  [[ -n "$cd_path" && -d "$cd_path" ]] || cd_path=""
+fi
 # The session id (the transcript UUID) is the same value delegate.sh sees as
 # CLAUDE_CODE_SESSION_ID and writes on its row as `session` (#479). It scopes
 # the projectless lookup below and is recorded on the opportunity row.
@@ -432,6 +460,9 @@ read_posted_body() { # raw-segment
   IFS=$'\t' read -r kind flag <<<"$first"
   if [[ "$kind" == "FILE" ]]; then
     path="$flag"
+    # The hook already sits in the payload cwd; a leading `cd <path> &&`
+    # moves relative paths again (fifth review round on #484).
+    [[ -n "$path" && "$path" != /* && -n "$cd_path" ]] && path="$cd_path/$path"
     [[ -n "$path" && -f "$path" && -r "$path" ]] || return 0
     body_text=$(head -c 65536 < "$path" 2>/dev/null; printf X); body_text=${body_text%X}
     body_measurable=true
@@ -583,10 +614,10 @@ done <<<"$scan"
 # a session that may well have delegated. The #385 refusal below had guarded
 # only the `cd <path> &&` branch against this. Sourcing the lib is documented
 # side-effect free; it is done here, after the boundary is known, so the
-# common path pays nothing for it. $script_dir was resolved before the cd,
-# and through the ~/.claude/skills symlink it names the symlinked tree, which
-# is where lib/ is. A missing lib leaves cwd_project empty: fail open.
-[[ -n "$hook_cwd" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
+# common path pays nothing for it. $script_dir was resolved before the cd to
+# the payload cwd (done right after the payload was read), and through the
+# ~/.claude/skills symlink it names the symlinked tree, which is where lib/
+# is. A missing lib leaves cwd_project empty: fail open.
 cwd_project=""
 if [[ -n "$script_dir" && -f "$script_dir/lib/otel.sh" ]]; then
   # shellcheck source=lib/otel.sh
@@ -605,34 +636,22 @@ fi
 #
 # Parsed off the RAW $cmd rather than the $scan surface. That is a deliberate
 # departure from the doctrine above, because scan blanks quoted spans and a
-# quoted path with a space survives there as `cd   `. The match is ^-anchored,
-# so a heredoc body mentioning `cd /x && git commit` cannot reach it, and the
-# captured path is only ever a quoted argument to `cd` inside a subshell. It is
-# never expanded and never eval'd.
+# quoted path with a space survives there as `cd   `. The parse itself (and
+# its refusals) now sits with the payload read near the top, because the
+# body scanner needs the target too; $cd_path is empty unless it named a
+# directory.
 cd_project=""
-_cd_sq="^[[:space:]]*cd[[:space:]]+'([^']+)'[[:space:]]*&&"
-_cd_dq="^[[:space:]]*cd[[:space:]]+\"([^\"]+)\"[[:space:]]*&&"
-_cd_bare="^[[:space:]]*cd[[:space:]]+([^[:space:]&'\"]+)[[:space:]]*&&"
-if [[ "$cmd" =~ $_cd_sq ]] || [[ "$cmd" =~ $_cd_dq ]] || [[ "$cmd" =~ $_cd_bare ]]; then
-  cd_path="${BASH_REMATCH[1]}"
-  # `cd -` resolves to $OLDPWD, which is not knowable from the payload, and a
-  # path carrying $, backtick or ~ would need an expansion the hook must not
-  # perform. Both are rejected outright rather than sanitised.
-  case "$cd_path" in
-    -*|*'$'*|*'`'*|*'~'*) cd_path="" ;;
-  esac
-  if [[ -n "$cd_path" && -d "$cd_path" ]]; then
-    # Derived inside a SUBSHELL that has chdir'd to the target. Do not reach for
-    # `git -C "$cd_path" rev-parse --git-common-dir`: at a repo root that returns
-    # the RELATIVE string `.git`, which then resolves against the hook's own cwd
-    # and silently reproduces the very bug this block exists to fix.
-    # Accepted only when the target is inside a git repository — a `cd /tmp`
-    # must not file the boundary under `tmp` and fragment the denominator.
-    cd_project=$(cd -- "$cd_path" 2>/dev/null || exit
-      c=$(git rev-parse --git-common-dir 2>/dev/null) || exit
-      d=$(cd "$c" 2>/dev/null && pwd) || exit
-      basename "$(dirname "$d")")
-  fi
+if [[ -n "$cd_path" ]]; then
+  # Derived inside a SUBSHELL that has chdir'd to the target. Do not reach for
+  # `git -C "$cd_path" rev-parse --git-common-dir`: at a repo root that returns
+  # the RELATIVE string `.git`, which then resolves against the hook's own cwd
+  # and silently reproduces the very bug this block exists to fix.
+  # Accepted only when the target is inside a git repository — a `cd /tmp`
+  # must not file the boundary under `tmp` and fragment the denominator.
+  cd_project=$(cd -- "$cd_path" 2>/dev/null || exit
+    c=$(git rev-parse --git-common-dir 2>/dev/null) || exit
+    d=$(cd "$c" 2>/dev/null && pwd) || exit
+    basename "$(dirname "$d")")
 fi
 # An explicit DELEGATE_PROJECT outranks the cd target as well: delegate.sh run
 # after that same `cd` inherits the variable and records it, so the row has to
@@ -706,6 +725,78 @@ metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/s
 window_min="${DELEGATE_BOUNDARY_WINDOW_MIN:-480}"
 now_epoch=$(date -u +%s)
 
+# --- is this enough text to be drafting? (#483) ----------------------------
+# `body_chars` (set by read_posted_body above, from the matched segment) is a
+# count, never the text, and is recorded only when there is a measurable body
+# at PreToolUse time: a `-F -` fed by a heredoc, a file written by the same
+# call, a `--body-file` that does not exist yet, or any unresolved shell in
+# the value leave it absent, and an absent count keeps the pre-#483
+# behaviour (nudge or deny as the mode says). Measured 2026-09-13,
+# `pr-review-comment` ran at 3% delegated over n=63 because most inline
+# replies are one line — an applied-in hash, a dependabot rebase command, a
+# one-word acknowledgement — and no recipe should draft those; without a
+# stored length they could not be told from real drafting after the fact, so
+# the floor records them and steps aside.
+#
+# The floor is per boundary (PR #484 review, item H). 120 was calibrated on
+# inline review comments, where a paragraph clears it and a status line does
+# not, but a one-line conventional commit is 40-60 characters — the
+# commit-message recipe's own core output — and one global 120 exempted every
+# such commit from enforcement and from the denominator, inflating the
+# git-commit rate. git-commit gets 20 (a subject line); the rest keep 120.
+# DELEGATE_BOUNDARY_MIN_CHARS overrides both. The rows carry the number, not
+# the floor, so it can be re-tuned from the corpus.
+case "$boundary" in
+  git-commit) min_chars=20 ;;
+  *)          min_chars=120 ;;
+esac
+if [[ "${DELEGATE_BOUNDARY_MIN_CHARS:-}" =~ ^[0-9]+$ ]]; then
+  min_chars="$DELEGATE_BOUNDARY_MIN_CHARS"
+fi
+below_floor=false
+if [[ "$body_measurable" == "true" ]] && (( body_chars < min_chars )); then
+  below_floor=true
+fi
+
+# --- which mode applies to THIS boundary? (#483) ---------------------------
+# Unset (the default) enforces the set in DELEGATE_BOUNDARY_ENFORCE and warns
+# elsewhere. The default set is the four boundaries whose recipe is proven on
+# the corpus: git-commit (commit-message, 92% usable over n=41), issue-create
+# (github-issue-body, 100% over n=12), and the two reply boundaries
+# (pr-review-reply, maintainer-reply). pr-create and pr-review-body stay on
+# warn until pr-description is above 80% usable on more than a handful of
+# rows — denying a post to hand the agent a recipe that fails half the time
+# would teach it to route around the hook. `${VAR-default}` rather than
+# `:-`, so an explicitly empty set means "enforce nothing", which is the
+# documented override.
+#
+# The deny is issued only while a provider is serving the recipe's tier: the
+# same resolution delegate.sh will perform, so a deny never points at a
+# command that cannot run. It costs one pick-model.sh run — the first
+# reachable provider answers in tens of milliseconds, a dead localhost port
+# refuses at once, and a dead remote host costs DELEGATE_PROBE_TIMEOUT (1s)
+# per entry — and it is paid only on the deny path: never on a warn-only
+# boundary, a credited post, or a body under the floor.
+enforce_set="${DELEGATE_BOUNDARY_ENFORCE-git-commit,issue-create,comment-reply,pr-review-comment}"
+enforce_set="${enforce_set// /}"
+# Case-insensitive, and an unknown value is warn — as it was on main before
+# #483, when any spelling but `enforce`/`off` fell through to the warn
+# default. For a while an unknown value fell into the DEFAULT branch here and
+# enforced, so `DELEGATE_BOUNDARY_MODE=Off` denied (PR #484 review, item F).
+# nocasematch is bash 3.2 and costs no fork (`${var,,}` is bash 4).
+shopt -s nocasematch
+case "${DELEGATE_BOUNDARY_MODE:-}" in
+  "") case ",${enforce_set}," in
+        *",${boundary},"*) mode=enforce ;;
+        *)                 mode=warn ;;
+      esac ;;
+  off)     mode=off ;;
+  enforce) mode=enforce ;;
+  *)       mode=warn ;;
+esac
+shopt -u nocasematch
+prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
+
 # --- serialise lookup + append across concurrent hooks (PR #484, item M) ----
 # The lookup reads a snapshot and the row that spends the credit is appended
 # further down, so two enforced boundaries running at once after one
@@ -742,7 +833,15 @@ if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
   lock_tries=0
   while ! mkdir "$lock_dir" 2>/dev/null; do
+    # The dir is visible at mkdir before `ts` is written, so a hook killed in
+    # between leaves a lock with no `ts`; treating that as fresh made every
+    # later hook wait 2 s and fail open for good (fifth review round). With
+    # no `ts` the DIRECTORY mtime stands in — BSD `stat -f %m` first, GNU
+    # `stat -c %Y` as the fallback, the pattern pick-model.sh already uses.
     lock_ts=$(cat "$lock_dir/ts" 2>/dev/null)
+    if [[ ! "$lock_ts" =~ ^[0-9]+$ ]]; then
+      lock_ts=$(stat -f %m "$lock_dir" 2>/dev/null || stat -c %Y "$lock_dir" 2>/dev/null)
+    fi
     if [[ "$lock_ts" =~ ^[0-9]+$ && $(( now_epoch - lock_ts )) -gt 5 ]]; then
       rm -rf "$lock_dir" 2>/dev/null; continue
     fi
@@ -873,174 +972,6 @@ if [[ -f "$metrics_file" ]]; then
   [[ "${recent:-0}" -gt 0 ]] && delegated=true
 fi
 
-# --- is this enough text to be drafting? (#483) ----------------------------
-# `body_chars` (set by read_posted_body above, from the matched segment) is a
-# count, never the text, and is recorded only when there is a measurable body
-# at PreToolUse time: a `-F -` fed by a heredoc, a file written by the same
-# call, a `--body-file` that does not exist yet, or any unresolved shell in
-# the value leave it absent, and an absent count keeps the pre-#483
-# behaviour (nudge or deny as the mode says). Measured 2026-09-13,
-# `pr-review-comment` ran at 3% delegated over n=63 because most inline
-# replies are one line — an applied-in hash, a dependabot rebase command, a
-# one-word acknowledgement — and no recipe should draft those; without a
-# stored length they could not be told from real drafting after the fact, so
-# the floor records them and steps aside.
-#
-# The floor is per boundary (PR #484 review, item H). 120 was calibrated on
-# inline review comments, where a paragraph clears it and a status line does
-# not, but a one-line conventional commit is 40-60 characters — the
-# commit-message recipe's own core output — and one global 120 exempted every
-# such commit from enforcement and from the denominator, inflating the
-# git-commit rate. git-commit gets 20 (a subject line); the rest keep 120.
-# DELEGATE_BOUNDARY_MIN_CHARS overrides both. The rows carry the number, not
-# the floor, so it can be re-tuned from the corpus.
-case "$boundary" in
-  git-commit) min_chars=20 ;;
-  *)          min_chars=120 ;;
-esac
-if [[ "${DELEGATE_BOUNDARY_MIN_CHARS:-}" =~ ^[0-9]+$ ]]; then
-  min_chars="$DELEGATE_BOUNDARY_MIN_CHARS"
-fi
-below_floor=false
-if [[ "$body_measurable" == "true" ]] && (( body_chars < min_chars )); then
-  below_floor=true
-fi
-
-# --- store the posted body as the shipped half of the pair (ADR 0029) -------
-# `maintainer-reply` was the weakest recipe with any volume (21% usable over
-# n=33) and the only one whose 32 rejections carried no captured final at all,
-# because its output is posted inline inside `gh pr comment --body "..."` and
-# there is no path on disk for `delegate-feedback.sh --final` to name. A commit
-# message reaches a file before `git commit -F` reads it; a reply never does.
-#
-# This hook is the one place that sees the shipped text, and when the post is
-# credited to a delegation it IS that delegation's shipped form by definition.
-# Store it beside the draft under the draft's own stem, so the two halves are
-# guaranteed to belong together, and let `delegate-feedback.sh` adopt it when
-# the caller passed no `--final`. An existing file is never overwritten: a
-# hand-supplied final outranks an inferred one. The `-e` check is only the
-# cheap way to skip parsing the body; the guarantee is the `set -C` on the
-# write, which makes the redirect itself fail if a feedback call claimed the
-# bare name between the check and the write (PR #479 review).
-#
-# The capture is PRE-post, so a post that then fails leaves a final for text
-# that never shipped. The verdict is recorded by whoever ran the command and
-# knows, and `--final` still wins, so the cost of that is bounded.
-if [[ "$delegated" == "true" && -n "${credit_draft:-}" \
-      && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
-  drafts_dir="$(dirname "$metrics_file")/drafts"
-  final_path="$drafts_dir/${credit_draft%.draft.txt}.final.txt"
-  if [[ ! -e "$final_path" && -n "$body_text" ]]; then
-    if mkdir -p "$drafts_dir" 2>/dev/null; then
-      chmod 700 "$drafts_dir" 2>/dev/null || true
-      ( umask 077; set -C; printf '%s' "$body_text" > "$final_path" ) 2>/dev/null || true
-      [[ -f "$final_path" ]] && chmod 600 "$final_path" 2>/dev/null
-    fi
-  fi
-fi
-# --- which mode applies to THIS boundary? (#483) ---------------------------
-# Unset (the default) enforces the set in DELEGATE_BOUNDARY_ENFORCE and warns
-# elsewhere. The default set is the four boundaries whose recipe is proven on
-# the corpus: git-commit (commit-message, 92% usable over n=41), issue-create
-# (github-issue-body, 100% over n=12), and the two reply boundaries
-# (pr-review-reply, maintainer-reply). pr-create and pr-review-body stay on
-# warn until pr-description is above 80% usable on more than a handful of
-# rows — denying a post to hand the agent a recipe that fails half the time
-# would teach it to route around the hook. `${VAR-default}` rather than
-# `:-`, so an explicitly empty set means "enforce nothing", which is the
-# documented override.
-#
-# The deny is issued only while a provider is serving the recipe's tier: the
-# same resolution delegate.sh will perform, so a deny never points at a
-# command that cannot run. It costs one pick-model.sh run — the first
-# reachable provider answers in tens of milliseconds, a dead localhost port
-# refuses at once, and a dead remote host costs DELEGATE_PROBE_TIMEOUT (1s)
-# per entry — and it is paid only on the deny path: never on a warn-only
-# boundary, a credited post, or a body under the floor.
-enforce_set="${DELEGATE_BOUNDARY_ENFORCE-git-commit,issue-create,comment-reply,pr-review-comment}"
-enforce_set="${enforce_set// /}"
-# Case-insensitive, and an unknown value is warn — as it was on main before
-# #483, when any spelling but `enforce`/`off` fell through to the warn
-# default. For a while an unknown value fell into the DEFAULT branch here and
-# enforced, so `DELEGATE_BOUNDARY_MODE=Off` denied (PR #484 review, item F).
-# nocasematch is bash 3.2 and costs no fork (`${var,,}` is bash 4).
-shopt -s nocasematch
-case "${DELEGATE_BOUNDARY_MODE:-}" in
-  "") case ",${enforce_set}," in
-        *",${boundary},"*) mode=enforce ;;
-        *)                 mode=warn ;;
-      esac ;;
-  off)     mode=off ;;
-  enforce) mode=enforce ;;
-  *)       mode=warn ;;
-esac
-shopt -u nocasematch
-prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
-# Why a deny was not issued, when it was not. Every reason here fails OPEN to
-# warn, because "a commit is never blocked by a hook bug" has to survive
-# every way the credit path can be broken (PR #484 review, items E, G, M):
-#   metrics-unwritable  DELEGATE_LOCAL_NO_METRICS=1 in the hook env, or the
-#                       metrics file cannot be appended to — no credit can
-#                       ever be written where this hook reads, so a deny
-#                       would have no escape.
-#   retry-cap           two consecutive denials for this session+boundary
-#                       already; a delegation that fails (canary stall, HTTP
-#                       500, echo check) never credits, so the third attempt
-#                       goes through.
-#   lock-timeout        the lookup lock above could not be taken in 2 s.
-#   no-provider         pick-model.sh: nothing reachable.
-#   no-model            pick-model.sh: a provider is up but serves no model
-#                       for the recipe tier.
-#   bad-tier            pick-model.sh: the recipe declares a tier it does not
-#                       know (or the frontmatter is malformed).
-# The probe is pick-model.sh on the recipe tier — the same resolution
-# delegate.sh will perform, so a deny never points at a command that cannot
-# run. It exits 1 for both "unreachable" and "no model", telling them apart
-# only on stderr, and 2 for a bad tier. It costs ~50 ms when the first
-# provider answers or every localhost port is closed (a dead remote host costs
-# DELEGATE_PROBE_TIMEOUT, 1 s, per entry), and it is paid only when a deny is
-# otherwise about to happen: never on a warn-only boundary, a credited post,
-# a body under the floor, or a capped or unlockable session.
-enforce_skipped="" tier_decl=""
-retry_cap=2
-if [[ "$mode" == "enforce" && "$delegated" != "true" && "$below_floor" != "true" ]]; then
-  if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]]; then
-    enforce_skipped="metrics-unwritable"
-  elif [[ "$lock_failed" == "true" ]]; then
-    enforce_skipped="lock-timeout"
-  elif (( denied_streak >= retry_cap )); then
-    enforce_skipped="retry-cap"
-  else
-    # The tier the recipe declares, read with the same expression delegate.sh
-    # uses (lib/recipe.sh, item I), so `tier: prose ` resolves in both.
-    if [[ -n "$script_dir" && -f "$script_dir/lib/recipe.sh" && -f "$prompts_dir/$recipe.md" ]]; then
-      # shellcheck source=lib/recipe.sh
-      . "$script_dir/lib/recipe.sh"
-      tier_decl=$(recipe_tier "$prompts_dir/$recipe.md")
-    fi
-    if [[ -z "$tier_decl" ]]; then
-      # delegate.sh exits 2 on this too; the command as printed would fail.
-      tier_decl=$(awk 'NR > 1 && /^tier:/ { sub(/^tier:[[:space:]]*/, ""); print; exit }' "$prompts_dir/$recipe.md" 2>/dev/null)
-      enforce_skipped="bad-tier"
-    elif [[ -z "$script_dir" || ! -f "$script_dir/pick-model.sh" ]]; then
-      enforce_skipped="no-provider"
-    else
-      probe_err=$(bash "$script_dir/pick-model.sh" "$tier_decl" 2>&1 >/dev/null); probe_rc=$?
-      if (( probe_rc == 2 )); then
-        enforce_skipped="bad-tier"
-      elif (( probe_rc != 0 )); then
-        case "$probe_err" in
-          *"holds a model"*) enforce_skipped="no-model" ;;
-          *)                 enforce_skipped="no-provider" ;;
-        esac
-      fi
-    fi
-  fi
-  [[ -n "$enforce_skipped" ]] && mode=warn
-fi
-denied=false
-[[ "$mode" == "enforce" && "$delegated" != "true" && "$below_floor" != "true" ]] && denied=true
-
 # --- record the opportunity (the trigger-rate sensor) ---------------------
 # One row per boundary so trigger rate has a denominator. Stores no command or
 # message text — only boundary type, suggested recipe, project and the flag.
@@ -1061,17 +992,14 @@ denied=false
 # boundary as a miss followed by a hit and cap the rate near 50%.
 # `enforce_skipped:"<reason>"` marks a deny that fell open (the reasons are
 # listed above); the post went through undrafted, so that row stays a real
-# miss.
-#
-# The append is the writability test. When it fails and a deny was about to
-# be issued, the deny is withdrawn: no row means no credit could ever be
-# recorded here either, and the row that would have said `denied:true` was
-# not written, so nothing is left inconsistent. The reminder carries the
-# reason instead (item E).
-if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
-  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# miss. Returns the append's status, so the caller can tell a row that was
+# not written (item E: a deny is withdrawn when no credit could ever be
+# recorded here either).
+append_row() {
+  [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] || return 0
+  local ts; ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
-  if ! jq -nc --arg ts "$ts" --arg project "$project" --arg boundary "$boundary" \
+  jq -nc --arg ts "$ts" --arg project "$project" --arg boundary "$boundary" \
      --arg recipe "$recipe" --arg sid "$session_id" --argjson delegated "$delegated" \
      --arg body_chars "$body_chars" --argjson below_floor "$below_floor" \
      --argjson denied "$denied" --arg skipped "$enforce_skipped" '
@@ -1082,13 +1010,131 @@ if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
      + (if $below_floor then {below_floor:true} else {} end)
      + (if $denied then {denied:true} else {} end)
      + (if $skipped != "" then {enforce_skipped:$skipped} else {} end)' \
-     >> "$metrics_file" 2>/dev/null; then
-    if [[ "$denied" == "true" ]]; then
-      denied=false; mode=warn; enforce_skipped="metrics-unwritable"
+     >> "$metrics_file" 2>/dev/null
+}
+
+# --- the critical section ends here (fifth review round on #484) ----------
+# Only a delegated:true row spends a credit, so only a credited post has to
+# append under the lock; the lookup and that append are the whole critical
+# section, milliseconds. An uncredited post releases the lock FIRST and only
+# then decides whether it can be denied — the provider probe, the retry cap,
+# the writability test — because a slow probe (DELEGATE_PROBE_TIMEOUT raised
+# against a dead remote host) held inside the lock could be stale-broken at
+# 5 s and let a second hook spend the same credit; the owner token protects
+# only the cleanup. Its delegated:false row is appended unlocked: it spends
+# nothing, and the worst a race can do is count one extra denial toward the
+# retry cap. A credited post never probes at all.
+denied=false enforce_skipped="" tier_decl=""
+if [[ "$delegated" == "true" ]]; then
+  # --- store the posted body as the shipped half of the pair (ADR 0029) -------
+  # `maintainer-reply` was the weakest recipe with any volume (21% usable over
+  # n=33) and the only one whose 32 rejections carried no captured final at all,
+  # because its output is posted inline inside `gh pr comment --body "..."` and
+  # there is no path on disk for `delegate-feedback.sh --final` to name. A commit
+  # message reaches a file before `git commit -F` reads it; a reply never does.
+  #
+  # This hook is the one place that sees the shipped text, and when the post is
+  # credited to a delegation it IS that delegation's shipped form by definition.
+  # Store it beside the draft under the draft's own stem, so the two halves are
+  # guaranteed to belong together, and let `delegate-feedback.sh` adopt it when
+  # the caller passed no `--final`. An existing file is never overwritten: a
+  # hand-supplied final outranks an inferred one. The `-e` check is only the
+  # cheap way to skip parsing the body; the guarantee is the `set -C` on the
+  # write, which makes the redirect itself fail if a feedback call claimed the
+  # bare name between the check and the write (PR #479 review).
+  #
+  # The capture is PRE-post, so a post that then fails leaves a final for text
+  # that never shipped. The verdict is recorded by whoever ran the command and
+  # knows, and `--final` still wins, so the cost of that is bounded.
+  if [[ "$delegated" == "true" && -n "${credit_draft:-}" \
+        && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
+    drafts_dir="$(dirname "$metrics_file")/drafts"
+    final_path="$drafts_dir/${credit_draft%.draft.txt}.final.txt"
+    if [[ ! -e "$final_path" && -n "$body_text" ]]; then
+      if mkdir -p "$drafts_dir" 2>/dev/null; then
+        chmod 700 "$drafts_dir" 2>/dev/null || true
+        ( umask 077; set -C; printf '%s' "$body_text" > "$final_path" ) 2>/dev/null || true
+        [[ -f "$final_path" ]] && chmod 600 "$final_path" 2>/dev/null
+      fi
     fi
   fi
+  append_row || true
+  release_lock
+else
+  release_lock
+  # Why a deny was not issued, when it was not. Every reason here fails OPEN to
+  # warn, because "a commit is never blocked by a hook bug" has to survive
+  # every way the credit path can be broken (PR #484 review, items E, G, M):
+  #   metrics-unwritable  DELEGATE_LOCAL_NO_METRICS=1 in the hook env, or the
+  #                       metrics file cannot be appended to — no credit can
+  #                       ever be written where this hook reads, so a deny
+  #                       would have no escape.
+  #   retry-cap           two consecutive denials for this session+boundary
+  #                       already; a delegation that fails (canary stall, HTTP
+  #                       500, echo check) never credits, so the third attempt
+  #                       goes through.
+  #   lock-timeout        the lookup lock above could not be taken in 2 s.
+  #   no-provider         pick-model.sh: nothing reachable.
+  #   no-model            pick-model.sh: a provider is up but serves no model
+  #                       for the recipe tier.
+  #   bad-tier            pick-model.sh: the recipe declares a tier it does not
+  #                       know (or the frontmatter is malformed).
+  # The probe is pick-model.sh on the recipe tier — the same resolution
+  # delegate.sh will perform, so a deny never points at a command that cannot
+  # run. It exits 1 for both "unreachable" and "no model", telling them apart
+  # only on stderr, and 2 for a bad tier. It costs ~50 ms when the first
+  # provider answers or every localhost port is closed (a dead remote host costs
+  # DELEGATE_PROBE_TIMEOUT, 1 s, per entry), and it is paid only when a deny is
+  # otherwise about to happen: never on a warn-only boundary, a credited post,
+  # a body under the floor, or a capped or unlockable session.
+  enforce_skipped="" tier_decl=""
+  retry_cap=2
+  if [[ "$mode" == "enforce" && "$delegated" != "true" && "$below_floor" != "true" ]]; then
+    if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]]; then
+      enforce_skipped="metrics-unwritable"
+    elif [[ "$lock_failed" == "true" ]]; then
+      enforce_skipped="lock-timeout"
+    elif (( denied_streak >= retry_cap )); then
+      enforce_skipped="retry-cap"
+    else
+      # The tier the recipe declares, read with the same expression delegate.sh
+      # uses (lib/recipe.sh, item I), so `tier: prose ` resolves in both.
+      if [[ -n "$script_dir" && -f "$script_dir/lib/recipe.sh" && -f "$prompts_dir/$recipe.md" ]]; then
+        # shellcheck source=lib/recipe.sh
+        . "$script_dir/lib/recipe.sh"
+        tier_decl=$(recipe_tier "$prompts_dir/$recipe.md")
+      fi
+      if [[ -z "$tier_decl" ]]; then
+        # delegate.sh exits 2 on this too; the command as printed would fail.
+        tier_decl=$(awk 'NR > 1 && /^tier:/ { sub(/^tier:[[:space:]]*/, ""); print; exit }' "$prompts_dir/$recipe.md" 2>/dev/null)
+        enforce_skipped="bad-tier"
+      elif [[ -z "$script_dir" || ! -f "$script_dir/pick-model.sh" ]]; then
+        enforce_skipped="no-provider"
+      else
+        probe_err=$(bash "$script_dir/pick-model.sh" "$tier_decl" 2>&1 >/dev/null); probe_rc=$?
+        if (( probe_rc == 2 )); then
+          enforce_skipped="bad-tier"
+        elif (( probe_rc != 0 )); then
+          case "$probe_err" in
+            *"holds a model"*) enforce_skipped="no-model" ;;
+            *)                 enforce_skipped="no-provider" ;;
+          esac
+        fi
+      fi
+    fi
+    [[ -n "$enforce_skipped" ]] && mode=warn
+  fi
+  denied=false
+  [[ "$mode" == "enforce" && "$delegated" != "true" && "$below_floor" != "true" ]] && denied=true
+  # The append is the writability test. When it fails and a deny was about
+  # to be issued, the deny is withdrawn: no row means no credit could ever be
+  # recorded here either, and the row that would have said `denied:true` was
+  # not written, so nothing is left inconsistent. The reminder carries the
+  # reason instead (item E).
+  if ! append_row && [[ "$denied" == "true" ]]; then
+    denied=false; mode=warn; enforce_skipped="metrics-unwritable"
+  fi
 fi
-release_lock
 
 # --- nudge unless the artifact was already delegated ----------------------
 # The only exemption is a credited delegation. Since #465 a file-backed body

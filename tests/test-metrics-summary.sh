@@ -483,6 +483,8 @@ cat > "$xrepo" <<'EOF'
 {"ts":"2026-09-13T10:02:00Z","source":"opportunity","project":"beta","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312,"session":"s1"}
 {"ts":"2026-09-13T10:03:00Z","source":"opportunity","project":"gamma","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s2"}
 {"ts":"2026-09-13T10:03:00Z","source":"opportunity","project":"gamma","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312,"session":"s2"}
+{"ts":"2026-09-13T10:10:00Z","source":"opportunity","project":"delta","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s3"}
+{"ts":"2026-09-13T09:00:00Z","source":"opportunity","project":"delta","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312,"session":"s3"}
 EOF
 out=$(bash "$SCRIPT" --file "$xrepo" 2>&1)
 trig=$(sed -n '/^Trigger rate/,/^$/p' <<<"$out")
@@ -490,6 +492,10 @@ assert_contains "alpha                 opportunities=1  delegated=0  missed=1  r
   "retry: a later commit in another repo does not erase this repo's denial"
 assert_contains "gamma                 opportunities=1  delegated=1  missed=0  rate=100%" "$trig" \
   "retry: a denial and its redraft in the same second count once"
+# A row appended later but stamped EARLIER (clock skew, a merged file) is
+# not a retry: the window has a lower bound of zero (fifth round).
+assert_contains "delta                 opportunities=2  delegated=1  missed=1  rate=50%" "$trig" \
+  "retry: a later-appended row with an earlier timestamp does not satisfy the window"
 assert_contains "excluded 1 denied attempts retried" "$trig" \
   "retry: exactly the same-second redraft is the excluded denial"
 rm -f "$xrepo"
