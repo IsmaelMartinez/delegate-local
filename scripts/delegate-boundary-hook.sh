@@ -398,7 +398,11 @@ _posted_body_scan() {
       }
       prev = c; i++;
     }
+    # NONE when no body flag was present at all; an INLINE with empty text
+    # is a body flag whose value was empty — a known 0-character post, which
+    # the caller must not confuse with no body (fourth review round on #484).
     if (file != "") { printf "FILE\t%s\n", file }
+    else if (nbody == 0) { printf "NONE\n" }
     else { printf "INLINE\t%d\n", lit; printf "%s", body }
   }' <<<"$raw"
 }
@@ -411,6 +415,12 @@ _posted_body_scan() {
 # /dev/zero would hang the hook, and a directory or a FIFO is not a body file.
 # A path with an unresolved `$` never names a readable file, so it falls out
 # as unmeasurable by the same test.
+#
+# Measurable means the scan SUCCEEDED, not that the text is non-empty:
+# `--body ""` and a readable empty `--body-file` are known 0-character posts
+# and record body_chars:0 (under any floor), where a command with no body
+# flag, an unreadable file or unresolved shell records nothing and is
+# enforced. Conflating the two enforced a post the hook had fully read.
 body_text="" body_chars="" body_measurable=false body_read=false
 read_posted_body() { # raw-segment
   local out first kind flag path
@@ -424,15 +434,15 @@ read_posted_body() { # raw-segment
     path="$flag"
     [[ -n "$path" && -f "$path" && -r "$path" ]] || return 0
     body_text=$(head -c 65536 < "$path" 2>/dev/null; printf X); body_text=${body_text%X}
+    body_measurable=true
   elif [[ "$kind" == "INLINE" ]]; then
+    [[ "$flag" == "1" ]] || return 0
     body_text=${out#*$'\n'}
     body_text=${body_text:0:65536}
-    [[ "$flag" == "1" ]] || { body_text=""; return 0; }
-  fi
-  if [[ -n "$body_text" ]]; then
     body_measurable=true
-    body_chars=${#body_text}
   fi
+  [[ "$body_measurable" == "true" ]] && body_chars=${#body_text}
+  return 0
 }
 
 # 600 was picked on 2026-08-27 from the two recipes' own documented output, and

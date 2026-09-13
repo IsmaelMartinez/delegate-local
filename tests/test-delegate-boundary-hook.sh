@@ -1823,6 +1823,29 @@ assert_eq "present" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "loc
 assert_eq "someone-else" "$(cat "$lockdir/owner" 2>/dev/null)" "lock: ...and its owner file is untouched"
 rm -rf "$lockdir"
 
+# 76. An EMPTY measurable body is a known 0-character post, not an unknown one
+# (fourth review round). `--body ""` and a readable empty `--body-file` left
+# body_text empty, so the scan's success was never recorded and the post was
+# enforced as unmeasurable. "The scan succeeded" and "the text is non-empty"
+# are tracked apart: body_chars:0, below_floor:true, no nudge, no deny.
+: > "$METRICS"
+out=$(payload 'gh pr comment 12 --body ""' "$tmpcwd" | dflt bash "$HOOK")
+assert_eq "" "$out" "empty body: --body \"\" is neither nudged nor denied"
+assert_eq 0 "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "empty body: --body \"\" records body_chars:0"
+assert_eq true "$(jq -r '.below_floor // false' <<<"$(last_row)")" "empty body: --body \"\" is below_floor"
+: > "$tmpcwd/empty.md"
+: > "$METRICS"
+out=$(payload "gh issue create --title t --body-file $tmpcwd/empty.md" "$tmpcwd" | dflt bash "$HOOK")
+assert_eq "" "$out" "empty body: an empty --body-file is neither nudged nor denied"
+assert_eq 0 "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "empty body: an empty --body-file records body_chars:0"
+assert_eq true "$(jq -r '.below_floor // false' <<<"$(last_row)")" "empty body: an empty --body-file is below_floor"
+# ...while a command with NO body flag at all is still unmeasurable.
+: > "$METRICS"
+out=$(payload "git commit -F - <<'EOF'
+$body300
+EOF" "$tmpcwd" | dflt bash "$HOOK")
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "empty body: no body flag is still no body_chars"
+
 # 75. Lock ownership (third review round). A hook whose provider probe keeps
 # it running past the 5 s stale threshold had its lock broken by the next
 # hook, and then its own EXIT cleanup removed the REPLACEMENT lock, so both

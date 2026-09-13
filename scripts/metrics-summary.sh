@@ -488,22 +488,30 @@ if (( n_opp > 0 )); then
   [[ "$retry_win" =~ ^[0-9]+$ ]] || retry_win=480
   jq -rs --arg floor "$floor_override" --argjson win_min "$retry_win" '
     def epoch: ((.ts | fromdateiso8601?) // 0);
-    # A denial is "retried" when a later row for the same session and
-    # boundary lands within the window AND is itself a counted post: not
+    # A denial is "retried" when a LATER row for the same session, project
+    # and boundary lands within the window AND is itself a counted post: not
     # denied, not below_floor (a one-line post the floor waved through is not
     # the redraft), and not the retry-cap fall-open (an undrafted post the cap
     # let through). Accepting any non-denied row erased a denied miss behind
-    # an unrelated short post (third review round on #484). Without a session
-    # the project stands in, so a pre-#479 corpus still resolves.
+    # an unrelated short post (third review round on #484); matching on the
+    # session alone let a later commit in ANOTHER repo erase this one, and
+    # "later" as a strictly greater second-precision timestamp counted a
+    # denial and its redraft in the same second as both a miss and a hit
+    # (fourth round). Later is therefore append order — the row index in the
+    # file — and the window is still measured on ts. Rows with no session
+    # match on project alone, so a pre-#479 corpus still resolves.
     # O(denied x rows), and the denied set is small.
-    map(select((.source // "") == "opportunity")) as $all
+    [ map(select((.source // "") == "opportunity"))
+      | range(0; length) as $i | .[$i] + {_i: $i} ] as $all
     | $all
     | map(if .denied == true then . as $d
-            | .retried = any($all[]; .denied != true and .below_floor != true
+            | .retried = any($all[]; ._i > $d._i
+                and .denied != true and .below_floor != true
                 and (.enforce_skipped // "") != "retry-cap"
                 and (.boundary // "") == ($d.boundary // "")
-                and ((.session // .project // "") == ($d.session // $d.project // ""))
-                and epoch > ($d | epoch) and (epoch - ($d | epoch)) <= ($win_min * 60))
+                and (.session // "") == ($d.session // "")
+                and (.project // "") == ($d.project // "")
+                and (epoch - ($d | epoch)) <= ($win_min * 60))
           else . end)
     | (map(select(.below_floor == true)) | length) as $floored
     | (map(select(.denied == true and .retried == true)) | length) as $denied

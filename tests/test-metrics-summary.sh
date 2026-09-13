@@ -472,6 +472,27 @@ assert_contains "opportunities=4  delegated=1  missed=3  rate=25%" "$trig" \
 assert_contains "excluded 1 denied attempts retried" "$trig" \
   "retry: only the denial followed by a real post is excluded"
 rm -f "$notretry"
+# 12e-iii. The retry has to be the SAME repo's boundary, and "later" is append
+# order, not a strictly greater second (fourth review round on PR #484).
+# Matching on session alone let a later commit in another repo erase this
+# repo's denial, and `epoch >` on second-precision timestamps counted a
+# denial and its redraft in the same second as both a miss and a hit.
+xrepo=$(mktemp)
+cat > "$xrepo" <<'EOF'
+{"ts":"2026-09-13T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s1"}
+{"ts":"2026-09-13T10:02:00Z","source":"opportunity","project":"beta","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312,"session":"s1"}
+{"ts":"2026-09-13T10:03:00Z","source":"opportunity","project":"gamma","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s2"}
+{"ts":"2026-09-13T10:03:00Z","source":"opportunity","project":"gamma","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312,"session":"s2"}
+EOF
+out=$(bash "$SCRIPT" --file "$xrepo" 2>&1)
+trig=$(sed -n '/^Trigger rate/,/^$/p' <<<"$out")
+assert_contains "alpha                 opportunities=1  delegated=0  missed=1  rate=0%" "$trig" \
+  "retry: a later commit in another repo does not erase this repo's denial"
+assert_contains "gamma                 opportunities=1  delegated=1  missed=0  rate=100%" "$trig" \
+  "retry: a denial and its redraft in the same second count once"
+assert_contains "excluded 1 denied attempts retried" "$trig" \
+  "retry: exactly the same-second redraft is the excluded denial"
+rm -f "$xrepo"
 # With nothing excluded the line still prints, so the floor is never silent.
 opp2=$(mktemp)
 cat > "$opp2" <<'EOF'
