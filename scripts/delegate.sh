@@ -682,6 +682,10 @@ log_metric() {
 # omits prompt/context/output entirely). Sourcing has no side effects.
 # shellcheck source=lib/otel.sh
 . "$script_dir/lib/otel.sh"
+# recipe_tier lives in lib/recipe.sh so the boundary hook reads the tier with
+# the exact expression used here (PR #484 review, item I).
+# shellcheck source=lib/recipe.sh
+. "$script_dir/lib/recipe.sh"
 
 # Resolve the project name (main repo basename, even inside a git worktree).
 # The caller can state it outright — `--project NAME`, or DELEGATE_PROJECT —
@@ -806,16 +810,10 @@ if [[ -n "$recipe" ]]; then
   # implies. An explicit tier — positional or --tier — still wins, which is what
   # keeps the deliberate `commit-message` on `code` runs working. Read with the
   # same independent single-key awk scan as inputs:/checks:/flaky_on_models:,
-  # so it cannot disturb them and recipes without it still work.
+  # so it cannot disturb them and recipes without it still work. The scan is
+  # `recipe_tier` in lib/recipe.sh, shared with the boundary hook.
   if [[ -z "$tier" ]]; then
-    tier=$(awk '
-      BEGIN { in_fm=0 }
-      NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
-      in_fm && /^---[[:space:]]*$/ { exit }
-      in_fm && /^tier:[[:space:]]*[a-z-]+[[:space:]]*$/ {
-        sub(/^tier:[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print; exit
-      }
-    ' "$recipe_file")
+    tier=$(recipe_tier "$recipe_file")
     if [[ -z "$tier" ]]; then
       {
         echo "delegate: recipe '$recipe' declares no tier and none was given"

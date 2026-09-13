@@ -194,6 +194,14 @@ if [[ -f "$OVERVIEW" ]]; then
   else
     echo "  FAIL  delegate-overview.json: no trigger-rate panel on the opportunity stream with the below_floor/denied exclusions"; fail=$((fail+1))
   fi
+  # The ratio gauge divides by the eligible count; a range or project with
+  # none would render NaN without a noValue (PR #484 review, item L).
+  nan_gauge=$(jq -r '[.panels[] | select(.type == "gauge") | select((.targets // []) | map(.expr // "") | join(" ") | contains("source=\"opportunity\"")) | select((.fieldConfig.defaults.noValue // "") == "") | .title] | join(", ")' "$OVERVIEW" 2>/dev/null)
+  if [[ -z "$nan_gauge" ]]; then
+    echo "  PASS  delegate-overview.json: trigger-rate gauge sets noValue (no NaN on an empty denominator)"; pass=$((pass+1))
+  else
+    echo "  FAIL  delegate-overview.json: trigger-rate gauge without noValue (NaN on an empty denominator): $nan_gauge"; fail=$((fail+1))
+  fi
 else
   echo "  FAIL  delegate-overview.json missing"; fail=$((fail+1))
 fi

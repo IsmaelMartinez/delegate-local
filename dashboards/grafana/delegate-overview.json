@@ -916,7 +916,7 @@
       "id": 15,
       "type": "gauge",
       "title": "Trigger rate (range)",
-      "description": "delegated / opportunities over the selected range, same population as the Trigger rate series: below-floor rows and denied attempts excluded. This is the number the boundary hook exists to move.",
+      "description": "delegated / opportunities over the selected range, same population as the Trigger rate series: below-floor rows and denied attempts excluded. This is the number the boundary hook exists to move. Reads n/a when the range holds no eligible boundary, so an empty denominator never shows as NaN.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -949,7 +949,8 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [],
+          "noValue": "n/a"
         },
         "overrides": []
       },
