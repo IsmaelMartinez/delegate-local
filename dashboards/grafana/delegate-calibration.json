@@ -110,7 +110,7 @@
       "id": 36,
       "type": "stat",
       "title": "Verdicts",
-      "description": "Verdict rows in range. 0 means the loop is not being fed: the agent records one after every delegation with `delegate-feedback.sh --id <id> hit|scaffold|miss`.",
+      "description": "Verdict rows in range. 0 means the loop is not being fed: the agent records one after every delegation with `delegate-feedback.sh --id <id>` followed by `hit`, `scaffold \"<reason>\"` or `miss \"<reason>\"`.",
       "datasource": {
         "type": "loki",
         "uid": "loki"

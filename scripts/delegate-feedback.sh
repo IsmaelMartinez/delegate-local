@@ -545,7 +545,7 @@ esac
 # delegate.project is the referenced row's project, the same value the JSONL
 # row above carries, so per-project calibration dashboards can scope feedback
 # spans the same way they scope delegation spans.
-# $verdict is already the lowercase wire form (hit|miss|scaffold); the OTel
+# $verdict is already the lowercase wire form (hit, miss or scaffold); the OTel
 # span carries it verbatim as the delegate.feedback.verdict attribute.
 emit_otel_feedback_span "$ts" "$verdict" "$reason" "$parent_trace_id" "$parent_span_id" "$parent_model" "$parent_recipe" "$feedback_project" "$verdict_source"
 

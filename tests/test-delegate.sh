@@ -967,7 +967,7 @@ assert_contains "delegate-feedback.sh --source agent --id " "$stderr_content" "v
 # is a shell comment so a whole-line copy still runs.
 nudge_cmds=$(printf '%s\n' "$stderr_content" | grep -F 'delegate-feedback.sh')
 assert_eq 3 "$(printf '%s\n' "$nudge_cmds" | grep -c '')" "verdict-nudge: three verdict commands, one per line"
-nudge_re='bash scripts/delegate-feedback\.sh --source agent --id [0-9a-f]{16} (hit|scaffold "<reason>"|miss "<reason>")( +# [a-z -]+)?$'
+nudge_re='bash scripts/delegate-feedback\.sh --source agent --id [0-9a-f]{16} (scaffold "<reason>"|miss "<reason>"|hit)( +# [a-z -]+)?$'
 assert_eq 3 "$(printf '%s\n' "$nudge_cmds" | grep -Ec "$nudge_re")" "verdict-nudge: every line is one complete command plus an optional # note"
 assert_eq 1 "$(printf '%s\n' "$nudge_cmds" | grep -Ec -- '--id [0-9a-f]{16} hit( |$)')" "verdict-nudge: a hit command"
 assert_eq 1 "$(printf '%s\n' "$nudge_cmds" | grep -Ec -- '--id [0-9a-f]{16} scaffold "<reason>"')" "verdict-nudge: a scaffold command"

@@ -102,7 +102,7 @@ esac
 # still runs.
 cmd_lines=$(printf '%s\n' "$reason" | grep -F 'delegate-feedback.sh')
 assert_eq 3 "$(printf '%s\n' "$cmd_lines" | grep -c '')" "T3: three verdict commands, one per line"
-cmd_re='delegate-feedback\.sh" <pin> --source agent (hit|scaffold "<reason>"|miss "<reason>")( +# [a-z -]+)?$'
+cmd_re='delegate-feedback\.sh" <pin> --source agent (scaffold "<reason>"|miss "<reason>"|hit)( +# [a-z -]+)?$'
 assert_eq 3 "$(printf '%s\n' "$cmd_lines" | grep -Ec "$cmd_re")" "T3: every line is one complete command plus an optional # note"
 assert_eq 1 "$(printf '%s\n' "$cmd_lines" | grep -Ec -- '--source agent hit( |$)')" "T3: a hit command"
 assert_eq 1 "$(printf '%s\n' "$cmd_lines" | grep -Ec -- '--source agent scaffold "<reason>"')" "T3: a scaffold command"

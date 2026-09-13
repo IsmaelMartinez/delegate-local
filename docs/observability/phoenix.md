@@ -38,7 +38,7 @@ In practice this means: spans land in Phoenix without modifying the exporter, bu
 export DELEGATE_OTEL_ENDPOINT="http://localhost:6006/v1/traces"
 ```
 
-No `DELEGATE_OTEL_HEADERS` is required for the default workstation install. Once exported, the next `delegate.sh` call posts one span per invocation; the matching `delegate-feedback.sh hit | miss "<reason>"` call posts the feedback span with `links` to the parent — Phoenix renders the two as a linked trace pair under the parent's project view.
+No `DELEGATE_OTEL_HEADERS` is required for the default workstation install. Once exported, the next `delegate.sh` call posts one span per invocation; the matching `delegate-feedback.sh` call (`hit`, `scaffold "<reason>"` or `miss "<reason>"`) posts the feedback span with `links` to the parent — Phoenix renders the two as a linked trace pair under the parent's project view.
 
 ## Backfill historical metrics
 

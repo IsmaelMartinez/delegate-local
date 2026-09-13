@@ -59,7 +59,7 @@ No auth header is needed for the local workstation install. With the default por
 export DELEGATE_OTEL_ENDPOINT="http://localhost:4318/v1/traces"
 ```
 
-Once exported, the next `delegate.sh` call posts one span per invocation and the matching `delegate-feedback.sh hit | miss "<reason>"` posts the feedback span linked to it.
+Once exported, the next `delegate.sh` call posts one span per invocation and the matching `delegate-feedback.sh` call (`hit`, `scaffold "<reason>"` or `miss "<reason>"`) posts the feedback span linked to it.
 
 ## How the dashboards populate (read this before deciding the panels are broken)
 
