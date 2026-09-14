@@ -100,9 +100,6 @@ jobs:
       - name: Boundary-hook tests
         run: bash tests/test-delegate-boundary-hook.sh
 
-      - name: Verdict-sweep tests
-        run: bash tests/test-verdict-sweep.sh
-
       - name: Verdict stop-hook tests
         run: bash tests/test-delegate-verdict-stop-hook.sh
 

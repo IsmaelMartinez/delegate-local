@@ -31,12 +31,11 @@ Running it advances a watermark, so the next run sees only what is new. Use
 Five sections, in the order you should read them.
 
 The **verdict tally** is the headline: how many of the new delegations were
-used, used as a scaffold, or rewritten — split into the two ADR 0015 tiers,
-because they do not mean the same thing. A human verdict is a taste judgment
-and is the quality signal. A `--source agent` verdict is the agent reporting
-whether it used its own draft, which is usage. The tally says `n=0` on the
-human side out loud when there is none, rather than printing a 0% that reads
-as a quality collapse.
+kept, used as a scaffold, or rewritten, and the usable rate over all of them.
+Every verdict is the agent's own record of what it did with its draft, and
+that is the one tier there is (ADR 0030): the agent that used or rewrote the
+output is the judge, and the reason plus the draft/final pair is what turns a
+verdict into evidence.
 
 The **per-recipe outcomes** section ranks recipes by usable rate — kept plus
 scaffold — over a rolling window, worst first, so the recipe worth your
@@ -44,10 +43,8 @@ attention is the top line with a meaningful `n`. Usable rather than kept alone,
 because a draft the agent edited and shipped did most of its job, while a
 recipe whose drafts are all thrown away is a different and worse problem, and
 a kept-only rate cannot tell the two apart. `commit-message` read 0% kept and
-80% usable on the same 25 rows the day this changed. The `h=` count on each
-row says how much of it is human judgment; treat a row of `h=0` as usage data,
-not as a quality measurement. Ignore a 0% on `n=1`; one delegation is not a
-signal.
+80% usable on the same 25 rows the day this changed. Ignore a 0% on `n=1`; one
+delegation is not a signal.
 
 The **deterministic check failures** section needs no interpretation. The
 wrapper already decided the output broke a constraint the recipe declared, so
@@ -137,10 +134,12 @@ number and the one-line reason it exists.
 
 ## Do not fake progress
 
-Quote the `n` beside every rate, and say which tier it came from. At this
-corpus size one delegation moves a percentage by several points, a rate over
-`n=3` is a rumour, and a rate built entirely from `--source agent` rows is a
-usage figure however much it looks like a quality one.
+Quote the `n` beside every rate. At this corpus size one delegation moves a
+percentage by several points, and a rate over `n=3` is a rumour. The rate is
+the producing agent grading its own output, which skews toward "I used it, so
+it was good"; the reason and the draft/final pair are what keep it honest, so
+a hit rate with thin capture coverage is a weaker claim than the number
+suggests.
 
 Never claim a fix worked without a measurement taken after it landed. The
 honest form is "this landed on <date>, re-measure after ~10 more calls on that

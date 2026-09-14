@@ -48,7 +48,9 @@ because its unsubstituted-placeholder guard only looks for `{{name}}`.
 
 ## Expected output shape
 What HIT looks like. Lets the agent verify the output before recording
-the verdict via `bash scripts/delegate-feedback.sh hit|miss [reason]`.
+the verdict via `bash scripts/delegate-feedback.sh` followed by `hit`,
+`scaffold "<reason>"` or `miss "<reason>"` (the reason is required on
+scaffold and miss).
 
 ## Calibration notes
 Provenance: which session's HIT validated this recipe, and what specific
@@ -164,7 +166,7 @@ The maintainer (or a future PR-bot) graduates a `prompt-pattern` issue by drafti
 
 Each recipe is tagged for portability, following the engine / environment / flavor split in [ADR 0013](../docs/adr/0013-portable-recipes-flavor-profile.md). A recipe tagged universal is a generic structure, extraction, or mechanical-transform shape — summarisation, structured-field extraction, grounding, em-dash substitution — whose output has a near-ground-truth correct answer, so a new adopter can use it as shipped. A recipe tagged taste-calibrated additionally bakes in the maintainer's judgment about what good output looks like — subject-length ceilings, conventional-commit vocabulary, anti-padding blocklists, prose-over-bullets voice, reply tone — distilled from this project's own MISS history, so it will read as mis-calibrated to someone with different preferences.
 
-The taste-calibrated recipes are the ones a new install should recalibrate; the universal ones rarely need it. `commit-message.md` is the worked proof of the reset path: its subject ceiling and type vocabulary are lifted out of the prompt into a per-user flavor profile that `scripts/derive-flavor.sh` generates from your own `git log` and `scripts/load-flavor.sh` resolves over the shipped defaults (see ADR 0013). `scripts/onboard.sh` wraps that derive/confirm/write loop into a single interactive command — it presents each derived value for confirm-or-edit and writes the profile (plus the `init.sh` routing override) only on explicit confirmation. For a recipe that is not yet flavor-parameterised, the lightest reset is to copy it, swap its Wrong/Correct anchors and voice directives for examples drawn from your own best work, then run `scripts/delegate-feedback.sh hit|miss` over a few sessions — the same hit/miss loop that calibrated these recipes for the maintainer — until the new calibration holds.
+The taste-calibrated recipes are the ones a new install should recalibrate; the universal ones rarely need it. `commit-message.md` is the worked proof of the reset path: its subject ceiling and type vocabulary are lifted out of the prompt into a per-user flavor profile that `scripts/derive-flavor.sh` generates from your own `git log` and `scripts/load-flavor.sh` resolves over the shipped defaults (see ADR 0013). `scripts/onboard.sh` wraps that derive/confirm/write loop into a single interactive command — it presents each derived value for confirm-or-edit and writes the profile (plus the `init.sh` routing override) only on explicit confirmation. For a recipe that is not yet flavor-parameterised, the lightest reset is to copy it, swap its Wrong/Correct anchors and voice directives for examples drawn from your own best work, then record `scripts/delegate-feedback.sh hit` or `scripts/delegate-feedback.sh miss "<reason>"` verdicts over a few sessions — the same hit/miss loop that calibrated these recipes for the maintainer — until the new calibration holds.
 
 - `commit-message.md` (taste-calibrated) — drafting a git commit message from a staged diff and recent log examples.
 - `pr-description.md` (taste-calibrated) — drafting a GitHub PR description from a diff stat and a recent merged-PR body.
@@ -214,5 +216,5 @@ The companion list of patterns this library DOES adopt lives in Track B (#161), 
 
 - `SKILL.md` "Recipes" section references this directory and tells the agent when to consult a recipe.
 - `scripts/delegate.sh` is the wrapper that recipes feed prompts into.
-- `scripts/delegate-feedback.sh hit|miss` records whether the output was kept; `scripts/metrics-summary.sh` rolls up calibration over time.
+- `scripts/delegate-feedback.sh` followed by `hit`, `scaffold "<reason>"` or `miss "<reason>"` records whether the output was kept (a scaffold or miss needs its reason); `scripts/metrics-summary.sh` rolls up calibration over time.
 - `evals/eval-set.json` paraphrase positives keep the trigger surface aligned with recipe coverage.

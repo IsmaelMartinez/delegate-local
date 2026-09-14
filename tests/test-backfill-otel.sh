@@ -197,6 +197,14 @@ fb_project=$(echo "$fb_body" | jq -r '
   | map(select(.key == "delegate.project"))
   | .[0].value.stringValue // ""')
 assert_eq "acme-repo" "$fb_project" "T5: delegate.project emitted on backfilled feedback span"
+# The row carries no verdict_source. One tier (ADR 0030): an untagged row is
+# the agent's verdict like every other, and the span says so rather than
+# labelling it with the retired human tier.
+fb_source=$(echo "$fb_body" | jq -r '
+  .resourceSpans[0].scopeSpans[0].spans[0].attributes
+  | map(select(.key == "delegate.feedback.source"))
+  | .[0].value.stringValue // ""')
+assert_eq "agent" "$fb_source" "T5: an untagged feedback row backfills as delegate.feedback.source=agent"
 # Track F (#158) default: feedback reason is content and redacted unless
 # DELEGATE_OTEL_INCLUDE_CONTENT=1. Assert the redaction holds end-to-end
 # through the backfill path.

@@ -91,8 +91,8 @@ EC=0
 out=$(DELEGATE_SELF_IMPROVE_STATE="$STATE" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1) || EC=$?
 assert_eq 0 "$EC" "first run with new delegations exits 0"
 assert_contains "New delegations since watermark: 3" "$out" "first run counts every delegate row"
-assert_contains "agent (usage):    n=3  used=1 scaffold=0 rewrote=2" "$out" \
-  "verdict tally splits used from rewritten inside the agent tier"
+assert_contains "Verdicts on those delegations: n=3  kept=1  scaffold=0  rewrote=2  usable=33%" "$out" \
+  "verdict tally quotes kept, scaffold, rewrote and the usable rate from every row"
 
 # 5. The per-recipe section ranks worst keep-rate first.
 recipes=$(printf '%s\n' "$out" | sed -n '/per-recipe outcomes/,/^$/p' | grep -E '^  [a-z]' | head -2)
@@ -174,11 +174,11 @@ assert_contains "tab here and newline there" "$out" "control characters in a rea
 rm -rf "$tmp"
 
 # ---------------------------------------------------------------------------
-# ADR 0015 verdict tiers. A human recording their own taste judgment is the
-# quality signal; `--source agent` is the agent saying whether it used its own
-# draft, which is usage. metrics-summary.sh has always kept them apart and this
-# script used to add them together under the word "kept". With a corpus at 100%
-# agent verdicts the blend is invisible, so these assertions seed BOTH tiers.
+# One verdict tier (ADR 0030). ADR 0015 split the tally into a human "quality"
+# line and an agent "usage" line, and this script printed `h=` on every
+# per-recipe row to say how much of it was human judgment — a count that was
+# zero everywhere. The tally now quotes one keep rate from every row, tagged
+# or not, and neither the tier lines nor the h= column exist.
 # ---------------------------------------------------------------------------
 tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
 t1=$(iso_ago 3600); t2=$(iso_ago 1800); t3=$(iso_ago 900)
@@ -191,28 +191,23 @@ cat > "$tmp/m.jsonl" <<EOF
 {"ts":"$(iso_ago 890)","source":"feedback","ref_ts":"$t3","kept":false,"reason":"discarded","verdict_source":"agent"}
 EOF
 out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
-assert_contains "human (quality):  n=1" "$out" \
-  "verdict tiers: the human tier is counted on its own"
-assert_contains "agent (usage):    n=2" "$out" \
-  "verdict tiers: the agent tier is counted on its own"
-# The blend this replaces would have printed "kept=1 scaffold=1 rewrote=1" as a
-# single line with no tier named at all.
-if [[ "$out" == *"3 total — kept="* ]]; then
-  echo "  FAIL  verdict tiers: the two tiers must not be summed under one 'kept'"; fail=$((fail+1))
-else
-  echo "  PASS  verdict tiers: the two tiers are not summed under one 'kept'"; pass=$((pass+1))
-fi
+assert_contains "Verdicts on those delegations: n=3  kept=1  scaffold=1  rewrote=1  usable=66%" "$out" \
+  "one tier: an untagged row and two tagged rows land in one tally"
+assert_not_contains "human (quality)" "$out" "one tier: no human tier line"
+assert_not_contains "agent (usage)" "$out" "one tier: no agent usage line"
+assert_not_contains "no keep rate to quote" "$out" "one tier: the keep rate is quoted"
 # Ranking is on kept+scaffold. Two of the three commit-message drafts were used
 # (one kept, one edited and shipped), so the row must read 66%, not the 33% a
 # kept-only rate would give.
-assert_contains "usable=66%" "$out" \
-  "verdict tiers: the per-recipe rate counts scaffolded drafts as used"
-assert_contains "h=1" "$out" \
-  "verdict tiers: the per-recipe row says how much of it is human judgment"
+recipe_row=$(printf '%s\n' "$out" | grep -E '^  commit-message')
+assert_contains "n=3  kept=1  scaffold=1  rewrote=1  usable=66%" "$recipe_row" \
+  "one tier: the per-recipe rate counts scaffolded drafts as used"
+assert_not_contains "h=" "$recipe_row" "one tier: the per-recipe row carries no h= column"
+assert_not_contains "h= human" "$out" "one tier: the per-recipe header does not explain an h= column"
 rm -rf "$tmp"
 
-# An all-agent window must say plainly that there is no keep rate to quote,
-# rather than printing a 0% that reads as a quality collapse.
+# A window of nothing but rejections quotes usable=0%, because that is what
+# happened; the tally does not hedge it.
 tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
 t1=$(iso_ago 3600)
 cat > "$tmp/m.jsonl" <<EOF
@@ -220,8 +215,100 @@ cat > "$tmp/m.jsonl" <<EOF
 {"ts":"$(iso_ago 3590)","source":"feedback","ref_ts":"$t1","kept":false,"reason":"no","verdict_source":"agent"}
 EOF
 out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
-assert_contains "no human taste judgment in this window" "$out" \
-  "verdict tiers: an all-agent window says there is no keep rate to quote"
+assert_contains "Verdicts on those delegations: n=1  kept=0  scaffold=0  rewrote=1  usable=0%" "$out" \
+  "one tier: an all-rejection window quotes its 0%"
+rm -rf "$tmp"
+
+# No verdicts at all: n=0 and no rate, rather than a divide-by-zero abort.
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+t1=$(iso_ago 3600)
+printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","exit_status":0}\n' "$t1" > "$tmp/m.jsonl"
+EC=0
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1) || EC=$?
+assert_eq 0 "$EC" "one tier: a window with no verdicts still exits 0"
+assert_contains "Verdicts on those delegations: n=0" "$out" "one tier: a window with no verdicts says n=0"
+assert_not_contains "usable=" "$(printf '%s\n' "$out" | grep -F 'Verdicts on those')" \
+  "one tier: no rate is quoted over zero verdicts"
+rm -rf "$tmp"
+
+# ---------------------------------------------------------------------------
+# A revised verdict counts once, under its latest. The tally and the per-recipe
+# ranking used to count raw feedback rows, so kept:false then kept:true on one
+# delegation read `n=2 usable=50%` while metrics-summary.sh printed `n=1
+# hits=1` for the same file.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+r1=$(iso_ago 3600)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$r1","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","exit_status":0,"otel_span_id":"bbbb000000000001"}
+{"ts":"$(iso_ago 3590)","source":"feedback","ref_ts":"$r1","ref_id":"bbbb000000000001","kept":false,"reason":"first look: too long","verdict_source":"agent"}
+{"ts":"$(iso_ago 3580)","source":"feedback","ref_ts":"$r1","ref_id":"bbbb000000000001","kept":true,"verdict_source":"agent"}
+EOF
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
+assert_contains "Verdicts on those delegations: n=1  kept=1  scaffold=0  rewrote=0  usable=100%" "$out" \
+  "revision: the tally counts the delegation once, under its latest verdict"
+assert_contains "  commit-message  n=1  kept=1  scaffold=0  rewrote=0  usable=100%" "$out" \
+  "revision: the per-recipe row counts the delegation once, under its latest verdict"
+rm -rf "$tmp"
+
+# ---------------------------------------------------------------------------
+# Join by ref_id first, ref_ts second (#481). Two delegations share a second;
+# the verdict names the FIRST by ref_id. INDEX(.ts) kept the second, so the
+# rejection was filed under the wrong recipe and project and its draft
+# fallback pointed at the sibling's file. There is nothing ambiguous about a
+# ref_id row, so the AMBIGUOUS warning stays quiet; a ref_ts-only row on a
+# shared second is still ambiguous and still says so.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+st=$(iso_ago 600)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$st","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"first-project","exit_status":0,"draft_file":"S1.draft.txt","otel_span_id":"cccc000000000001"}
+{"ts":"$st","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"second-project","exit_status":0,"draft_file":"S2.draft.txt","otel_span_id":"cccc000000000002"}
+{"ts":"$(iso_ago 590)","source":"feedback","ref_ts":"$st","ref_id":"cccc000000000001","kept":false,"reason":"verdict on the first sibling","verdict_source":"agent"}
+EOF
+printf 'the commit draft\n' > "$tmp/drafts/S1.draft.txt"
+printf 'the reply draft\n' > "$tmp/drafts/S2.draft.txt"
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_contains "project=first-project  recipe=commit-message" "$out" \
+  "ref_id join: the rejection is filed under the row its ref_id names"
+assert_contains "draft:  $tmp/drafts/S1.draft.txt" "$out" \
+  "ref_id join: the draft fallback follows ref_id, not the last row of the second"
+assert_not_contains "S2.draft.txt" "$out" "ref_id join: the sibling's draft is not shown"
+assert_not_contains "AMBIGUOUS" "$out" "ref_id join: a ref_id verdict on a shared second is not ambiguous"
+assert_contains "Verdicts on those delegations: n=1  kept=0  scaffold=0  rewrote=1  usable=0%" "$out" \
+  "ref_id join: the tally counts the one verdict"
+assert_contains "  commit-message  n=1  kept=0  scaffold=0  rewrote=1  usable=0%" "$out" \
+  "ref_id join: the per-recipe row is the ref_id row's recipe"
+# The same second with a legacy ref_ts-only verdict: attribution is a guess
+# and the bundle says so.
+perl -pi -e 's/,"ref_id":"cccc000000000001"//' "$tmp/m.jsonl"
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_contains "AMBIGUOUS: 1 verdict(s)" "$out" "ref_id join: a ref_ts-only verdict on a shared second is flagged"
+rm -rf "$tmp"
+
+# A feedback row with neither ref_id nor ref_ts references nothing, and is
+# skipped everywhere, as metrics-summary.sh skips it: it cannot be attributed
+# to a recipe, paired with a draft, or counted against a delegation. Two of
+# them, so that the skip is a skip and not a collapse — keyed on the empty
+# reference they would have shared one pkey and INDEX would have kept one,
+# counting "a verdict" that nobody recorded on anything.
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+o1=$(iso_ago 600)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$o1","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","exit_status":0,"otel_span_id":"dddd000000000001"}
+{"ts":"$(iso_ago 596)","source":"feedback","kept":false,"reason":"orphan one: no reference at all","verdict_source":"agent"}
+{"ts":"$(iso_ago 595)","source":"feedback","kept":false,"reason":"orphan two: no reference at all","verdict_source":"agent"}
+{"ts":"$(iso_ago 590)","source":"feedback","ref_ts":"$o1","ref_id":"dddd000000000001","kept":true,"verdict_source":"agent"}
+EOF
+EC=0
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1) || EC=$?
+assert_eq 0 "$EC" "orphan: feedback rows with no reference do not abort the bundle"
+assert_contains "Verdicts on those delegations: n=1  kept=1  scaffold=0  rewrote=0  usable=100%" "$out" \
+  "orphan: unreferenced rows are skipped, not collapsed into one phantom verdict"
+assert_not_contains "orphan one" "$out" "orphan: an unreferenced rejection is not listed"
+assert_not_contains "orphan two" "$out" "orphan: nor is the second"
+assert_contains "rejections=0" "$out" "orphan: capture coverage does not count unreferenced rows"
+assert_not_contains "jq: error" "$out" "orphan: no jq error leaks into the bundle"
 rm -rf "$tmp"
 
 # ---------------------------------------------------------------------------

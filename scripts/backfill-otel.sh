@@ -319,7 +319,7 @@ emit_feedback_row() {
     (.kept // false | tostring),
     .reason // "",
     .project // "",
-    (.verdict_source // "human")
+    (.verdict_source // "agent")
   ] | join("\u001f")' <<< "$row")
   IFS=$'\x1f' read -r fb_ts ref_ts kept reason project verdict_source <<< "$fields"
 
@@ -390,8 +390,9 @@ emit_feedback_row() {
   # carry recipe, so backfilled feedback spans omit delegate.recipe (unchanged
   # behaviour). Position 10 (project) comes from the feedback row's own field,
   # which delegate-feedback.sh records at verdict time. Position 11
-  # (verdict_source) is the Phase E tier tag, defaulting to "human" for rows
-  # that pre-date the tier so backfilled spans match the live partition.
+  # (verdict_source) is the tier tag; a row that pre-dates it is the agent's
+  # verdict like every other (ADR 0030), so it backfills as "agent" and lands
+  # in the same dashboard filter as the live rows.
   emit_otel_feedback_span_with_ids "$fb_trace" "$fb_span" \
     "$fb_ts" "$verdict" "$reason" "$parent_trace" "$parent_span" "$parent_model" "" "$project" "$verdict_source"
   ROW_RESULT="OK"

@@ -106,7 +106,7 @@ Single-quote `{{facts}}` rather than double-quoting it, as above. Facts for this
  no opening "This section…" filler, no closing recap sentence>
 ```
 
-Verify before recording verdict via `bash scripts/delegate-feedback.sh hit|miss [reason]`:
+Verify before recording the verdict (`bash scripts/delegate-feedback.sh` followed by `hit`, `scaffold "<reason>"` or `miss "<reason>"`):
 
 - Sentence count is ≤ `max_sentences`.
 - The final sentence does not begin with any of the rule-2 trigger phrases.

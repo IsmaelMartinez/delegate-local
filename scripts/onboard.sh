@@ -193,7 +193,7 @@ if (( ! interactive )); then
   exit 0
 fi
 
-# --- Interactive layer (verdict-sweep.sh pattern) ----------------------------
+# --- Interactive layer -------------------------------------------------------
 read_answer() {
   if [[ "${DELEGATE_ONBOARD_ASSUME_TTY:-}" == "1" ]]; then
     IFS= read -r _ans
@@ -296,4 +296,4 @@ fi
 echo "" >&2
 echo "onboard: done — profile $( ((wrote_profile)) && echo written || echo unchanged ), routing override $( ((wrote_config)) && echo written || echo unchanged )." >&2
 echo "Next: pipe a task through the wrapper (e.g. git diff | bash $script_dir/delegate.sh --recipe commit-message ...)," >&2
-echo "record verdicts with delegate-feedback.sh hit|miss, and re-run onboard.sh as your history grows." >&2
+echo "record verdicts with delegate-feedback.sh (hit, scaffold \"<reason>\" or miss \"<reason>\"), and re-run onboard.sh as your history grows." >&2

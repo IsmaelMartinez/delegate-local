@@ -2437,10 +2437,16 @@ if [[ "$row_written" == "true" ]] \
   # delegate row is newest, which with parallel sessions is routinely someone
   # else's; the feedback script now refuses that lookup when more than one
   # row is fresh, so a caller who copies this line never hits the refusal.
-  # The id, not the ts: ts is second-precision and siblings share it.
-  nudge_msg="delegate: record verdict → bash scripts/delegate-feedback.sh --source agent --id $otel_span_id hit | scaffold \"<reason>\" | miss \"<reason>\"
-delegate:   on scaffold/miss also pass --final <path|-> naming what you shipped instead. The draft is already saved; the pair is what calibrates the recipe.
-delegate:   scaffold = you edited it and shipped it, miss = you threw it away; drop --source if you are a human recording a taste judgment"
+  # The id, not the ts: ts is second-precision and siblings share it. Each
+  # verdict is a complete command on its own line, because the line is copied
+  # as printed: `a | b | c` ran as a pipeline and `a, b or c` passed `hit,` as
+  # the verdict, and delegate-feedback.sh rejected both. <reason> is the one
+  # placeholder left, since it cannot be pre-filled; the note after each
+  # command is a shell comment so a whole-line copy still runs.
+  nudge_msg="delegate: record verdict → bash scripts/delegate-feedback.sh --source agent --id $otel_span_id hit                  # shipped as-is
+delegate:                  bash scripts/delegate-feedback.sh --source agent --id $otel_span_id scaffold \"<reason>\"  # edited and shipped
+delegate:                  bash scripts/delegate-feedback.sh --source agent --id $otel_span_id miss \"<reason>\"      # thrown away
+delegate:   on scaffold/miss also pass --final <path|-> naming what you shipped instead. The draft is already saved; the pair is what calibrates the recipe."
   if (( nudge_fd == 2 )); then
     echo "$nudge_msg" >&2
   else
