@@ -310,6 +310,21 @@ assert_contains "MULTI-ASK-SPLIT" "$maintainer_reply_guards" \
   "maintainer-reply.md '## Anti-hallucination guards' names MULTI-ASK-SPLIT"
 assert_contains "NO-FACT-DROP" "$maintainer_reply_guards" \
   "maintainer-reply.md '## Anti-hallucination guards' names NO-FACT-DROP"
+# STATED-NOT-ASKED and NO-CLAIMED-ACTION (#487). Pinned after the 2026-09-14
+# window put the recipe at 47% usable over n=21 with 15 of 38 rejection
+# reasons across the two reply recipes saying the model turned a supplied
+# fact into a question to the contributor, and one saying it reported a fix
+# it had only been given to suggest. Both resolve a tension between "exactly
+# one ask" and "do not restate the facts" that the template creates, so a
+# tidy-up that dropped either would bring the tic straight back.
+assert_contains "STATED-NOT-ASKED — non-negotiable" "$maintainer_reply_template" \
+  "maintainer-reply.md prompt template carries STATED-NOT-ASKED directive"
+assert_contains "NO-CLAIMED-ACTION — non-negotiable" "$maintainer_reply_template" \
+  "maintainer-reply.md prompt template carries NO-CLAIMED-ACTION directive"
+assert_contains "STATED-NOT-ASKED" "$maintainer_reply_guards" \
+  "maintainer-reply.md '## Anti-hallucination guards' names STATED-NOT-ASKED"
+assert_contains "NO-CLAIMED-ACTION" "$maintainer_reply_guards" \
+  "maintainer-reply.md '## Anti-hallucination guards' names NO-CLAIMED-ACTION"
 
 # pr-description.md — EVIDENCE precedence, SHAPE deference, test-plan sourcing.
 # Pinned after the 2026-08-03 sweep put the recipe at 0 keeps out of 10 in the
@@ -544,6 +559,23 @@ for base in maintainer-reply maintainer-review-reply; do
     echo "  PASS  $base.md prompt template no longer forbids an opener"; pass=$((pass+1))
   fi
 done
+
+# ---------------------------------------------------------------------------
+# maintainer-review-reply must state its length ceiling relative to the input
+# (#487). After the 2026-09-11 rewording the recipe still shipped 16 of 16
+# drafts the size of their FACTS block (1172 chars out for 981 in, 557 for
+# 560, 940 for 899) and the retry did not move them: naming "a reply the
+# length of the FACTS block" as a failure is not the same as saying the reply
+# is shorter than it. Pin the rule so a LENGTH tidy-up cannot drop the one
+# sentence that gives the model a ceiling.
+# ---------------------------------------------------------------------------
+mrr_template=$(extract_fenced "$PROMPTS_DIR/maintainer-review-reply.md" "## Prompt template")
+if [[ -z "$mrr_template" ]]; then
+  echo "  FAIL  maintainer-review-reply.md prompt template could not be extracted"; fail=$((fail+1))
+else
+  assert_contains "The reply is SHORTER than the FACTS block it was given" "$mrr_template" \
+    "maintainer-review-reply.md prompt template states the length ceiling relative to the FACTS block"
+fi
 
 echo
 echo "$pass passed, $fail failed"

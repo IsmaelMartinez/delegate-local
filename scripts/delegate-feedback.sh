@@ -25,6 +25,12 @@
 #                                         as ambiguous, none refuses as stale
 #                                         (#474) (default 300; set 0 to attach
 #                                         to the most recent row unbounded).
+#   DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS  a miss or scaffold whose reason is
+#                                         byte-identical to another feedback
+#                                         row's inside this window warns on
+#                                         stderr with the count — a sweep
+#                                         pasting one verdict — and is still
+#                                         written (#487) (default 600).
 #   DELEGATE_FEEDBACK_NO_NUDGE            set to 1 to silence the trigger-on-
 #                                         MISS recurrence nudge.
 #   DELEGATE_FEEDBACK_NUDGE_AT            minimum total similar MISSes (this
@@ -513,6 +519,25 @@ elif [[ -n "$parent_draft" && "$kept" == "false" ]]; then
       'select(.source == "feedback" and .ref_ts == $ts and .final_file == $f and (.final_source // "") != "posted") | .ts' \
       "$metrics_file" | head -n 1)
     [[ -z "$vouched" ]] && final_source="posted"
+  fi
+fi
+
+# A rejection whose reason is byte-identical to one already recorded a few
+# minutes ago is almost always a sweep pasting one verdict across a batch: the
+# 16 maintainer-review-reply rejections of 2026-09-13 all fired at 11:00 with
+# one reason repeated 16 times, so the loop learned one fact from 16 rows
+# (#487). Warn with the count and write the row anyway — a pasted verdict is
+# thinner than a fresh one but still better than none, and refusing would
+# leave the batch untracked. Hits are exempt (a hit carries no reason worth
+# comparing) and a miss or scaffold always has a reason by this point.
+repeat_window="${DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS:-600}"
+if [[ "$kept" == "false" && -n "$reason" ]]; then
+  repeat_n=$(jq -r --arg r "$reason" --argjson cutoff "$(( $(jq -n 'now | floor') - repeat_window ))" \
+    'select(.source == "feedback" and (.reason // "") == $r and ((.ts // "") | fromdateiso8601?) >= $cutoff) | .ts' \
+    "$metrics_file" | grep -c '')
+  if (( repeat_n > 0 )); then
+    if (( repeat_window % 60 == 0 )); then repeat_desc="$((repeat_window / 60)) min"; else repeat_desc="${repeat_window}s"; fi
+    echo "delegate-feedback: this reason was already recorded $repeat_n time(s) in the last $repeat_desc — a sweep pasting one verdict teaches the loop nothing; record what THIS draft did" >&2
   fi
 fi
 

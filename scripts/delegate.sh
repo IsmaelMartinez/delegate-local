@@ -1619,7 +1619,12 @@ retry_constraint_for() {
     no_example_echo)
       echo "no_example_echo: do not reproduce any line of this prompt or of an example; write from the input." ;;
     no_context_echo)
-      echo "no_context_echo: do not copy sentences of the supplied facts into the answer; carry their paths, numbers and references inside sentences of your own." ;;
+      # A length ceiling relative to the input, not only a copy ban (#487):
+      # "do not copy sentences" left the second generation the same size as
+      # the first on every retry measured over 2026-09-13/14 (1172 chars out
+      # for 981 in, 557 for 560, 940 for 899). A reply as long as its facts
+      # has curated nothing, whichever words it used.
+      echo "no_context_echo: the answer must be shorter than the supplied facts, carrying their paths, numbers and references inside new sentences of your own and none of their sentences as written." ;;
     *)
       echo "$name: the constraint of that name, stated above, was not met." ;;
   esac

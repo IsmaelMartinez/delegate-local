@@ -2020,6 +2020,97 @@ assert_eq "$(printf '%s' "$TS_LATEST" | tr -d ':-')-nodraft.final.txt" \
   "traversing draft_file: falls through to the ts-derived stem"
 rm -rf "$tmp"
 
+# ---------------------------------------------------------------------------
+# Repeated-reason warning (#487). The 16 maintainer-review-reply rejections in
+# the 2026-09-13 corpus all fired at 11:00 and carry one identical reason
+# pasted 16 times, so the loop learned one fact from 16 rows. A reason
+# byte-identical to one on another feedback row inside the last 10 minutes
+# (DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS, default 600) is warned about on
+# stderr with the count, and the row is still written: a pasted verdict is
+# thinner than a fresh one but better than none.
+# ---------------------------------------------------------------------------
+
+# seed_repeats <file> <N> <reason> <age_seconds>
+#   Writes N feedback rows carrying <reason> verbatim, each <age_seconds> old
+#   (spread a second apart so their ts values differ), then the fresh delegate
+#   row the new verdict attaches to.
+seed_repeats() {
+  local file="$1" n="$2" reason="$3" age="$4"
+  : > "$file"
+  local i rep_ts
+  for (( i=1; i<=n; i++ )); do
+    rep_ts=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-'"$age"'+'"$i"'))')
+    printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":false,"reason":"%s","verdict_source":"agent"}\n' \
+      "$rep_ts" "$rep_ts" "$reason" >> "$file"
+  done
+  TS_LATEST=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"otel_span_id":"%s"}\n' \
+    "$TS_LATEST" "$ID_LATEST" >> "$file"
+}
+REPEAT_REASON="restated the fact sheet verbatim as one paragraph with the verdict string as a heading"
+
+# Identical reason on two rows inside the window: the warning names the count
+# and the row is still written.
+tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 2 "$REPEAT_REASON" 120
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1) || EC=$?
+assert_eq 0 "$EC" "repeat reason: a warned miss still exits 0"
+assert_contains "this reason was already recorded 2 time(s) in the last 10 min" "$out" \
+  "repeat reason: the warning names the count and the window"
+assert_contains "record what THIS draft did" "$out" \
+  "repeat reason: the warning says what to record instead"
+assert_eq 3 "$(jq -c 'select(.source=="feedback")' "$tmp/m.jsonl" | grep -c '')" \
+  "repeat reason: the row is written anyway"
+assert_eq "$REPEAT_REASON" "$(tail -1 "$tmp/m.jsonl" | jq -r '.reason')" \
+  "repeat reason: the row carries the reason as given"
+rm -rf "$tmp"
+
+# A scaffold is a rejection too, and a sweep pastes those the same way.
+tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 1 "$REPEAT_REASON" 60
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id "$ID_LATEST" scaffold "$REPEAT_REASON" 2>&1)
+assert_contains "this reason was already recorded 1 time(s)" "$out" \
+  "repeat reason: a scaffold with a pasted reason warns too"
+rm -rf "$tmp"
+
+# The same reason outside the window is a coincidence, not a sweep.
+tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 2 "$REPEAT_REASON" 900
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1) || EC=$?
+assert_eq 0 "$EC" "repeat reason outside window: exit 0"
+if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason outside window: no warning"; pass=$((pass+1))
+else echo "  FAIL  repeat reason outside window: warned ($out)"; fail=$((fail+1)); fi
+assert_eq 3 "$(jq -c 'select(.source=="feedback")' "$tmp/m.jsonl" | grep -c '')" \
+  "repeat reason outside window: the row is written"
+# Widening the window brings the same rows back in.
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS=1200 \
+  bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1)
+assert_contains "this reason was already recorded 3 time(s) in the last 20 min" "$out" \
+  "repeat reason: DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS widens the window"
+rm -rf "$tmp"
+
+# A different reason inside the window is what the loop wants; no warning.
+tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 2 "$REPEAT_REASON" 120
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id "$ID_LATEST" miss "turned the key count 258 into a question to the contributor" 2>&1)
+if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason: a different reason does not warn"; pass=$((pass+1))
+else echo "  FAIL  repeat reason: a different reason warned ($out)"; fail=$((fail+1)); fi
+rm -rf "$tmp"
+
+# A hit never warns, whatever reason words it carries.
+tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 2 "$REPEAT_REASON" 120
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id "$ID_LATEST" hit "$REPEAT_REASON" 2>&1) || EC=$?
+assert_eq 0 "$EC" "repeat reason on a hit: exit 0"
+if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason on a hit: no warning"; pass=$((pass+1))
+else echo "  FAIL  repeat reason on a hit: warned ($out)"; fail=$((fail+1)); fi
+assert_eq 3 "$(jq -c 'select(.source=="feedback")' "$tmp/m.jsonl" | grep -c '')" \
+  "repeat reason on a hit: the row is written"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

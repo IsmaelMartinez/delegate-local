@@ -6841,7 +6841,12 @@ else
 fi
 
 # 48g. The retry path fires with the constraint named, so the second request
-# tells the model to carry the anchors rather than the lines.
+# tells the model to carry the anchors rather than the lines. The sentence
+# states a length ceiling relative to the input (#487): "do not copy sentences"
+# left the second generation the same size as the first on every retry
+# measured over 2026-09-13/14 (1172 chars out for 981 in, 557 for 560, 940
+# for 899), so the constraint now says the answer must be shorter than the
+# facts it was given.
 counter="$tmp/calls"
 make_mock_curl_seq "$tmp" "$counter" \
   'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.' \
@@ -6854,7 +6859,7 @@ assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
   "context-echo: a failed check costs exactly two dispatches"
 assert_contains "so PR #2632 is clear" "$out" \
   "context-echo: the caller receives the retried output"
-assert_contains "no_context_echo: do not copy sentences of the supplied facts" "$(cat "$tmp/payload.2.json")" \
+assert_contains "no_context_echo: the answer must be shorter than the supplied facts, carrying their paths, numbers and references inside new sentences of your own and none of their sentences as written." "$(cat "$tmp/payload.2.json")" \
   "context-echo: the second request carries the constraint sentence"
 assert_contains '"retried":true' "$(tail -1 "$metrics")" \
   "context-echo: the retry is marked on the metrics row"
