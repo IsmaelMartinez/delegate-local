@@ -553,8 +553,7 @@ if [[ "$kept" == "false" && -n "$reason" ]] && (( repeat_window > 0 )); then
   repeat_n=$(jq -r --arg r "$reason" --arg ref "$ref_ts" --arg refid "$ref_id" --argjson cutoff "$(( now_epoch - repeat_window ))" \
     'select(.source == "feedback" and (.kept == false) and (.reason // "") == $r
             and ((.ts // "") | fromdateiso8601?) >= $cutoff
-            and (.ref_ts // "") != $ref
-            and (($refid == "") or ((.ref_id // "") != $refid))) | .ts' \
+            and (if ($refid != "" and (.ref_id // "") != "") then (.ref_id != $refid) else ((.ref_ts // "") != $ref) end)) | .ts' \
     "$metrics_file" | grep -c '')
   if (( repeat_n > 0 )); then
     if (( repeat_window % 60 == 0 )); then repeat_desc="$((repeat_window / 60)) min"; else repeat_desc="${repeat_window}s"; fi

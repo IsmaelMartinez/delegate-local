@@ -2122,6 +2122,20 @@ out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
   bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1)
 if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason: a revision on the same delegation does not warn"; pass=$((pass+1))
 else echo "  FAIL  repeat reason: a revision on the same delegation warned ($out)"; fail=$((fail+1)); fi
+# A same-SECOND sibling is a different delegation: when both rows carry an
+# id the exclusion compares ids, and only a row without one falls back to
+# ref_ts. Two delegate rows sharing TS_LATEST, a miss on the first, then the
+# same reason on the second — that is a sweep pasting, and it warns.
+tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 0 "$REPEAT_REASON" 120
+printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"otel_span_id":"0000000000000009"}\n' \
+  "$TS_LATEST" >> "$tmp/m.jsonl"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" >/dev/null 2>&1
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id 0000000000000009 miss "$REPEAT_REASON" 2>&1)
+assert_contains "already recorded 1 time(s)" "$out" \
+  "repeat reason: a same-second sibling with its own id still warns"
+rm -rf "$tmp"
 # Same again with a prior row that carries only ref_ts (no ref_id), the shape
 # rows written before the id pin existed have.
 tmp2=$(mktemp -d); seed_repeats "$tmp2/m.jsonl" 0 "$REPEAT_REASON" 120
