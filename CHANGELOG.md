@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.34.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.33.0...v0.34.0) (2026-09-14)
+
+
+### Features
+
+* deny proven boundaries until a delegation exists ([#484](https://github.com/IsmaelMartinez/delegate-local/issues/484)) ([3ce86f0](https://github.com/IsmaelMartinez/delegate-local/commit/3ce86f044fd8a6cb7523ae65ce75751ca31456ad))
+* make the agent verdict the only calibration tier ([#485](https://github.com/IsmaelMartinez/delegate-local/issues/485)) ([03b4bb7](https://github.com/IsmaelMartinez/delegate-local/commit/03b4bb739460acdf541731dce7e2af5c1521dbef))
+
 ## [0.33.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.32.0...v0.33.0) (2026-09-12)
 
 
