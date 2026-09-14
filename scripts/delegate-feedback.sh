@@ -26,11 +26,14 @@
 #                                         (#474) (default 300; set 0 to attach
 #                                         to the most recent row unbounded).
 #   DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS  a miss or scaffold whose reason is
-#                                         byte-identical to another feedback
-#                                         row's inside this window warns on
-#                                         stderr with the count — a sweep
-#                                         pasting one verdict — and is still
-#                                         written (#487) (default 600).
+#                                         byte-identical to another rejection's
+#                                         on a different delegation inside this
+#                                         window warns on stderr with the
+#                                         count — a sweep pasting one verdict —
+#                                         and is still written (#487) (default
+#                                         600; 0 switches the warning off; a
+#                                         non-numeric value falls back to 600
+#                                         with a note).
 #   DELEGATE_FEEDBACK_NO_NUDGE            set to 1 to silence the trigger-on-
 #                                         MISS recurrence nudge.
 #   DELEGATE_FEEDBACK_NUDGE_AT            minimum total similar MISSes (this
@@ -350,8 +353,11 @@ elif [[ "$stale_seconds" -gt 0 ]]; then
 else
   pin_mode="all"; pin_desc="the metrics file"
 fi
+# Banked once: the freshness cutoff here and the repeat-reason cutoff below
+# both count back from the same instant.
+now_epoch=$(jq -n 'now | floor')
 candidates=$(jq -r --arg mode "$pin_mode" --arg id "$override_id" --arg ts "$override_ts" \
-  --argjson cutoff "$(( $(jq -n 'now | floor') - stale_seconds ))" \
+  --argjson cutoff "$(( now_epoch - stale_seconds ))" \
   'select((.source // "delegate") == "delegate")
    | select(if $mode == "id" then .otel_span_id == $id
             elif $mode == "ts" then .ts == $ts
@@ -528,12 +534,27 @@ fi
 # one reason repeated 16 times, so the loop learned one fact from 16 rows
 # (#487). Warn with the count and write the row anyway — a pasted verdict is
 # thinner than a fresh one but still better than none, and refusing would
-# leave the batch untracked. Hits are exempt (a hit carries no reason worth
-# comparing) and a miss or scaffold always has a reason by this point.
+# leave the batch untracked. Only prior REJECTIONS on OTHER delegations count:
+# a hit can carry reason words too and is not a pasted rejection, and a second
+# verdict on the row this one references (matched on ref_id, or on ref_ts for
+# a row written before ids) is a revision of one draft's record, not a sweep.
+# This verdict is a miss or scaffold, so it always has a reason by this point.
+#
+# The window is whole seconds; anything else falls back to the default and
+# says so rather than dying in arithmetic. 0 is the OFF switch here — the
+# opposite of DELEGATE_FEEDBACK_STALE_SECONDS, where 0 means unbounded —
+# because a zero-width lookback has nothing to compare against.
 repeat_window="${DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS:-600}"
-if [[ "$kept" == "false" && -n "$reason" ]]; then
-  repeat_n=$(jq -r --arg r "$reason" --argjson cutoff "$(( $(jq -n 'now | floor') - repeat_window ))" \
-    'select(.source == "feedback" and (.reason // "") == $r and ((.ts // "") | fromdateiso8601?) >= $cutoff) | .ts' \
+if [[ ! "$repeat_window" =~ ^[0-9]+$ ]]; then
+  echo "delegate-feedback: DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS='$repeat_window' is not a number of seconds; using 600" >&2
+  repeat_window=600
+fi
+if [[ "$kept" == "false" && -n "$reason" ]] && (( repeat_window > 0 )); then
+  repeat_n=$(jq -r --arg r "$reason" --arg ref "$ref_ts" --arg refid "$ref_id" --argjson cutoff "$(( now_epoch - repeat_window ))" \
+    'select(.source == "feedback" and (.kept == false) and (.reason // "") == $r
+            and ((.ts // "") | fromdateiso8601?) >= $cutoff
+            and (.ref_ts // "") != $ref
+            and (($refid == "") or ((.ref_id // "") != $refid))) | .ts' \
     "$metrics_file" | grep -c '')
   if (( repeat_n > 0 )); then
     if (( repeat_window % 60 == 0 )); then repeat_desc="$((repeat_window / 60)) min"; else repeat_desc="${repeat_window}s"; fi

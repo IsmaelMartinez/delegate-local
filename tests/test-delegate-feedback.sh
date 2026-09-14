@@ -2084,10 +2084,11 @@ if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason outsid
 else echo "  FAIL  repeat reason outside window: warned ($out)"; fail=$((fail+1)); fi
 assert_eq 3 "$(jq -c 'select(.source=="feedback")' "$tmp/m.jsonl" | grep -c '')" \
   "repeat reason outside window: the row is written"
-# Widening the window brings the same rows back in.
+# Widening the window brings the two seeded rows back in; the miss just
+# recorded above references this same delegation and so does not count.
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS=1200 \
   bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1)
-assert_contains "this reason was already recorded 3 time(s) in the last 20 min" "$out" \
+assert_contains "this reason was already recorded 2 time(s) in the last 20 min" "$out" \
   "repeat reason: DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS widens the window"
 rm -rf "$tmp"
 
@@ -2109,6 +2110,65 @@ if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason on a h
 else echo "  FAIL  repeat reason on a hit: warned ($out)"; fail=$((fail+1)); fi
 assert_eq 3 "$(jq -c 'select(.source=="feedback")' "$tmp/m.jsonl" | grep -c '')" \
   "repeat reason on a hit: the row is written"
+rm -rf "$tmp"
+
+# A second verdict on the SAME delegation is a revision of one draft's
+# record, not a sweep: rows that reference this row (by ref_id, or by ref_ts
+# on a row that pre-dates ids) never count. PR #488 review.
+tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 0 "$REPEAT_REASON" 120
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" >/dev/null 2>&1
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1)
+if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason: a revision on the same delegation does not warn"; pass=$((pass+1))
+else echo "  FAIL  repeat reason: a revision on the same delegation warned ($out)"; fail=$((fail+1)); fi
+# Same again with a prior row that carries only ref_ts (no ref_id), the shape
+# rows written before the id pin existed have.
+tmp2=$(mktemp -d); seed_repeats "$tmp2/m.jsonl" 0 "$REPEAT_REASON" 120
+printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":false,"reason":"%s","verdict_source":"agent"}\n' \
+  "$TS_LATEST" "$TS_LATEST" "$REPEAT_REASON" >> "$tmp2/m.jsonl"
+out=$(DELEGATE_METRICS_FILE="$tmp2/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1)
+if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason: a same-ref_ts row without ref_id does not count either"; pass=$((pass+1))
+else echo "  FAIL  repeat reason: a same-ref_ts row without ref_id counted ($out)"; fail=$((fail+1)); fi
+rm -rf "$tmp" "$tmp2"
+
+# A prior HIT that happens to carry the same reason words is not a pasted
+# rejection: only kept:false rows count.
+tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 0 "$REPEAT_REASON" 120
+for age in 100 80; do
+  hit_ts=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-'"$age"'))')
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","ref_id":"ffff000000000001","kept":true,"reason":"%s","verdict_source":"agent"}\n' \
+    "$hit_ts" "$hit_ts" "$REPEAT_REASON" >> "$tmp/m.jsonl"
+done
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1)
+if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason: prior hits with the same reason do not count"; pass=$((pass+1))
+else echo "  FAIL  repeat reason: prior hits with the same reason counted ($out)"; fail=$((fail+1)); fi
+rm -rf "$tmp"
+
+# DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS=0 is the off switch (unlike
+# STALE_SECONDS, where 0 means unbounded). The seed rows sit in the current
+# second (age 0), which a zero-width window would still include, so this
+# passes only when 0 switches the comparison off rather than narrowing it.
+tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 2 "$REPEAT_REASON" 0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS=0 \
+  bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1)
+if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason: REPEAT_WINDOW_SECONDS=0 disables the warning"; pass=$((pass+1))
+else echo "  FAIL  repeat reason: REPEAT_WINDOW_SECONDS=0 still warned ($out)"; fail=$((fail+1)); fi
+assert_eq 3 "$(jq -c 'select(.source=="feedback")' "$tmp/m.jsonl" | grep -c '')" \
+  "repeat reason: REPEAT_WINDOW_SECONDS=0 still writes the row"
+rm -rf "$tmp"
+
+# A value that is not a whole number of seconds falls back to the default,
+# says so, and the warning still fires on the default window.
+tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 2 "$REPEAT_REASON" 120
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS=10m \
+  bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1)
+assert_contains "DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS='10m' is not a number of seconds; using 600" "$out" \
+  "repeat reason: a non-numeric window falls back to 600 and says so"
+assert_contains "this reason was already recorded 2 time(s) in the last 10 min" "$out" \
+  "repeat reason: the fallback window still warns"
 rm -rf "$tmp"
 
 echo

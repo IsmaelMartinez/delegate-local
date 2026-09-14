@@ -1619,12 +1619,16 @@ retry_constraint_for() {
     no_example_echo)
       echo "no_example_echo: do not reproduce any line of this prompt or of an example; write from the input." ;;
     no_context_echo)
-      # A length ceiling relative to the input, not only a copy ban (#487):
-      # "do not copy sentences" left the second generation the same size as
-      # the first on every retry measured over 2026-09-13/14 (1172 chars out
-      # for 981 in, 557 for 560, 940 for 899). A reply as long as its facts
-      # has curated nothing, whichever words it used.
-      echo "no_context_echo: the answer must be shorter than the supplied facts, carrying their paths, numbers and references inside new sentences of your own and none of their sentences as written." ;;
+      # Sentences only. This check measures echo, not length, so its notice
+      # must not claim a length rule was broken; max_context_ratio owns that
+      # and carries its own sentence below (#487).
+      echo "no_context_echo: reproduce none of the supplied sentences as written; carry their paths, numbers and references inside sentences of your own." ;;
+    max_context_ratio)
+      # "Do not copy" left the second generation the same size as the first on
+      # every retry measured over 2026-09-13/14 (1172 chars out for 981 in,
+      # 557 for 560, 940 for 899): a copy ban names words to avoid and says
+      # nothing about length, so this one says the length out loud (#487).
+      echo "max_context_ratio: the answer runs about as long as the supplied facts; curate it to well under the facts' length, carrying every path, number and reference inside new sentences." ;;
     *)
       echo "$name: the constraint of that name, stated above, was not met." ;;
   esac
@@ -1690,7 +1694,7 @@ run_output_checks() {
 # is a function (it ran at top level before the refactor). The result and the
 # counters — output, checks_run/failed/autofixed, capability_failed — are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -2224,6 +2228,47 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             capability_failed=$((capability_failed + 1))
           fi
         fi
+        ;;
+      max_context_ratio)
+        # A length ceiling relative to the piped context (#487). The reply
+        # recipes' failure after #475 was the fact sheet handed back at input
+        # size: 1172 chars out for 981 in, 557 for 560, 940 for 899, and the
+        # no_context_echo retry came back the same size every time, because
+        # that check measures echo and its notice says nothing about length.
+        # A prose rule ("the reply is shorter than the FACTS block") was tried
+        # first and withdrawn: it contradicted the recipe's own LENGTH
+        # paragraph, could not be met on a three-line fact list once opener,
+        # verdict, anchors, ask and sign-off are all mandatory, and 3 of the
+        # 16 rejected rows (557/560, 547/578, 318/329) were already shorter
+        # and still echoing. So the ceiling is a declared check with its own
+        # retry constraint, and it only applies where curation is possible:
+        # the context must be at least min_context_chars (a sibling key in
+        # the same checks block, default 400), because a two-line fact list
+        # legitimately comes back as those facts plus an ask. The ratio is a
+        # decimal, compared in awk since bash arithmetic is integer-only.
+        # Warn-only like the rest; capability rather than style, so it counts
+        # toward capability_failed.
+        if [[ "$cval" =~ ^[0-9]*\.?[0-9]+$ ]]; then
+          checks_run=$((checks_run + 1))
+          ctx_floor=$(printf '%s\n' "$recipe_checks" | awk '
+            { sub(/^[[:space:]]+/, "") }
+            index($0, "min_context_chars:") == 1 { sub(/^[^:]*:[[:space:]]*/, ""); print; exit }')
+          [[ "$ctx_floor" =~ ^[0-9]+$ ]] || ctx_floor=400
+          if (( ${#context} > 0 && ${#context} >= 10#$ctx_floor )); then
+            ctx_ratio=$(awk -v o="${#output}" -v c="${#context}" 'BEGIN { printf "%.2f", o / c }')
+            if awk -v o="${#output}" -v c="${#context}" -v r="$cval" 'BEGIN { exit !(o / c >= r) }'; then
+              echo "delegate: check 'max_context_ratio' FAILED — the answer is ${#output} chars against ${#context} chars of context (ratio $ctx_ratio >= $cval)" >&2
+              echo "  The draft runs about as long as its facts; curate them, well under the facts' length, carrying every anchor inside new sentences." >&2
+              checks_failed=$((checks_failed + 1))
+              checks_failed_names="${checks_failed_names:+$checks_failed_names,}max_context_ratio"
+              capability_failed=$((capability_failed + 1))
+            fi
+          fi
+        fi
+        ;;
+      min_context_chars)
+        # The floor max_context_ratio reads out of the same block (above); a
+        # setting, not a check of its own, so it is accepted and does nothing.
         ;;
       no_example_echo)
         # Handled before this loop (it is on by default for every recipe, not
