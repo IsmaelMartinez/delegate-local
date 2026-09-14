@@ -458,22 +458,80 @@ fi
 # checkouts) came to hold 14 rows at rate=0%. They are neither dropped nor
 # filed under a name: one `(no project)` line after the per-project rows, kept
 # out of the count ranking so a scratch cwd cannot rank above a real project.
+#
+# Two kinds of row leave the ratio since #483, and one line under the table
+# says how many. `below_floor:true` is a body the hook measured under its
+# floor (an applied-in hash, a dependabot command, one word); no recipe
+# should draft it, so it is neither a hit nor a miss — inline review comments
+# read 3% while those were counted. `denied:true` is an attempt the hook
+# blocked: the post did not happen, and when the same session retried that
+# boundary within the hook's window the retry is the row that counts, so
+# counting the attempt too would record every enforced boundary as a miss
+# and then a hit. A denial that was never retried — or was retried through a
+# bypass the hook could not see — is the miss it is, and stays (PR #484
+# review, item K); dropping every denied row let those vanish from the rate.
+# An `enforce_skipped` row (the deny fell open and the post went through
+# undrafted) is a real miss and counts as it always did.
+#
+# The floor named on the footer is the one in force for this shell, read
+# with the same guard the hook applies — a numeric DELEGATE_BOUNDARY_MIN_CHARS
+# overrides, anything else means the per-boundary defaults (20 for
+# git-commit, 120 for the rest) — because the rows carry the verdict, not the
+# threshold it was made against. The retry window is the hook's
+# DELEGATE_BOUNDARY_WINDOW_MIN (480) for the same reason.
 n_opp=$(jq -rs 'map(select((.source // "") == "opportunity")) | length' "$metrics_file")
 if (( n_opp > 0 )); then
   echo "Trigger rate (commit/PR/release/comment boundaries):"
-  jq -rs '
-    map(select((.source // "") == "opportunity"))
-    | group_by(.project // "")
-    | map({
-        project: (.[0].project // ""),
-        n: length,
-        delegated: (map(select(.delegated == true)) | length),
-        missed: (map(select(.delegated == false)) | length)
-      })
-    | sort_by((.project == ""), -.n)
-    | .[]
-    | "  \((if .project == "" then "(no project)" else .project end) | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
-      + "  rate=\(.delegated * 100 / .n | floor)%"
+  floor_override=""
+  [[ "${DELEGATE_BOUNDARY_MIN_CHARS:-}" =~ ^[0-9]+$ ]] && floor_override="$DELEGATE_BOUNDARY_MIN_CHARS"
+  retry_win="${DELEGATE_BOUNDARY_WINDOW_MIN:-480}"
+  [[ "$retry_win" =~ ^[0-9]+$ ]] || retry_win=480
+  jq -rs --arg floor "$floor_override" --argjson win_min "$retry_win" '
+    def epoch: ((.ts | fromdateiso8601?) // 0);
+    # A denial is "retried" when a LATER row for the same session, project
+    # and boundary lands within the window AND is itself a counted post: not
+    # denied, not below_floor (a one-line post the floor waved through is not
+    # the redraft), and not the retry-cap fall-open (an undrafted post the cap
+    # let through). Accepting any non-denied row erased a denied miss behind
+    # an unrelated short post (third review round on #484); matching on the
+    # session alone let a later commit in ANOTHER repo erase this one, and
+    # "later" as a strictly greater second-precision timestamp counted a
+    # denial and its redraft in the same second as both a miss and a hit
+    # (fourth round). Later is therefore append order — the row index in the
+    # file — and the window is still measured on ts, bounded below at zero so
+    # an out-of-order or clock-skewed row cannot pass an upper-bound-only
+    # check (fifth round). Rows with no session match on project alone, so a
+    # pre-#479 corpus still resolves. O(denied x rows), and the denied set is
+    # small.
+    [ map(select((.source // "") == "opportunity"))
+      | range(0; length) as $i | .[$i] + {_i: $i} ] as $all
+    | $all
+    | map(if .denied == true then . as $d
+            | .retried = any($all[]; ._i > $d._i
+                and .denied != true and .below_floor != true
+                and (.enforce_skipped // "") != "retry-cap"
+                and (.boundary // "") == ($d.boundary // "")
+                and (.session // "") == ($d.session // "")
+                and (.project // "") == ($d.project // "")
+                and (epoch - ($d | epoch)) >= 0
+                and (epoch - ($d | epoch)) <= ($win_min * 60))
+          else . end)
+    | (map(select(.below_floor == true)) | length) as $floored
+    | (map(select(.denied == true and .retried == true)) | length) as $denied
+    | map(select(.below_floor != true and (.denied != true or .retried != true)))
+    | (group_by(.project // "")
+      | map({
+          project: (.[0].project // ""),
+          n: length,
+          delegated: (map(select(.delegated == true)) | length),
+          missed: (map(select(.delegated == false)) | length)
+        })
+      | sort_by((.project == ""), -.n)
+      | .[]
+      | "  \((if .project == "" then "(no project)" else .project end) | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
+        + "  rate=\(.delegated * 100 / .n | floor)%"),
+      "  excluded \($floored) boundaries under " + (if $floor != "" then "\($floor) chars" else "the floor (20 chars for git-commit, 120 for the rest)" end),
+      (if $denied > 0 then "  excluded \($denied) denied attempts retried within \($win_min)m (the post did not happen; the retry is what counts)" else empty end)
   ' "$metrics_file"
   echo
 fi

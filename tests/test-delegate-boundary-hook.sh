@@ -45,7 +45,37 @@ METRICS=$(mktemp)
 # DELEGATE_PROJECT would rename every row the hook records.
 gitroot="" norepo=""
 unset DELEGATE_PROJECT
-trap 'rm -rf "$tmpcwd" "$METRICS" "$gitroot" "$norepo"' EXIT
+unset DELEGATE_BOUNDARY_MODE DELEGATE_BOUNDARY_ENFORCE
+# Since #483 the four proven boundaries DENY by default, and only while a
+# provider is reachable, so the whole suite runs against one pinned provider
+# state rather than whatever daemon the developer happens to have up: a mock
+# `curl` first on PATH answers `GET /models` on port 8080 with one prose-tier
+# model and refuses everything else (exit 7, curl's failed-to-connect), and the
+# per-user override config is pointed at a non-file so it cannot reorder the
+# prefs. The mock also records every call in $MOCKDIR/probed, so a test can
+# assert the probe did NOT run on a path that must stay cheap.
+MOCKDIR=$(mktemp -d)
+cat > "$MOCKDIR/curl" <<'EOF'
+#!/usr/bin/env bash
+: >> "$(dirname "$0")/probed"
+for a in "$@"; do
+  case "$a" in
+    *:8080/*) printf '{"object":"list","data":[{"id":"qwen3.6:35b-a3b-q8_0","object":"model"}]}'; exit 0 ;;
+  esac
+done
+exit 7
+EOF
+chmod +x "$MOCKDIR/curl"
+export PATH="$MOCKDIR:$PATH"
+export DELEGATE_BASE_URL=http://localhost:8080/v1
+export DELEGATE_LOCAL_CONFIG=/dev/null
+# The pre-#483 tests post placeholder bodies (`--body x`, `-m "fix: thing"`)
+# to exercise classification, routing and the lookup, none of which the
+# body-length floor is about; a 120-character floor would silence every one
+# of them. The floor is pinned off here and tested at its default in the #483
+# block below.
+export DELEGATE_BOUNDARY_MIN_CHARS=0
+trap 'rm -rf "$tmpcwd" "$METRICS" "$gitroot" "$norepo" "$MOCKDIR"' EXIT
 nowts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # The harness hands every hook the session id (the transcript UUID); the same
@@ -58,6 +88,10 @@ payload() { # cmd  cwd  [session_id]
 }
 last_row() { tail -1 "$METRICS"; }
 nrows() { local n; n=$(grep -c . "$METRICS" 2>/dev/null) || true; echo "${n:-0}"; }
+# The reminder text, whichever channel carried it: additionalContext on the
+# warn path, permissionDecisionReason on the deny path. Tests about the TEXT
+# read it through this so they do not also pin the channel.
+hook_msg() { jq -r '.hookSpecificOutput | .additionalContext // .permissionDecisionReason // empty' <<<"$1"; }
 
 # 1. Non-boundary command: silent, no row.
 : > "$METRICS"
@@ -67,11 +101,13 @@ assert_eq 0 "$ec" "non-boundary: exit 0"
 assert_eq "" "$out" "non-boundary: no stdout"
 assert_eq 0 "$(nrows)" "non-boundary: no metrics row"
 
-# 2. git commit, no prior delegation: warn nudge + delegated:false opportunity row.
+# 2. git commit, no prior delegation: DENIED (#483 — git-commit is one of the
+# four enforced-by-default boundaries) with the reminder as the reason, plus a
+# delegated:false opportunity row.
 : > "$METRICS"
 out=$(payload 'git commit -m "fix: thing"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
-assert_contains '"additionalContext"' "$out" "commit/no-delegation: non-blocking additionalContext"
-assert_contains '"permissionDecision":"allow"' "$out" "commit/no-delegation: allow (non-blocking)"
+assert_contains '"permissionDecision":"deny"' "$out" "commit/no-delegation: denied by default (#483)"
+assert_contains '"permissionDecisionReason"' "$out" "commit/no-delegation: the reminder is the deny reason"
 assert_contains 'commit-message' "$out" "commit/no-delegation: names the recipe"
 row=$(last_row)
 assert_eq opportunity "$(jq -r .source <<<"$row")" "commit row: source=opportunity"
@@ -278,10 +314,13 @@ out=$(payload 'git commit -m x' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" DEL
 assert_eq "" "$out" "off: no nudge"
 assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "off: row still written"
 
-# 12. DELEGATE_LOCAL_NO_METRICS=1: nudge still fires, no row written.
+# 12. DELEGATE_LOCAL_NO_METRICS=1: the reminder still fires, no row written —
+# and it cannot deny (PR #484 review, item E): with metrics off no credit can
+# ever be written where the hook reads, so a deny would be a permanent block.
 : > "$METRICS"
 out=$(payload 'git commit -m x' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_LOCAL_NO_METRICS=1 bash "$HOOK")
-assert_contains 'additionalContext' "$out" "no-metrics: still nudges"
+assert_contains 'commit-message' "$(hook_msg "$out")" "no-metrics: still nudges"
+assert_contains '"permissionDecision":"allow"' "$out" "no-metrics: never denies (no credit could be recorded)"
 assert_eq 0 "$(nrows)" "no-metrics: no row written"
 
 # 13. Custom window honoured (1-minute window, 5-minute-old delegation -> missed).
@@ -568,7 +607,7 @@ spacedir="$tmpcwd/a project"
 mk_repo "$spacedir" >/dev/null 2>&1
 : > "$METRICS"
 out=$(payload 'git commit -m "fix: thing"' "$spacedir" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
-ctx=$(jq -r '.hookSpecificOutput.additionalContext' <<<"$out")
+ctx=$(hook_msg "$out")
 assert_contains '--project "a project"' "$ctx" "spaced project: quoted in the rendered command"
 
 # --- #385: the boundary's repo is the one the command cd's into -------------
@@ -696,7 +735,7 @@ assert_eq git-commit "$(jq -r .boundary <<<"$(last_row)")" "no-repo cwd: the bou
 # and no `--project <name>` — bash reads the latter as a redirection — and a
 # delegation carrying ANY name could never credit this projectless boundary
 # (41d), so omitting the flag is also the only advice that matches.
-ctx=$(jq -r '.hookSpecificOutput.additionalContext' <<<"$out")
+ctx=$(hook_msg "$out")
 case "$ctx" in
   *"$(basename "$norepo")"*) assert_eq "absent" "present" "no-repo cwd: nudge does not name the directory" ;;
   *)                          assert_eq "absent" "absent"  "no-repo cwd: nudge does not name the directory" ;;
@@ -712,7 +751,7 @@ assert_contains 'commit-message' "$ctx" "no-repo cwd: nudge still names the reci
 # renders it quoted: a delegation under that name is a lookup candidate here.
 : > "$METRICS"
 out=$(payload 'gh issue comment 1 --repo owner/repo-b --body x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
-ctx=$(jq -r '.hookSpecificOutput.additionalContext' <<<"$out")
+ctx=$(hook_msg "$out")
 assert_contains '--project "repo-b"' "$ctx" "no-repo cwd + --repo: nudge renders the --repo candidate as --project"
 
 # 41c. A delegation issued from the same non-repo cwd carries no project
@@ -738,7 +777,7 @@ assert_eq sess-A "$(jq -r .session <<<"$(last_row)")" "no-repo cwd: the opportun
 : > "$METRICS"; seed_projectless sess-B commit-message
 out=$(payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
 assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd: another session's projectless delegation does not credit"
-assert_contains 'additionalContext' "$out" "no-repo cwd: ...and the nudge fires"
+assert_contains 'commit-message' "$(hook_msg "$out")" "no-repo cwd: ...and the nudge fires"
 : > "$METRICS"; seed_projectless "" commit-message
 payload 'git commit -m x' "$norepo" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "no-repo cwd: a projectless delegation with no session does not credit"
@@ -1369,6 +1408,523 @@ printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","project":"%s
 cap_post 'gh pr comment 12 --body "the fix landed in abc1234"'
 assert_eq "" "$(ls "$capdir/drafts" 2>/dev/null)" "capture: a draft_file without the .draft.txt suffix stores nothing"
 rm -rf "$capdir" "$capcwd"
+
+# ---------------------------------------------------------------------------
+# #483. Measured 2026-09-13 over 14 days: 680 boundaries, 108 delegated (15%),
+# and the warn-mode nudge does not move it — after a nudge the next boundary
+# within 30 minutes is delegated 9% of the time, against 34% after a credit,
+# because the nudge lands while the post executes and cannot change the text
+# it is about. Only a deny makes the agent redo the text with a draft. The
+# four boundaries whose recipe is proven deny by default; pr-create and
+# pr-review-body stay on warn until pr-description is above 80% usable.
+# ---------------------------------------------------------------------------
+# These run at the DEFAULT floor (the pin at the top is lifted per call) with
+# bodies long enough to be real drafting, and against the pinned mock
+# provider unless a case says otherwise.
+body300=$(python3 -c "print('The sandbox flag in src/main.js is the cause, not your distro. ' * 5)")
+dflt() { DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "$@"; }
+# Provider down: the real curl against a closed port refuses at once, and the
+# mock is out of the way so it cannot answer.
+down() { PATH="${PATH#$MOCKDIR:}" DELEGATE_BASE_URL=http://localhost:1/v1 DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "$@"; }
+
+# 60. Each of the four proven boundaries is denied when nothing was delegated,
+# the reason is the runnable reminder, and the row says why the post did not
+# happen — `denied:true`, so the retry that follows is not counted twice.
+for spec in \
+  "git-commit|commit-message|git commit -m \"$body300\"" \
+  "issue-create|github-issue-body|gh issue create --title t --body \"$body300\"" \
+  "comment-reply|maintainer-reply|gh pr comment 12 --body \"$body300\"" \
+  "pr-review-comment|pr-review-reply|gh api repos/o/r/pulls/12/comments -X POST -f body=\"$body300\" -F in_reply_to=9"; do
+  b="${spec%%|*}"; rest="${spec#*|}"; r="${rest%%|*}"; c="${rest#*|}"
+  : > "$METRICS"
+  out=$(payload "$c" "$tmpcwd" | dflt bash "$HOOK")
+  assert_contains '"permissionDecision":"deny"' "$out" "enforce: $b is denied without a credit"
+  assert_contains "--recipe $r" "$(hook_msg "$out")" "enforce: $b deny reason names the runnable command"
+  assert_eq "$b" "$(jq -r .boundary <<<"$(last_row)")" "enforce: $b row still recorded"
+  assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "enforce: $b row is delegated=false"
+  assert_eq true "$(jq -r '.denied // false' <<<"$(last_row)")" "enforce: $b row carries denied:true"
+  assert_eq false "$(jq 'has("enforce_skipped")' <<<"$(last_row)")" "enforce: $b row carries no enforce_skipped while a provider answers"
+  # ...and allowed, silently, once the delegation exists.
+  : > "$METRICS"; seed_delegation "$proj" "$r"
+  out=$(payload "$c" "$tmpcwd" | dflt bash "$HOOK")
+  assert_eq "" "$out" "enforce: $b passes once credited"
+  assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "enforce: $b credited row is delegated=true"
+  assert_eq false "$(jq 'has("denied")' <<<"$(last_row)")" "enforce: $b credited row carries no denied field"
+done
+
+# 61. pr-create and pr-review-body stay on warn: their recipe is not proven.
+for spec in \
+  "pr-create|gh pr create --title t --body \"$body300\"" \
+  "pr-review-body|gh pr review 12 --comment --body \"$body300\""; do
+  b="${spec%%|*}"; c="${spec#*|}"
+  : > "$METRICS"; rm -f "$MOCKDIR/probed"
+  out=$(payload "$c" "$tmpcwd" | dflt bash "$HOOK")
+  assert_contains '"permissionDecision":"allow"' "$out" "warn: $b is only warned by default"
+  assert_contains '"additionalContext"' "$out" "warn: $b reminder is non-blocking"
+  assert_eq false "$(jq 'has("denied")' <<<"$(last_row)")" "warn: $b row carries no denied field"
+  assert_eq "absent" "$([[ -e "$MOCKDIR/probed" ]] && echo present || echo absent)" "warn: $b did not probe the provider"
+done
+
+# 62. The overrides. DELEGATE_BOUNDARY_MODE=warn and =off are global and win
+# over the enforced set; =enforce means every boundary; the set itself is
+# DELEGATE_BOUNDARY_ENFORCE, comma-separated, and empty means none.
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=warn dflt bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "override: MODE=warn downgrades an enforced boundary to a reminder"
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=off dflt bash "$HOOK")
+assert_eq "" "$out" "override: MODE=off silences an enforced boundary"
+assert_eq false "$(jq 'has("denied")' <<<"$(last_row)")" "override: MODE=off row carries no denied field"
+: > "$METRICS"
+out=$(payload "gh pr create --title t --body \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=enforce dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "override: MODE=enforce denies pr-create too"
+: > "$METRICS"
+out=$(payload "gh pr create --title t --body \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_ENFORCE=pr-create dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "override: ENFORCE=pr-create denies pr-create"
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_ENFORCE=pr-create dflt bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "override: ENFORCE=pr-create leaves git-commit on warn"
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_ENFORCE= dflt bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "override: ENFORCE= (empty) enforces nothing"
+: > "$METRICS"
+out=$(payload "gh pr comment 12 --body \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_ENFORCE="git-commit, comment-reply" dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "override: ENFORCE tolerates a space after the comma"
+
+# 63. Fail open when no provider answers. A session with MLX and Ollama down
+# cannot delegate and must still be able to commit, so the deny becomes a
+# reminder and the row says so.
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | down bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "no provider: an enforced boundary is not denied"
+assert_contains 'commit-message' "$(hook_msg "$out")" "no provider: the reminder still fires"
+assert_contains 'No local provider answered' "$(hook_msg "$out")" "no provider: the reminder says why the call proceeds"
+assert_eq no-provider "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "no provider: row records enforce_skipped=no-provider"
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "no provider: row is still a real miss (delegated=false)"
+assert_eq false "$(jq 'has("denied")' <<<"$(last_row)")" "no provider: row carries no denied field"
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=enforce down bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "no provider: explicit MODE=enforce fails open too"
+# A credited post never probes: the provider's state is irrelevant to a post
+# that already has its delegation.
+: > "$METRICS"; seed_delegation "$proj" commit-message; rm -f "$MOCKDIR/probed"
+payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK" >/dev/null
+assert_eq "absent" "$([[ -e "$MOCKDIR/probed" ]] && echo present || echo absent)" "no probe: a credited post does not probe the provider"
+
+# 64. The body-length floor. Inline review comments ran at 3% because most are
+# one line — an applied-in hash, a dependabot command, one word — and the hook
+# stored no length, so they could not be told from real drafting after the
+# fact. `body_chars` is an integer (never the text) on every row whose body is
+# measurable; under DELEGATE_BOUNDARY_MIN_CHARS (120) the hook neither nudges
+# nor denies and marks the row `below_floor:true` so the data stays for tuning.
+body40='LGTM, applied in abc123 and pushed; thanks!'
+: > "$METRICS"; rm -f "$MOCKDIR/probed"
+out=$(payload "gh pr comment 12 --body \"$body40\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_eq "" "$out" "floor: a ${#body40}-char reply is neither nudged nor denied"
+assert_eq "${#body40}" "$(jq -r '.body_chars // empty' <<<"$(last_row)")" "floor: row records body_chars as an integer"
+assert_eq true "$(jq -r '.below_floor // false' <<<"$(last_row)")" "floor: row carries below_floor:true"
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "floor: row is still recorded as delegated=false"
+assert_eq false "$(jq 'has("denied")' <<<"$(last_row)")" "floor: row carries no denied field"
+assert_eq "absent" "$([[ -e "$MOCKDIR/probed" ]] && echo present || echo absent)" "floor: a below-floor post does not probe the provider"
+assert_eq "absent" "$(grep -qF "$body40" "$METRICS" && echo present || echo absent)" "floor: the body text itself is never written to the row"
+# A body over the floor is enforced, and carries its length with no marker.
+: > "$METRICS"
+out=$(payload "gh pr comment 12 --body \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "floor: a ${#body300}-char reply is enforced"
+assert_eq "${#body300}" "$(jq -r '.body_chars // empty' <<<"$(last_row)")" "floor: over-floor row records body_chars"
+assert_eq false "$(jq 'has("below_floor")' <<<"$(last_row)")" "floor: over-floor row carries no below_floor field"
+# A commit whose message arrives on stdin (`-F -` with a heredoc) has no body
+# the hook can read at PreToolUse time — a bare `git commit` is not a boundary
+# at all, it opens the editor — so the row carries no body_chars and today's
+# behaviour stands: enforced.
+: > "$METRICS"
+out=$(payload "git commit -F - <<'EOF'
+$body300
+EOF" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "floor: a commit with no measurable body is enforced"
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "floor: no measurable body, no body_chars field"
+assert_eq false "$(jq 'has("below_floor")' <<<"$(last_row)")" "floor: no measurable body, no below_floor field"
+# A credited post under the floor keeps both facts.
+: > "$METRICS"; seed_delegation "$proj" maintainer-reply
+out=$(payload "gh pr comment 12 --body \"$body40\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_eq "" "$out" "floor: a credited below-floor post is silent"
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "floor: credited below-floor row is delegated=true"
+assert_eq true "$(jq -r '.below_floor // false' <<<"$(last_row)")" "floor: credited below-floor row still carries below_floor"
+# The floor is tunable.
+: > "$METRICS"
+out=$(payload "gh pr comment 12 --body \"$body40\"" "$tmpcwd" | DELEGATE_BOUNDARY_MIN_CHARS=10 DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "floor: DELEGATE_BOUNDARY_MIN_CHARS=10 enforces the ${#body40}-char reply"
+
+# 65. `git commit -m` is measured. The scanner knew `--message` and `-F` but
+# not `-m`, so every commit posted the way Claude Code posts them —
+# `-m "$(cat <<'EOF' … EOF\n)"` — measured nothing. The heredoc wrapper is
+# not part of the message: the length and the captured final are the text
+# between the delimiters, and a quote or a paren inside the message does not
+# end it early.
+commit_body="fix: handle a \"quoted\" flag (see 1) and 2) in the notes)
+
+$body300"
+cc="git commit -m \"\$(cat <<'EOF'
+$commit_body
+EOF
+)\""
+: > "$METRICS"
+out=$(payload "$cc" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "commit -m: the heredoc shape is enforced"
+assert_eq "${#commit_body}" "$(jq -r '.body_chars // empty' <<<"$(last_row)")" "commit -m: body_chars is the message between the delimiters"
+: > "$METRICS"
+payload 'git commit -am "fix: short"' "$tmpcwd" | dflt bash "$HOOK" >/dev/null
+assert_eq 10 "$(jq -r '.body_chars // empty' <<<"$(last_row)")" "commit -am: the combined short flag is measured"
+# ...and the credited commit stores the same text as its final (ADR 0029).
+cap_setup_recipe commit-message
+payload "$cc" "$capcwd" | DELEGATE_METRICS_FILE="$capm" DELEGATE_BOUNDARY_MIN_CHARS= bash "$HOOK" >/dev/null 2>&1
+assert_eq "$commit_body" "$(cat "$capdir/$capfinal" 2>/dev/null)" "commit -m: a credited commit stores the unwrapped message as its final"
+rm -rf "$capdir" "$capcwd"
+
+# ---------------------------------------------------------------------------
+# PR #484 review. The deny had bypasses and one loop, each reproduced below
+# before it was closed.
+# ---------------------------------------------------------------------------
+
+# 66 (A). Unexpanded shell text is not a body. `--body "$(cat draft.md)"`
+# measured 15 characters and was silently allowed as below the floor;
+# `MSG=…; git commit -m "$MSG"` measured 4 — a one-token bypass the agent finds
+# on its first denied commit — and a compliant, credited `--body "$(cat
+# reply.txt)"` was marked below_floor and dropped from the numerator. Any body
+# holding an unresolved `$`, backtick or `$(` — other than the recognised
+# `-m "$(cat <<'EOF' … EOF)"` shape — is UNMEASURABLE: no body_chars, no
+# below_floor, enforced as before.
+: > "$METRICS"
+out=$(payload 'gh pr comment 12 --body "$(cat draft.md)"' "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "unmeasurable: \$(cat draft.md) is enforced, not measured"
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "unmeasurable: \$(cat file) carries no body_chars"
+assert_eq false "$(jq 'has("below_floor")' <<<"$(last_row)")" "unmeasurable: \$(cat file) carries no below_floor"
+: > "$METRICS"
+out=$(payload 'MSG="fix: thing"; git commit -m "$MSG"' "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "unmeasurable: a \$VAR body is enforced"
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "unmeasurable: a \$VAR body carries no body_chars"
+: > "$METRICS"
+out=$(payload 'gh pr comment 12 --body "see `cat notes.md` for the rest of the reasoning behind this"' "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "unmeasurable: a backtick body is enforced"
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "unmeasurable: a backtick body carries no body_chars"
+# Credited and unmeasurable: delegated=true, no below_floor, and nothing is
+# stored as the final — the literal text is not what shipped.
+cap_setup
+cap_post 'gh pr comment 12 --body "$(cat reply-draft.txt)"'
+assert_eq true "$(jq -r .delegated <<<"$(tail -1 "$capm")")" "unmeasurable: a credited \$(cat) post is still credited"
+assert_eq false "$(jq 'has("below_floor")' <<<"$(tail -1 "$capm")")" "unmeasurable: a credited \$(cat) post is not marked below_floor"
+assert_eq "" "$(ls "$capdir/drafts" 2>/dev/null)" "unmeasurable: a credited \$(cat) post stores no final"
+rm -rf "$capdir" "$capcwd"
+# A literal dollar inside SINGLE quotes is text, and stays measurable.
+: > "$METRICS"
+out=$(payload "gh pr comment 12 --body 'the \$5 plan covers it; $body300'" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "measurable: a single-quoted \$ is literal and the body is enforced on length"
+assert_eq true "$(jq 'has("body_chars")' <<<"$(last_row)")" "measurable: a single-quoted \$ body still records body_chars"
+# An escaped dollar inside double quotes is literal too.
+: > "$METRICS"
+payload "gh pr comment 12 --body \"costs \\\$5; $body300\"" "$tmpcwd" | dflt bash "$HOOK" >/dev/null
+assert_eq true "$(jq 'has("body_chars")' <<<"$(last_row)")" "measurable: an escaped \\\$ inside double quotes is literal"
+
+# 67 (B). The loop. comment-reply names its recipe from the ORIGINAL body's
+# length (the 600 split). A 700-char post was denied naming
+# maintainer-review-reply; the agent delegated exactly that and posted the
+# 450-char draft, which routed to maintainer-reply, matched no credit, and was
+# denied again under a different recipe name. Either comment-reply recipe
+# credits a comment-reply boundary.
+body700=$(python3 -c "print('The sandbox flag in src/main.js is the cause, not your distro. ' * 11)")
+body450=$(python3 -c "print('The sandbox flag in src/main.js is the cause, not your distro. ' * 7)")
+: > "$METRICS"
+out=$(payload "gh pr comment 12 --body \"$body700\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "loop: the 700-char post is denied"
+assert_contains '--recipe maintainer-review-reply' "$(hook_msg "$out")" "loop: ...naming maintainer-review-reply"
+seed_delegation "$proj" maintainer-review-reply
+out=$(payload "gh pr comment 12 --body \"$body450\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_eq "" "$out" "loop: the 450-char draft posted next is credited, not denied again"
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "loop: ...and recorded delegated=true"
+assert_eq maintainer-reply "$(jq -r .suggested_recipe <<<"$(last_row)")" "loop: ...under the recipe its own length routes to"
+# The converse: a maintainer-reply delegation credits a long comment too.
+: > "$METRICS"; seed_delegation "$proj" maintainer-reply
+out=$(payload "gh pr comment 12 --body \"$body700\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "loop: a maintainer-reply delegation credits a long comment-reply"
+# Other boundaries are still recipe-exact.
+: > "$METRICS"; seed_delegation "$proj" maintainer-reply
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "loop: a reply delegation does not credit a commit"
+
+# 68 (C). The body is read from the MATCHED SEGMENT, not the whole compound
+# command. `git commit -m "fix: x" && gh pr create --body "<300 chars>"`
+# measured the PR body against the commit boundary and denied a 6-char commit;
+# the reverse paired a commit with a `--body-file` further along and stored
+# that file as the commit's final.
+: > "$METRICS"
+out=$(payload "git commit -m \"fix: x\" && gh pr create --title t --body \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_eq git-commit "$(jq -r .boundary <<<"$(last_row)")" "segment scope: the first segment classifies"
+assert_eq 6 "$(jq -r '.body_chars // empty' <<<"$(last_row)")" "segment scope: the commit is measured, not the PR body"
+assert_eq "" "$out" "segment scope: a 6-char commit is below its floor, not denied on the PR body's length"
+cap_setup_recipe commit-message
+printf 'notes that are not the commit message\n' > "$capcwd/notes.md"
+payload "git commit -m \"fix: thing\" && gh pr comment 1 --body-file $capcwd/notes.md" "$capcwd" \
+  | DELEGATE_METRICS_FILE="$capm" DELEGATE_BOUNDARY_MIN_CHARS= bash "$HOOK" >/dev/null 2>&1
+assert_eq "fix: thing" "$(cat "$capdir/$capfinal" 2>/dev/null)" "segment scope: the commit's final is its own message, not a later --body-file"
+rm -rf "$capdir" "$capcwd"
+
+# 69 (D). Repeated `-m` are paragraphs — git joins them with a blank line — so
+# a two-paragraph commit that clears the floor combined was marked below_floor
+# because only the longest one was kept. The inline bodies of one command are
+# summed (joined with a blank line).
+para1='fix: the subject line, forty characters'
+para2='and the body paragraph, also forty chars'
+: > "$METRICS"
+out=$(payload "git commit -m \"$para1\" -m \"$para2\"" "$tmpcwd" | DELEGATE_BOUNDARY_MIN_CHARS=60 DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq "$(( ${#para1} + 2 + ${#para2} ))" "$(jq -r '.body_chars // empty' <<<"$(last_row)")" "summed -m: body_chars is both paragraphs plus the blank line"
+assert_contains '"permissionDecision":"deny"' "$out" "summed -m: two 40-char paragraphs clear a 60-char floor together"
+
+# 70 (E). Never a permanent block. A delegation that fails (exit_status 3, an
+# HTTP 500, the echo check) never credits, and DELEGATE_LOCAL_NO_METRICS=1 or a
+# metrics path that differs between the hook's env and the Bash tool's means
+# no credit can ever be written where the hook reads — and the deny text
+# itself says a command prefix cannot change the hook's env. Two escapes:
+# after two consecutive denials for the same session and boundary the third
+# attempt is warned with enforce_skipped:"retry-cap", and a metrics file the
+# hook cannot append to fails open with enforce_skipped:"metrics-unwritable".
+seed_denied() { # session boundary [ts]
+  jq -nc --arg ts "${3:-$nowts}" --arg p "$proj" --arg s "$1" --arg b "$2" \
+    '{ts:$ts, source:"opportunity", boundary:$b, suggested_recipe:"x", delegated:false, denied:true, project:$p, session:$s}' >> "$METRICS"
+}
+: > "$METRICS"; seed_denied sess-A git-commit; seed_denied sess-A git-commit
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "retry cap: the third consecutive attempt is not denied"
+assert_eq retry-cap "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "retry cap: the row records enforce_skipped=retry-cap"
+assert_eq false "$(jq 'has("denied")' <<<"$(last_row)")" "retry cap: the row is not a denial"
+assert_contains 'twice' "$(hook_msg "$out")" "retry cap: the reminder says why the call proceeds"
+# The natural sequence, with nothing seeded: deny, deny, proceed.
+: > "$METRICS"
+for i in 1 2; do
+  out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+  assert_contains '"permissionDecision":"deny"' "$out" "retry cap: attempt $i is denied"
+done
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "retry cap: attempt 3 proceeds"
+# A credited post in between resets the streak, so the cap cannot be banked.
+: > "$METRICS"; seed_denied sess-A git-commit; seed_denied sess-A git-commit
+jq -nc --arg ts "$nowts" --arg p "$proj" '{ts:$ts, source:"opportunity", boundary:"git-commit", suggested_recipe:"commit-message", delegated:true, project:$p, session:"sess-A"}' >> "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "retry cap: a later non-denied row resets the streak"
+# Scoped to the session and the boundary.
+: > "$METRICS"; seed_denied sess-B git-commit; seed_denied sess-B git-commit
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "retry cap: another session's denials do not count"
+: > "$METRICS"; seed_denied sess-A comment-reply; seed_denied sess-A comment-reply
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "retry cap: another boundary's denials do not count"
+# Outside the window the denials have expired.
+: > "$METRICS"; seed_denied sess-A git-commit 2020-01-01T00:00:00Z; seed_denied sess-A git-commit 2020-01-01T00:00:01Z
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "retry cap: denials outside the window do not count"
+# Metrics unwritable: a directory where the file should be.
+unwritable=$(mktemp -d)
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$unwritable" bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "metrics unwritable: the boundary is not denied"
+assert_contains 'metrics' "$(hook_msg "$out")" "metrics unwritable: the reminder says the row could not be written"
+rmdir "$unwritable"
+
+# 71 (F). DELEGATE_BOUNDARY_MODE is case-insensitive and an unknown value is
+# warn, as it was on main — for a while any value but the three exact spellings
+# fell into the default branch and enforced.
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=Off dflt bash "$HOOK")
+assert_eq "" "$out" "mode: Off is off"
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=WARN dflt bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "mode: WARN is warn"
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=0 dflt bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "mode: an unknown value (0) is warn, not enforce"
+: > "$METRICS"
+out=$(payload "gh pr create --title t --body \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=Enforce dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "mode: Enforce is enforce"
+
+# 72 (G). "No provider" was also said when a provider IS up but serves no
+# model for the tier, or the recipe's tier is malformed. pick-model.sh already
+# tells the three apart; the row and the reminder now do too.
+MOCKDIR2=$(mktemp -d)
+sed 's/qwen3.6:35b-a3b-q8_0/nomic-embed-text/' "$MOCKDIR/curl" > "$MOCKDIR2/curl"; chmod +x "$MOCKDIR2/curl"
+nomodel() { PATH="$MOCKDIR2:${PATH#$MOCKDIR:}" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "$@"; }
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | nomodel bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "no model: fails open"
+assert_eq no-model "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "no model: the row says no-model, not no-provider"
+assert_contains 'no model for the prose tier' "$(hook_msg "$out")" "no model: the reminder names the tier that has no model"
+rm -rf "$MOCKDIR2"
+badtier=$(mktemp -d)
+sed 's/^tier: prose$/tier: bogus/' "$REPO/prompts/commit-message.md" > "$badtier/commit-message.md"
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_PROMPTS_DIR="$badtier" dflt bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "bad tier: fails open"
+assert_eq bad-tier "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "bad tier: the row says bad-tier"
+assert_contains "'bogus'" "$(hook_msg "$out")" "bad tier: the reminder names the tier the recipe declares"
+# (I) The tier is read the way delegate.sh reads it: trailing whitespace is
+# not a different tier.
+sed 's/^tier: prose$/tier: prose   /' "$REPO/prompts/commit-message.md" > "$badtier/commit-message.md"
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_PROMPTS_DIR="$badtier" dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "tier read: 'tier: prose   ' resolves like delegate.sh and is enforced"
+rm -rf "$badtier"
+
+# 73 (H). One 120-char floor calibrated on inline review comments exempted the
+# one-line conventional commit — the commit-message recipe's own core output —
+# from enforcement and from the denominator. Per-boundary defaults: 20 for
+# git-commit (a subject line), 120 for the rest; DELEGATE_BOUNDARY_MIN_CHARS
+# stays the global override.
+subject46='fix: close the body-floor bypasses in the hook'
+: > "$METRICS"
+out=$(payload "git commit -m \"$subject46\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_eq 46 "${#subject46}" "per-boundary floor: the fixture subject is 46 chars"
+assert_contains '"permissionDecision":"deny"' "$out" "per-boundary floor: a 46-char conventional commit is enforced"
+assert_eq false "$(jq 'has("below_floor")' <<<"$(last_row)")" "per-boundary floor: ...and counted"
+: > "$METRICS"
+out=$(payload 'git commit -m "wip"' "$tmpcwd" | dflt bash "$HOOK")
+assert_eq "" "$out" "per-boundary floor: a 3-char commit is under the 20-char commit floor"
+assert_eq true "$(jq -r '.below_floor // false' <<<"$(last_row)")" "per-boundary floor: ...and marked below_floor"
+: > "$METRICS"
+out=$(payload "gh pr comment 12 --body \"$subject46\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_eq "" "$out" "per-boundary floor: 46 chars is still under the 120-char reply floor"
+: > "$METRICS"
+out=$(payload 'git commit -m "wip"' "$tmpcwd" | DELEGATE_BOUNDARY_MIN_CHARS=2 DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "per-boundary floor: the global override applies to git-commit too"
+
+# 74 (M). One credit, two hooks at once. The lookup read a snapshot and the
+# spending row was appended later, so two enforced boundaries after one
+# delegation could both see the credit, both allow, and both spend it. Lookup
+# and append are serialised with a mkdir lock in the data dir.
+for i in 1 2 3; do
+  : > "$METRICS"; seed_delegation "$proj" commit-message
+  payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK" >/dev/null &
+  payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK" >/dev/null &
+  wait
+  assert_eq 1 "$(grep -c '"delegated":true' "$METRICS")" "lock: run $i — one credit is spent exactly once"
+  assert_eq 2 "$(grep -c '"source":"opportunity"' "$METRICS")" "lock: run $i — both boundaries are recorded"
+done
+lockdir="$(dirname "$METRICS")/.boundary-hook.lock"
+# A stale lock (a killed hook) is broken rather than wedging every later post.
+mkdir -p "$lockdir"; printf '%s' "$(( $(date -u +%s) - 60 ))" > "$lockdir/ts"
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "lock: a stale lock is broken and the boundary is judged normally"
+assert_eq "absent" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock: the lock is released afterwards"
+# A live lock that is never released fails open to warn after the timeout,
+# and is never removed by a hook that does not own it.
+mkdir -p "$lockdir"; printf '%s' "$(date -u +%s)" > "$lockdir/ts"; printf 'someone-else' > "$lockdir/owner"
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "lock: an unobtainable lock fails open"
+assert_eq lock-timeout "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "lock: ...recording enforce_skipped=lock-timeout"
+assert_eq "present" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock: a live lock is not removed by a non-owner"
+assert_eq "someone-else" "$(cat "$lockdir/owner" 2>/dev/null)" "lock: ...and its owner file is untouched"
+rm -rf "$lockdir"
+
+# 76. An EMPTY measurable body is a known 0-character post, not an unknown one
+# (fourth review round). `--body ""` and a readable empty `--body-file` left
+# body_text empty, so the scan's success was never recorded and the post was
+# enforced as unmeasurable. "The scan succeeded" and "the text is non-empty"
+# are tracked apart: body_chars:0, below_floor:true, no nudge, no deny.
+: > "$METRICS"
+out=$(payload 'gh pr comment 12 --body ""' "$tmpcwd" | dflt bash "$HOOK")
+assert_eq "" "$out" "empty body: --body \"\" is neither nudged nor denied"
+assert_eq 0 "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "empty body: --body \"\" records body_chars:0"
+assert_eq true "$(jq -r '.below_floor // false' <<<"$(last_row)")" "empty body: --body \"\" is below_floor"
+: > "$tmpcwd/empty.md"
+: > "$METRICS"
+out=$(payload "gh issue create --title t --body-file $tmpcwd/empty.md" "$tmpcwd" | dflt bash "$HOOK")
+assert_eq "" "$out" "empty body: an empty --body-file is neither nudged nor denied"
+assert_eq 0 "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "empty body: an empty --body-file records body_chars:0"
+assert_eq true "$(jq -r '.below_floor // false' <<<"$(last_row)")" "empty body: an empty --body-file is below_floor"
+# ...while a command with NO body flag at all is still unmeasurable.
+: > "$METRICS"
+out=$(payload "git commit -F - <<'EOF'
+$body300
+EOF" "$tmpcwd" | dflt bash "$HOOK")
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "empty body: no body flag is still no body_chars"
+
+# 75. Lock ownership (third review round). A hook that keeps its lock past
+# the 5 s stale threshold has it broken by the next hook; without an
+# ownership check its own EXIT cleanup then removed the REPLACEMENT lock, so
+# both ran their lookup unserialised and consumed the same credit. The lock
+# dir carries an owner token written on acquisition; release removes the dir
+# only when the token matches. Since the fifth round the provider probe runs
+# OUTSIDE the lock — the critical section is the lookup and the append — so
+# the slow holder here is a `jq` wrapper that sleeps on the lookup's `-rs`
+# slurp: hook A holds the lock for 9 s, hook B — started 7 s in, so A's lock
+# reads stale — for 3 s. A exits at ~9 s while B still holds the lock it took
+# over; the lock must survive A's exit and vanish only when B finishes.
+REAL_JQ=$(command -v jq)
+slow_jq() { # dir seconds
+  mkdir -p "$1"
+  printf '#!/usr/bin/env bash\ncase " $* " in *" -rs "*) sleep %s ;; esac\nexec %q "$@"\n' "$2" "$REAL_JQ" > "$1/jq"
+  chmod +x "$1/jq"
+}
+SLOWA=$(mktemp -d); slow_jq "$SLOWA" 9
+SLOWB=$(mktemp -d); slow_jq "$SLOWB" 3
+slow() { PATH="$1:$PATH" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "${@:2}"; }
+: > "$METRICS"; rm -rf "$lockdir"
+payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWA" bash "$HOOK" >/dev/null &
+pid_a=$!
+sleep 7
+payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWB" bash "$HOOK" >/dev/null &
+pid_b=$!
+wait "$pid_a"
+assert_eq "present" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock owner: A's exit leaves B's replacement lock in place"
+wait "$pid_b"
+assert_eq "absent" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock owner: B releases its own lock when it finishes"
+assert_eq 2 "$(grep -c '"denied":true' "$METRICS")" "lock owner: both boundaries were judged (denied, no credit)"
+rm -rf "$SLOWA" "$SLOWB"
+
+# 75b (fifth round). The probe is not in the critical section. With the
+# mock provider sleeping 3 s, a second hook started 1 s later must not wait on
+# the first: the lock is held for the lookup and the append only, so both
+# finish in about one probe's time rather than two.
+SLOWC=$(mktemp -d)
+{ printf '#!/usr/bin/env bash\nsleep 3\n'; sed '1d;/^: >> /d' "$MOCKDIR/curl"; } > "$SLOWC/curl"; chmod +x "$SLOWC/curl"
+slowc() { PATH="$SLOWC:${PATH#$MOCKDIR:}" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "$@"; }
+: > "$METRICS"; rm -rf "$lockdir"
+t0=$(date +%s)
+payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK" >/dev/null &
+pid_a=$!
+sleep 1
+payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK" >/dev/null &
+pid_b=$!
+wait "$pid_a" "$pid_b"
+elapsed=$(( $(date +%s) - t0 ))
+assert_eq "yes" "$([[ $elapsed -le 5 ]] && echo yes || echo "no (${elapsed}s)")" "probe outside lock: two slow probes overlap instead of queueing on the lock"
+assert_eq 2 "$(grep -c '"denied":true' "$METRICS")" "probe outside lock: both boundaries were judged"
+rm -rf "$SLOWC"
+
+# 77 (fifth round). A lock dir with no `ts` — a hook killed between mkdir
+# and the write — was never treated as stale, so every later hook waited 2 s
+# and failed open forever. A ts-less lock is stale once the DIRECTORY is
+# older than the threshold.
+rm -rf "$lockdir"; mkdir -p "$lockdir"; touch -t 202001010000 "$lockdir"
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "incomplete lock: an old ts-less lock dir is broken and the boundary judged"
+assert_eq "absent" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "incomplete lock: ...and released afterwards"
+
+# 78 (fifth round). A relative `--body-file` resolves against the payload
+# cwd, and against a leading `cd <path> &&` target when there is one. The
+# body was read before the hook chdir'd to the payload cwd, so `reply.md`
+# was looked up in the hook process's own cwd, not found, and a readable
+# body was marked unmeasurable and enforced.
+printf '%s' "$body300" > "$tmpcwd/reply.md"
+: > "$METRICS"
+payload 'gh pr comment 1 --body-file reply.md' "$tmpcwd" | dflt bash "$HOOK" >/dev/null
+assert_eq "${#body300}" "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "relative body-file: resolved against the payload cwd"
+mk_repo "$gitroot/repo-c" >/dev/null 2>&1
+printf 'short' > "$gitroot/repo-c/reply.md"
+: > "$METRICS"
+out=$(payload "cd $gitroot/repo-c && gh pr comment 1 --body-file reply.md" "$tmpcwd" | dflt bash "$HOOK")
+assert_eq 5 "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "relative body-file: resolved against the cd target"
+assert_eq "" "$out" "relative body-file: ...so the 5-char reply is under the floor, not enforced as unmeasurable"
+rm -f "$tmpcwd/reply.md"
 
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"

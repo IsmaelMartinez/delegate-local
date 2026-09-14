@@ -401,9 +401,116 @@ case "$trig" in
   *null*) assert_eq "absent" "present" "no-project opportunities: never printed as null" ;;
   *)      assert_eq "absent" "absent"  "no-project opportunities: never printed as null" ;;
 esac
-assert_contains "(no project)" "$(grep -v '^$' <<<"$trig" | tail -1)" \
+# Among the project rows (the `excluded …` footer since #483 is not one).
+assert_contains "(no project)" "$(grep -F 'opportunities=' <<<"$trig" | tail -1)" \
   "no-project opportunities: listed after the per-project rows, not ranked by count"
 rm -f "$noproj"
+
+# 12e. #483: the rate is about real drafting. A row the hook marked
+# `below_floor:true` (a body under the floor — an applied-in hash, a
+# dependabot command) is neither a hit nor a miss and leaves both halves of
+# the ratio. A `denied:true` row is an attempt the hook blocked; when the same
+# session retried that boundary within the window, the retry is the row that
+# counts and the denial leaves the ratio — but a denial never retried (or
+# retried through a bypass) is the miss it is and stays (PR #484 review,
+# item K). An `enforce_skipped` row (no provider answered, the post went
+# through undrafted) is a real miss and counts as before. Fixture: alpha has
+# 1 delegated, 1 plain miss, 1 no-provider miss, 1 below-floor row, 1 denied
+# attempt that session s1 retried two minutes later, and 1 denied attempt
+# session s2 never retried — 1/4, not 1/6 and not 1/3.
+floor=$(mktemp)
+cat > "$floor" <<'EOF'
+{"ts":"2026-09-13T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312,"session":"s1"}
+{"ts":"2026-09-13T10:02:00Z","source":"opportunity","project":"alpha","boundary":"comment-reply","suggested_recipe":"maintainer-reply","delegated":false,"body_chars":280,"session":"s1"}
+{"ts":"2026-09-13T10:03:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":200,"enforce_skipped":"no-provider","session":"s1"}
+{"ts":"2026-09-13T10:04:00Z","source":"opportunity","project":"alpha","boundary":"pr-review-comment","suggested_recipe":"pr-review-reply","delegated":false,"body_chars":23,"below_floor":true,"session":"s1"}
+{"ts":"2026-09-13T10:05:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s1"}
+{"ts":"2026-09-13T10:07:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312,"session":"s1"}
+{"ts":"2026-09-13T11:00:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s2"}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$floor" 2>&1) || EC=$?
+assert_eq 0 "$EC" "body floor: exits 0"
+trig=$(sed -n '/^Trigger rate/,/^$/p' <<<"$out")
+assert_contains "opportunities=5  delegated=2  missed=3  rate=40%" "$trig" \
+  "body floor: below-floor and retried-denied rows leave the ratio; the no-provider miss and the unretried denial stay"
+assert_contains "excluded 1 boundaries under the floor (20 chars for git-commit, 120 for the rest)" "$trig" \
+  "body floor: one line under the table names the excluded count and the per-boundary floors"
+assert_contains "excluded 1 denied attempts retried within 480m" "$trig" \
+  "body floor: retried denials are reported on their own, not as misses"
+# The floor named is the one in force. A global override is read with the
+# same guard the hook applies: numeric, else the defaults.
+out=$(DELEGATE_BOUNDARY_MIN_CHARS=80 bash "$SCRIPT" --file "$floor" 2>&1)
+assert_contains "under 80 chars" "$out" "body floor: the line reads a numeric DELEGATE_BOUNDARY_MIN_CHARS"
+out=$(DELEGATE_BOUNDARY_MIN_CHARS=lots bash "$SCRIPT" --file "$floor" 2>&1)
+assert_contains "under the floor (20 chars for git-commit, 120 for the rest)" "$out" \
+  "body floor: a non-numeric override falls back to the defaults, as the hook does"
+# The retry window is the hook's, so a denial retried outside it is a miss.
+out=$(DELEGATE_BOUNDARY_WINDOW_MIN=1 bash "$SCRIPT" --file "$floor" 2>&1)
+assert_contains "opportunities=6  delegated=2  missed=4  rate=33%" "$out" \
+  "body floor: a denial retried outside DELEGATE_BOUNDARY_WINDOW_MIN counts as a miss"
+rm -f "$floor"
+# 12e-ii. A retry is a later row that is itself a counted post: a denial
+# followed by a below-floor one-liner, or by a retry-cap post (an undrafted
+# post the cap let through), is not "retried" — it stays the miss it is
+# (third review round on PR #484). Fixture: s1 denied then posted a
+# below-floor row; s2 denied then hit the retry cap; s3 denied then posted a
+# real retry. Only s3's denial leaves the ratio.
+notretry=$(mktemp)
+cat > "$notretry" <<'EOF'
+{"ts":"2026-09-13T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s1"}
+{"ts":"2026-09-13T10:02:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":3,"below_floor":true,"session":"s1"}
+{"ts":"2026-09-13T10:03:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s2"}
+{"ts":"2026-09-13T10:04:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"enforce_skipped":"retry-cap","session":"s2"}
+{"ts":"2026-09-13T10:05:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s3"}
+{"ts":"2026-09-13T10:06:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312,"session":"s3"}
+EOF
+out=$(bash "$SCRIPT" --file "$notretry" 2>&1)
+trig=$(sed -n '/^Trigger rate/,/^$/p' <<<"$out")
+assert_contains "opportunities=4  delegated=1  missed=3  rate=25%" "$trig" \
+  "retry: a below-floor or retry-cap row after a denial is not a retry; those denials stay misses"
+assert_contains "excluded 1 denied attempts retried" "$trig" \
+  "retry: only the denial followed by a real post is excluded"
+rm -f "$notretry"
+# 12e-iii. The retry has to be the SAME repo's boundary, and "later" is append
+# order, not a strictly greater second (fourth review round on PR #484).
+# Matching on session alone let a later commit in another repo erase this
+# repo's denial, and `epoch >` on second-precision timestamps counted a
+# denial and its redraft in the same second as both a miss and a hit.
+xrepo=$(mktemp)
+cat > "$xrepo" <<'EOF'
+{"ts":"2026-09-13T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s1"}
+{"ts":"2026-09-13T10:02:00Z","source":"opportunity","project":"beta","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312,"session":"s1"}
+{"ts":"2026-09-13T10:03:00Z","source":"opportunity","project":"gamma","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s2"}
+{"ts":"2026-09-13T10:03:00Z","source":"opportunity","project":"gamma","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312,"session":"s2"}
+{"ts":"2026-09-13T10:10:00Z","source":"opportunity","project":"delta","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s3"}
+{"ts":"2026-09-13T09:00:00Z","source":"opportunity","project":"delta","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312,"session":"s3"}
+EOF
+out=$(bash "$SCRIPT" --file "$xrepo" 2>&1)
+trig=$(sed -n '/^Trigger rate/,/^$/p' <<<"$out")
+assert_contains "alpha                 opportunities=1  delegated=0  missed=1  rate=0%" "$trig" \
+  "retry: a later commit in another repo does not erase this repo's denial"
+assert_contains "gamma                 opportunities=1  delegated=1  missed=0  rate=100%" "$trig" \
+  "retry: a denial and its redraft in the same second count once"
+# A row appended later but stamped EARLIER (clock skew, a merged file) is
+# not a retry: the window has a lower bound of zero (fifth round).
+assert_contains "delta                 opportunities=2  delegated=1  missed=1  rate=50%" "$trig" \
+  "retry: a later-appended row with an earlier timestamp does not satisfy the window"
+assert_contains "excluded 1 denied attempts retried" "$trig" \
+  "retry: exactly the same-second redraft is the excluded denial"
+rm -f "$xrepo"
+# With nothing excluded the line still prints, so the floor is never silent.
+opp2=$(mktemp)
+cat > "$opp2" <<'EOF'
+{"ts":"2026-09-13T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true}
+EOF
+out=$(bash "$SCRIPT" --file "$opp2" 2>&1)
+assert_contains "excluded 0 boundaries under the floor" "$out" "body floor: the excluded line prints even at zero"
+case "$out" in
+  *"denied attempts"*) assert_eq "absent" "present" "body floor: no denied line when nothing was denied" ;;
+  *)                   assert_eq "absent" "absent"  "body floor: no denied line when nothing was denied" ;;
+esac
+rm -f "$opp2"
 
 # 12d. The per-project DELEGATE section carries the same projectless rows
 # (#476): delegate.sh records no project outside a repository, so they are

@@ -838,6 +838,145 @@
           "legendFormat": "{{tier}}"
         }
       ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Trigger rate",
+      "description": "Delegatable boundaries the PreToolUse hook saw (commit, PR body, review body, inline review reply, comment reply, issue body) against the ones a local delegation preceded (#277, #483). Rows under the body-length floor (below_floor) and attempts the hook denied (denied) are left out: the first is not drafting, the second is a post that did not happen \u2014 its delegated retry is the row that counts. Measured 2026-09-13: 680 boundaries in 14 days, 108 delegated, 15%.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"opportunity\"} | json | project=~\"$project\" | below_floor!=\"true\" | denied!=\"true\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "opportunities"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"opportunity\"} | json | project=~\"$project\" | below_floor!=\"true\" | denied!=\"true\" | delegated=\"true\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "delegated"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "gauge",
+      "title": "Trigger rate (range)",
+      "description": "delegated / opportunities over the selected range, same population as the Trigger rate series: below-floor rows and denied attempts excluded. This is the number the boundary hook exists to move. Reads n/a when the range holds no eligible boundary, so an empty denominator never shows as NaN.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.3
+              },
+              {
+                "color": "green",
+                "value": 0.6
+              }
+            ]
+          },
+          "mappings": [],
+          "noValue": "n/a"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"opportunity\"} | json | project=~\"$project\" | below_floor!=\"true\" | denied!=\"true\" | delegated=\"true\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"opportunity\"} | json | project=~\"$project\" | below_floor!=\"true\" | denied!=\"true\" [$__range]))",
+          "queryType": "instant"
+        }
+      ]
     }
   ]
 }
