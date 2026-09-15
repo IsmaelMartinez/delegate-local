@@ -648,21 +648,25 @@ if [[ -f "$metrics_file" ]]; then
     # inside the current window: a delegation ages out of the window before
     # the post that spent it does, so "in-window delegations minus in-window
     # spends" read three fresh delegations as already spent and denied a
-    # session that had done exactly what the deny asked (#503).
-    ([ .[]
-       | select((.source // "delegate") == "delegate")
-       | select((.exit_status // 0) == 0)
-       | select(matches_proj)
-       | select((.recipe // "") as $r | $recipes | index($r) != null)
-       | . + {epoch: ((.ts | fromdateiso8601?) // 0)} ] | sort_by(.epoch)) as $earned
-    | ([ .[]
-       | select((.source // "") == "opportunity")
-       | select(.delegated == true)
-       | select(matches_proj)
-       | select((.suggested_recipe // "") as $r | $recipes | index($r) != null)
-       | ((.ts | fromdateiso8601?) // 0) ] | sort) as $spends
-    | (reduce $spends[] as $st ($earned;
-         (to_entries | map(select(.value.epoch <= $st and .value.epoch > $st - $win)) | .[0].key) as $i
+    # session that had done exactly what the deny asked (#503). ts is second
+    # precision, so file order breaks ties: a delegation appended after a
+    # spend in the same second was not there to be spent.
+    ([ to_entries[] | {i: .key, r: .value}
+       | select(.r | (.source // "delegate") == "delegate")
+       | select(.r | (.exit_status // 0) == 0)
+       | select(.r | matches_proj)
+       | select(.r | (.recipe // "") as $x | $recipes | index($x) != null)
+       | .r + {epoch: ((.r.ts | fromdateiso8601?) // 0), idx: .i} ] | sort_by(.epoch, .idx)) as $earned
+    | ([ to_entries[] | {i: .key, r: .value}
+       | select(.r | (.source // "") == "opportunity")
+       | select(.r | .delegated == true)
+       | select(.r | matches_proj)
+       | select(.r | (.suggested_recipe // "") as $x | $recipes | index($x) != null)
+       | {st: ((.r.ts | fromdateiso8601?) // 0), idx: .i} ] | sort_by(.st, .idx)) as $spends
+    | (reduce $spends[] as $s ($earned;
+         (to_entries | map(select(
+            (.value.epoch < $s.st or (.value.epoch == $s.st and .value.idx < $s.idx))
+            and .value.epoch > $s.st - $win)) | .[0].key) as $i
          | if $i == null then . else del(.[$i]) end)) as $unspent
     | ([ $unspent[] | select(.epoch > ($now - $win)) ]) as $d
     # The denial streak: denied:true rows for this session+boundary, newest

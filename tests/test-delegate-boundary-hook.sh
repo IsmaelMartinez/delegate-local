@@ -904,6 +904,23 @@ jq -nc --arg ts "$nowts" --arg p "$proj" \
   '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message"}' >> "$METRICS"
 payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "window replay: an orphan spend is not charged to a later delegation"
+# Same second, file order decides: a delegation appended AFTER an orphan spend
+# in the same second was not there to be spent, so it still credits.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"opportunity", boundary:"git-commit", suggested_recipe:"commit-message", delegated:true, project:$p}' >> "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "window replay: a same-second delegation appended after a spend is not consumed by it"
+# ...and one appended BEFORE it in the same second is.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"opportunity", boundary:"git-commit", suggested_recipe:"commit-message", delegated:true, project:$p}' >> "$METRICS"
+payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "window replay: a same-second delegation appended before the spend is consumed by it"
 
 # 53. The default window covers a 3-hour-old delegation (delegate, await
 # approval, post).
