@@ -1,31 +1,11 @@
 #!/usr/bin/env bash
-# quality-report.sh — re-review the recorded hit/miss verdicts and produce a
-# more honest quality number than the raw hit-rate.
-#
-# Why this exists: a "hit" in the metrics means the agent USED the delegated
-# output, not that the output was clean — the verdict is binary and counts
-# "used after I fixed it" the same as "used verbatim". The raw hit-rate
-# therefore overstates quality. This script re-derives quality from the
-# free-text `reason` the verdict carries, splitting hits into "clean" (used
-# as-is) and "fixed" (used after an edit), and buckets the problem cases by
-# failure mode. It re-reviews PAST decisions from data already on disk — it
-# does not need the original model output (which is never stored). See
-# docs/adr/0016-historical-quality-rereview.md.
-#
-# Two modes:
-#   default     — keyword heuristic. Zero dependencies, instant, repeatable,
-#                 but a large share of hits land "ambiguous": a floor, not a
-#                 trusted number.
-#   --classify  — delegates each reason to a local model for closed-form
-#                 classification (CLEAN / FAITHFULNESS / PADDING / STRUCTURAL /
-#                 STYLE / OPERATIONAL / OTHER). Accurate, still on-device and
-#                 repeatable; slower (one local call per ~25 reasons).
-#
-# Honesty boundaries, stated in the output too:
-#   - The `reason` is self-reported by the same agent that judged, so problem
-#     counts are a LOWER bound and the clean-as-is rate an UPPER bound: a flaw
-#     the agent never noticed never became a reason.
-#   - Verdicts with no reason cannot be re-reviewed; reported as indeterminate.
+# quality-report.sh — re-review the recorded verdicts from the free-text
+# `reason` each carries, splitting hits into "clean" and "fixed" and bucketing
+# problem cases by failure mode (ADR 0016). A raw hit means the output was
+# USED, not that it was clean. Default mode is a keyword heuristic (a floor,
+# not a trusted number); --classify sends each reason to a local model for
+# closed-form classification. The reason is self-reported by the judging
+# agent, so problem counts are a LOWER bound and the clean rate an UPPER bound.
 #
 # Usage:
 #   quality-report.sh [--file PATH] [--since YYYY-MM-DD|ISO] [--days N]
@@ -40,8 +20,7 @@
 set -uo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# The delegate.sh used by --classify; overridable so the test suite can inject a
-# stub model without a live backend.
+# Overridable so the test suite can inject a stub model.
 delegate_sh="${DELEGATE_QUALITY_DELEGATE_SH:-$script_dir/delegate.sh}"
 metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 since=""; days=""; classify=0; by_recipe=0; tier="agent"
@@ -56,10 +35,7 @@ while (($# > 0)); do
     --days=*) days="${1#--days=}"; shift ;;
     --classify) classify=1; shift ;;
     --by-recipe) by_recipe=1; shift ;;
-    # ADR 0015 splits feedback into human verdicts (quality) and
-    # verdict_source:"agent" (usage). Pooling them is the conflation #408
-    # removed from the dashboards; this tool must not reintroduce it, so it
-    # reports one tier at a time and always says which.
+    # One tier at a time, always named, so tiers are never pooled.
     --tier)
       if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
         echo 'quality-report: --tier requires human|agent|all' >&2; exit 2
@@ -98,9 +74,7 @@ case "$tier" in
   human|agent|all) ;;
   *) echo "quality-report: --tier must be human|agent|all (got '$tier')" >&2; exit 2 ;;
 esac
-# A human verdict omits verdict_source entirely (delegate-feedback.sh writes the
-# field only for the agent tier), so "human" is the complement of "agent" rather
-# than a positive match on a literal.
+# A human verdict omits verdict_source, so "human" is the complement of "agent".
 jq -c --argjson cutoff "${cutoff_epoch:-0}" --arg tier "$tier" '
   select((.source//"")=="feedback")
   | select($cutoff == 0 or (((.ts // "") | fromdateiso8601?) >= $cutoff))
@@ -109,8 +83,7 @@ jq -c --argjson cutoff "${cutoff_epoch:-0}" --arg tier "$tier" '
            or ($tier == "human" and (.verdict_source // "") != "agent"))
 ' "$metrics_file" > "$feedback"
 
-# The count in the tier NOT being reported, so a reader always knows the other
-# population exists rather than mistaking this one for the whole picture.
+# The other tier's count, so this one is never mistaken for the whole picture.
 other_tier_n=$(jq -r --argjson cutoff "${cutoff_epoch:-0}" --arg tier "$tier" '
   select((.source//"")=="feedback")
   | select($cutoff == 0 or (((.ts // "") | fromdateiso8601?) >= $cutoff))
@@ -163,9 +136,8 @@ Examples: "used verbatim, 6/6 checks" -> CLEAN; "stripped a hallucinated PR numb
     echo "  classified $(( base < reasoned ? base : reasoned ))/$reasoned ..." >&2
   done
 else
-  # Keyword rules in a single awk pass (no per-row shell forks). Conservative on
-  # purpose; "fix" is excluded (collides with the conventional-commit type
-  # "fix:" quoted in commit-message reasons).
+  # One awk pass, conservative on purpose; "fix" is excluded because it
+  # collides with the conventional-commit type quoted in reasons.
   awk -F'\t' '
     { d = tolower($2)
       if (d ~ /edited|stripped|strip |removed|trimmed|hallucinat|rewrot|rewritten|corrected|dropped|de-?indent|tweaked|adjusted|reworded|by hand|hand-|had to|minor edit|light edit|one edit|mechanical edit|miss-with-edit/) c = "FIXEDKW"

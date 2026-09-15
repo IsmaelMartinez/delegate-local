@@ -1,22 +1,11 @@
 #!/usr/bin/env bash
-# Diagnose (and optionally recover) the local observability stack when the
-# Grafana dashboards go blank. The recurring failure mode is a single-binary
-# Loki ring flap: when the workstation sleeps and wakes, Loki's heartbeat goes
-# stale, the ring marks its only member unhealthy ("could only find 0 healthy
-# instances ... auto-forgetting instance 127.0.0.1:9096"), and the query path
-# is down until the ~10-minute auto-forget elapses — so the dashboards, which
-# read history from Loki, show nothing. It self-heals, but this recurs on every
-# sleep/wake, so this script makes the diagnosis one command and `--fix` skips
-# the wait by restarting Loki and re-running the sync.
-#
-# The load-bearing logic is distinguishing a real flap from GENUINE IDLENESS: a
-# blank "last 1 hour" panel may just mean no recent delegations. We judge that
-# against the metrics FILE — if the file itself has nothing recent, an empty
-# panel is expected and nothing is wrong, so the doctor does not cry wolf.
-#
-# Read-only by default (like audit-metrics.sh): it only restarts/re-syncs under
-# --fix. The Tempo trace path is independent of Loki's ring and is reported but
-# never touched.
+# Diagnose (and with --fix recover) the local observability stack when the
+# Grafana dashboards go blank. The recurring failure is a single-binary Loki
+# ring flap after sleep/wake: the ring marks its only member unhealthy and the
+# query path is down until the auto-forget elapses. The load-bearing logic is
+# telling a flap from GENUINE IDLENESS, judged against the metrics FILE: with
+# nothing recent there, an empty panel is expected. Read-only by default; the
+# Tempo path is reported but never touched.
 #
 # Usage:
 #   observability-doctor.sh [--fix] [--loki-url URL] [--metrics-file PATH]
@@ -101,8 +90,7 @@ fi
 ready_code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "${loki_url%/}/ready" 2>/dev/null || echo "000")
 
 # --- 3. Ring health from recent Loki logs ----------------------------------
-# The sleep/wake signature the maintainer observed. Plain grep -E (no -P) for
-# portability. A match within the recent window means the ring flapped.
+# The sleep/wake signature; plain grep -E (no -P) for portability.
 ring_logsig=0
 if docker compose -f "$compose_file" logs --since 15m loki 2>/dev/null \
      | grep -E -i 'could only find 0|unhealthy instances|auto-forgetting instance' >/dev/null 2>&1; then
@@ -114,8 +102,6 @@ wedged=0
 (( ring_logsig == 1 )) && wedged=1
 
 # --- 4. Data age: newest row in the FILE vs newest Loki actually serves -----
-# Idleness is judged against the file: if the file has nothing recent, a blank
-# panel is expected, not a flap.
 if [[ ! -f "$metrics_file" ]]; then
   echo "observability-doctor: metrics file not found: $metrics_file" >&2
   echo "  Cannot judge data freshness without it." >&2
@@ -123,9 +109,7 @@ if [[ ! -f "$metrics_file" ]]; then
   exit 2
 fi
 
-# The metrics file is append-only and roughly chronological, so the newest ts
-# is in the last handful of rows — read only the tail rather than slurping the
-# whole (potentially large) file into jq.
+# Append-only and roughly chronological, so the tail holds the newest ts.
 file_newest=$(tail -n 200 "$metrics_file" 2>/dev/null | jq -rs '
   [ .[] | (.ts? // empty)
     | select(test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
@@ -140,8 +124,7 @@ else
   if (( file_age <= stale_seconds )); then file_recent=1; else file_recent=0; fi
 fi
 
-# Newest timestamp Loki actually holds (best-effort: a wedged Loki returns
-# nothing here, which corroborates the flap). seconds = ns / 1e9.
+# Best-effort: a wedged Loki returns nothing, which corroborates the flap.
 loki_newest=""
 loki_body=$(curl -s -m 5 -G "${loki_url%/}/loki/api/v1/query_range" \
   --data-urlencode 'query={service="delegate-local"}' \
@@ -155,8 +138,8 @@ if [[ -n "$loki_body" ]]; then
 fi
 if [[ -n "$loki_newest" ]]; then loki_age=$(( now - loki_newest )); else loki_age="n/a"; fi
 
-# Loki is "behind" the file when the file has recent rows but Loki's newest is
-# missing or lags by more than the staleness window (a sync that fell behind).
+# "Behind": the file has recent rows but Loki's newest is missing or lags by
+# more than the staleness window.
 loki_behind=0
 if (( file_recent == 1 )); then
   if [[ -z "$loki_newest" ]]; then
@@ -228,9 +211,8 @@ if [[ "$ready_after" != "200" ]]; then
   summary "fix-ready-timeout"
   exit 1
 fi
-# Loki is ready again either way; the sync is a best-effort backfill. Let its
-# stderr through (only stdout is muted) and warn rather than claim success if it
-# fails, so a sync problem is visible instead of hidden behind "recovered".
+# The sync is best-effort; its stderr is let through and a failure warns
+# rather than claims "recovered".
 ready_code="$ready_after"
 if DELEGATE_LOKI_URL="$loki_url" DELEGATE_METRICS_FILE="$metrics_file" \
      bash "$REPO/scripts/sync-metrics-to-loki.sh" >/dev/null; then

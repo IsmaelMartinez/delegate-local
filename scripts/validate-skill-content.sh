@@ -3,26 +3,17 @@
 # Categories: SEC_DISABLE, SEC_PERMISSIVE, CRED_EXFIL, OBFUSC_B64,
 #             OBFUSC_UNICODE, TOOL_BROAD, CONFLICT_MARKER, URL_EXTERNAL.
 #
-# Scope: CI (.github/workflows/ci.yml) and the post-edit hook
-# (.claude/hooks/post-edit-validate.sh) invoke this validator against SKILL.md
-# only — that file is the production prompt content Claude reads to decide
-# trigger eligibility, so strict URL hygiene matters. Contributor docs under
-# prompts/ (e.g., prompts/README.md "What this library does NOT adopt")
-# deliberately permit external citations (arxiv, microsoft/prompty,
-# danielmiessler/fabric) as evidence of rejection rationale, not as trigger
-# surface. The validator itself is file-agnostic — pointing it at any markdown
-# still flags violations — but the gates only call it on SKILL.md by design.
+# CI and the post-edit hook run this against SKILL.md only, the production
+# prompt content, so strict URL hygiene matters there; contributor docs under
+# prompts/ deliberately cite external sources. The validator is file-agnostic.
 #
 # Usage: validate-skill-content.sh <file>
 # Env:   ALLOW_FILE                 override path to .content-check-allow
 #                                   (default: repo root)
-#        DELEGATE_CONTENT_ALLOW_ORG GitHub org/user whose github.com URLs the
+#        DELEGATE_CONTENT_ALLOW_ORG GitHub org whose github.com URLs the
 #                                   URL_EXTERNAL allowlist accepts (default
-#                                   IsmaelMartinez; forks set their own org).
-#                                   Must be a plain org name — the value is
-#                                   regex-escaped before interpolation, so
-#                                   metacharacters match literally and cannot
-#                                   widen the allowlist.
+#                                   IsmaelMartinez); regex-escaped before
+#                                   interpolation, so it cannot widen the list
 # Exit:  0 clean, 1 unjustified hit, 2 usage error.
 
 set -uo pipefail
@@ -36,14 +27,11 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 allow_file="${ALLOW_FILE:-$repo_root/.content-check-allow}"
 allow_org="${DELEGATE_CONTENT_ALLOW_ORG:-IsmaelMartinez}"
-# The org is interpolated into an ERE, so escape metacharacters first: a value
-# like ".*" must match the literal two characters, never widen the allowlist.
-# GitHub org names are alphanumerics and hyphens, so a plain name is unchanged.
+# Interpolated into an ERE, so metacharacters are escaped first: ".*" must
+# match literally, never widen the allowlist.
 allow_org_re=$(printf '%s' "$allow_org" | sed 's/[][\.|$(){}?+*^\\]/\\&/g')
 
-# Normalize $file to a repo-root-relative path so allow-file keys are stable
-# regardless of whether the caller passed `./SKILL.md`, `SKILL.md`, or an
-# absolute path. Falls back to the original path if it's outside the repo.
+# Repo-root-relative so allow-file keys are stable however the path was spelled.
 file_abs=$(cd "$(dirname "$file")" && pwd)/$(basename "$file")
 file_key="${file_abs#"$repo_root"/}"
 
@@ -51,23 +39,18 @@ file_key="${file_abs#"$repo_root"/}"
 declare -a CATEGORIES=(
   'SEC_DISABLE||(disable|turn[ _-]?off|skip|bypass)[ _-]+(auth|authn|authz|sso|mfa|2fa|tls|ssl|cert|verification|signature|sandbox|seccomp|apparmor|selinux)'
   'SEC_PERMISSIVE||(allow[_-]?all|trust[_-]?all|trust-all-certs|--no-verify|--insecure|--disable[_-]?ssl|verify[ _=]+false|YOLO|0\.0\.0\.0/0|::/0|chmod[ ]+(-R[ ]+)?0?777)'
-  # `nc` is included alongside `ncat` because the `(^|[^a-zA-Z])...[[:space:]]+`
-  # boundary correctly excludes the substring inside words like "once",
-  # "concurrent", "non-reasoning". Without that boundary, `nc` was too noisy.
+  # The `(^|[^a-zA-Z])...[[:space:]]+` boundary is what keeps `nc` from
+  # matching inside "once" or "concurrent".
   'CRED_EXFIL||(^|[^a-zA-Z])(curl|wget|nc|ncat)[[:space:]]+.{0,200}(token|api[_-]?key|secret|password|bearer|aws_secret|gh_token|anthropic_api_key|gitlab_token)'
   'OBFUSC_B64||(base64[ _-]?-d|base64[ ]+--decode|echo[ ]+[A-Za-z0-9+/]{40,}={0,2})'
   'TOOL_BROAD||^[ ]*allowed-tools:[ ]*["'\'']?\*["'\'']?[ ]*$'
 )
-# Note: OBFUSC_HEX (\\x.. sequences) is not scanned because it false-positives
-# heavily on shell examples in markdown. Add later if a real exfil pattern emerges.
+# OBFUSC_HEX (\\x.. sequences) is not scanned: it false-positives on shell examples.
 
-# URL allowlist: localhost, the configured org (DELEGATE_CONTENT_ALLOW_ORG),
-# anthropic, ollama, huggingface, etc.
 URL_ALLOW="^https?://(localhost|127\.0\.0\.1|::1|github\.com/${allow_org_re}|github\.com/anthropics|docs\.anthropic\.com|platform\.claude\.com|claude\.com|claude\.ai|ollama\.com|huggingface\.co|embracethered\.com)"
 
-# Read allow-file into a newline-delimited string, leading + trailing newline so
-# membership checks via `*$'\n'key$'\n'*` are unambiguous. Bash 3-compatible
-# (no associative arrays).
+# Newline-delimited with a leading and trailing newline so `*$'\n'key$'\n'*`
+# membership checks are unambiguous; bash 3 has no associative arrays.
 allow_keys=$'\n'
 if [[ -f "$allow_file" ]]; then
   while IFS= read -r entry || [[ -n "$entry" ]]; do
@@ -103,16 +86,13 @@ for entry in "${CATEGORIES[@]}"; do
   done < <(grep -nEi "$pat" "$file" 2>/dev/null || true)
 done
 
-# OBFUSC_UNICODE: zero-width / bidi / tag chars. Use perl for the unicode regex
-# because macOS BSD grep lacks -P. perl is on every macOS and Ubuntu by default.
+# OBFUSC_UNICODE: zero-width / bidi / tag chars; perl because macOS BSD grep lacks -P.
 while IFS=: read -r line_no content; do
   [[ -z "$line_no" ]] && continue
   report_hit "OBFUSC_UNICODE" "$line_no" "$content"
 done < <(perl -CSD -ne 'print "$.:$_" if /[\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{206F}]/' "$file" 2>/dev/null || true)
 
-# CONFLICT_MARKER: unresolved git merge markers. Structural prevention for
-# the class of regression PR #41 remediated (conflict markers landing on main
-# because CI didn't assert ROADMAP/SKILL parseability).
+# CONFLICT_MARKER: unresolved git merge markers.
 while IFS=: read -r line_no content; do
   [[ -z "$line_no" ]] && continue
   report_hit "CONFLICT_MARKER" "$line_no" "$content"
