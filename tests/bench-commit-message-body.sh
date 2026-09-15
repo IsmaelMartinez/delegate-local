@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Commit-message body-drop regression benchmark. Drives delegate.sh --recipe auto
-# with a REAL diff on stdin (the production path) and scores with the exact
-# body_required logic. Reps add no signal under MLX greedy determinism (ADR 0018);
-# diversity comes from fixtures. Usage:
+# Commit-message body-drop benchmark: drives `delegate.sh --recipe auto` with
+# a real diff and scores with the body_required logic. Usage:
 #   [BENCH_BACKENDS="mlx ollama"] [BENCH_GATE=1] bash tests/bench-commit-message-body.sh
 set -uo pipefail
 SKILL_DIR="${SKILL_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -17,14 +15,10 @@ RC="$(cat "$RC_FILE")"
 [[ -n "$RC" ]] || { echo "bench: $RC_FILE is empty — recent-commit anchors are required" >&2; exit 2; }
 fail=0
 
-# Exact mirror of delegate.sh body_required (delegate.sh:1373): the same
-# `tr -d '\r' | awk 'NF { n++ } END { print n + 0 }'` non-empty-line count and
-# the same `< 2` -> fail threshold.
+# Mirrors delegate.sh's body_required: non-empty-line count, fail below 2.
 score_body() { local n; n=$(printf '%s\n' "$1" | tr -d '\r' | awk 'NF { n++ } END { print n + 0 }'); (( n >= 2 )); }
 
-# Map a bench arm to the provider it pins. An arm is one entry in
-# DELEGATE_BASE_URL now, not a DELEGATE_BACKEND mode: pinning the list to a
-# single provider is what keeps the arms comparable.
+# An arm pins DELEGATE_BASE_URL to one provider so the arms stay comparable.
 backend_base() {
   case "$1" in
     mlx)    printf '%s/v1' "${MLX_HOST:-http://localhost:8080}" ;;
