@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
-# Integrity check for the fix-with-test fixture suite: every fixture's test must
-# FAIL on the buggy source and PASS after reference.patch. No model needed. This
-# is the CI guarantee that each fixture is a real bug with a known good fix, so a
-# score on this suite means something was solved rather than a no-op passing.
+# Every fix-with-test fixture must fail on the buggy source and pass after
+# reference.patch, so a score on the suite means something was solved.
 set -u
 
-# pytest is not optional here: both suites below assert on real test runs, so
-# without it every PASS-path assertion fails with an unhelpful import error
-# rather than one clear message. Skip locally, fail in CI, so a runner missing
-# pytest can never look like a green run.
+# pytest is required: skip locally, fail in CI, so a runner missing it can
+# never look like a green run.
 py="${APPLY_AND_TEST_PYTHON:-python3}"
 if ! "$py" -m pytest --version >/dev/null 2>&1; then
   msg="pytest not installed for $py; this suite runs real tests and verifies nothing without it"
