@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/observability-doctor.sh. Mocks docker + curl on a
-# restricted PATH (the run-tests.sh / test-sync-metrics-to-loki.sh idiom) so no
-# container or network is touched, and pins the two load-bearing behaviours:
-# the staleness-vs-idleness discriminator and the exit-code contract
+# Unit tests for scripts/observability-doctor.sh, with docker and curl
+# mocked: the staleness-vs-idleness discriminator and the exit-code contract
 # (0 healthy/idle, 1 recoverable flap, 2 stack-down/usage/dep).
 
 set -u
