@@ -1,100 +1,45 @@
 #!/usr/bin/env bash
-# PreToolUse hook (Bash matcher) — the trigger-rate boundary for #277.
-#
-# Skill auto-invocation is turn-INITIAL, but the highest-volume delegation
-# triggers (commit message, PR body, release note) are turn-MEDIAL: the last
-# sub-step of "implement X, commit, open a PR". By then the agent is deep in
-# execution and never re-runs skill selection, so it writes the message inline
-# and the calibrated recipes go unused. Instruction text in SKILL.md cannot fix
-# a control-flow gating gap (#226 tried; the reminders kept coming). A hook can:
-# it fires at the missed site, in the harness, regardless of whether the agent
-# re-considered the skill.
-#
-# On every Bash call:
-#   1. If the command is NOT a delegatable boundary (commit, PR/MR-create,
-#      issue-create with an inline body, release-create, PR review-comment reply,
-#      or PR/issue/MR comment reply), exit 0 immediately — the cheap common path
-#      (no jq slurp, no metrics read). Classification runs over the *leading
-#      tokens of each shell segment*, never the raw string, so a command that
-#      merely writes ABOUT a boundary command (a heredoc body, a quoted message)
-#      does not fire (#342 defect 2).
-#   2. Otherwise derive the project (same rule as delegate.sh's metrics rows) and
-#      check metrics.jsonl for a delegate.sh row for THIS project within the last
-#      N minutes. Its presence means the artifact was drafted locally; its
-#      absence means it is about to be authored inline.
-#   3. Log one source:"opportunity" row per boundary with delegated:true|false so
-#      metrics-summary.sh can report trigger rate = delegated / opportunities per
-#      project — the number #277 is about, previously unmeasured.
-#   4. When delegated:false, surface a reminder naming the exact recipe. The
-#      four boundaries whose recipe is proven — git-commit, issue-create,
-#      comment-reply, pr-review-comment — are DENIED until a delegation exists
-#      (#483); the rest get the same text as non-blocking additionalContext.
-#      DELEGATE_BOUNDARY_MODE=warn|off overrides that globally, =enforce
-#      denies every boundary, and DELEGATE_BOUNDARY_ENFORCE names the set.
-#
-# Why deny rather than remind (#483). Measured 2026-09-13 over 14 days: 680
-# boundaries, 108 delegated, 15%. The warn-mode nudge is delivered while the
-# `git commit` / `gh pr comment` it is about executes, so the text is already
-# authored and posted by the time the agent reads it; the only boundary it can
-# influence is the next one, and after a nudge the next boundary within 30
-# minutes on the same project was delegated 9% of the time, against 34% after
-# a credit. There is no human in the loop to notice a reminder, so only a
-# mechanism that makes the agent redo the text with a draft moves the rate.
-#
-# Every boundary counts the same way. A body read from an existing file used to
-# be excluded as state:"pre-drafted" (#349), on the theory that the drafting
-# moment had passed; that exclusion was removed in #465 because the hook cannot
-# distinguish it from a body the agent authored one call earlier, and because
-# the identical act was counted when the write and the post shared a Bash call.
-# One exception since #483: a body under the boundary's floor (20 characters
-# for git-commit, 120 for the rest) is neither nudged nor denied, and its row
-# is marked below_floor:true so the summary can leave it out of the rate.
-# Inline review comments sat at 3% because most are one line — an applied-in
-# hash, a dependabot command, one word — and no recipe should draft those. A
-# body the hook cannot read (unresolved shell in the value, a heredoc on
-# stdin, a file not yet written) is not under any floor: it is enforced.
-#
-# Fails OPEN: any error, missing jq, or unparseable input exits 0 so a commit is
-# never blocked by a hook bug, and a deny is issued only after pick-model.sh
-# confirms a provider is serving the recipe's tier — a session with MLX and
-# Ollama down cannot delegate and must still be able to commit — and only
-# while the credit path can work at all: two consecutive denials for one
-# session and boundary, metrics the hook cannot write, or a lookup lock it
-# cannot take all fall open to warn, with the reason on the row as
-# enforce_skipped (PR #484 review). Install is opt-in — see
+# PreToolUse hook (Bash matcher): the trigger-rate boundary sensor (#277).
+# The highest-volume delegation triggers (commit message, PR body, reply) are
+# turn-medial, where SKILL.md text cannot reach them; a hook fires at the
+# missed site. On every Bash call it classifies the leading tokens of each
+# shell segment (never the raw string, so text ABOUT a boundary cannot fire),
+# looks for a matching delegate.sh row in the window, logs one
+# source:"opportunity" row, and when none is found nudges with the exact
+# recipe, denying the proven boundaries until a delegation exists (#483).
+# Fails OPEN: any error, missing jq, no reachable provider, two consecutive
+# denials, unwritable metrics or an untakeable lock all fall back to warn,
+# with the reason recorded as enforce_skipped. Install is opt-in — see
 # docs/boundary-hook.md.
 #
 # Env:
-#   DELEGATE_BOUNDARY_MODE        unset (default: enforce the set below, warn
-#                                 elsewhere) | warn | enforce | off
-#                                 (case-insensitive; any other value is warn)
+#   DELEGATE_BOUNDARY_MODE        unset (enforce the set below, warn elsewhere)
+#                                 | warn | enforce | off (case-insensitive;
+#                                 any other value is warn)
 #   DELEGATE_BOUNDARY_ENFORCE     comma-separated boundaries denied by default
 #                                 (default git-commit,issue-create,comment-reply,
 #                                 pr-review-comment; empty means none)
 #   DELEGATE_BOUNDARY_MIN_CHARS   body length under which a boundary is recorded
-#                                 but neither nudged nor denied; overrides the
-#                                 per-boundary defaults (20 git-commit, 120 rest)
+#                                 but neither nudged nor denied (default 20 for
+#                                 git-commit, 120 for the rest)
 #   DELEGATE_BOUNDARY_WINDOW_MIN  look-back window for a prior delegation (default 480)
 #   DELEGATE_BOUNDARY_WRAPPER_DIRS colon-separated directories whose scripts are
 #                                 read when run via bash/sh/zsh (default
 #                                 $CLAUDE_JOB_DIR, $TMPDIR, /tmp, /private/tmp,
 #                                 /var/folders)
-#   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
-#                               (default ~/.local/share/delegate-local)
+#   DELEGATE_LOCAL_DATA_DIR       where per-user data lives
+#                                 (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE         metrics path (shared with delegate.sh)
 #   DELEGATE_LOCAL_NO_METRICS=1   skip writing the opportunity row
 
 set -uo pipefail
 
-# Resolve our own directory BEFORE the cd to the payload's cwd below. Doing it
-# later resolved a relative $0 against the wrong tree — invoked as
-# `bash scripts/delegate-boundary-hook.sh` from a project checkout it produced
-# <that-project>/scripts/../prompts, so the recipe lookup silently found nothing.
+# Resolved BEFORE the cd to the payload cwd below: a relative $0 resolved
+# afterwards names the wrong tree and the recipe lookup silently finds nothing.
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || script_dir=""
 
 # --- read the harness payload ---------------------------------------------
-# Exit cleanly if stdin is a TTY (the hook run by hand in a terminal) so `cat`
-# can't block waiting for input that will never arrive.
+# A TTY on stdin means the hook was run by hand; exit before `cat` blocks.
 [[ -t 0 ]] && exit 0
 input=$(cat 2>/dev/null) || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
@@ -102,12 +47,8 @@ command -v jq >/dev/null 2>&1 || exit 0
 cmd=$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null) || exit 0
 [[ -z "$cmd" ]] && exit 0
 hook_cwd=$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null) || hook_cwd=""
-# Work from the payload's cwd from here on. Relative paths in the command — a
-# `--body-file reply.md` — mean relative to where the Bash tool will run,
-# not to wherever the hook process happened to start; reading the body
-# before this chdir looked `reply.md` up in the wrong directory, found
-# nothing, and enforced a post the hook could have measured (fifth review
-# round on #484). A builtin, so the common path pays nothing.
+# Relative paths in the command (`--body-file reply.md`) are relative to where
+# the Bash tool will run, so chdir there before reading any body.
 [[ -n "$hook_cwd" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
 # A path opening with `$NAME` or `${NAME}` is resolved by LOOKUP in
 # the hook's own environment (the Bash tool's, where drafts live under
@@ -127,16 +68,11 @@ resolve_env_prefix() { # path -> path with a leading env var resolved, else unch
   fi
   printf '%s' "$p"
 }
-# A leading `cd <path> &&` retargets those relative paths (and, below, the
-# project) to that directory. Parsed off the RAW command: the scan surface
-# blanks quoted spans, so a quoted path with a space survives there only as
-# `cd   `. The match is ^-anchored, so a heredoc body mentioning `cd /x &&
-# git commit` cannot reach it, and the captured path is only ever a quoted
-# argument to `cd` inside a subshell — never expanded, never eval'd. `cd -`
-# resolves to $OLDPWD, which is not knowable from the payload, and a path
-# carrying $, backtick or ~ would need an expansion the hook must not
-# perform; both are rejected outright rather than sanitised. Kept only when
-# it names a directory.
+# A leading `cd <path> &&` retargets relative paths and the project. Parsed off
+# the RAW command (the scan surface blanks quoted spans) with a ^-anchored match
+# so a heredoc body cannot reach it; the path is never expanded or eval'd. `cd -`
+# and a path carrying $, backtick or ~ would need an expansion the hook must not
+# perform, so both are rejected outright rather than sanitised.
 cd_path=""
 _cd_sq="^[[:space:]]*cd[[:space:]]+'([^']+)'[[:space:]]*&&"
 _cd_dq="^[[:space:]]*cd[[:space:]]+\"([^\"]+)\"[[:space:]]*&&"
@@ -148,23 +84,18 @@ if [[ "$cmd" =~ $_cd_sq ]] || [[ "$cmd" =~ $_cd_dq ]] || [[ "$cmd" =~ $_cd_bare 
   esac
   [[ -n "$cd_path" && -d "$cd_path" ]] || cd_path=""
 fi
-# The session id (the transcript UUID) is the same value delegate.sh sees as
-# CLAUDE_CODE_SESSION_ID and writes on its row as `session` (#479). It scopes
-# the projectless lookup below and is recorded on the opportunity row.
+# The transcript UUID delegate.sh writes on its row as `session` (#479); it
+# scopes the projectless lookup below.
 session_id=$(jq -r '.session_id // empty' <<<"$input" 2>/dev/null) || session_id=""
 
 # --- cheap pre-filter (the common path exits here) ------------------------
-# One linear-time grep over the raw string. Everything below is gated on it, so
-# the overwhelming majority of Bash calls cost a single grep and nothing else.
-# It over-matches on purpose (a heredoc body mentioning `gh pr create` passes);
-# the segment-aware classifier below is what decides.
+# One linear-time grep over the raw string; it over-matches on purpose and the
+# segment-aware classifier below decides.
 # A boundary command inside a wrapper script is invisible to the token
 # classifier, and a wrapper is what the worktree-isolation guard forces on a
-# substitution-bearing call (#469). When the command runs `bash`/`sh`/`zsh`
-# on a readable script under a scratch directory, the script's text stands in
-# for the command and is classified like any other; scripts elsewhere (a
-# repo's own test suite commits in a temp repo) are left alone. Read, never
-# run. `wrapper` on the row names the script so the case stays countable.
+# substitution-bearing call (#469): a script run via bash/sh/zsh from a scratch
+# directory is read (never run) and its text classified; `wrapper` on the row
+# names it.
 wrapper=""
 _wrapper_re='^[[:space:]]*(cd[[:space:]]+[^&]+&&[[:space:]]*)?((/usr/bin/env[[:space:]]+)?(bash|sh|zsh)|/bin/(bash|sh|zsh))[[:space:]]+((-[a-bd-zA-Z]+[[:space:]]+)*)("([^"]+)"|'"'"'([^'"'"']+)'"'"'|([^[:space:];&|"'"'"']+))'
 if [[ "$cmd" =~ $_wrapper_re ]]; then
@@ -192,60 +123,29 @@ fi
 grep -Eq 'git[[:space:]]+commit|gh[[:space:]]+(pr|issue|release|api)([[:space:]]|$)|glab[[:space:]]+(mr|issue)([[:space:]]|$)' <<<"$cmd" || exit 0
 
 # --- build the classification surface -------------------------------------
-# Only the leading tokens of a shell segment can BE a command. Matching the raw
-# string made merely writing ABOUT a boundary command enough to fire: a
-# `cat > notes.md <<'EOF' ... gh pr create ... EOF` write classified as
-# pr-create, because the heredoc body was part of the string the classifier saw
-# (#342 defect 2). Quoting the delimiter cannot help — the match happens before
-# the shell ever runs.
-#
-# One awk pass turns the command into one segment per line:
-#   * everything from the first `<<` (heredoc / here-string) is dropped — that
-#     is data being written, not a command being run. Real boundary uses of a
-#     heredoc (`gh pr create --body-file - <<'EOF'`) keep their flags, which all
-#     precede the redirect, so they still classify.
-#   * quoted spans are blanked, so prose inside -m/--body cannot classify.
-#   * `; & | ( ) { }` and newlines become line breaks, so `cd x && git commit`
-#     and `url=$(gh pr create ...)` both expose their command at a line start.
-# Each grep below therefore sees one segment. The patterns deliberately do NOT
-# anchor at segment start: once data is stripped, a leading wrapper or prefix
-# (`sudo gh pr create`, `timeout 30 gh pr create`, `GIT_AUTHOR_NAME=x git
-# commit`, `for f in ...; do git commit`) is still a real boundary, and
-# anchoring dropped all of them without buying any false-positive protection.
-#
-# The same pass also records where each segment starts and ends in the RAW
-# command, and emits the raw segments after the blanked surface: a 0x1e
-# (record separator) between the two parts, 0x02 between raw segments, and a
-# terminal marker because bash 3.2 `read -a` drops a trailing empty field.
-# Not 0x01 for the split: that is CTLESC, the byte bash uses internally to
-# mark quoting, and `${var#*$'\1'}` silently matched nothing inside the
-# process substitution below. The body measurement and the ADR 0029
-# capture read the raw text of the MATCHED segment only: reading the whole
-# command let `git commit -m "fix: x" && gh pr create --body "<300 chars>"`
-# measure the PR body against the commit boundary and deny a 6-character
-# commit, and the reverse stored a later `--body-file` as the commit's final
-# (PR #484 review, item C).
+# Only the leading tokens of a shell segment can BE a command: matching the raw
+# string let a heredoc mentioning `gh pr create` classify (#342). One awk pass
+# skips heredoc bodies, blanks quoted spans and breaks segments on `; & | ( ) { }`
+# and newlines. The greps below do NOT anchor at segment start, so a wrapper or
+# prefix (`sudo`, `VAR=x`) still classifies. The raw segments follow a 0x1e,
+# split on 0x02 (0x01 is CTLESC, which bash eats in process substitution) with
+# a terminal marker because bash 3.2 `read -a` drops a trailing empty field.
 scan_all=$(awk 'BEGIN{RS="\1"} {
   n = length($0); q = ""; out = ""; nseg = 0; segstart = 1;
-  # The loop is O(n) per character, and this runs on every Bash call that
-  # clears the pre-filter. A 200KB command (a big heredoc that happens to
-  # mention a boundary command) measured ~800ms, so cap the surface: no real
+  # O(n) per character on every Bash call that clears the pre-filter; no real
   # command line is decided by anything past 32KB.
   if (n > 32768) n = 32768;
   for (i = 1; i <= n; i++) {
     c = substr($0, i, 1);
-    # A backslash escapes the next character everywhere except inside single
-    # quotes, where the shell treats it literally. Without this an odd number
-    # of \" inside a quoted string flips quote parity, and the tail of the
-    # prose gets scanned as live shell — the #342 false positive again.
+    # A backslash escapes the next character except inside single quotes,
+    # where the shell takes it literally; otherwise \" flips quote parity.
     if (q != "\047" && c == "\\") { i++; continue }
     if (q != "") { if (c == q) { q = ""; } continue }
     if (c == "\047" || c == "\"") { q = c; out = out " "; continue }
     if (c == "<" && substr($0, i + 1, 1) == "<") {
-      # Heredoc body is data, not commands — but skip only the body and resume
-      # after the terminator. Dropping the rest of the command instead loses
-      # the write-then-post pattern (`cat > b.md <<EOF ... EOF` followed by
-      # `gh issue create --body-file b.md`), which is a genuine opportunity.
+      # Skip only the heredoc body and resume after the terminator: a
+      # write-then-post (`cat > b.md <<EOF ... EOF` then `gh issue create
+      # --body-file b.md`) is a genuine opportunity.
       j = i + 2;
       if (substr($0, j, 1) == "-") j++;
       if (substr($0, j, 1) == "<") { i = j; continue }   # <<< here-string: no body
@@ -284,52 +184,24 @@ rawsegs=()
 IFS=$'\x02' read -r -d '' -a rawsegs < <(printf '%s' "${scan_all#*$'\x1e'}") || true
 
 # --- is this a delegatable boundary? --------------------------------------
-# Each segment is classified independently and the first match wins, so a flag
-# never binds to a command in a different segment.
+# Segments are classified independently and the first match wins, so a flag
+# never binds to a command in another segment.
 boundary="" recipe=""
-# Any command word added below must also appear in the pre-filter grep above —
-# everything here is gated on it, so a new branch whose command word is missing
-# there is dead code that silently never fires, with tests still green because
-# they only exercise branches that exist.
-# What text a boundary command is about to publish, read ONCE per boundary
-# and shared by everything downstream: the 600-character comment-reply split,
-# the length floor, and the ADR 0029 capture. It used to run twice with
-# different units — bytes from `wc -c` for the split, characters capped at
-# 64 KB for the floor — so the two could disagree about one body (PR #484
-# review, item J). Now one scan, one text, one length.
-#
-# Read from the raw text of the MATCHED segment, never from $scan (which
-# blanks every quoted run, so the segment handed to classify_segment carries
-# no body at all) and never from the whole command (item C above). Nothing
-# here is executed; the only things taken from the raw text are a length and
-# the text itself.
-#
-# What counts as a body. A `--body-file` (and `-F <path>`, `body=@path`)
-# wins over an inline body because it names where the text really is, and
-# the file is read when it is a readable regular file. Inline bodies of ONE
-# command are summed, joined with a blank line, because that is what git
-# does with repeated `-m` and a two-paragraph commit that clears the floor
-# combined was being marked below_floor on its longest paragraph alone
-# (item D). A body is MEASURABLE only when the hook can know its text: a
-# double-quoted or bare value holding an unresolved `$`, backtick or `$( … )`
-# is shell the tool has not run yet — `--body "$(cat draft.md)"` measured 15
-# characters and was silently allowed as below the floor, `-m "$MSG"`
-# measured 4, and a credited `--body "$(cat reply.txt)"` was marked
-# below_floor and dropped from the numerator (item A). The one shape that is
-# resolved here is the one every Claude Code commit uses, `-m "$(cat <<'EOF'
-# … EOF\n)"` as the whole value: its heredoc body is the message, and it is
-# literal when the delimiter is quoted (or when the body carries no `$` or
-# backtick). Single quotes are always literal. An unmeasurable body reports
-# no text and no length, and the caller treats that exactly like no body:
-# no body_chars, no below_floor, enforced as the mode says.
+# Any command word added to classify_segment must also appear in the pre-filter
+# grep above, or the branch is dead code that never fires.
+# The text a boundary is about to publish, read ONCE from the raw text of the
+# MATCHED segment (never $scan, which blanks quoted runs, and never the whole
+# command) and shared by the length split, the floor and the ADR 0029 capture.
+# Nothing here is executed. A body file wins over an inline body; repeated
+# inline bodies of one command are joined with a blank line as git does with
+# `-m`. A body holding an unresolved `$`, backtick or `$( … )` is unmeasurable
+# and treated like no body, except `-m "$(cat <<'EOF' … EOF\n)"` as the whole
+# value, whose heredoc body is the message.
 _posted_body_scan() {
   local raw="$1"
-  # ONE left-to-right pass, no backtracking: find each flag that starts at a
-  # word boundary and read the argument after it. A quoted argument is taken
-  # whole, spaces included, so `--body-file "notes with spaces.md"` resolves to
-  # a path rather than to its first word; a bare one stops at whitespace or at
-  # shell punctuation, so `--body-file notes.md;` does not become `notes.md;`.
-  # Output is `FILE\t<path>` or `INLINE\t<literal 0|1>\n<joined text>`.
+  # One left-to-right pass: each flag at a word boundary, then its argument (a
+  # quoted one taken whole, a bare one stopping at whitespace or shell
+  # punctuation). Output is FILE\t<path>, NONE, or INLINE\t<literal 0|1>\n<text>.
   # (No apostrophes in the comments below: the program sits inside a
   # single-quoted bash string.)
   awk 'BEGIN { RS="\1" } {
@@ -337,11 +209,8 @@ _posted_body_scan() {
     body = ""; nbody = 0; lit = 1; file = ""; i = 1; prev = " ";
     while (i <= n) {
       c = substr($0, i, 1);
-      # A quoted span that is not a flag argument is DATA, and is skipped
-      # whole. Without this, prose that merely mentions a flag counts —
-      # `echo "x --body-file draft.md"; gh pr comment --body "short"` measured
-      # the mention and promoted a two-sentence reply to the long recipe,
-      # which is the direction that costs something.
+      # A quoted span that is not a flag argument is data: prose that merely
+      # mentions a flag must not count.
       if (c == "\"" || c == "\047") {
         j = i + 1;
         while (j <= n && substr($0, j, 1) != c) {
@@ -351,17 +220,10 @@ _posted_body_scan() {
         prev = "x"; i = j + 1; continue;
       }
       if (prev ~ /[[:space:]]/) {
-        # `-f`/`-F` and their long forms are gh api FIELD flags: the argument
-        # is `key=value`, and only the `body` key is a body. Reading `-F` as a
-        # bare path is how `-F in_reply_to=99` became a filename, which made
-        # the whole `gh api ... -f body=... -F in_reply_to=...` reply — the
-        # shape /address-pr-comments prescribes — measure 0 characters and
-        # carry no text (#461). `-F` keeps its file meaning when the argument
-        # has no `=`, because it is also the short form of `--body-file` in
-        # `gh pr comment` / `gh issue create`. `-m` is `git commit` and
-        # `glab … note` alike (no gh command takes it), and `-am` is the one
-        # combined form seen in real commits; neither was read until #483, so
-        # a commit measured nothing and stored no final.
+        # -f/-F and their long forms are gh api FIELD flags whose argument is
+        # key=value, and only the body key is a body (#461). -F keeps its file
+        # meaning without an =, being also the short --body-file. -m/-am are
+        # git commit and glab note; no gh command takes them.
         f = 0; isfile = 0; isfield = 0;
         if (substr($0, i, 12) == "--body-file ")      { f = 12; isfile = 1 }
         else if (substr($0, i, 12) == "--raw-field ") { f = 12; isfield = 1 }
@@ -376,9 +238,8 @@ _posted_body_scan() {
         if (f > 0) {
           j = i + f;
           while (j <= n && substr($0, j, 1) == " ") j++;
-          # The key is read before the value so the value reader below still
-          # sees a quote where one opens: `-f body="two words"` is one body,
-          # not the bare token `body="two`.
+          # The key is read before the value so a quote opening the value is
+          # still seen: -f body="two words" is one body.
           key = "";
           if (isfield) {
             k = j;
@@ -394,16 +255,11 @@ _posted_body_scan() {
           if (d == "\"" || d == "\047") {
             j++;
             while (j <= n && substr($0, j, 1) != d) {
-              # Inside double quotes a $( … ) is opaque to the shell: quotes
-              # nest and the closing quote cannot be in there. The one shape
-              # resolved is `-m "$(cat <<EOF … EOF\n)"` as the WHOLE value:
-              # the heredoc body is copied out as the message (it may hold
-              # any quote or paren), and it is literal when the delimiter was
-              # quoted or nothing in it expands. Any other substitution, or
-              # that shape with text around it, is consumed to its closing
-              # paren so the quote parity stays right, and makes the body
-              # unmeasurable. Checked before the backslash rule below so an
-              # escaped \$( stays literal.
+              # Inside double quotes a $( … ) is opaque to the shell. The one
+              # shape resolved is -m "$(cat <<EOF … EOF\n)" as the WHOLE value;
+              # any other substitution is consumed to its closing paren to keep
+              # quote parity and makes the body unmeasurable. Checked before the
+              # backslash rule so an escaped \$( stays literal.
               if (d == "\"" && substr($0, j, 2) == "$(") {
                 shape = 0;
                 if (v == "") {
@@ -446,8 +302,7 @@ _posted_body_scan() {
                 }
                 continue;
               }
-              # A backslash escapes the next character inside double quotes
-              # only; inside single quotes the shell takes it literally.
+              # A backslash escapes only inside double quotes.
               if (d == "\"" && substr($0, j, 1) == "\\") { j++; v = v substr($0, j, 1); j++; continue }
               ch = substr($0, j, 1);
               if (d == "\"" && (ch == "$" || ch == "`")) vlit = 0;
@@ -461,10 +316,8 @@ _posted_body_scan() {
               v = v ch; j++;
             }
           }
-          # What this argument IS, decided once: a body file, an inline body,
-          # or neither. A field flag carrying any key but `body` is neither —
-          # `-f event=COMMENT` and `-F in_reply_to=99` are not text anyone
-          # posted, and reading them as one is the whole of #461.
+          # A field flag with any key but body is neither a file nor a body:
+          # -f event=COMMENT and -F in_reply_to=99 are not posted text (#461).
           asfile = 0; asbody = 0;
           # The `@` may also sit inside the quotes (`body="@file"`), or the
           # whole pair may (`'body=@file'`); the shell hands gh the same bytes.
@@ -486,42 +339,31 @@ _posted_body_scan() {
       }
       prev = c; i++;
     }
-    # NONE when no body flag was present at all; an INLINE with empty text
-    # is a body flag whose value was empty — a known 0-character post, which
-    # the caller must not confuse with no body (fourth review round on #484).
+    # NONE means no body flag at all; INLINE with empty text is a known
+    # 0-character post, which the caller must not confuse with no body.
     if (file != "") { printf "FILE\t%s\n", file }
     else if (nbody == 0) { printf "NONE\n" }
     else { printf "INLINE\t%d\n", lit; printf "%s", body }
   }' <<<"$raw"
 }
 
-# Reads the body once into three globals: `body_text` (what would be posted,
-# capped at 64 KB — this runs inside a PreToolUse hook on every Bash call, and
-# a body larger than that is not a reply anyone hand-edited from a draft),
-# `body_chars` (its length, or "" when there is no measurable body) and
-# `body_measurable` (true|false). Only a regular file is read: `head -c` on
-# /dev/zero would hang the hook, and a directory or a FIFO is not a body file.
-# A path with an unresolved `$` never names a readable file, so it falls out
-# as unmeasurable by the same test.
-#
-# Measurable means the scan SUCCEEDED, not that the text is non-empty:
-# `--body ""` and a readable empty `--body-file` are known 0-character posts
-# and record body_chars:0 (under any floor), where a command with no body
-# flag, an unreadable file or unresolved shell records nothing and is
-# enforced. Conflating the two enforced a post the hook had fully read.
+# Sets body_text (capped at 64 KB: this runs on every Bash call), body_chars
+# ("" when unmeasurable) and body_measurable. Only a regular file is read:
+# `head -c` on /dev/zero would hang the hook. Measurable means the scan
+# SUCCEEDED, not that the text is non-empty: `--body ""` records body_chars:0
+# (under any floor), where no body flag, an unreadable file or unresolved
+# shell records nothing and is enforced.
 body_text="" body_chars="" body_measurable=false body_read=false
 read_posted_body() { # raw-segment
   local out first kind flag path
   body_text="" body_chars="" body_measurable=false body_read=true
-  # The trailing X survives command substitution newline stripping, so a body
-  # that legitimately ends in a blank line is not silently reshaped.
+  # The trailing X survives command-substitution newline stripping.
   out=$(_posted_body_scan "$1"; printf X); out=${out%X}
   first=${out%%$'\n'*}
   IFS=$'\t' read -r kind flag <<<"$first"
   if [[ "$kind" == "FILE" ]]; then
     path=$(resolve_env_prefix "$flag")
-    # The hook already sits in the payload cwd; a leading `cd <path> &&`
-    # moves relative paths again (fifth review round on #484).
+    # A leading `cd <path> &&` moves relative paths again.
     [[ -n "$path" && "$path" != /* && -n "$cd_path" ]] && path="$cd_path/$path"
     [[ -n "$path" && -f "$path" && -r "$path" ]] || return 0
     body_text=$(head -c 65536 < "$path" 2>/dev/null; printf X); body_text=${body_text%X}
@@ -536,21 +378,13 @@ read_posted_body() { # raw-segment
   return 0
 }
 
-# 600 was picked on 2026-08-27 from the two recipes' own documented output, and
-# said so. Measured the same day against the population it actually routes: 27
-# issue comments authored by the maintainer on this repo run min 8, p25 573,
-# median 950, p75 1417, max 2522 characters. The split sends 19 to
-# `maintainer-review-reply` and keeps 8 for `maintainer-reply`, and the tail it
-# keeps (two comments under 200 characters) is the status-line shape that recipe
-# is capped for. Re-measure before moving it, and do not reuse the number
-# elsewhere: the `pr-review-comment` population is a different distribution
-# entirely (median 312 over n=23), where 600 would route nothing.
+# Calibrated on this repo's issue comments; re-measure before moving it, and do
+# not reuse the number for pr-review-comment, a different distribution.
 long_body_chars="${DELEGATE_BOUNDARY_LONG_BODY_CHARS:-600}"
 
 classify_segment() { # blanked-segment raw-segment
   local seg="$1" rawseg="$2"
-  # git commit that authors a message inline (-m/-F), but not --amend (which
-  # reuses an existing message — no fresh drafting moment).
+  # Inline message (-m/-F) only; --amend reuses a message, no drafting moment.
   if grep -Eq '(^|[^[:alnum:]_-])git[[:space:]]+commit([[:space:]]|$)' <<<"$seg" \
      && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[mF]|--message|--file)' <<<"$seg" \
      && ! grep -Eq -- '--amend' <<<"$seg"; then
@@ -560,9 +394,7 @@ classify_segment() { # blanked-segment raw-segment
      || grep -Eq '(^|[^[:alnum:]_-])glab[[:space:]]+mr[[:space:]]+create([[:space:]]|$)' <<<"$seg"; then
     boundary="pr-create"; recipe="pr-description"; return 0
   fi
-  # New issue authored with an inline body (--body / -b / --body-file / -F), but
-  # not the interactive editor or the --web form — those have no inline drafting
-  # moment, same reasoning as commit --amend.
+  # Inline body only; the editor and --web have no drafting moment.
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+issue[[:space:]]+create([[:space:]]|$)' <<<"$seg" \
      && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[bF]|--body)' <<<"$seg" \
      && ! grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*w|--web)([[:space:]]|$)' <<<"$seg"; then
@@ -571,66 +403,38 @@ classify_segment() { # blanked-segment raw-segment
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+release[[:space:]]+create([[:space:]]|$)' <<<"$seg"; then
     boundary="release-create"; recipe="release-note"; return 0
   fi
-  # A maintainer's PR REVIEW BODY, either `gh pr review <n> --body ...` or the
-  # equivalent reviews-endpoint POST. This is the evidence-led shape — a verdict
-  # plus the anchors it rests on — which is `maintainer-review-reply`, not the
-  # closed two-sentence `maintainer-reply` below.
-  #
-  # Until 2026-08-26 this was not a boundary at all. `gh pr review` clears the
-  # pre-filter (it is `gh pr ...`) and then matched no branch, so the single most
-  # common way a maintainer posts a judgement produced no row and no nudge. Over
-  # the same period `maintainer-reply` absorbed the workload at 21% usable over
-  # n=33 while `maintainer-review-reply` sat at n=0 calls, with prose pointers in
-  # SKILL.md and in both scope paragraphs of `maintainer-reply.md`. Prose routing
-  # had been tried twice; this is the mechanical version.
-  #
-  # An inline body is required for the same reason issue-create requires one:
-  # `--web` and the interactive editor have no drafting moment to intercept.
+  # A PR REVIEW BODY is the evidence-led shape, which is maintainer-review-reply
+  # rather than the two-sentence maintainer-reply below. Inline body required,
+  # for the same reason as issue-create.
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+review([[:space:]]|$)' <<<"$seg" \
      && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[bF]|--body)' <<<"$seg" \
      && ! grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*w|--web)([[:space:]]|$)' <<<"$seg"; then
     boundary="pr-review-body"; recipe="maintainer-review-reply"; return 0
   fi
-  # The API form carries the same inline-body requirement as the CLI form above.
-  # A reviews POST is not necessarily a drafting moment: `-f event=APPROVE` with
-  # no body is an approval with no text to intercept, and firing on it would
-  # nudge for a message that is never written.
+  # Same inline-body requirement: `-f event=APPROVE` with no body has no text
+  # to intercept.
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+api([[:space:]]|$)' <<<"$seg" \
      && grep -Eq '/pulls/[0-9]+/reviews' <<<"$seg" \
      && grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$seg" \
      && grep -Eq -- '(^|[[:space:]])(-[fF]|--field|--raw-field)([[:space:]]+|=)body=' <<<"$seg"; then
     boundary="pr-review-body"; recipe="maintainer-review-reply"; return 0
   fi
-  # Inline PR review-comment reply: `gh api .../pulls/<n>/comments -X POST -f body=...`
-  # (the /address-pr-comments inline path). Scope to the pulls endpoint so an
-  # issue-comment POST (`.../issues/<n>/comments`) is not misread as a PR review
-  # reply, and require an explicit POST so the read-only fetch step
-  # (`gh api .../comments --jq ...`, no -X POST) is NOT a boundary.
+  # Scoped to the pulls endpoint so an issues-comment POST is not misread, and
+  # to an explicit POST so the read-only fetch step is not a boundary.
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+api([[:space:]]|$)' <<<"$seg" \
      && grep -Eq '/pulls/[0-9]+/comments' <<<"$seg" \
      && grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$seg"; then
     boundary="pr-review-comment"; recipe="pr-review-reply"; return 0
   fi
-  # General PR / issue / MR comment reply authored inline. Which recipe this
-  # names depends on how much is being posted, because the two candidates are
-  # different SHAPES rather than different qualities: `maintainer-reply` caps
-  # its prose body at two sentences, and `maintainer-review-reply` sets its
-  # length by how much evidence the reply has to carry.
-  #
-  # Pinning `maintainer-reply` unconditionally is how that recipe came to hold
-  # 33 of the corpus's delegations at 21% usable, with rejection reasons that
-  # are one shape repeated — "collapsed all 14 facts into a single run-on
-  # sentence", "returned two sentences instead of a four-paragraph body",
-  # "dropped every measured fact from the context". The closed shape was doing
-  # exactly its job to a workload it explicitly excludes, and the nudge naming
-  # it was teaching that routing rather than correcting it.
+  # Which recipe this names depends on how much is posted: maintainer-reply
+  # caps its body at two sentences, maintainer-review-reply sizes by evidence.
+  # Pinning maintainer-reply unconditionally taught the wrong routing.
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+comment([[:space:]]|$)' <<<"$seg" \
      || grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+issue[[:space:]]+comment([[:space:]]|$)' <<<"$seg" \
      || grep -Eq '(^|[^[:alnum:]_-])glab[[:space:]]+(mr|issue)[[:space:]]+(discussion[[:space:]]+)?note([[:space:]]|$)' <<<"$seg"; then
     boundary="comment-reply"
-    # The one scan this boundary gets; the floor and the capture below reuse
-    # its result. An unmeasurable or unreadable body keeps the short shape —
-    # a measurement that failed must not promote a reply on no evidence.
+    # An unmeasurable body keeps the short shape: a failed measurement must
+    # not promote a reply on no evidence.
     read_posted_body "$rawseg"
     if [[ "$body_measurable" == "true" ]] && (( body_chars >= long_body_chars )); then
       recipe="maintainer-review-reply"
@@ -646,11 +450,8 @@ matched_seg="" matched_raw="" seg_idx=0
 while IFS= read -r seg; do
   seg_idx=$((seg_idx + 1))
   [[ -z "$seg" ]] && continue
-  # Builtin pre-filter, no subprocess: classify_segment costs up to 9 greps and
-  # runs per SEGMENT, so a routine `gh pr list ... | while read n; do ...; done`
-  # (5 segments, classifies as nothing) paid 46 grep spawns / ~204ms. Every
-  # branch above needs a literal git/gh/glab, so skipping segments without one
-  # is free — measured 204ms -> 93ms on that shape.
+  # Builtin pre-filter: classify_segment costs up to 9 greps per segment, and
+  # every branch needs a literal git/gh/glab.
   case "$seg" in *git*|*gh*|*glab*) ;; *) continue ;; esac
   # Blanked line k of $scan is raw segment k (0-based in the array).
   if classify_segment "$seg" "${rawsegs[$((seg_idx - 1))]-}"; then
@@ -662,22 +463,10 @@ done <<<"$scan"
 [[ "$body_read" == "true" ]] || read_posted_body "$matched_raw"
 
 # --- derive the project name (shared with delegate.sh via lib/otel.sh) -----
-# The SAME function delegate.sh and delegate-feedback.sh call, not a copy of
-# it: the row this hook writes and the rows its lookup reads then agree by
-# construction. The inline mirror that lived here drifted twice — it ignored
-# DELEGATE_PROJECT, which both of those scripts honour, and it fell back to
-# the cwd's basename outside a git repository (#476), filing 14 boundaries
-# from `~/projects/gitlab` (the parent folder holding the checkouts) under
-# `project:"gitlab"`. delegate_project_name records no project from that same
-# cwd, so a lookup keyed on "gitlab" could never match a delegation there, and
-# the row sat at rate=0% for a name that names nothing while every post nudged
-# a session that may well have delegated. The #385 refusal below had guarded
-# only the `cd <path> &&` branch against this. Sourcing the lib is documented
-# side-effect free; it is done here, after the boundary is known, so the
-# common path pays nothing for it. $script_dir was resolved before the cd to
-# the payload cwd (done right after the payload was read), and through the
-# ~/.claude/skills symlink it names the symlinked tree, which is where lib/
-# is. A missing lib leaves cwd_project empty: fail open.
+# The SAME function delegate.sh and delegate-feedback.sh call, so the row this
+# hook writes and the rows its lookup reads agree by construction; an inline
+# mirror drifted twice (#476). Sourced only after the boundary is known so the
+# common path pays nothing. A missing lib leaves cwd_project empty: fail open.
 cwd_project=""
 if [[ -n "$script_dir" && -f "$script_dir/lib/otel.sh" ]]; then
   # shellcheck source=lib/otel.sh
@@ -686,57 +475,31 @@ if [[ -n "$script_dir" && -f "$script_dir/lib/otel.sh" ]]; then
 fi
 
 # --- which repository is this boundary actually about? (#385) -------------
-# The harness reports the SESSION cwd, but agents routinely run
-# `cd <other-repo> && git commit …`. delegate.sh runs AFTER that cd, so it
-# records the other repo, and a lookup keyed on the session cwd could never
-# match across it: a boundary whose drafting genuinely was delegated got
-# recorded as a miss and nudged anyway. Measured 2026-08-18, 66 opportunities
-# filed under `pr-agent` against 3 delegations there, while 35 delegations sat
-# under `delegate-local` with none.
-#
-# Parsed off the RAW $cmd rather than the $scan surface. That is a deliberate
-# departure from the doctrine above, because scan blanks quoted spans and a
-# quoted path with a space survives there as `cd   `. The parse itself (and
-# its refusals) now sits with the payload read near the top, because the
-# body scanner needs the target too; $cd_path is empty unless it named a
-# directory.
+# Agents routinely run `cd <other-repo> && git commit …`; delegate.sh runs
+# AFTER that cd and records the other repo, so a lookup keyed on the session
+# cwd could never match. $cd_path was parsed off the RAW command near the top.
 cd_project=""
 if [[ -n "$cd_path" ]]; then
-  # Derived inside a SUBSHELL that has chdir'd to the target. Do not reach for
-  # `git -C "$cd_path" rev-parse --git-common-dir`: at a repo root that returns
-  # the RELATIVE string `.git`, which then resolves against the hook's own cwd
-  # and silently reproduces the very bug this block exists to fix.
-  # Accepted only when the target is inside a git repository — a `cd /tmp`
-  # must not file the boundary under `tmp` and fragment the denominator.
+  # Derived inside a subshell that has chdir'd to the target: `git -C <path>
+  # rev-parse --git-common-dir` at a repo root returns the RELATIVE `.git`,
+  # which resolves against the hook's own cwd. Accepted only inside a git
+  # repository, so a `cd /tmp` does not file the boundary under `tmp`.
   cd_project=$(cd -- "$cd_path" 2>/dev/null || exit
     c=$(git rev-parse --git-common-dir 2>/dev/null) || exit
     d=$(cd "$c" 2>/dev/null && pwd) || exit
     basename "$(dirname "$d")")
 fi
-# An explicit DELEGATE_PROJECT outranks the cd target as well: delegate.sh run
-# after that same `cd` inherits the variable and records it, so the row has to
-# be filed where the lookup will find it.
+# DELEGATE_PROJECT outranks the cd target: delegate.sh run after that same
+# `cd` inherits it and records it.
 project="${DELEGATE_PROJECT:-${cd_project:-$cwd_project}}"
 
 # --- a boundary that names its repo explicitly (#393 follow-up) ------------
-# `gh issue comment --repo owner/name` carries no `cd`, so it is filed under the
-# session cwd. This candidate widens the delegation LOOKUP only and never sets
-# the recorded project: replaying the whole metrics file showed recording it buys
-# no extra recall, because the either-match set is identical, while adding four
-# `rate=0%` project keys and moving 22 rows off two real projects. The driver is
-# hub-repo sweeps (`gh pr comment N --repo IsmaelMartinez/<other> --body
-# "@dependabot rebase"`), 13 of the 34 affected rows.
-#
-# Parsed off $matched_seg, NOT the raw $cmd, which is the opposite trade-off
-# from the `cd` block above: the scan surface blanks quoted spans, so a `--repo`
-# inside a quoted body cannot reach here (good), but a legitimately quoted
-# `--repo "owner/name"` is blanked too and falls back silently (6 of 534 real
-# invocations, and it fails safe).
-#
-# The charset test is security work, not tidiness. It is the only thing
-# rejecting `--repo IsmaelMartinez/$1`, `--repo $R` and `` --repo `whoami`/name ``
-# — shell-variable values are 11 of 534 real invocations — and it validates the
-# WHOLE value, because a last-segment-only check accepts all three.
+# `--repo owner/name` widens the delegation LOOKUP only and never sets the
+# recorded project (recording it bought no recall and fragmented the rollup).
+# Parsed off $matched_seg, not the raw command, so a `--repo` inside a quoted
+# body cannot reach here; a quoted `--repo "owner/name"` is blanked too and
+# fails safe. The charset test validates the WHOLE value: it is what rejects
+# `--repo $R` and `` --repo `whoami`/name ``.
 repo_project=""
 _repo_flag_re="(^|[[:space:]])(--repo[[:space:]]+|--repo=|-R[[:space:]]+)([^[:space:]]+)"
 _repo_val_re="^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$"
@@ -750,62 +513,28 @@ if [[ "$matched_seg" =~ $_repo_flag_re ]]; then
 fi
 
 # --- #465: a body file is NOT evidence the drafting moment passed ---------
-# Until 2026-08-28 a `--body-file` / `-F` post whose file already existed was
-# recorded `state:"pre-drafted"` and excluded from the trigger-rate ratio (#349,
-# #355), on the theory that the text had been authored at an earlier Write and
-# often approved by a human. The hook cannot tell those apart from a body the
-# agent wrote inline one Bash call earlier, which is the case the sensor exists
-# to catch — and it never could, so the exclusion was quiet rather than
-# accurate (#358). It was also inconsistent: writing the body and posting it in
-# ONE call left the file non-existent at PreToolUse time, so the identical act
-# was counted as a miss and nudged, making the rate depend on how the agent
-# batched its shell calls (#465). Every boundary is now counted the same way,
-# and a body file nudges like an inline one.
+# The hook cannot tell a pre-existing body file from one the agent wrote a
+# call earlier, so every boundary is counted the same way.
 
 # --- was there a local delegation for THIS boundary's recipe, recently? ----
-# Recipe-aware: only a delegation whose recipe matches this boundary's recipe
-# counts as capturing it. Matching on project alone over-counted — a commit-message
-# delegation marked a later `gh pr create` / review-comment reply as captured even
-# though the PR body / reply was authored inline, which both inflated the trigger
-# rate AND suppressed the nudge (delegated:true skips it below), so the artifact the
-# boundary is about was never delegated. A bare (no-recipe) delegation no longer
-# counts for any boundary — the calibrated recipe the nudge names is the path.
-# Runs for file-backed bodies too. Delegate-then-save-then-post is the whole
-# workflow the nudge asks for, and skipping the lookup recorded that compliant
-# case as delegated:false — removing the sensor's best outcome from the ratio.
+# Recipe-aware: only a delegation whose recipe matches counts, else a
+# commit-message delegation credits a later `gh pr create`. A bare (no-recipe)
+# delegation credits nothing. Runs for file-backed bodies too:
+# delegate-then-save-then-post is the workflow the nudge asks for.
 metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
-# Default 480 rather than 10: the batch flow delegates a sweep of drafts,
-# waits for human approval, and posts hours later. Measured 2026-08-25, a
-# 12-reply sweep delegated at 11:13 had still not posted four hours on, so a
-# 10-minute window would have recorded every one of those posts as a missed
-# delegation and fired 12 spurious nudges at the compliant session. The wide
-# window is safe because credits are CONSUMED below: each delegated:true
-# opportunity row spends one delegate row, so one morning delegation credits
-# one post rather than silencing the nudge for the whole afternoon.
+# 480 rather than 10: a batch sweep delegates its drafts, waits for approval
+# and posts hours later. Safe because credits are CONSUMED below, one per
+# delegated:true row.
 window_min="${DELEGATE_BOUNDARY_WINDOW_MIN:-480}"
 now_epoch=$(date -u +%s)
 
 # --- is this enough text to be drafting? (#483) ----------------------------
-# `body_chars` (set by read_posted_body above, from the matched segment) is a
-# count, never the text, and is recorded only when there is a measurable body
-# at PreToolUse time: a `-F -` fed by a heredoc, a file written by the same
-# call, a `--body-file` that does not exist yet, or any unresolved shell in
-# the value leave it absent, and an absent count keeps the pre-#483
-# behaviour (nudge or deny as the mode says). Measured 2026-09-13,
-# `pr-review-comment` ran at 3% delegated over n=63 because most inline
-# replies are one line — an applied-in hash, a dependabot rebase command, a
-# one-word acknowledgement — and no recipe should draft those; without a
-# stored length they could not be told from real drafting after the fact, so
-# the floor records them and steps aside.
-#
-# The floor is per boundary (PR #484 review, item H). 120 was calibrated on
-# inline review comments, where a paragraph clears it and a status line does
-# not, but a one-line conventional commit is 40-60 characters — the
-# commit-message recipe's own core output — and one global 120 exempted every
-# such commit from enforcement and from the denominator, inflating the
-# git-commit rate. git-commit gets 20 (a subject line); the rest keep 120.
-# DELEGATE_BOUNDARY_MIN_CHARS overrides both. The rows carry the number, not
-# the floor, so it can be re-tuned from the corpus.
+# `body_chars` is a count, never the text, recorded only when the body is
+# measurable at PreToolUse time; an absent count nudges or denies as the mode
+# says. Most inline review replies are one line and no recipe should draft
+# those. The floor is per boundary: a one-line conventional commit is 40-60
+# characters, so a global 120 exempted every such commit. The rows carry the
+# number, not the floor, so it can be re-tuned from the corpus.
 case "$boundary" in
   git-commit) min_chars=20 ;;
   *)          min_chars=120 ;;
@@ -819,31 +548,16 @@ if [[ "$body_measurable" == "true" ]] && (( body_chars < min_chars )); then
 fi
 
 # --- which mode applies to THIS boundary? (#483) ---------------------------
-# Unset (the default) enforces the set in DELEGATE_BOUNDARY_ENFORCE and warns
-# elsewhere. The default set is the four boundaries whose recipe is proven on
-# the corpus: git-commit (commit-message, 92% usable over n=41), issue-create
-# (github-issue-body, 100% over n=12), and the two reply boundaries
-# (pr-review-reply, maintainer-reply). pr-create and pr-review-body stay on
-# warn until pr-description is above 80% usable on more than a handful of
-# rows — denying a post to hand the agent a recipe that fails half the time
-# would teach it to route around the hook. `${VAR-default}` rather than
-# `:-`, so an explicitly empty set means "enforce nothing", which is the
-# documented override.
-#
-# The deny is issued only while a provider is serving the recipe's tier: the
-# same resolution delegate.sh will perform, so a deny never points at a
-# command that cannot run. It costs one pick-model.sh run — the first
-# reachable provider answers in tens of milliseconds, a dead localhost port
-# refuses at once, and a dead remote host costs DELEGATE_PROBE_TIMEOUT (1s)
-# per entry — and it is paid only on the deny path: never on a warn-only
-# boundary, a credited post, or a body under the floor.
+# Unset enforces the set in DELEGATE_BOUNDARY_ENFORCE and warns elsewhere;
+# pr-create and pr-review-body stay on warn until pr-description is reliable,
+# since denying a post to hand the agent a recipe that fails would teach it to
+# route around the hook. `${VAR-default}` rather than `:-`, so an explicitly
+# empty set means "enforce nothing". The deny is issued only while a provider
+# serves the recipe's tier, probed only on the deny path.
 enforce_set="${DELEGATE_BOUNDARY_ENFORCE-git-commit,issue-create,comment-reply,pr-review-comment}"
 enforce_set="${enforce_set// /}"
-# Case-insensitive, and an unknown value is warn — as it was on main before
-# #483, when any spelling but `enforce`/`off` fell through to the warn
-# default. For a while an unknown value fell into the DEFAULT branch here and
-# enforced, so `DELEGATE_BOUNDARY_MODE=Off` denied (PR #484 review, item F).
-# nocasematch is bash 3.2 and costs no fork (`${var,,}` is bash 4).
+# Case-insensitive, and an unknown value is warn, never enforce. nocasematch
+# is bash 3.2 (`${var,,}` is bash 4).
 shopt -s nocasematch
 case "${DELEGATE_BOUNDARY_MODE:-}" in
   "") case ",${enforce_set}," in
@@ -857,29 +571,13 @@ esac
 shopt -u nocasematch
 prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 
-# --- serialise lookup + append across concurrent hooks (PR #484, item M) ----
-# The lookup reads a snapshot and the row that spends the credit is appended
-# further down, so two enforced boundaries running at once after one
-# delegation could both see `recent=1`, both allow, and both append
-# delegated:true — one credit spent twice, rate inflated. A mkdir lock in the
-# data dir is the portable primitive (flock is not on macOS, bash 3.2 has no
-# better one): mkdir is atomic, so exactly one hook holds it, and the others
-# wait in 50 ms steps. A lock older than a few seconds is a killed hook — the
-# whole hook runs in ~150 ms — and is broken rather than wedging every later
-# post; a lock that cannot be taken in 2 s fails OPEN: the hook proceeds
-# unlocked and records enforce_skipped:"lock-timeout" instead of denying.
-# Taken only when metrics are on, since with them off there is nothing to
-# spend. Released on every exit path by the trap.
-#
-# The lock is OWNED. A hook whose provider probe runs past the stale
-# threshold (a dead remote host costs DELEGATE_PROBE_TIMEOUT per entry) has
-# its lock broken and replaced by the next hook; without an ownership check
-# its own EXIT cleanup then removed the REPLACEMENT lock, and both ran their
-# lookup unserialised against the same credit (third review round on #484).
-# An owner token — pid plus a random suffix — is written into the dir on
-# acquisition, and release removes the dir only while the token still
-# matches. Breaking a stale lock removes it and re-runs mkdir, so the breaker
-# owns what it takes.
+# --- serialise lookup + append across concurrent hooks ---------------------
+# Two enforced boundaries after one delegation could both see `recent=1` and
+# spend one credit twice. mkdir is the portable atomic primitive (flock is not
+# on macOS). A lock older than 5 s is a killed hook and is broken; one that
+# cannot be taken in 2 s fails OPEN as enforce_skipped:"lock-timeout". The lock
+# is OWNED by a pid+random token so a hook whose lock was broken does not
+# remove its replacement on EXIT. Taken only when metrics are on.
 lock_dir="$(dirname "$metrics_file")/.boundary-hook.lock"
 lock_held=false lock_failed=false
 lock_token="$$-${RANDOM}${RANDOM}"
@@ -893,13 +591,10 @@ if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
   lock_tries=0
   while ! mkdir "$lock_dir" 2>/dev/null; do
-    # The dir is visible at mkdir before `ts` is written, so a hook killed in
-    # between leaves a lock with no `ts`; treating that as fresh made every
-    # later hook wait 2 s and fail open for good (fifth review round). With
-    # no `ts` the DIRECTORY mtime stands in. GNU `stat -c %Y` is tried FIRST:
-    # BSD stat rejects `-c` outright, whereas GNU stat accepts `-f %m` as
-    # "file-system mode, print the mount point" and exits 0 with `/`, so the
-    # BSD-first order never reached its fallback on Linux (CI caught it).
+    # A hook killed between mkdir and writing `ts` leaves no `ts`, so the
+    # directory mtime stands in. GNU `stat -c %Y` FIRST: BSD stat rejects `-c`,
+    # but GNU stat accepts `-f %m` and prints the mount point, so BSD-first
+    # never reached its fallback on Linux.
     lock_ts=$(cat "$lock_dir/ts" 2>/dev/null)
     if [[ ! "$lock_ts" =~ ^[0-9]+$ ]]; then
       lock_ts=$(stat -c %Y "$lock_dir" 2>/dev/null || stat -f %m "$lock_dir" 2>/dev/null)
@@ -923,65 +618,32 @@ delegated=false
 credit_draft=""
 denied_streak=0
 if [[ -f "$metrics_file" ]]; then
-  # Only the recent tail can fall inside the look-back window, so cap the read
-  # instead of slurping the whole (ever-growing) metrics file on each boundary.
-  # 2000 lines, not 500: truncation is asymmetric — it drops the OLDEST rows,
-  # which are the earning delegate rows, while keeping the newer opportunity
-  # rows that spent them, so a too-small tail denies credit (and can push the
-  # count negative, which `-gt 0` already reads as uncredited). 2000 rows
-  # covers the 480-minute window unless boundaries exceed ~4/minute all day.
-  # `recent` is delegate rows MINUS already-credited posts (delegated:true
-  # opportunity rows for the same project+recipe in the same window), so a
-  # boundary is credited only while an unspent delegation remains.
-  #
-  # `credit_recipes` is the set of recipes that credit THIS boundary. Every
-  # boundary but one maps to a single recipe; comment-reply names its recipe
-  # from the body's length (the 600 split above), and matching on that exact
-  # name looped (PR #484 review, item B): a 700-char post was denied naming
-  # maintainer-review-reply, the agent delegated exactly that and posted the
-  # 450-char draft, which routed to maintainer-reply, matched no credit, and
-  # was denied again under a different name. Either comment-reply recipe
-  # credits a comment-reply boundary, on both the earning and the spending
-  # side; the row still records the recipe its own length routes to.
-  # Built by hand rather than with jq: $recipe is one of the fixed identifiers
-  # classify_segment assigns, never user text, and this runs on every
-  # boundary.
+  # Only the recent tail can fall inside the window. 2000 lines, not 500:
+  # truncation drops the OLDEST rows, the earning delegate rows, so a too-small
+  # tail denies credit. `recent` is delegate rows MINUS already-credited posts.
+  # comment-reply names its recipe from the body length, so either of its two
+  # recipes credits it on both the earning and the spending side, else a deny
+  # answered by a shorter draft is denied again under the other name. Built by
+  # hand: $recipe is a fixed identifier classify_segment assigns, never user text.
   case "$boundary" in
     comment-reply) credit_recipes='["maintainer-reply","maintainer-review-reply"]' ;;
     *)             credit_recipes="[\"${recipe}\"]" ;;
   esac
   recent_out=$(tail -n 2000 "$metrics_file" 2>/dev/null | jq -rs --argjson win "$((window_min * 60))" --arg proj "$project" --arg proj2 "$cwd_project" --arg proj3 "$repo_project" --arg sid "$session_id" --argjson recipes "$credit_recipes" --arg boundary "$boundary" --argjson now "$now_epoch" '
-    # Any of the three NAMED candidates counts, each guarded against being
-    # empty. With no `cd`, $proj and $proj2 are equal, so $proj3 is
-    # load-bearing rather than decorative.
-    #
-    # A PROJECTLESS row (no .project) is a different case. It is what
-    # delegate.sh writes when its cwd is outside a git repository (#476), so
-    # it can only belong to a boundary whose session cwd is likewise outside
-    # one ($proj2 == "") — a boundary inside a repository has a non-empty
-    # $proj2 and the projectless rows never reach it. But the metrics file is
-    # shared by every session on the machine, and "no project" would name one
-    # pool across all of them: an unrelated scratch-cwd session could credit
-    # this post, silence its nudge, and have its draft filed as the shipped
-    # form of a reply it never wrote (PR #477 review). So a projectless row
-    # is credited only when its `session` — CLAUDE_CODE_SESSION_ID as
-    # delegate.sh records it (#479), the same UUID the harness hands this
-    # hook as .session_id — equals this session. A projectless row with no
-    # session (written before #479, or by a caller outside Claude) credits
-    # nothing: fail safe, nudge. The same predicate scopes the delegated:true
-    # opportunity rows that SPEND credits, which is why the opportunity row
-    # below records the session too, and the ADR 0029 draft capture inherits
-    # the scoping for free. (No apostrophes here: this comment sits inside
-    # the single-quoted jq program.)
+    # Any of the three named candidates counts, each guarded against empty.
+    # A PROJECTLESS row (delegate.sh outside a git repository, #476) is
+    # credited only when its session equals this one: the metrics file is
+    # shared by every session on the machine, and one pool across them would
+    # let an unrelated scratch-cwd session credit this post. A projectless row
+    # with no session credits nothing. The same predicate scopes the spending
+    # rows. (No apostrophes here: this sits inside the single-quoted jq program.)
     def named($c): $c != "" and (.project // "") == $c;
     def same_session: $sid != "" and (.session // "") == $sid;
     def matches_proj: named($proj) or named($proj2) or named($proj3)
                       or ((.project // "") == "" and $proj2 == "" and same_session);
     def in_window: ((.ts | fromdateiso8601?) // 0) > ($now - $win);
-    # A delegation that failed (exit_status:3 is the pre-flight stall, #110)
-    # produced no draft this post could be the shipped form of, so it earns
-    # no credit. metrics-summary.sh and the Stop hook already join on
-    # exit_status 0; until PR #477 this lookup was the odd one out.
+    # A failed delegation (exit_status 3, the pre-flight stall) produced no
+    # draft this post could be the shipped form of, so it earns no credit.
     ([ .[]
        | select((.source // "delegate") == "delegate")
        | select((.exit_status // 0) == 0)
@@ -994,14 +656,10 @@ if [[ -f "$metrics_file" ]]; then
        | select(matches_proj)
        | select((.suggested_recipe // "") as $r | $recipes | index($r) != null)
        | select(in_window) ] | length) as $c
-    # The denial streak (PR #484 review, item E): how many of this
-    # session+boundary rows in the window, newest first, are denied:true
-    # before the first that is not. Two in a row and the next attempt is
-    # warned rather than denied — a delegation that fails never credits, and
-    # a metrics path that differs between the hook env and the tool env
-    # means no credit can be written where this lookup reads, so without a
-    # cap a deny was a permanent block. A credited (or any non-denied) row
-    # resets it, so the cap cannot be banked across a session.
+    # The denial streak: denied:true rows for this session+boundary, newest
+    # first, before the first that is not. Two in a row and the next attempt
+    # is warned, because a delegation that never credits would otherwise make
+    # a deny a permanent block; any non-denied row resets it.
     | ([ .[]
        | select((.source // "") == "opportunity")
        | select((.boundary // "") == $boundary)
@@ -1010,23 +668,16 @@ if [[ -f "$metrics_file" ]]; then
        | reduce .[] as $r ({n: 0, stop: false};
            if .stop then . elif $r.denied == true then .n += 1 else .stop = true end)
        | .n) as $streak
-    # Three fields from one pass: the credit count the nudge decision reads,
-    # the draft belonging to the delegation THIS post is about to spend, and
-    # the streak. Oldest-unspent-first, because that is the order a sweep
-    # posts in — the 12-reply flow that set the 480-minute window delegates a
-    # batch and works down it, so the n-th post is the n-th draft.
+    # Credit count, the draft this post spends, and the streak. The draft is
+    # oldest-unspent-first, because that is the order a sweep posts in.
     | "\($d | length - $c)\u001f\($d[$c].draft_file // "")\u001f\($streak)"' 2>/dev/null) || recent_out=""
   # Unit separator, not tab: tab is IFS whitespace, so an empty middle field
-  # (a delegation with no draft) would collapse and shift the streak into
-  # credit_draft.
+  # would collapse and shift the streak into credit_draft.
   IFS=$'\x1f' read -r recent credit_draft denied_streak <<<"$recent_out"
   [[ "${recent:-0}" =~ ^-?[0-9]+$ ]] || recent=0
   [[ "${denied_streak:-0}" =~ ^[0-9]+$ ]] || denied_streak=0
-  # `credit_draft` is read out of a JSONL file and is about to become part of a
-  # path this hook WRITES to, so it is treated as untrusted: a bare filename
-  # ending in .draft.txt, nothing else. A hand-edited or corrupted row carrying
-  # `../../x.draft.txt` would otherwise place the captured body outside the
-  # drafts directory. Anything that fails simply loses the capture.
+  # `credit_draft` comes from the JSONL file and becomes part of a path this
+  # hook WRITES to, so it is untrusted: a bare *.draft.txt filename only.
   case "$credit_draft" in
     *.draft.txt) [[ "$credit_draft" == */* || "$credit_draft" == .* ]] && credit_draft="" ;;
     *) credit_draft="" ;;
@@ -1035,28 +686,13 @@ if [[ -f "$metrics_file" ]]; then
 fi
 
 # --- record the opportunity (the trigger-rate sensor) ---------------------
-# One row per boundary so trigger rate has a denominator. Stores no command or
-# message text — only boundary type, suggested recipe, project and the flag.
-# The project field is omitted, not emptied, when there is none (#476), the
-# same shape delegate.sh writes; metrics-summary.sh reports those rows on one
-# `(no project)` line rather than under a name. The session is recorded on
-# the same terms as delegate.sh records it (present when known, omitted
-# otherwise): a delegated:true row spends a credit, and the projectless
-# lookup above only counts spends from the same session, so a row without it
-# could never spend one.
-#
-# Three #483 fields, each omitted when it does not apply. `body_chars` is the
-# measured length (an integer, never the text). `below_floor:true` marks a
-# row the floor kept out of the nudge, so the summary can keep it out of the
-# rate. `denied:true` marks an attempt this hook blocked: the post did not
-# happen, the agent will delegate and retry, and that retry writes the row
-# that counts — counting the blocked attempt too would record every enforced
-# boundary as a miss followed by a hit and cap the rate near 50%.
-# `enforce_skipped:"<reason>"` marks a deny that fell open (the reasons are
-# listed above); the post went through undrafted, so that row stays a real
-# miss. Returns the append's status, so the caller can tell a row that was
-# not written (item E: a deny is withdrawn when no credit could ever be
-# recorded here either).
+# One row per boundary; no command or message text. `project` and `session`
+# are omitted, not emptied, when unknown, the shape delegate.sh writes.
+# `body_chars` is a length, `below_floor:true` keeps a row out of the rate,
+# `denied:true` marks a blocked attempt (the retry writes the row that counts;
+# counting both would cap the rate near 50%), `enforce_skipped` marks a deny
+# that fell open and stays a real miss. Returns the append status so a deny
+# can be withdrawn when no credit could be recorded.
 append_row() {
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] || return 0
   local ts; ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -1076,39 +712,19 @@ append_row() {
      >> "$metrics_file" 2>/dev/null
 }
 
-# --- the critical section ends here (fifth review round on #484) ----------
-# Only a delegated:true row spends a credit, so only a credited post has to
-# append under the lock; the lookup and that append are the whole critical
-# section, milliseconds. An uncredited post releases the lock FIRST and only
-# then decides whether it can be denied — the provider probe, the retry cap,
-# the writability test — because a slow probe (DELEGATE_PROBE_TIMEOUT raised
-# against a dead remote host) held inside the lock could be stale-broken at
-# 5 s and let a second hook spend the same credit; the owner token protects
-# only the cleanup. Its delegated:false row is appended unlocked: it spends
-# nothing, and the worst a race can do is count one extra denial toward the
-# retry cap. A credited post never probes at all.
+# --- the critical section ends here ---------------------------------------
+# Only a credited post spends a credit, so only it appends under the lock. An
+# uncredited post releases the lock FIRST and then decides on the deny: a slow
+# provider probe held inside the lock could be stale-broken at 5 s and let a
+# second hook spend the same credit. Its delegated:false row spends nothing.
 denied=false enforce_skipped="" tier_decl=""
 if [[ "$delegated" == "true" ]]; then
-  # --- store the posted body as the shipped half of the pair (ADR 0029) -------
-  # `maintainer-reply` was the weakest recipe with any volume (21% usable over
-  # n=33) and the only one whose 32 rejections carried no captured final at all,
-  # because its output is posted inline inside `gh pr comment --body "..."` and
-  # there is no path on disk for `delegate-feedback.sh --final` to name. A commit
-  # message reaches a file before `git commit -F` reads it; a reply never does.
-  #
-  # This hook is the one place that sees the shipped text, and when the post is
-  # credited to a delegation it IS that delegation's shipped form by definition.
-  # Store it beside the draft under the draft's own stem, so the two halves are
-  # guaranteed to belong together, and let `delegate-feedback.sh` adopt it when
-  # the caller passed no `--final`. An existing file is never overwritten: a
-  # hand-supplied final outranks an inferred one. The `-e` check is only the
-  # cheap way to skip parsing the body; the guarantee is the `set -C` on the
-  # write, which makes the redirect itself fail if a feedback call claimed the
-  # bare name between the check and the write (PR #479 review).
-  #
-  # The capture is PRE-post, so a post that then fails leaves a final for text
-  # that never shipped. The verdict is recorded by whoever ran the command and
-  # knows, and `--final` still wins, so the cost of that is bounded.
+  # --- store the posted body as the shipped half of the pair (ADR 0029) -----
+  # A reply posted inline has no file for `delegate-feedback.sh --final` to
+  # name; a credited post IS its delegation's shipped form, stored under the
+  # draft's own stem. Never overwritten: the `set -C` on the write is the
+  # guarantee, the `-e` check only skips the work. The capture is PRE-post,
+  # so a post that then fails leaves a final for text that never shipped.
   if [[ "$delegated" == "true" && -n "${credit_draft:-}" \
         && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
     drafts_dir="$(dirname "$metrics_file")/drafts"
@@ -1125,31 +741,16 @@ if [[ "$delegated" == "true" ]]; then
   release_lock
 else
   release_lock
-  # Why a deny was not issued, when it was not. Every reason here fails OPEN to
-  # warn, because "a commit is never blocked by a hook bug" has to survive
-  # every way the credit path can be broken (PR #484 review, items E, G, M):
-  #   metrics-unwritable  DELEGATE_LOCAL_NO_METRICS=1 in the hook env, or the
-  #                       metrics file cannot be appended to — no credit can
-  #                       ever be written where this hook reads, so a deny
-  #                       would have no escape.
+  # Every reason here fails OPEN to warn, so a hook bug never blocks a commit:
+  #   metrics-unwritable  no credit could ever be written where this hook reads
   #   retry-cap           two consecutive denials for this session+boundary
-  #                       already; a delegation that fails (canary stall, HTTP
-  #                       500, echo check) never credits, so the third attempt
-  #                       goes through.
-  #   lock-timeout        the lookup lock above could not be taken in 2 s.
-  #   no-provider         pick-model.sh: nothing reachable.
-  #   no-model            pick-model.sh: a provider is up but serves no model
-  #                       for the recipe tier.
-  #   bad-tier            pick-model.sh: the recipe declares a tier it does not
-  #                       know (or the frontmatter is malformed).
-  # The probe is pick-model.sh on the recipe tier — the same resolution
-  # delegate.sh will perform, so a deny never points at a command that cannot
-  # run. It exits 1 for both "unreachable" and "no model", telling them apart
-  # only on stderr, and 2 for a bad tier. It costs ~50 ms when the first
-  # provider answers or every localhost port is closed (a dead remote host costs
-  # DELEGATE_PROBE_TIMEOUT, 1 s, per entry), and it is paid only when a deny is
-  # otherwise about to happen: never on a warn-only boundary, a credited post,
-  # a body under the floor, or a capped or unlockable session.
+  #   lock-timeout        the lookup lock could not be taken in 2 s
+  #   no-provider         pick-model.sh: nothing reachable
+  #   no-model            a provider is up but serves no model for the tier
+  #   bad-tier            the recipe declares a tier pick-model.sh does not know
+  # pick-model.sh exits 1 for both no-provider and no-model (told apart on
+  # stderr) and 2 for a bad tier; it is run only when a deny is otherwise
+  # about to happen.
   enforce_skipped="" tier_decl=""
   retry_cap=2
   if [[ "$mode" == "enforce" && "$delegated" != "true" && "$below_floor" != "true" ]]; then
@@ -1160,8 +761,7 @@ else
     elif (( denied_streak >= retry_cap )); then
       enforce_skipped="retry-cap"
     else
-      # The tier the recipe declares, read with the same expression delegate.sh
-      # uses (lib/recipe.sh, item I), so `tier: prose ` resolves in both.
+      # The same expression delegate.sh uses, so `tier: prose ` resolves in both.
       if [[ -n "$script_dir" && -f "$script_dir/lib/recipe.sh" && -f "$prompts_dir/$recipe.md" ]]; then
         # shellcheck source=lib/recipe.sh
         . "$script_dir/lib/recipe.sh"
@@ -1189,33 +789,23 @@ else
   fi
   denied=false
   [[ "$mode" == "enforce" && "$delegated" != "true" && "$below_floor" != "true" ]] && denied=true
-  # The append is the writability test. When it fails and a deny was about
-  # to be issued, the deny is withdrawn: no row means no credit could ever be
-  # recorded here either, and the row that would have said `denied:true` was
-  # not written, so nothing is left inconsistent. The reminder carries the
-  # reason instead (item E).
+  # The append is the writability test: when it fails the deny is withdrawn,
+  # since no credit could ever be recorded here either.
   if ! append_row && [[ "$denied" == "true" ]]; then
     denied=false; mode=warn; enforce_skipped="metrics-unwritable"
   fi
 fi
 
 # --- nudge unless the artifact was already delegated ----------------------
-# The only exemption is a credited delegation. Since #465 a file-backed body
-# nudges like an inline one, because a body file is not evidence that the text
-# came from anywhere but this agent a call earlier. A body under the floor is
-# recorded above and left alone here: it is not drafting.
+# A file-backed body nudges like an inline one (#465); a body under the floor
+# is not drafting.
 [[ "$delegated" == "true" ]] && exit 0
 [[ "$below_floor" == "true" ]] && exit 0
 [[ "$mode" == "off" ]] && exit 0
 
-# Every boundary recipe declares required inputs, and a --recipe call that
-# omits one exits 2 ("missing required inputs: ..."). Naming the recipe without
-# its --var keys therefore handed the agent a command that could not run: the
-# nudge fired, the agent tried it, delegate.sh refused, and the delegation never
-# happened. Read the keys from the recipe's own frontmatter rather than
-# hardcoding them here, so the nudge stays correct as recipes change their
-# inputs. `stdin` is not a --var — it means "pipe the context in" — and a
-# trailing `?` marks an optional input, which the nudge leaves out.
+# A --recipe call that omits a required input exits 2, so the keys are read
+# from the recipe's own frontmatter rather than hardcoded. `stdin` is not a
+# --var, and a trailing `?` marks an optional input the nudge leaves out.
 var_hint="" stdin_hint=""
 if [[ -f "$prompts_dir/$recipe.md" ]]; then
   while IFS= read -r key; do
@@ -1232,22 +822,13 @@ if [[ -f "$prompts_dir/$recipe.md" ]]; then
   ' "$prompts_dir/$recipe.md" 2>/dev/null)
 fi
 
-# The nudge names --project explicitly: the metrics project is derived from
-# delegate.sh's own cwd, so an agent that cd's into the skill checkout to run
-# the command records project=delegate-local and never matches this lookup,
-# which is the nag loop #342 describes. The hook already knows the right value.
-#
-# Outside a git repository it knows no value (#476). The command must still
-# run as printed (docs/boundary-hook.md), so neither `--project ""` nor a
-# `--project <name>` placeholder — bash reads that as a redirection — can
-# appear. When the command names its repo (`--repo owner/name`) that value is
-# rendered, because it is a lookup candidate here. Otherwise the flag is left
-# out entirely: a delegation issued from this same cwd is projectless, which
-# is exactly what the empty session-cwd candidate matches, whereas one
-# carrying ANY name could never credit this boundary. Not every non-repo
-# boundary carries a `cd` or `--repo` — `gh api ... -F in_reply_to=`,
-# `git -C <path>` and a `~` path all reach here without one — so the no-flag
-# form is the only advice that matches the lookup in every case.
+# The nudge names --project explicitly: an agent that cd's into the skill
+# checkout to run the command would record project=delegate-local and never
+# match this lookup (#342). Outside a git repository (#476) the command must
+# still run as printed, so neither `--project ""` nor a placeholder appears:
+# a `--repo owner/name` value is rendered because it is a lookup candidate,
+# otherwise the flag is left out, and the projectless delegation that
+# produces is exactly what the empty session-cwd candidate matches.
 if [[ -n "$project" ]]; then
   where="for project '${project}'"
   project_flag=" --project \"${project}\""
@@ -1260,18 +841,13 @@ else
 fi
 reminder="delegate-local: about to author a ${boundary} message inline with no local delegation recorded in the last ${window_min}m ${where}. Draft it on-device first — bash ~/.claude/skills/delegate-local/scripts/delegate.sh${project_flag} --recipe ${recipe}${var_hint}${stdin_hint} — then record the verdict with ~/.claude/skills/delegate-local/scripts/delegate-feedback.sh --source agent."
 
-# The same text on both channels; only the closing sentence differs. The
-# hook reads its environment from the harness, not from the command it is
-# judging, so a `DELEGATE_BOUNDARY_MODE=off git commit …` prefix changes
-# nothing — the deny says what does help: delegate, then rerun this call,
-# which the recorded delegation then credits.
+# The hook reads its environment from the harness, not from the command it
+# judges, so a `DELEGATE_BOUNDARY_MODE=off git commit …` prefix changes nothing.
 if [[ "$denied" == "true" ]]; then
   jq -nc --arg r "${reminder} This call was blocked; rerun it once the delegation is recorded, and it is credited. DELEGATE_BOUNDARY_MODE=warn in the hook's environment downgrades this to a reminder." \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
 else
-  # A deny that fell open says why, in terms the agent can act on: each
-  # reason names a different remedy, and "start MLX or Ollama" was being said
-  # when a provider was up all along (item G).
+  # Each reason names a different remedy.
   case "$enforce_skipped" in
     no-provider)        tail="No local provider answered, so this call proceeds undrafted; start MLX or Ollama to draft the next one." ;;
     no-model)           tail="A local provider is up but serves no model for the ${tier_decl:-prose} tier, so this call proceeds undrafted; pull one or edit the prefs in pick-model.sh." ;;
