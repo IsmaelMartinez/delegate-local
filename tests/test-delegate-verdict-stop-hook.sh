@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/delegate-verdict-stop-hook.sh — the Phase E Stop hook
-# that hands a session's untracked delegations back to the live agent for an
-# agent-observed verdict. Builds synthetic metrics + Stop payloads in $tmp and
-# asserts the surface/skip decisions, the session-once loop guard, and that the
-# injected instruction always carries --source agent.
+# Unit tests for scripts/delegate-verdict-stop-hook.sh, the Stop hook that
+# hands a session's untracked delegations back to the agent for a verdict.
 set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,12 +27,9 @@ assert_empty() {
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 OLD=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 48*3600))')
 
-# Build a Stop payload. project is derived by the hook from cwd the way
-# delegate.sh derives it (lib/otel.sh delegate_project_name), so each test's
-# cwd is a real git repository whose basename is the project. Until #476 the
-# hook fell back to the cwd basename outside a repository and the suite leaned
-# on that; T14 now pins the opposite. DELEGATE_PROJECT is unset so the suite's
-# own environment cannot rename every row.
+# Build a Stop payload. The hook derives the project from cwd as delegate.sh
+# does, so each test's cwd is a real git repository. DELEGATE_PROJECT is
+# unset so the suite's own environment cannot rename every row.
 unset DELEGATE_PROJECT
 mk_tmp_repo() {  # -> prints the path of a fresh temp git repository
   local d; d=$(mktemp -d)
@@ -73,12 +67,9 @@ rm -rf "$tmp"
 
 # --- T3. The injected instruction names delegate-feedback.sh, --source agent,
 # and a pin the agent can copy off each batch line ---------------------------
-# --source agent is what every caller passes and the recorder's default. The
-# pin is the row's otel_span_id where it has one: ts is second-precision and
-# parallel delegations share it, so a --ts pin refuses on a shared second
-# while --id cannot name two rows. A row with no span id is pinned by --ts
-# instead — a `--id -` copied off such a line would match nothing, and with
-# the session marker written the row would never be surfaced again.
+# The pin is --id with the row's otel_span_id (parallel delegations share a
+# second); a row with no span id is pinned by --ts instead, since a `--id -`
+# would match nothing and the row would never be surfaced again.
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","otel_span_id":"abcdef0123456789","session":"s3"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s3" "$tmp" "$tmp/m.jsonl" "$tmp/out"
@@ -95,11 +86,9 @@ case "$reason" in
   *"verdict-sweep"*) echo "  FAIL  T3: no hand-off to an interactive sweep"; fail=$((fail+1));;
   *) echo "  PASS  T3: no hand-off to an interactive sweep"; pass=$((pass+1));;
 esac
-# Each verdict is its own complete command on its own line, copied as printed
-# with the row's pin substituted for <pin>. `a | b | c` ran as a pipeline and
-# `a, b or c` passed `hit,` as the verdict; delegate-feedback.sh rejected both.
-# The annotation after each command is a shell comment so a whole-line copy
-# still runs.
+# Each verdict is its own complete command on its own line: `a | b | c` runs
+# as a pipeline and `a, b or c` passes `hit,` as the verdict. The annotation
+# after each is a shell comment so a whole-line copy still runs.
 cmd_lines=$(printf '%s\n' "$reason" | grep -F 'delegate-feedback.sh')
 assert_eq 3 "$(printf '%s\n' "$cmd_lines" | grep -c '')" "T3: three verdict commands, one per line"
 cmd_re='delegate-feedback\.sh" <pin> --source agent (scaffold "<reason>"|miss "<reason>"|hit)( +# [a-z -]+)?$'
@@ -122,10 +111,8 @@ case "$reason" in
 esac
 rm -rf "$tmp"
 
-# --- T4. Session-once guard: second Stop, SAME session → exit 0, no output --
-# The regression test for the decision:block re-inject loop. After T's inject
-# writes the marker, a second Stop in the same session must NOT re-inject even
-# though the delegation is still untracked.
+# --- T4. Session-once guard: a second Stop in the same session does not
+# re-inject, even though the delegation is still untracked -------------------
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"sLoop"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "sLoop" "$tmp" "$tmp/m.jsonl" "$tmp/out1"
@@ -135,9 +122,8 @@ assert_eq 0 "$ec" "T4: second Stop (same session) → exit 0"
 assert_empty "$(cat "$tmp/out2")" "T4: second Stop (same session) → no re-inject (loop guard)"
 rm -rf "$tmp"
 
-# --- T4b. A DIFFERENT session in the same repo is not offered the batch -----
-# The marker is per-session, but so is the scan: sB never delegated this row,
-# so it is not asked about it and no marker is written for sB.
+# --- T4b. A different session in the same repo is not offered the batch:
+# the scan is per-session, and no marker is written for it ------------------
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"sA"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "sA" "$tmp" "$tmp/m.jsonl" "$tmp/outA"
@@ -225,10 +211,7 @@ assert_eq 0 "$ec" "T12: empty payload → exit 0"
 assert_empty "$out" "T12: empty payload → no output (no session_id to scope)"
 rm -rf "$tmp"
 
-# --- T13. Payload with cwd but NO session_id → never inject ----------------
-# The marker is the loop guard and it is keyed by session_id; without one the
-# hook cannot guard against a re-inject loop, so it must NOT inject at all even
-# when an untracked delegation exists (fail open to a clean stop).
+# --- T13. No session_id, no inject: the loop-guard marker is keyed by it ----
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 no_sid_payload=$(jq -nc --arg c "$tmp" '{cwd:$c, hook_event_name:"Stop"}')
@@ -238,18 +221,10 @@ assert_empty "$out" "T13: no session_id → no inject (guardless re-inject would
 [[ -d "$tmp/.verdict-stop-markers" ]] && { fail=$((fail+1)); echo "  FAIL  T13: no marker dir should be created without a session_id"; } || { pass=$((pass+1)); echo "  PASS  T13: no marker written without a session_id"; }
 rm -rf "$tmp"
 
-# --- T14. A cwd outside any git repository derives NO project (#476) --------
-# The hook carried the same `|| pwd` fallback the boundary hook had, so a Stop
-# from a parent folder of checkouts scanned for rows under that folder's name
-# — a project delegate.sh never writes. It now shares delegate_project_name:
-# a row filed under the folder basename is not this cwd's, while a projectless
-# row (what delegate.sh records from that same cwd) is — but only one THIS
-# session wrote. The metrics file is shared by every session on the machine,
-# so the projectless rows are scoped by the `session` delegate.sh records
-# (CLAUDE_CODE_SESSION_ID, #479) against the payload's session_id; a Stop in
-# one scratch session must not block on another session's drafts, and a
-# projectless row with no session cannot be scoped, so it is left alone (fail
-# open). The reason must not print an empty project name.
+# --- T14. A cwd outside any git repository derives no project (#476): a row
+# under the folder basename is not this cwd's, a projectless row is, but
+# only one this session wrote (#479); a projectless row with no session is
+# left alone, and the reason must not print an empty project name ----------
 tmp=$(mktemp -d); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s14" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
@@ -271,14 +246,8 @@ run_hook "s14d" "$tmp" "$tmp/m.jsonl" "$tmp/out"
 assert_empty "$(cat "$tmp/out")" "T14: a projectless row with no session cannot be scoped and is left alone"
 rm -rf "$tmp"
 
-# --- T16. A named-project row is session-scoped too (#482) ------------------
-# #477 scoped only the projectless rows by session, so a row under this repo's
-# name from another session was still listed here as "this repo's backlog".
-# With no human sweep to pick those up (ADR 0030) that asks an agent about a
-# draft it never saw. Only a row whose session is this session's is listed. A
-# row with no session field at all cannot be anyone's: surfacing it to every
-# session in the repo is the same wrong question, and #479 merged 2026-09-12,
-# so the sessionless backlog sits outside the 24 h window anyway.
+# --- T16. A named-project row is session-scoped too (#482): only a row this
+# session wrote is listed, and a row with no session field is nobody's -----
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s16"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s16" "$tmp" "$tmp/m.jsonl" "$tmp/out"
@@ -293,10 +262,8 @@ assert_eq 0 "$ec" "T16: a named-project row with no session field → exit 0"
 assert_empty "$(cat "$tmp/out")" "T16: a named-project row with no session field is nobody's and is not listed"
 rm -rf "$tmp"
 
-# --- T17. Same-second siblings: a verdict on one does not track the other (#481)
-# The feedback map used to be keyed on ts alone, so a --id-pinned verdict on
-# sibling A marked sibling B as tracked too and B was never surfaced. The map
-# is keyed on ref_id where the feedback row carries one, on ref_ts otherwise.
+# --- T17. Same-second siblings: a verdict on one does not track the other
+# (#481); the map is keyed on ref_id where present, ref_ts otherwise --------
 tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
 {
   printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s17","otel_span_id":"aaaa000000000001"}\n' "$NOW" "$proj"
