@@ -1,13 +1,7 @@
 #!/usr/bin/env bash
-# Where the four per-user files resolve to by default.
-#
-# This suite exists because no other one can catch a regression here: every
-# existing test either passes an explicit path (--file, DELEGATE_METRICS_FILE)
-# or sandboxes HOME, so all of them stay green if the default is wrong.
-#
-# Resolution is deliberately a plain parameter expansion, so it is a pure
-# function of the environment. See the design doc for why a shared lib and an
-# existence-based legacy fallback were both rejected.
+# Where the four per-user files resolve to by default. Every other suite
+# passes an explicit path or sandboxes HOME, so only this one can catch a
+# wrong default.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,12 +44,8 @@ assert_eq "/tmp/explicit.jsonl" \
   "$(probe_metrics DELEGATE_LOCAL_DATA_DIR=/tmp/dd-x DELEGATE_METRICS_FILE=/tmp/explicit.jsonl)" \
   "metrics: the file-specific override beats the data dir"
 
-# XDG_DATA_HOME is deliberately NOT consulted. It is commonly set in a shell rc
-# file and absent in GUI-launched processes, which is exactly the split between
-# an interactive terminal and the agent harness that runs these hooks. Honouring
-# it would make resolution depend on which environment a script happened to run
-# in, and a verdict recorded in one would silently attach to the wrong parent
-# delegation in the other.
+# XDG_DATA_HOME is not consulted: it is set in a shell rc and absent in the
+# GUI-launched agent harness, so honouring it would split the data.
 assert_eq "$H/.local/share/delegate-local/metrics.jsonl" \
   "$(probe_metrics XDG_DATA_HOME=/tmp/xdg-x)" \
   "metrics: XDG_DATA_HOME is ignored on purpose"
@@ -75,20 +65,15 @@ else echo "  FAIL  metrics: unset HOME exited 0"; fail=$((fail+1)); fi
 assert_contains "HOME" "$out" "metrics: unset HOME names the variable"
 
 echo "--- a second reader agrees ---"
-# Only sync-metrics-to-loki is probed behaviourally here. observability-doctor
-# resolves the same default but exits early on a missing `docker` under env -i,
-# so it never reaches the message; the structural assertion at the end is what
-# covers it, and the other eight scripts.
+# observability-doctor exits early on a missing `docker` under env -i, so it
+# and the other scripts are covered by the structural grep below.
 got=$(env -i PATH="$SAFE_PATH" HOME="$H" bash "$REPO/scripts/sync-metrics-to-loki.sh" 2>&1 \
       | sed -n 's/.*metrics file not found: //p' | head -1)
 assert_eq "$H/.local/share/delegate-local/metrics.jsonl" "$got" "sync-metrics-to-loki: same default"
 
 echo "--- config.sh and profile.sh ---"
-# The profile candidate prints unconditionally, so it can be probed for real.
-# The config candidate only prints when the environment probe finds installed
-# models, which is false on a CI runner, so asserting on it here would pass
-# locally and fail in CI. It is covered structurally instead, and behaviourally
-# by tests/test-onboard.sh, which mocks the provider endpoint.
+# The config candidate prints only when models are installed, which is false
+# in CI; it is covered structurally here and behaviourally in test-onboard.sh.
 onb=$(env -i PATH="$SAFE_PATH" HOME="$H" bash "$REPO/scripts/onboard.sh" 2>&1 || true)
 assert_contains "$H/.local/share/delegate-local/profile.sh" "$onb" \
   "onboard: profile.sh target under the data dir"
@@ -99,21 +84,13 @@ for f in onboard pick-model; do
 done
 
 echo "--- no script still DEFAULTS to the legacy data path ---"
-# Matches only a `:-` default expansion. Two scripts reference the legacy path
-# deliberately, in the migration hint that tells the user to move it, and those
-# must not trip this. Script paths (~/.claude/skills/delegate-local/scripts/...)
-# are unaffected either way: only the four DATA files moved.
+# Matches only a `:-` default expansion, since two scripts name the legacy
+# path deliberately in their migration hint.
 leftovers=$(grep -rln ':-\$HOME/\.claude/skills/delegate-local/' "$REPO/scripts/" 2>/dev/null || true)
 assert_eq "" "$leftovers" "scripts: no legacy data-file default remains"
 
-# The grep above is shell-specific: its pattern is a `:-` default expansion,
-# which Python never writes, so it cannot see a regression in
-# experiments/quality-trend.py. Broadening the pattern to a bare path match is
-# not the answer either — it false-positives on the two DELIBERATE migration
-# hints in delegate-feedback.sh and metrics-summary.sh that tell a legacy user
-# where their data moved from. So the Python tool gets a behavioural probe
-# instead, the same shape as probe_metrics above: point HOME at an empty
-# sandbox and read back the path it names as missing.
+# The `:-` grep cannot see Python, so quality-trend.py gets a behavioural
+# probe like probe_metrics above.
 QT="$REPO/experiments/quality-trend.py"
 if [[ -f "$QT" ]]; then
   qt_probe() {
