@@ -1,12 +1,7 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/eval-skill-triggers.sh.
-# Mocks `curl` (Ollama, Anthropic, GitHub Models backends) and optionally
-# `pick-model.sh` on a restricted PATH so the test runs the same everywhere.
-#
-# The script under test issues exactly one batched scoring call per run
-# (issue #62 quota fix). Mocks therefore parse the queries out of the
-# request body and return a verdicts JSON object covering every id, rather
-# than answering per-query like the pre-batching version.
+# Unit tests for scripts/eval-skill-triggers.sh. The script issues one
+# batched scoring call per run (#62), so the curl mocks parse the queries
+# out of the request body and return a verdicts object covering every id.
 
 set -u
 
@@ -73,13 +68,9 @@ description: Use this skill to offload non-reasoning text work to local Ollama m
 MD
 }
 
-# Build a verdicts JSON object given the request body and a classifier rule.
-# The classifier is one of:
-#   "perfect"        — id prefix p → TRIGGER, n → NOTRIGGER
-#   "all-trigger"    — every id → TRIGGER
-#   "all-trigger-lc" — every id → "trigger.\n" (tests verdict normalisation)
-# Reads the body from stdin, prints the verdicts JSON object on stdout.
-# Uses jq + grep, both available on SAFE_PATH on Ubuntu and macOS.
+# Build a verdicts object from the request body on stdin. Classifier:
+# "perfect" (p→TRIGGER, n→NOTRIGGER), "all-trigger", or "all-trigger-lc"
+# ("trigger.\n", for verdict normalisation).
 write_classifier_helper() {
   local dir="$1"
   cat > "$dir/build-verdicts.sh" <<'EOF'
@@ -271,10 +262,8 @@ assert_eq 0 "$EC" "--local perfect mock -> exits 0"
 assert_contains "scoring: backend=local model=mock-model:latest" "$out" "--local: model header"
 assert_contains "recall=1.000 negative-precision=1.000" "$out" "--local perfect: 1.000/1.000"
 assert_contains "OK trigger evals (local)" "$out" "--local: OK message"
-# Batching: one scoring request for the whole eval set, not one per query.
-# $sniff records scoring bodies only — the mock answers the discovery probe
-# (GET {base}/models) and exits before writing, so the probe is deliberately
-# not counted here.
+# Batching: one scoring request for the whole eval set. $sniff records
+# scoring bodies only; the discovery probe is not counted.
 calls=$(wc -l < "$sniff" | tr -d ' ')
 assert_eq 1 "$calls" "--local: exactly one batched scoring call (was $calls)"
 rm -rf "$tmp"
@@ -348,10 +337,8 @@ assert_contains "summarise this log" "$first_body" "--local body: query in promp
 assert_contains '\"id\":\"p01\"' "$first_body" "--local body: ids in batched payload"
 rm -rf "$tmp"
 
-# 10. OLLAMA_HOST feeds the default provider list, so it still steers the
-# scoring call — but through pick-model.sh rather than a hardcoded host. Only
-# the :9999 provider answers discovery, which is what proves the dispatch
-# landed on the overridden host rather than on the first list entry.
+# 10. OLLAMA_HOST steers the scoring call through pick-model.sh's default
+# list; only the :9999 provider answers discovery, which proves it.
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
@@ -623,12 +610,8 @@ assert_contains "8 verdicts missing" "$out" "--local partial: warning surfaces m
 assert_contains "recall=1.000 negative-precision=0.000" "$out" "--local partial: missing counted as misses"
 rm -rf "$tmp"
 
-# N. gate:false diagnostic queries (#277 dir 3) are scored and reported but
-# excluded from the pass/fail recall gate. The fixture adds two diagnostic
-# positives: one the perfect classifier marks TRIGGER (id starts with p) and
-# one it marks NOTRIGGER (a miss). If diagnostics counted toward the gate the
-# miss would drop gating recall below 0.9 and the run would exit 1; instead
-# gating stays 1.000/exit 0 and the diagnostic line reports embedded-recall.
+# N. gate:false diagnostic queries (#277) are scored and reported but not
+# gated: one diagnostic miss would otherwise drop recall below 0.9.
 tmp=$(mktemp -d)
 make_skill "$tmp"
 make_eval_set "$tmp"
