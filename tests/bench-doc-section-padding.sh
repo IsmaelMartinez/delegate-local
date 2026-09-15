@@ -1,16 +1,7 @@
 #!/usr/bin/env bash
-# doc-section closing-recap / padding-tail regression benchmark. Drives
-# `delegate.sh --recipe doc-section` over diverse fixtures and scores each
-# paragraph for the two deterministic failure shapes the recipe is built to
-# suppress: a trailing recap/participial padding clause, and a sentence-cap
-# violation (HARD RULE 4). doc-section ships NO `checks:` block, so production
-# enforces neither — this bench is the recipe's only regression coverage (the
-# deterministic scorer its own "What's not yet measured" note deferred).
-#
-# The padding detector is EXTRACTED from the production `padding_re` in
-# scripts/delegate.sh at runtime, not copied, so the bench can never drift from
-# the production no_padding_tail logic. Reps add no signal under MLX greedy
-# determinism (ADR 0018); diversity comes from fixtures. Usage:
+# doc-section padding-tail benchmark: scores each paragraph for a trailing
+# padding clause and a sentence-cap violation. The padding detector is read
+# from delegate.sh's `padding_re` at runtime so it cannot drift. Usage:
 #   [BENCH_BACKENDS="mlx ollama"] [BENCH_GATE=1] bash tests/bench-doc-section-padding.sh
 set -uo pipefail
 SKILL_DIR="${SKILL_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -34,9 +25,7 @@ has_padding() { printf '%s' "$1" | tr '\n' ' ' | grep -Eiq "$padding_re"; }
 # Approximate sentence count: terminal . ! ? followed by whitespace or end.
 count_sentences() { printf '%s' "$1" | tr '\n' ' ' | grep -oE '[.!?]+([[:space:]]|$)' | wc -l | tr -d ' '; }
 
-# Map a bench arm to the provider it pins. An arm is one entry in
-# DELEGATE_BASE_URL now, not a DELEGATE_BACKEND mode: pinning the list to a
-# single provider is what keeps the arms comparable.
+# An arm pins DELEGATE_BASE_URL to one provider so the arms stay comparable.
 backend_base() {
   case "$1" in
     mlx)    printf '%s/v1' "${MLX_HOST:-http://localhost:8080}" ;;
