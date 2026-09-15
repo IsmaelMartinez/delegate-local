@@ -16,7 +16,7 @@ Run the unit tests (mocks `ollama` and `llmfit` on a restricted PATH so results 
 bash tests/run-tests.sh
 ```
 
-Audit installed models and see tier routing plus llmfit upgrade suggestions (requires `ollama`, `jq`, and optionally `llmfit` on PATH):
+Audit installed models and see tier routing plus llmfit upgrade suggestions (requires `jq` and a reachable provider; `llmfit` on PATH for the upgrade half):
 
 ```bash
 bash scripts/audit-models.sh
@@ -120,7 +120,7 @@ The validation pipeline is the gate every PR has to clear. Three scripts plus th
 
 `prompts/` is the calibrated-recipe library introduced 2026-05-09 as layer 1 of the training-loop initiative (see ROADMAP). Each `prompts/<task>.md` ships the proven prompt skeleton + verbatim-example anchoring discipline + explicit anti-hallucination guards drawn from real session HITs. SKILL.md "Recipes" section points the agent at the directory; `tests/test-prompts-library.sh` enforces structural validity (required sections, README cross-reference, SKILL.md pointer) so a recipe can't drift into a broken template. Adding a new recipe is described in `prompts/README.md`: every recurring HIT graduates to a recipe entry, every MISS that names a missing recipe gets one filed.
 
-`scripts/audit-models.sh` is read-only by design and never pulls models. It cross-checks `llmfit recommend --json` output against `ollama list` because llmfit tracks its own HuggingFace GGUF cache rather than Ollama's model store. The `hf_stem` function strips provider prefix and quant/variant suffixes (`-instruct`, `-fp8`, `-q4_K_M`, etc.) so that `Qwen/Qwen3.6-35B-A3B-Instruct-Q8_0` matches an installed `qwen3.6:35b-a3b-q8_0`. Suggestions are filtered to first-party providers (Alibaba/Google/Meta/Microsoft/DeepSeek/Mistral/Zhipu) because third-party fine-tunes rarely appear on the Ollama library under the same name. The 3-point delta threshold for surfacing an upgrade is intentional — anything smaller is noise from llmfit's scoring.
+`scripts/audit-models.sh` is read-only by design and never pulls models. It cross-checks `llmfit recommend --json` output against the union of models the reachable providers serve (`pick-model.sh --print-installed`, so an MLX- or Docker-only host gets the upgrade half too, #492) because llmfit tracks its own HuggingFace GGUF cache rather than any provider's store. The `hf_stem` function strips provider prefix and quant/variant suffixes (`-instruct`, `-fp8`, `-q4_K_M`, etc.) so that `Qwen/Qwen3.6-35B-A3B-Instruct-Q8_0` matches an installed `qwen3.6:35b-a3b-q8_0`. Suggestions are filtered to first-party providers (Alibaba/Google/Meta/Microsoft/DeepSeek/Mistral/Zhipu) because third-party fine-tunes rarely appear on the Ollama library under the same name. The 3-point delta threshold for surfacing an upgrade is intentional — anything smaller is noise from llmfit's scoring.
 
 `tests/run-tests.sh` builds an isolated PATH containing only `/usr/bin:/bin:/usr/sbin:/sbin` plus a temp dir holding mock `ollama` and `llmfit` binaries, then asserts specific tier outputs. The MLX cases pass `HF_HOME=$tmp` and construct a fake `$tmp/hub/models--<org>--<name>/snapshots/<hash>/` tree (with a sentinel `weights.safetensors` so the empty-snapshot guard doesn't skip it) — no `mlx-lm` binary needed in the test PATH because `pick-model.sh` only reads the cache directory. The prose-tier ordering test (qwen3.6 ahead of qwen3-next) is intentional and encodes the empirical Phase 7 baseline finding — don't relax it without re-running the baseline.
 

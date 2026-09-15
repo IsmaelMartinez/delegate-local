@@ -438,14 +438,35 @@ assert_contains "qwen3-coder:30b" "$OUT" "audit: inventory is what the provider 
 assert_contains "reasoning-vision" "$OUT" "audit: routing table covers the scaffolded tiers"
 rm -rf "$tmp"
 
-# No ollama binary still gets a full routing report: nothing on the routing
-# path needs the CLI.
+# No ollama binary still gets the full report, upgrade check included: the
+# cross-check reads what the providers serve, not `ollama list` (#492), so an
+# MLX- or Docker-only host is no longer told the check was skipped.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:qwen3.6:35b-a3b-q8_0"
+make_mock_llmfit "$tmp"
 EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
 assert_eq "0" "$EC" "audit: no ollama binary -> exit 0"
 assert_contains "prose" "$OUT" "audit: still prints tier routing without the ollama CLI"
-assert_contains "Upgrade check skipped" "$OUT" "audit: no ollama -> llmfit cross-check skipped, not fatal"
+assert_contains "Top llmfit recommendations" "$OUT" "audit: the upgrade check runs without the ollama CLI (#492)"
+assert_absent_out() { case "$OUT" in *"$1"*) echo "  FAIL  $2"; fail=$((fail+1));; *) echo "  PASS  $2"; pass=$((pass+1));; esac; }
+assert_absent_out "Upgrade check skipped" "audit: no ollama is not a reason to skip the upgrade check (#492)"
+rm -rf "$tmp"
+
+# [installed] is judged against the provider inventory: an llmfit candidate
+# whose stem matches a served model is installed, one that does not is not.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b-q8_0"
+cat > "$tmp/llmfit" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == *--json* ]]; then
+  echo '{"models":[{"name":"Qwen/Qwen3.6-35B-A3B-Instruct-Q8_0","provider":"Qwen","score":90,"estimated_tps":40,"parameter_count":"35B","release_date":"2026-01-01"},{"name":"Qwen/Qwen2.5-Coder-7B-Instruct","provider":"Qwen","score":80,"estimated_tps":80,"parameter_count":"7.6B","release_date":"2025-01-01"}]}'
+else echo ""; fi
+EOF
+chmod +x "$tmp/llmfit"
+EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
+assert_contains "Qwen/Qwen3.6-35B-A3B-Instruct-Q8_0  [installed]" "$OUT" "audit: a served model is [installed] whichever provider serves it (#492)"
+assert_contains "Qwen/Qwen2.5-Coder-7B-Instruct  [not installed]" "$OUT" "audit: an unserved candidate is [not installed]"
+assert_contains "No strong upgrades found" "$OUT" "audit: the installed leader beats the candidate, so nothing is suggested"
 rm -rf "$tmp"
 
 # The embedding tier resolves like every other tier, with no per-tier
@@ -454,7 +475,6 @@ tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:nomic-embed-text:v1.5"
 EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
 assert_contains "nomic-embed-text" "$OUT" "audit: embedding tier resolves like any other tier"
-assert_absent_out() { case "$OUT" in *"$1"*) echo "  FAIL  $2"; fail=$((fail+1));; *) echo "  PASS  $2"; pass=$((pass+1));; esac; }
 assert_absent_out "embed.sh pins it" "audit: no per-tier provider pin is advertised"
 rm -rf "$tmp"
 

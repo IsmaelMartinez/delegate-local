@@ -313,7 +313,7 @@ More capable local models will shift these numbers but probably not by an order 
 
 The skill intentionally avoids frameworks. Local models are good summarisers and weak agents; delegation is a shell pipe, not an orchestration layer. The `pick-model.sh` preference lists are the single point of truth for routing — no hardcoded model names in the skill body.
 
-`audit-models.sh` cross-checks llmfit's `installed` flag against `ollama list` because llmfit tracks its own HuggingFace GGUF cache rather than Ollama's model store. It filters suggestions to Alibaba/Google/Meta/Microsoft/DeepSeek/Mistral/Zhipu so third-party fine-tunes that Ollama won't have under the same name don't pollute the output.
+`audit-models.sh` cross-checks llmfit's `installed` flag against the models the reachable providers serve (the same union `pick-model.sh --print-installed` reports, so MLX and Docker Model Runner count as much as Ollama) because llmfit tracks its own HuggingFace GGUF cache rather than any provider's store. It filters suggestions to Alibaba/Google/Meta/Microsoft/DeepSeek/Mistral/Zhipu so third-party fine-tunes that Ollama won't have under the same name don't pollute the output.
 
 ## Related projects
 
@@ -329,7 +329,7 @@ This skill sits at the intersection of three personal projects, and is observed 
 
 ## Maintenance
 
-A monthly reminder to re-run `scripts/audit-models.sh` is automated via [`.github/workflows/monthly-audit-reminder.yml`](.github/workflows/monthly-audit-reminder.yml). The workflow opens a tracking issue on the 1st of each month (idempotent — skips when one is already open) because the audit needs a local `ollama list` and can't run on the hosted runner; `workflow_dispatch` is the manual escape hatch.
+A monthly reminder to re-run `scripts/audit-models.sh` is automated via [`.github/workflows/monthly-audit-reminder.yml`](.github/workflows/monthly-audit-reminder.yml). The workflow opens a tracking issue on the 1st of each month (idempotent — skips when one is already open) because the audit needs the local providers running and can't run on the hosted runner; `workflow_dispatch` is the manual escape hatch.
 
 ## License
 

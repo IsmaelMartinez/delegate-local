@@ -3,8 +3,8 @@
 # for this hardware: tier routing, uninstalled models that outscore installed
 # ones, pull suggestions. Installs nothing. The provider list comes from
 # pick-model.sh so the audit cannot report an inventory routing does not
-# consult; llmfit tracks the HuggingFace cache, not the Ollama store, so each
-# candidate is cross-checked against `ollama list` by normalised stem.
+# consult; llmfit tracks the HuggingFace cache, not what the providers serve,
+# so each candidate is cross-checked against that same list by normalised stem.
 
 set -euo pipefail
 
@@ -44,15 +44,6 @@ while IFS= read -r tier; do
 done < <(bash "$pick" --print-prefs | cut -d: -f1)
 echo
 
-if ! command -v ollama >/dev/null 2>&1; then
-  cat <<EOF
-=== Upgrade check skipped ===
-The llmfit cross-check compares candidates against 'ollama list', and ollama
-is not on PATH. Tier routing above is unaffected.
-EOF
-  exit 0
-fi
-
 if ! command -v llmfit >/dev/null 2>&1; then
   cat <<EOF
 === Upgrade check skipped ===
@@ -76,11 +67,13 @@ tier_to_usecase() {
   esac
 }
 
-# Ollama model blob, normalized: lowercase, : and _ to -.
-ollama_blob=$(ollama list 2>/dev/null | awk 'NR>1 {print $1}' | tr '[:upper:]' '[:lower:]' | tr ':_' '--')
+# Every model a reachable provider serves, normalised: lowercase, : and _ to -.
+# The same union the inventory above printed, so [installed] means what routing
+# can reach, on any provider (#492).
+installed_blob=$(bash "$pick" --print-installed 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr ':_' '--')
 
 # HF name ("Provider/Model-Variant") to a stem for substring matching against
-# $ollama_blob: provider prefix and variant/quant suffixes stripped.
+# $installed_blob: provider prefix and variant/quant suffixes stripped.
 hf_stem() {
   local name="$1"
   echo "$name" \
@@ -88,13 +81,13 @@ hf_stem() {
     | sed -E 's/[-_](instruct|it|chat|base|fp8|fp16|bf16|mlx|awq[^ ]*|gptq[^ ]*|nvfp[^ ]*|q[0-9]+[^ ]*|abliterated|uncensored|speculator[^ ]*).*$//'
 }
 
-# Check if an HF model is represented in `ollama list`.
-is_in_ollama() {
+# Check if an HF model is served by a reachable provider.
+is_installed() {
   local stem
   stem=$(hf_stem "$1")
   # Need a non-empty stem of at least 4 chars to avoid false positives.
   [[ ${#stem} -ge 4 ]] || return 1
-  [[ "$ollama_blob" == *"$stem"* ]]
+  [[ "$installed_blob" == *"$stem"* ]]
 }
 
 # First-party providers only: third-party fine-tunes rarely appear on the
@@ -112,12 +105,8 @@ done
 
 echo "=== Top llmfit recommendations per tier (for this hardware) ==="
 echo "Scores are llmfit composite (quality+speed+fit+context). Installed status"
-echo "checked against 'ollama list' (not llmfit's HF cache). Filtered to"
-echo "first-party providers (Alibaba/Google/Meta/Microsoft/DeepSeek/Mistral/Zhipu)."
-if [[ "$backend" == "mlx" ]]; then
-  echo "Backend is mlx, so [installed] below is advisory only — it reflects the"
-  echo "Ollama store, not the hub cache this host actually routes through."
-fi
+echo "checked against what the reachable providers serve (not llmfit's HF cache)."
+echo "Filtered to first-party providers (Alibaba/Google/Meta/Microsoft/DeepSeek/Mistral/Zhipu)."
 echo
 
 for tier in code prose reasoning long-context; do
@@ -133,7 +122,7 @@ for tier in code prose reasoning long-context; do
   fi
   printf "  --- tier: %s (llmfit use-case: %s) ---\n" "$tier" "$uc"
   while IFS=$'\t' read -r score tps params name; do
-    if is_in_ollama "$name"; then tag="[installed]"; else tag="[not installed]"; fi
+    if is_installed "$name"; then tag="[installed]"; else tag="[not installed]"; fi
     printf "    %s  %stps  %s  %s  %s\n" "$score" "$tps" "$params" "$name" "$tag"
   done < <(echo "$filtered" | jq -r '.[] | "\(.score)\t\(.estimated_tps)\t\(.parameter_count)\t\(.name)"')
   echo
@@ -153,14 +142,14 @@ for tier in code prose reasoning long-context; do
   # Best installed score (among first-party models in llmfit top-20).
   best_installed=0
   while IFS=$'\t' read -r s n; do
-    if is_in_ollama "$n"; then
+    if is_installed "$n"; then
       if awk -v a="$s" -v b="$best_installed" 'BEGIN{ exit !(a>b) }'; then best_installed="$s"; fi
     fi
   done < <(echo "$filtered" | jq -r '.[] | "\(.score)\t\(.name)"')
 
   # First non-installed candidate that beats installed by 3+ points.
   while IFS=$'\t' read -r s p n; do
-    if is_in_ollama "$n"; then continue; fi
+    if is_installed "$n"; then continue; fi
     if ! awk -v a="$s" -v b="$best_installed" 'BEGIN{ exit !(a-b >= 3) }'; then continue; fi
     # Dedupe: same HF model across tiers prints once.
     case "$seen_suggestions" in *"|$n|"*) continue ;; esac
@@ -173,7 +162,13 @@ for tier in code prose reasoning long-context; do
       printf "  [%s] %s (%s) — llmfit %.1f vs installed %.1f\n" \
         "$tier" "$n" "$p" "$s" "$best_installed"
     fi
-    printf "         try: ollama pull %s   (verify at https://ollama.com/library)\n" "$hint"
+    # A pull command exists only for Ollama; MLX and Docker Model Runner
+    # take the HF name through their own tooling.
+    if command -v ollama >/dev/null 2>&1; then
+      printf "         try: ollama pull %s   (verify at https://ollama.com/library)\n" "$hint"
+    else
+      printf "         no ollama on PATH: fetch %s with your provider's tooling (mlx_lm / docker model pull)\n" "$n"
+    fi
     found=1
     break
   done < <(echo "$filtered" | jq -r '.[] | "\(.score)\t\(.parameter_count)\t\(.name)"')
@@ -185,7 +180,7 @@ fi
 echo
 cat <<'EOF'
 === Next steps ===
-- Verify the Ollama tag matches the HF name (Ollama sometimes re-packages).
+- On Ollama, verify the tag matches the HF name (Ollama sometimes re-packages).
 - After any pull, edit scripts/pick-model.sh prefs if the model-name pattern
   changed, then re-run this script.
 - Prefer the smallest model sufficient for the task (speed + energy).
