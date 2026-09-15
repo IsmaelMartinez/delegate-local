@@ -329,7 +329,7 @@ This skill sits at the intersection of three personal projects, and is observed 
 
 ## Maintenance
 
-A monthly reminder to re-run `scripts/audit-models.sh` is automated via [`.github/workflows/monthly-audit-reminder.yml`](.github/workflows/monthly-audit-reminder.yml). The workflow opens a tracking issue on the 1st of each month (idempotent — skips when one is already open) because the audit needs a local `ollama list` and can't run on the hosted runner; `workflow_dispatch` is the manual escape hatch.
+A monthly reminder to re-run `scripts/audit-models.sh` is automated via [`.github/workflows/monthly-audit-reminder.yml`](.github/workflows/monthly-audit-reminder.yml). The workflow opens a tracking issue on the 1st of each month (idempotent — skips when one is already open) because the audit needs the local providers running and can't run on the hosted runner; `workflow_dispatch` is the manual escape hatch.
 
 ## License
 

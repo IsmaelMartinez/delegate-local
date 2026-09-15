@@ -162,7 +162,13 @@ for tier in code prose reasoning long-context; do
       printf "  [%s] %s (%s) — llmfit %.1f vs installed %.1f\n" \
         "$tier" "$n" "$p" "$s" "$best_installed"
     fi
-    printf "         try: ollama pull %s   (verify at https://ollama.com/library)\n" "$hint"
+    # A pull command exists only for Ollama; MLX and Docker Model Runner
+    # take the HF name through their own tooling.
+    if command -v ollama >/dev/null 2>&1; then
+      printf "         try: ollama pull %s   (verify at https://ollama.com/library)\n" "$hint"
+    else
+      printf "         no ollama on PATH: fetch %s with your provider's tooling (mlx_lm / docker model pull)\n" "$n"
+    fi
     found=1
     break
   done < <(echo "$filtered" | jq -r '.[] | "\(.score)\t\(.parameter_count)\t\(.name)"')
@@ -174,7 +180,7 @@ fi
 echo
 cat <<'EOF'
 === Next steps ===
-- Verify the Ollama tag matches the HF name (Ollama sometimes re-packages).
+- On Ollama, verify the tag matches the HF name (Ollama sometimes re-packages).
 - After any pull, edit scripts/pick-model.sh prefs if the model-name pattern
   changed, then re-run this script.
 - Prefer the smallest model sufficient for the task (speed + energy).
