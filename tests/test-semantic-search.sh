@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/semantic-search.sh.
-# Mocks `ollama` and `curl` with deterministic embeddings so the cosine
-# similarities are predictable. The curl mock returns a different vector
-# per input string (keyed by stdin payload) so the ranking is testable
-# without touching a real model.
+# Unit tests for scripts/semantic-search.sh, against a curl mock that
+# returns a deterministic vector per input so the ranking is predictable.
 
 set -u
 
@@ -46,19 +43,9 @@ EOF
   chmod +x "$dir/ollama"
 }
 
-# Mock curl with deterministic per-input vectors so the ranking is testable
-# without touching a real model. The mock reads the JSON payload from stdin,
-# extracts the `.input` field, and emits a vector that varies with the input
-# string in a predictable way:
-#   * input contains "query"   -> [1, 0, 0, 0]
-#   * input contains "alpha"   -> [0.9, 0.1, 0, 0]   (high similarity to query)
-#   * input contains "beta"    -> [0.5, 0.5, 0, 0]   (medium similarity)
-#   * input contains "gamma"   -> [0, 1, 0, 0]       (orthogonal — score 0)
-#   * input contains "delta"   -> [-1, 0, 0, 0]      (opposite — score -1)
-#   * fallback                 -> [0.3, 0.3, 0.3, 0]
-# Each call requires jq to be on PATH (the real semantic-search.sh
-# expects jq too), so add `/usr/bin` and `/bin` to the mock's PATH via
-# the SAFE_PATH the test harness uses.
+# Vector per `.input` substring: query [1,0,0,0]; alpha [0.9,0.1,0,0];
+# beta [0.5,0.5,0,0]; gamma [0,1,0,0] (orthogonal); delta [-1,0,0,0]
+# (opposite); else [0.3,0.3,0.3,0]. The mock needs jq on PATH.
 make_mock_curl_deterministic() {
   local dir="$1"
   cat > "$dir/curl" <<'EOF'
