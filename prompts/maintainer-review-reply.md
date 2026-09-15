@@ -17,7 +17,7 @@ checks:
 
 ## When to use
 
-You are a maintainer replying to a contributor's PR or issue with a JUDGEMENT and the evidence behind it: the change is right, the change is wrong, this is not a regression, this blocker is real and that one is not. You already did the investigation, so the reply has to carry the anchors it rests on — file paths, line references, commit hashes, issue and PR numbers, measured counts — and then say what you want the contributor to do next.
+You are a maintainer replying to a contributor's PR or issue with a JUDGEMENT and the evidence behind it: the change is right, the change is wrong, this is not a regression, this blocker is real and that one is not. You already did the investigation, so the reply has to carry the anchors it rests on — file paths, line references, commit hashes, issue and PR numbers, measured counts — and then, when there is one, say what you want the contributor to do next; a clean approval has no ask and ends on the evidence.
 
 Distinct from the three adjacent reply recipes. `maintainer-reply.md` is the CLOSED short shape: one sentence of cause-or-praise, then one ask, capped at two sentences, for a diagnostic one-liner or a status comment. `pr-review-reply.md` carries the same evidence-shaped body in the PR *author's* voice, answering a reviewer under their own inline comment behind a fixed opener; the axis between that recipe and this one is role, not length. `summarise-issue.md` digests a thread rather than answering it. This recipe is for the case those three keep being asked to cover and cannot: a substantive reply whose length is set by how much evidence there is.
 
