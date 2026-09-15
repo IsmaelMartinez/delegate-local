@@ -1926,6 +1926,42 @@ assert_eq 5 "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "relative body
 assert_eq "" "$out" "relative body-file: ...so the 5-char reply is under the floor, not enforced as unmeasurable"
 rm -f "$tmpcwd/reply.md"
 
+# 79 (#489). A body-file path opening with `$NAME` / `${NAME}` is resolved by
+# lookup in the hook's environment, never by expansion: set → measured and
+# captured; unset, `$(...)`, or a further `$` → unmeasurable as before.
+envdir=$(mktemp -d)
+printf '%s' "$body300" > "$envdir/rr.txt"
+: > "$METRICS"
+payload 'gh api repos/o/r/pulls/1/comments -X POST --field body=@"$T489_DIR/rr.txt" -F in_reply_to=9' "$tmpcwd" | T489_DIR="$envdir" dflt bash "$HOOK" >/dev/null
+assert_eq "${#body300}" "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "env path: body=@\"\$VAR/file\" measures the file when VAR is set in the hook env"
+: > "$METRICS"
+payload 'gh pr comment 1 --body-file "${T489_DIR}/rr.txt"' "$tmpcwd" | T489_DIR="$envdir" dflt bash "$HOOK" >/dev/null
+assert_eq "${#body300}" "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "env path: --body-file \"\${VAR}/file\" resolves the braced form too"
+: > "$METRICS"
+out=$(payload 'gh pr comment 1 --body-file "$T489_UNSET/rr.txt"' "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "env path: an unset VAR stays unmeasurable and enforced"
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "env path: an unset VAR carries no body_chars"
+: > "$METRICS"
+out=$(payload 'gh pr comment 1 --body-file "$(cat where.txt)"' "$tmpcwd" | T489_DIR="$envdir" dflt bash "$HOOK")
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "env path: \$(cat x) is not a lookup and stays unmeasurable"
+: > "$METRICS"
+out=$(payload 'gh pr comment 1 --body-file "$T489_DIR/$SUB/rr.txt"' "$tmpcwd" | T489_DIR="$envdir" SUB=. dflt bash "$HOOK")
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "env path: a second \$ in the rest of the path stays unmeasurable"
+: > "$METRICS"
+out=$(payload 'gh pr comment 1 --body-file "$T489_DIR/rr.txt"' "$tmpcwd" | T489_DIR='$HOME/x' dflt bash "$HOOK")
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "env path: a value that itself holds \$ stays unmeasurable"
+: > "$METRICS"
+out=$(payload 'gh pr comment 1 --body-file "$T489_DIR/rr.txt"' "$tmpcwd" | T489_DIR='relative/dir' dflt bash "$HOOK")
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "env path: a non-absolute value stays unmeasurable"
+# The capture fires once the path resolves: a credited post under $VAR stores
+# its final beside the draft.
+cap_setup_recipe pr-review-reply
+printf 'the reply posted from the job dir' > "$envdir/rr.txt"
+payload 'gh api repos/o/r/pulls/12/comments -X POST --field body=@"$T489_DIR/rr.txt" -F in_reply_to=1' "$capcwd" | T489_DIR="$envdir" DELEGATE_METRICS_FILE="$capm" bash "$HOOK" >/dev/null 2>&1
+assert_eq "the reply posted from the job dir" "$(cat "$capdir/$capfinal" 2>/dev/null)" \
+  "env path: a credited body=@\"\$VAR/file\" post stores the file as the final"
+rm -rf "$capdir" "$capcwd" "$envdir"
+
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

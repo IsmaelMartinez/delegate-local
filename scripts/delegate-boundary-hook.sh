@@ -332,6 +332,11 @@ _posted_body_scan() {
             while (k <= n && substr($0, k, 1) ~ /[A-Za-z0-9_-]/) { key = key substr($0, k, 1); k++ }
             if (key != "" && substr($0, k, 1) == "=") j = k + 1; else key = "";
           }
+          # `body=@path` names a file, and the `@` sits before any quote:
+          # `body=@"$DIR/reply.md"` read bare kept the quotes in the path and
+          # never named a readable file (#489).
+          atfile = 0;
+          if (isfield && key == "body" && substr($0, j, 1) == "@") { atfile = 1; j++ }
           d = substr($0, j, 1); v = ""; vlit = 1;
           if (d == "\"" || d == "\047") {
             j++;
@@ -409,9 +414,7 @@ _posted_body_scan() {
           # posted, and reading them as one is the whole of #461.
           asfile = 0; asbody = 0;
           if (isfield && key != "") {
-            if (key == "body") {
-              if (substr(v, 1, 1) == "@") { asfile = 1; v = substr(v, 2) } else asbody = 1;
-            }
+            if (key == "body") { if (atfile) asfile = 1; else asbody = 1 }
           }
           else if (isfile) asfile = 1;
           else if (!isfield) asbody = 1;
@@ -450,6 +453,24 @@ _posted_body_scan() {
 # flag, an unreadable file or unresolved shell records nothing and is
 # enforced. Conflating the two enforced a post the hook had fully read.
 body_text="" body_chars="" body_measurable=false body_read=false
+# A body-file path opening with `$NAME` or `${NAME}` is resolved by LOOKUP in
+# the hook's own environment (the Bash tool's, where drafts live under
+# `$CLAUDE_JOB_DIR/tmp`), never by expansion; an unset name, a non-absolute
+# value, or any further `$`/backtick leaves the path as it came (#489).
+_env_prefix_braced='^\$\{([A-Za-z_][A-Za-z0-9_]*)\}(/.*)?$'
+_env_prefix_bare='^\$([A-Za-z_][A-Za-z0-9_]*)(/.*)?$'
+resolve_env_prefix() { # path -> path with a leading env var resolved, else unchanged
+  local p="$1" name rest val
+  if [[ "$p" =~ $_env_prefix_braced ]] || [[ "$p" =~ $_env_prefix_bare ]]; then
+    name="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]-}"
+    val="${!name-}"
+    if [[ -n "$val" && "$val" == /* && "$val" != *'$'* && "$val" != *'`'* \
+          && "$rest" != *'$'* && "$rest" != *'`'* ]]; then
+      printf '%s' "$val$rest"; return 0
+    fi
+  fi
+  printf '%s' "$p"
+}
 read_posted_body() { # raw-segment
   local out first kind flag path
   body_text="" body_chars="" body_measurable=false body_read=true
@@ -459,7 +480,7 @@ read_posted_body() { # raw-segment
   first=${out%%$'\n'*}
   IFS=$'\t' read -r kind flag <<<"$first"
   if [[ "$kind" == "FILE" ]]; then
-    path="$flag"
+    path=$(resolve_env_prefix "$flag")
     # The hook already sits in the payload cwd; a leading `cd <path> &&`
     # moves relative paths again (fifth review round on #484).
     [[ -n "$path" && "$path" != /* && -n "$cd_path" ]] && path="$cd_path/$path"
