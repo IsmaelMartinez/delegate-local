@@ -876,6 +876,35 @@ done
 payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "batch: post 4 exceeds the 3 credits"
 
+# 52b (#503). A spend outlives the delegation it consumed: delegation at
+# T-500m, credited post at T-470m, then a fresh delegation now. Netting
+# in-window rows (1 delegation, 1 spend) read the fresh one as spent and
+# denied a session that had just delegated; replaying the spend against
+# its own window pairs it with the old row and leaves the new one to credit.
+: > "$METRICS"
+old_d=$(jq -rn --argjson now "$(date -u +%s)" '($now - 30000) | todateiso8601')
+old_s=$(jq -rn --argjson now "$(date -u +%s)" '($now - 28200) | todateiso8601')
+jq -nc --arg ts "$old_d" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message", draft_file:"old.draft.txt"}' >> "$METRICS"
+jq -nc --arg ts "$old_s" --arg p "$proj" \
+  '{ts:$ts, source:"opportunity", boundary:"git-commit", suggested_recipe:"commit-message", delegated:true, project:$p}' >> "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message", draft_file:"new.draft.txt"}' >> "$METRICS"
+payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "window replay: a spend that consumed an aged-out delegation does not cancel a fresh one"
+payload 'git commit -m "y"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "window replay: ...and the fresh one is still spent exactly once"
+# The mirror: a spend inside the window with NO earning row in its own
+# window (the delegation was outside the window when it was credited, or
+# has left the tail) is not charged against a later delegation either.
+: > "$METRICS"
+jq -nc --arg ts "$old_s" --arg p "$proj" \
+  '{ts:$ts, source:"opportunity", boundary:"git-commit", suggested_recipe:"commit-message", delegated:true, project:$p}' >> "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"commit-message"}' >> "$METRICS"
+payload 'git commit -m "x"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "window replay: an orphan spend is not charged to a later delegation"
+
 # 53. The default window covers a 3-hour-old delegation (delegate, await
 # approval, post).
 : > "$METRICS"

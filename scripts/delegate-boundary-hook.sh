@@ -643,18 +643,28 @@ if [[ -f "$metrics_file" ]]; then
     def in_window: ((.ts | fromdateiso8601?) // 0) > ($now - $win);
     # A failed delegation (exit_status 3, the pre-flight stall) produced no
     # draft this post could be the shipped form of, so it earns no credit.
+    # Credited posts are replayed against the delegations each could have
+    # spent AT ITS OWN TIME (inside its own window, oldest first), not netted
+    # inside the current window: a delegation ages out of the window before
+    # the post that spent it does, so "in-window delegations minus in-window
+    # spends" read three fresh delegations as already spent and denied a
+    # session that had done exactly what the deny asked (#503).
     ([ .[]
        | select((.source // "delegate") == "delegate")
        | select((.exit_status // 0) == 0)
        | select(matches_proj)
        | select((.recipe // "") as $r | $recipes | index($r) != null)
-       | select(in_window) ] | sort_by(.ts)) as $d
+       | . + {epoch: ((.ts | fromdateiso8601?) // 0)} ] | sort_by(.epoch)) as $earned
     | ([ .[]
        | select((.source // "") == "opportunity")
        | select(.delegated == true)
        | select(matches_proj)
        | select((.suggested_recipe // "") as $r | $recipes | index($r) != null)
-       | select(in_window) ] | length) as $c
+       | ((.ts | fromdateiso8601?) // 0) ] | sort) as $spends
+    | (reduce $spends[] as $st ($earned;
+         (to_entries | map(select(.value.epoch <= $st and .value.epoch > $st - $win)) | .[0].key) as $i
+         | if $i == null then . else del(.[$i]) end)) as $unspent
+    | ([ $unspent[] | select(.epoch > ($now - $win)) ]) as $d
     # The denial streak: denied:true rows for this session+boundary, newest
     # first, before the first that is not. Two in a row and the next attempt
     # is warned, because a delegation that never credits would otherwise make
@@ -669,7 +679,7 @@ if [[ -f "$metrics_file" ]]; then
        | .n) as $streak
     # Credit count, the draft this post spends, and the streak. The draft is
     # oldest-unspent-first, because that is the order a sweep posts in.
-    | "\($d | length - $c)\u001f\($d[$c].draft_file // "")\u001f\($streak)"' 2>/dev/null) || recent_out=""
+    | "\($d | length)\u001f\($d[0].draft_file // "")\u001f\($streak)"' 2>/dev/null) || recent_out=""
   # Unit separator, not tab: tab is IFS whitespace, so an empty middle field
   # would collapse and shift the streak into credit_draft.
   IFS=$'\x1f' read -r recent credit_draft denied_streak <<<"$recent_out"
