@@ -75,6 +75,10 @@
 #                                 but neither nudged nor denied; overrides the
 #                                 per-boundary defaults (20 git-commit, 120 rest)
 #   DELEGATE_BOUNDARY_WINDOW_MIN  look-back window for a prior delegation (default 480)
+#   DELEGATE_BOUNDARY_WRAPPER_DIRS colon-separated directories whose scripts are
+#                                 read when run via bash/sh/zsh (default
+#                                 $CLAUDE_JOB_DIR, $TMPDIR, /tmp, /private/tmp,
+#                                 /var/folders)
 #   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
 #                               (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE         metrics path (shared with delegate.sh)
@@ -105,6 +109,24 @@ hook_cwd=$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null) || hook_cwd=""
 # nothing, and enforced a post the hook could have measured (fifth review
 # round on #484). A builtin, so the common path pays nothing.
 [[ -n "$hook_cwd" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
+# A path opening with `$NAME` or `${NAME}` is resolved by LOOKUP in
+# the hook's own environment (the Bash tool's, where drafts live under
+# `$CLAUDE_JOB_DIR/tmp`), never by expansion; an unset name, a non-absolute
+# value, or any further `$`/backtick leaves the path as it came (#489).
+_env_prefix_braced='^\$\{([A-Za-z_][A-Za-z0-9_]*)\}(/.*)?$'
+_env_prefix_bare='^\$([A-Za-z_][A-Za-z0-9_]*)(/.*)?$'
+resolve_env_prefix() { # path -> path with a leading env var resolved, else unchanged
+  local p="$1" name rest val
+  if [[ "$p" =~ $_env_prefix_braced ]] || [[ "$p" =~ $_env_prefix_bare ]]; then
+    name="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]-}"
+    val="${!name-}"
+    if [[ -n "$val" && "$val" == /* && "$val" != *'$'* && "$val" != *'`'* \
+          && "$rest" != *'$'* && "$rest" != *'`'* ]]; then
+      printf '%s' "$val$rest"; return 0
+    fi
+  fi
+  printf '%s' "$p"
+}
 # A leading `cd <path> &&` retargets those relative paths (and, below, the
 # project) to that directory. Parsed off the RAW command: the scan surface
 # blanks quoted spans, so a quoted path with a space survives there only as
@@ -136,6 +158,37 @@ session_id=$(jq -r '.session_id // empty' <<<"$input" 2>/dev/null) || session_id
 # the overwhelming majority of Bash calls cost a single grep and nothing else.
 # It over-matches on purpose (a heredoc body mentioning `gh pr create` passes);
 # the segment-aware classifier below is what decides.
+# A boundary command inside a wrapper script is invisible to the token
+# classifier, and a wrapper is what the worktree-isolation guard forces on a
+# substitution-bearing call (#469). When the command runs `bash`/`sh`/`zsh`
+# on a readable script under a scratch directory, the script's text stands in
+# for the command and is classified like any other; scripts elsewhere (a
+# repo's own test suite commits in a temp repo) are left alone. Read, never
+# run. `wrapper` on the row names the script so the case stays countable.
+wrapper=""
+_wrapper_re='^[[:space:]]*(cd[[:space:]]+[^&]+&&[[:space:]]*)?((/usr/bin/env[[:space:]]+)?(bash|sh|zsh)|/bin/(bash|sh|zsh))[[:space:]]+((-[a-bd-zA-Z]+[[:space:]]+)*)("([^"]+)"|'"'"'([^'"'"']+)'"'"'|([^[:space:];&|"'"'"']+))'
+if [[ "$cmd" =~ $_wrapper_re ]]; then
+  _wr_whole="${BASH_REMATCH[0]}"
+  _wr_path="${BASH_REMATCH[9]:-${BASH_REMATCH[10]:-${BASH_REMATCH[11]-}}}"
+  _wr_resolved=$(resolve_env_prefix "$_wr_path")
+  [[ -n "$_wr_resolved" && "$_wr_resolved" != /* && -n "$cd_path" ]] && _wr_resolved="$cd_path/$_wr_resolved"
+  [[ -n "$_wr_resolved" && "$_wr_resolved" != /* ]] && _wr_resolved="$PWD/$_wr_resolved"
+  _wr_dirs="${DELEGATE_BOUNDARY_WRAPPER_DIRS:-${CLAUDE_JOB_DIR:+$CLAUDE_JOB_DIR:}${TMPDIR:+$TMPDIR:}/tmp:/private/tmp:/var/folders}"
+  _wr_ok=false
+  IFS=':' read -r -a _wr_list <<<"$_wr_dirs"
+  for _wr_d in ${_wr_list[@]+"${_wr_list[@]}"}; do
+    [[ -n "$_wr_d" ]] || continue
+    _wr_d="${_wr_d%/}"
+    if [[ "$_wr_resolved" == "$_wr_d"/* ]]; then _wr_ok=true; break; fi
+  done
+  if [[ "$_wr_ok" == "true" && -f "$_wr_resolved" && -r "$_wr_resolved" ]]; then
+    _wr_text=$(head -c 32768 < "$_wr_resolved" 2>/dev/null; printf X); _wr_text=${_wr_text%X}
+    if [[ -n "$_wr_text" ]]; then
+      wrapper="$_wr_path"
+      cmd="$_wr_text"$'\n'"${cmd#"$_wr_whole"}"
+    fi
+  fi
+fi
 grep -Eq 'git[[:space:]]+commit|gh[[:space:]]+(pr|issue|release|api)([[:space:]]|$)|glab[[:space:]]+(mr|issue)([[:space:]]|$)' <<<"$cmd" || exit 0
 
 # --- build the classification surface -------------------------------------
@@ -457,24 +510,6 @@ _posted_body_scan() {
 # flag, an unreadable file or unresolved shell records nothing and is
 # enforced. Conflating the two enforced a post the hook had fully read.
 body_text="" body_chars="" body_measurable=false body_read=false
-# A body-file path opening with `$NAME` or `${NAME}` is resolved by LOOKUP in
-# the hook's own environment (the Bash tool's, where drafts live under
-# `$CLAUDE_JOB_DIR/tmp`), never by expansion; an unset name, a non-absolute
-# value, or any further `$`/backtick leaves the path as it came (#489).
-_env_prefix_braced='^\$\{([A-Za-z_][A-Za-z0-9_]*)\}(/.*)?$'
-_env_prefix_bare='^\$([A-Za-z_][A-Za-z0-9_]*)(/.*)?$'
-resolve_env_prefix() { # path -> path with a leading env var resolved, else unchanged
-  local p="$1" name rest val
-  if [[ "$p" =~ $_env_prefix_braced ]] || [[ "$p" =~ $_env_prefix_bare ]]; then
-    name="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]-}"
-    val="${!name-}"
-    if [[ -n "$val" && "$val" == /* && "$val" != *'$'* && "$val" != *'`'* \
-          && "$rest" != *'$'* && "$rest" != *'`'* ]]; then
-      printf '%s' "$val$rest"; return 0
-    fi
-  fi
-  printf '%s' "$p"
-}
 read_posted_body() { # raw-segment
   local out first kind flag path
   body_text="" body_chars="" body_measurable=false body_read=true
@@ -1029,14 +1064,15 @@ append_row() {
   jq -nc --arg ts "$ts" --arg project "$project" --arg boundary "$boundary" \
      --arg recipe "$recipe" --arg sid "$session_id" --argjson delegated "$delegated" \
      --arg body_chars "$body_chars" --argjson below_floor "$below_floor" \
-     --argjson denied "$denied" --arg skipped "$enforce_skipped" '
+     --argjson denied "$denied" --arg skipped "$enforce_skipped" --arg wrapper "$wrapper" '
      {ts:$ts, source:"opportunity", boundary:$boundary, suggested_recipe:$recipe, delegated:$delegated}
      + (if $project != "" then {project:$project} else {} end)
      + (if $sid != "" then {session:$sid} else {} end)
      + (if $body_chars != "" then {body_chars:($body_chars | tonumber)} else {} end)
      + (if $below_floor then {below_floor:true} else {} end)
      + (if $denied then {denied:true} else {} end)
-     + (if $skipped != "" then {enforce_skipped:$skipped} else {} end)' \
+     + (if $skipped != "" then {enforce_skipped:$skipped} else {} end)
+     + (if $wrapper != "" then {wrapper:$wrapper} else {} end)' \
      >> "$metrics_file" 2>/dev/null
 }
 
