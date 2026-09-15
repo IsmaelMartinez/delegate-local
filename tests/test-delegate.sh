@@ -4686,6 +4686,41 @@ else
   echo "  SKIP  --recipe auto (backfill): git not on PATH"
 fi
 
+# A6. A diff larger than the pipe buffer (#480): the sniff used to run
+# `printf | grep -q`, and grep exiting on line one left printf with SIGPIPE, so
+# every diff over ~64 KiB fell through to "could not infer" under pipefail.
+tmp=$(mktemp -d)
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp); : > "$metrics"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/commit-message.md" <<'EOF2'
+# commit-message
+
+## When to use
+Stub.
+
+## Prompt template
+
+```
+WHY
+{{why}}
+```
+
+## Calibration notes
+n/a
+EOF2
+big_diff=$(printf '%s\n' "$DIFF_SAMPLE"; awk 'BEGIN { for (i = 0; i < 3000; i++) printf "+%s\n", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }')
+EC=0
+err="$tmp/err.txt"
+out=$(printf '%s' "$big_diff" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe auto --var recent_commits=rc --var diff_stat=ds --var why=because prose "go" 2>"$err") || EC=$?
+assert_eq 0 "$EC" "--recipe auto (>64 KiB diff): exits 0, not 'could not infer' (#480)"
+assert_contains '"recipe":"commit-message"' "$(cat "$metrics")" "--recipe auto (>64 KiB diff): metrics recipe=commit-message"
+rm -rf "$tmp" "$metrics"
+
 # N. Tier-resolution failures must be distinguishable. pick-model.sh exits 2
 # for "that tier does not exist" and 1 for "the tier is real but nothing
 # installed matches it"; those need opposite remedies. delegate.sh used to
