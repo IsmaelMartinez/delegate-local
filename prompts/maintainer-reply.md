@@ -2,7 +2,7 @@
 tier: prose
 inputs:
   stdin: string
-  ask: string
+  ask: string?
   opener: string?
   recipient: string?
   signoff: string?
@@ -46,8 +46,8 @@ Draft a short reply from a project maintainer to a contributor or reporter, usin
 Write exactly this structure, in order:
 1. The opening, in this order and only this order: the recipient handle if one is given ("@{{recipient}}, "), then the opener verbatim if one is given, then the next item. Neither counts toward the sentence cap. With no handle, address the reader as "you"; with no opener, the next item is the first sentence.
 2. One sentence: either specific praise for what the contributor did, or a plain statement of the confirmed cause, in your own words. Name the actual thing (the specific change, or the specific cause), never generic "great work" or "the issue". Never open by restating what the contributor said.
-3. Exactly one question or ask, addressed to the reader in the second person. Derive it from the ask topic below and phrase it as a direct question. Never write it as an instruction about the reader ("ask them to ...", "they should ...", "the reporter needs to ...").
-4. If a sign-off is given below, end with it verbatim on its own line. If none is given, stop after the question.
+3. Exactly one question or ask, addressed to the reader in the second person. Derive it from the ask topic below and phrase it as a direct question. Never write it as an instruction about the reader ("ask them to ...", "they should ...", "the reporter needs to ..."). If the ask block below is empty, there is no item 3: the reply is the cause-or-praise sentence alone, and no question is invented.
+4. If a sign-off is given below, end with it verbatim on its own line. If none is given, stop after the question, or after the cause-or-praise sentence when there is no ask.
 
 MULTI-ASK-SPLIT — first match wins, non-negotiable:
 Count the distinct asks in the ask topic below. Two asks are distinct when answering one does not answer the other.
@@ -75,6 +75,9 @@ The reply says what the maintainer did or will do only as the Facts block states
 Wrong: <an action the facts only suggest, reported as done>.
 Correct: <the same action, offered as the suggestion the facts make>.
 
+NO-MERGE-ASK — non-negotiable:
+Never ask the contributor to confirm, approve or authorise a merge, and never ask them to confirm a result the Facts block already states. Merging is the maintainer's own action and a stated fact needs no confirmation; a clean approval with no ask ends on the cause-or-praise sentence.
+
 Rules:
 - Two body sentences maximum: the praise-or-cause sentence, then the question. No third sentence, no preamble sentence. (Superseded by MULTI-ASK-SPLIT rule 2 when the ask topic carries more than one distinct ask; the opener and the sign-off sit outside the cap.)
 - Do NOT repeat any instruction verbatim. If the ask topic is written as an imperative, rephrase it as a question to the reader.
@@ -94,7 +97,7 @@ Correct: <the cause>. Could you confirm whether <condition>?
 === Facts (confirmed cause, or the specific thing to praise) ===
 {{stdin}}
 
-=== The one thing to ask (a topic, not an instruction) ===
+=== The one thing to ask (a topic, not an instruction; empty means there is none) ===
 {{ask}}
 
 === Opener (verbatim, optional) ===
@@ -110,7 +113,7 @@ Correct: <the cause>. Could you confirm whether <condition>?
 ## Variables
 
 - `{{stdin}}` — the facts, piped in: the confirmed cause (for a bug reply) or the specific contribution worth praising (for a PR reply). State as plain facts, never as an instruction. No `--var` slot needed.
-- `{{ask}}` — the single thing to ask, as a *topic* (e.g. `whether the token survives a cold start`), not an imperative (`ask them to check ...`). The recipe phrases it as a question to the reader.
+- `{{ask}}` — the single thing to ask, as a *topic* (e.g. `whether the token survives a cold start`), not an imperative (`ask them to check ...`). The recipe phrases it as a question to the reader. Optional: omit it on a clean approval or a pure status note and the reply is the one sentence. Never pass `none` or `no question` as the value; the model reads any text here as a topic and renders it as a question (#471).
 - `{{opener}}` — optional opening sentence placed verbatim after the recipient handle and before the cause-or-praise sentence (e.g. `Thanks for the clear report.`). The caller writes it; the model never invents gratitude, so a caller who wants the reply to thank the contributor MUST supply it here. Omit for none, and the cause-or-praise sentence opens the reply with no thanks at all.
 - `{{recipient}}` — optional `@handle` of the contributor/reporter to open with. Omit to address the reader as "you".
 - `{{signoff}}` — optional warm closer to append verbatim (e.g. `Thanks again!`, `I hope this helps!`). Omit for no sign-off.
