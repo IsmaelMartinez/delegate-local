@@ -767,7 +767,10 @@ if [[ "$recipe" == "auto" ]]; then
     echo "delegate: --recipe auto needs context on stdin to infer a recipe (none piped). Pass --recipe NAME explicitly; see prompts/README.md." >&2
     exit 2
   fi
-  if printf '%s' "$context" | grep -Eq '^diff --git |^@@ '; then
+  # A here-string, not `printf | grep -q`: grep exits on the first match and
+  # printf then takes SIGPIPE on any diff over the pipe buffer, so under
+  # pipefail every diff past ~64 KiB fell through to "could not infer" (#480).
+  if grep -Eq '^diff --git |^@@ ' <<<"$context"; then
     recipe="commit-message"
     _auto_have_var() { local k="$1" v; for v in ${recipe_vars[@]+"${recipe_vars[@]}"}; do [[ "$v" == "$k="* ]] && return 0; done; return 1; }
     if ! _auto_have_var diff_stat; then
@@ -1115,7 +1118,7 @@ if [[ -n "$recipe" ]]; then
   fi
 
   # {{stdin}} is the implicit placeholder for the piped context.
-  if printf '%s' "$required_placeholders" | grep -qx '{{stdin}}'; then
+  if grep -qx '{{stdin}}' <<<"$required_placeholders"; then
     recipe_had_stdin_marker=1
     recipe_template="${recipe_template//\{\{stdin\}\}/$context}"
     satisfied_keys="${satisfied_keys}{{stdin}}"$'\n'
@@ -2177,7 +2180,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
           invented_refs=""
           while IFS= read -r ref_tok; do
             [[ -z "$ref_tok" ]] && continue
-            printf '%s\n' "$ref_ground" | grep -qxF -- "$ref_tok" && continue
+            grep -qxF -- "$ref_tok" <<<"$ref_ground" && continue
             invented_refs="${invented_refs:+$invented_refs }$ref_tok"
           done < <(printf '%s\n' "$output" | tr -d '\r' \
             | awk '/^[A-Za-z][A-Za-z0-9-]*:[[:space:]]/' \
