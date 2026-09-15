@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/delegate-feedback.sh.
-# Builds a synthetic metrics JSONL in $tmp, exercises every flag, and asserts
-# the appended feedback row points at the most recent delegate event with the
-# correct kept value and reason.
+# Unit tests for scripts/delegate-feedback.sh. Builds a synthetic metrics
+# JSONL in $tmp and asserts on the appended feedback row.
 
 set -u
 
@@ -23,22 +21,14 @@ assert_contains() {
   else echo "  FAIL  $name (missing '$needle' in '$haystack')"; fail=$((fail+1)); fi
 }
 
-# Seed a metrics JSONL with two delegate calls and one experiment call.
-# Timestamps are derived from `date` so the latest row is within the default
-# stale window (300 s) — the existing assertions about ref_ts equality
-# need stable values, so we capture them in TS_OLDEST / TS_LATEST.
+# Seeds two delegate rows and one experiment row. The oldest sits outside
+# the default 300 s window so the implicit lookup sees exactly one candidate
+# (two fresh rows refuse as ambiguous, #474); perl keeps the timestamp
+# format the same on BSD and GNU.
 TS_OLDEST=""
 TS_LATEST=""
 seed_metrics() {
   local file="$1"
-  # One stale and one fresh timestamp: the oldest sits outside the default
-  # 300 s window so the implicit lookup sees exactly one candidate (two fresh
-  # rows are an ambiguity and refuse since #474), while the "picks latest
-  # delegate" assertions still have a distinct older row to be wrong about.
-  # Generated via perl so the format is consistent across BSD and GNU date.
-  # The fresh row carries a project so the verdict's copy of it is checkable,
-  # and both rows carry the otel_span_id every real row has (ID_OLDEST /
-  # ID_LATEST), the key --id pins by.
   TS_OLDEST=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-400))')
   TS_LATEST=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   cat > "$file" <<EOF
@@ -97,11 +87,8 @@ assert_contains '"project":"seed-project"' "$last" "hit: project is copied from 
 [[ "$last" == *'"reason"'* ]] && { fail=$((fail+1)); echo "  FAIL  hit (no reason): reason field absent"; } || { pass=$((pass+1)); echo "  PASS  hit (no reason): reason field absent"; }
 rm -rf "$tmp"
 
-# 5b. The project is the referenced row's, never re-derived from the cwd at
-# verdict time (#474): 59 of 254 feedback rows since the corpus reset named a
-# project that differed from the row they reference, because the verdict was
-# recorded from a different repo than the delegation. A row with no project
-# yields a verdict with no project — there is nothing to copy.
+# 5b. The project is the referenced row's, never re-derived from the cwd
+# (#474); a row with no project yields a verdict with no project.
 tmp=$(mktemp -d)
 T_FRESH=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0}\n' "$T_FRESH" > "$tmp/m.jsonl"
@@ -110,9 +97,7 @@ assert_eq "false" "$(tail -1 "$tmp/m.jsonl" | jq -r 'has("project")')" \
   "project: a referenced row with no project yields a verdict with no project"
 rm -rf "$tmp"
 
-# 5c. DELEGATE_PROJECT in the recording shell does not override the copy. It
-# used to win (delegate_project_name checks it first), which is exactly how a
-# verdict ended up filed under the recorder's repo rather than the row's.
+# 5c. DELEGATE_PROJECT in the recording shell does not override the copy.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_PROJECT=other-repo bash "$SCRIPT" hit >/dev/null 2>&1
 assert_eq "seed-project" "$(tail -1 "$tmp/m.jsonl" | jq -r '.project // ""')" \
@@ -130,9 +115,8 @@ assert_contains '"reason":"bullets when prose was wanted"' "$last" "miss: reason
 assert_contains "MISS recorded" "$out" "miss: stdout reports MISS"
 rm -rf "$tmp"
 
-# 7. ref_ts picks the one delegate row inside the stale window; an older
-# delegate row outside it is not a candidate and does not make the lookup
-# ambiguous.
+# 7. ref_ts is the one delegate row inside the window; an older row outside
+# it is not a candidate.
 tmp=$(mktemp -d)
 T_EARLY=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-400))')
 T_LATE=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-10))')
@@ -149,12 +133,7 @@ assert_contains "\"ref_ts\":\"$T_LATE\"" "$last" "ref_ts: picks the fresh delega
 rm -rf "$tmp"
 
 # 7b. Two delegate rows inside the window is an ambiguity, not a choice
-# (#474). "Most recent" cannot tell sibling delegations apart: the pr-agent
-# sweeps and the parallel background jobs delegate seconds apart from
-# different sessions, and whichever session recorded next hit whatever row
-# was newest — one ref_ts carried four verdicts from four different drafts
-# within 12 seconds while its five siblings stayed untracked. The refusal
-# lists every candidate as `ts  recipe  project` so the caller can pin.
+# (#474): the refusal lists every candidate so the caller can pin.
 tmp=$(mktemp -d)
 T_A=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-40))')
 T_B=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-10))')
@@ -171,14 +150,13 @@ assert_contains "aaaaaaaaaaaaaaa2  $T_B  (bare)  -" "$out" \
   "ambiguous window: a bare-tier row with no project is listed with placeholders"
 assert_contains "--id" "$out" "ambiguous window: the refusal names --id as the pin"
 assert_eq 2 "$(grep -c '' "$tmp/m.jsonl")" "ambiguous window: no row appended on refuse"
-# Pinning resolves it — to the pinned row, not the newest.
+# Pinning resolves it to the pinned row, not the newest.
 EC=0
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts "$T_A" hit >/dev/null 2>&1 || EC=$?
 assert_eq 0 "$EC" "ambiguous window: --ts resolves the ambiguity"
 assert_contains "\"ref_ts\":\"$T_A\"" "$(tail -1 "$tmp/m.jsonl")" \
   "ambiguous window: the pinned verdict lands on the pinned row"
-# DELEGATE_FEEDBACK_STALE_SECONDS=0 keeps the unbounded most-recent path for
-# back-compat scripts, ambiguity included.
+# DELEGATE_FEEDBACK_STALE_SECONDS=0 keeps the unbounded most-recent path.
 EC=0
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_STALE_SECONDS=0 bash "$SCRIPT" hit >/dev/null 2>&1 || EC=$?
 assert_eq 0 "$EC" "ambiguous window: STALE_SECONDS=0 keeps the unbounded most-recent lookup"
@@ -186,13 +164,9 @@ assert_contains "\"ref_ts\":\"$T_B\"" "$(tail -1 "$tmp/m.jsonl")" \
   "ambiguous window: STALE_SECONDS=0 attaches to the newest row as before"
 rm -rf "$tmp"
 
-# 7c. The pin is the row's otel_span_id, not its ts. ts is second-precision
-# and parallel delegations share it; a --ts pin on a shared second validated
-# with `head -n 1` and read with `tail -n 1`, so caller A's verdict, project,
-# draft pairing and OTel parent all came from sibling B and A's commit
-# message was stored as B's final (PR #479 review). Two draft-bearing rows
-# share one second here, and the pin names the FIRST — the case a
-# last-row-wins lookup gets wrong.
+# 7c. The pin is the row's otel_span_id, since parallel delegations share a
+# second. Two draft-bearing rows share one second and the pin names the
+# first, the case a last-row-wins lookup gets wrong.
 same_second_setup() {
   tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
   T_SHARED=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -219,8 +193,7 @@ assert_eq "false" "$([[ -e "$tmp/drafts/20260911T054711Z-second00.final.txt" ]] 
   "--id: nothing is written under the sibling's stem"
 rm -rf "$tmp"
 
-# --ts on a shared second is the same ambiguity as the implicit window: it
-# refuses and lists the candidates with their ids, so the caller can pin.
+# --ts on a shared second refuses and lists the candidates with their ids.
 same_second_setup
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts "$T_SHARED" hit 2>&1) || EC=$?
@@ -247,9 +220,7 @@ assert_eq 2 "$EC" "--id= (empty value) -> exit 2"
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --id "$ID_LATEST" --ts "$TS_LATEST" hit 2>&1) || EC=$?
 assert_eq 2 "$EC" "--id with --ts -> exit 2 (one pin)"
-# A row with no otel_span_id yields a verdict with no ref_id — there is
-# nothing to copy — and the implicit path still records ref_id when the row
-# has one.
+# The implicit path records ref_id when the row has one, and none when it does not.
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit >/dev/null 2>&1
 assert_eq "$ID_LATEST" "$(tail -1 "$tmp/m.jsonl" | jq -r '.ref_id // ""')" \
   "ref_id: the implicit path records the referenced row's otel_span_id"
@@ -262,12 +233,8 @@ assert_eq "false" "$(tail -1 "$tmp/m.jsonl" | jq -r 'has("ref_id")')" \
   "ref_id: a referenced row with no otel_span_id yields a verdict with no ref_id"
 rm -rf "$tmp"
 
-# 7d. Rows are appended at completion but ts is the start time, so one
-# fresh candidate need not be the file's last delegate line: a long
-# delegation started before a short one lands after it. The implicit path
-# used to count candidates over the window and then take ref_ts from
-# `tail -n 1` of the whole file, so this shape — one fresh candidate, one
-# stale row appended after it — was refused as stale.
+# 7d. ts is the start time but rows land at completion, so the one fresh
+# candidate need not be the last delegate line in the file.
 tmp=$(mktemp -d)
 T_SHORT=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-10))')
 T_LONG=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-400))')
@@ -293,8 +260,7 @@ echo "$last" | jq -e . >/dev/null 2>&1 || EC=$?
 assert_eq 0 "$EC" "feedback row is valid JSON"
 rm -rf "$tmp"
 
-# 9. Feedback after a feedback still finds the original delegate (the
-#    feedback event itself is excluded from the "most recent delegate" search).
+# 9. Feedback after a feedback still finds the original delegate.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit >/dev/null
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "actually no" >/dev/null
@@ -310,9 +276,8 @@ assert_eq 0 "$EC" "custom DELEGATE_METRICS_FILE: exit 0"
 [[ $(wc -l < "$custom" | tr -d ' ') -eq 4 ]] && pass=$((pass+1)) && echo "  PASS  custom path: feedback appended there" || { fail=$((fail+1)); echo "  FAIL  custom path: line count wrong"; }
 rm -rf "$tmp"
 
-# 11. Stale-window: refuse when most recent delegate row is older than the
-# configured window (default 300 s). Seed an old row and assert exit 1
-# with a message mentioning the threshold.
+# 11. Stale window: refuse when the most recent delegate row is older than
+# the window (default 300 s).
 tmp=$(mktemp -d)
 T_OLD=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-3600))')
 cat > "$tmp/m.jsonl" <<EOF
@@ -322,7 +287,6 @@ EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit 2>&1) || EC=$?
 assert_eq 1 "$EC" "stale window: exit 1 when delegate row is too old"
 assert_contains "DELEGATE_FEEDBACK_STALE_SECONDS" "$out" "stale window: error mentions env override"
-# Confirm no row was appended.
 [[ $(wc -l < "$tmp/m.jsonl" | tr -d ' ') -eq 1 ]] && pass=$((pass+1)) && echo "  PASS  stale window: no row appended on refuse" || { fail=$((fail+1)); echo "  FAIL  stale window: row appended despite refuse"; }
 rm -rf "$tmp"
 
@@ -363,11 +327,7 @@ assert_contains "does not match any delegate row" "$out" "--ts: error names the 
 [[ $(wc -l < "$tmp/m.jsonl" | tr -d ' ') -eq 3 ]] && pass=$((pass+1)) && echo "  PASS  --ts bogus: no row appended" || { fail=$((fail+1)); echo "  FAIL  --ts bogus: row appended despite refuse"; }
 rm -rf "$tmp"
 
-# 15. --ts pinning: ts that matches a feedback row (not a delegate row) -> exit 1.
-# Prevents the case where a typoed --ts accidentally pins to a prior feedback.
-# Construct distinct, non-colliding timestamps to avoid wall-clock races
-# between the seeded delegate ts and the feedback ts that delegate-
-# feedback.sh would write itself.
+# 15. A --ts that matches a feedback row, not a delegate row, exits 1.
 tmp=$(mktemp -d)
 T_DEL=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-200))')
 T_FB=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-100))')
@@ -385,14 +345,12 @@ rm -rf "$tmp"
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts hit 2>&1) || EC=$?
-# Either the parser rejects --ts with no value (exit 2), or it consumes
-# 'hit' as the ts and then fails to find a verdict. Both are acceptable
-# rejections — the test asserts non-zero exit and no row appended.
+# Exit 2 from the parser, or 'hit' consumed as the ts and no verdict found:
+# either rejection is acceptable.
 [[ "$EC" -ne 0 ]] && pass=$((pass+1)) && echo "  PASS  --ts without value -> non-zero exit" || { fail=$((fail+1)); echo "  FAIL  --ts without value should fail (got $EC)"; }
 rm -rf "$tmp"
 
-# 16b. --ts= (equals-attached, empty value) rejected with the same wording
-# as `--ts` with no value — consistency between the two flag forms.
+# 16b. --ts= (empty value) is rejected with the same wording.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" "--ts=" hit 2>&1) || EC=$?
@@ -409,20 +367,10 @@ last=$(tail -1 "$tmp/m.jsonl")
 assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "--ts=value form: feedback attached to pinned ts"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# Trigger-on-MISS recurrence nudge (issue #88)
-# Helpers seed a metrics file with N historical similar MISS rows, all
-# placed inside the default 30-day window unless an explicit older
-# timestamp is requested. Each test then appends a fresh MISS via the
-# script and asserts the nudge fires (or stays quiet) as documented.
-# ---------------------------------------------------------------------------
+# --- Recurrence nudge on MISS (#88) ---
 
-# seed_history <file> <N_similar> [<extra_reason>]
-#   Writes one delegate + one MISS feedback row per similar entry, all
-#   stamped within the last hour so they fall well inside any reasonable
-#   window. Then writes a fresh delegate row that the new feedback can
-#   attach to. <extra_reason>, when set, becomes the historical reason
-#   text — defaults to a stable "pr-description prose tier stalled" shape.
+# seed_history <file> <N_similar> [<reason>]: N delegate + MISS pairs within
+# the last hour, then a fresh delegate row for the new verdict to attach to.
 seed_history() {
   local file="$1" n="$2"
   local reason_template="${3:-pr-description recipe stalled past 30s on prose tier body}"
@@ -434,7 +382,6 @@ seed_history() {
     echo "{\"ts\":\"$hist_ts\",\"source\":\"delegate\",\"tier\":\"prose\",\"model\":\"q\",\"duration_ms\":1000,\"exit_status\":0,\"estimated_tokens_avoided\":50}" >> "$file"
     echo "{\"ts\":\"$hist_ts\",\"source\":\"feedback\",\"ref_ts\":\"$hist_ts\",\"kept\":false,\"reason\":\"$reason_template ($i)\"}" >> "$file"
   done
-  # Fresh delegate row for the new feedback to attach to.
   TS_LATEST=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   echo "{\"ts\":\"$TS_LATEST\",\"source\":\"delegate\",\"tier\":\"prose\",\"model\":\"q\",\"duration_ms\":1000,\"exit_status\":0,\"estimated_tokens_avoided\":40}" >> "$file"
 }
@@ -497,8 +444,7 @@ if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  NO_NUDGE=1: nudg
 else echo "  FAIL  NO_NUDGE=1: nudge still printed"; fail=$((fail+1)); fi
 rm -rf "$tmp"
 
-# n24: MISS with empty reason is refused before the matcher runs (a rejection
-# needs a reason), so five similar priors fire no nudge.
+# n24: a MISS with no reason is refused before the matcher runs.
 tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 5
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss 2>&1) || EC=$?
@@ -507,10 +453,9 @@ if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  empty-reason MIS
 else echo "  FAIL  empty-reason MISS: nudge fired"; fail=$((fail+1)); fi
 rm -rf "$tmp"
 
-# n25: MISSes outside the window (35 days old) don't count toward nudge.
+# n25: MISSes outside the 30-day window (35 days old) do not count.
 tmp=$(mktemp -d)
 : > "$tmp/m.jsonl"
-# Write 4 historical similar MISSes 35 days old — outside the 30-day default.
 for i in 1 2 3 4; do
   old_ts=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - 35*86400 + '"$i"' * 60))')
   echo "{\"ts\":\"$old_ts\",\"source\":\"feedback\",\"ref_ts\":\"$old_ts\",\"kept\":false,\"reason\":\"pr-description recipe stalled past 30s on prose tier body ($i)\"}" >> "$tmp/m.jsonl"
@@ -522,7 +467,7 @@ out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "pr-description r
 assert_eq 0 "$EC" "old-MISS window: exit 0"
 if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  old MISSes outside window: nudge silent"; pass=$((pass+1))
 else echo "  FAIL  old MISSes outside window: nudge fired (window filter not working)"; fail=$((fail+1)); fi
-# And confirm the same data DOES fire when the window is widened.
+# The same data fires when the window is widened.
 EC=0
 out=$(DELEGATE_FEEDBACK_NUDGE_WINDOW_DAYS=60 DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
       bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
@@ -538,12 +483,8 @@ assert_eq 0 "$EC" "nudge names matches: exit 0"
 assert_contains "pr-description prose tier stalled" "$out" "nudge names matches: reason text rendered"
 rm -rf "$tmp"
 
-# n27: stopword-only reason → matcher must short-circuit cleanly (regression
-# for the `return outside subroutine` bug gemini-code-assist caught on PR #91:
-# the earlier draft used `return print ... unless @new_t` at Perl top level,
-# which would crash the Perl process. With the fix in place this test
-# exercises the empty-tokens path WITHOUT going through the bash-side
-# empty-reason short-circuit (the reason has length, just no content tokens).
+# n27: a stopword-only reason has length but no tokens, so it reaches the
+# matcher's empty-tokens path and must not crash perl.
 tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 3
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "on the to a an" 2>&1) || EC=$?
@@ -553,8 +494,7 @@ if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  stopword-only re
 else echo "  FAIL  stopword-only reason: nudge fired"; fail=$((fail+1)); fi
 rm -rf "$tmp"
 
-# n27b: nudge's draft gh command targets the default repo when
-# DELEGATE_GITHUB_REPO is unset, and the override repo when set (fork support).
+# n27b: the draft gh command targets DELEGATE_GITHUB_REPO when set.
 tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 2
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
@@ -571,18 +511,9 @@ if [[ "$out" != *"IsmaelMartinez/delegate-local"* ]]; then echo "  PASS  repo ov
 else echo "  FAIL  repo override: default repo still present in nudge"; fail=$((fail+1)); fi
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# Single-row-per-invocation regression (issue #171)
-# Every code path through delegate-feedback.sh must append exactly one new
-# JSONL row — never zero (silent drop), never two (double-count in
-# metrics-summary). Bisects across verdict (hit/miss), reason absent/present,
-# --ts absent/present, and DELEGATE_FEEDBACK_NO_NUDGE absent/present so a
-# future stray write or premature row added before the verdict is detected.
-# ---------------------------------------------------------------------------
+# --- Every code path appends exactly one row (#171): never zero, never two ---
 
 # assert_one_row_added <before_count> <after_count> <name>
-#   Compares line counts before and after an invocation; expects
-#   delta == 1. Callers should separately verify the content of the new row.
 assert_one_row_added() {
   local before="$1" after="$2" name="$3"
   local delta=$((after - before))
@@ -650,10 +581,8 @@ assert_contains '"reason":"needed rewrite"' "$last" "single-row miss with --ts: 
 assert_contains '"kept":false' "$last" "single-row miss with --ts: kept=false preserved"
 rm -rf "$tmp"
 
-# n33: miss with reason + DELEGATE_FEEDBACK_NO_NUDGE=1 → one row even when
-# nudge would otherwise fire. Seeds 5 prior similar MISSes so the nudge code
-# path is fully exercised but silenced — guards against a future change that
-# accidentally writes a row during the nudge logic.
+# n33: miss + NO_NUDGE=1 with five similar priors, so the nudge path runs
+# silenced and still writes one row.
 tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 5
 before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
 DELEGATE_FEEDBACK_NO_NUDGE=1 DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
@@ -662,11 +591,8 @@ after=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
 assert_one_row_added "$before" "$after" "single-row miss with NO_NUDGE=1 + similar history"
 rm -rf "$tmp"
 
-# n34: miss with reason + nudge fires (default settings, ≥3 similar prior) →
-# still exactly one row. The nudge writes to stderr only — a regression that
-# adds a preliminary or duplicate JSONL row during the matcher must fail
-# here. This is the load-bearing assertion against the "two rows per
-# verdict — one empty, one with reason" shape called out in issue #171.
+# n34: miss with the nudge firing still writes exactly one row (the nudge is
+# stderr only).
 tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 5
 before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
@@ -679,9 +605,7 @@ assert_contains '"reason":"pr-description recipe stalled past 30s on prose tier 
 assert_contains '"kept":false' "$last" "single-row miss nudge-fires: kept=false on the appended row"
 rm -rf "$tmp"
 
-# n35: same scenario as n34 but with --ts pinning → still exactly one row.
-# Crosses the two most recently-extended code paths (--ts validation + nudge
-# matcher) so a stray write at either branch boundary is detected.
+# n35: n34 with --ts pinning.
 tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 5
 before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" \
@@ -693,19 +617,10 @@ assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "single-row miss with --ts +
 assert_contains '"reason":"pr-description recipe stalled past 30s on prose tier body"' "$last" "single-row miss with --ts + nudge: reason on the appended row is the real one"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# Phase 11 Track A — OTLP/HTTP feedback-as-linked-span (#134)
-# When DELEGATE_OTEL_ENDPOINT is set, delegate-feedback.sh POSTs a feedback
-# span per ADR 0007: a new trace, new span_id, with `links: [{traceId, spanId}]`
-# pointing at the parent delegation (looked up via ref_ts). Belt-and-braces,
-# delegate.feedback.parent_trace_id / parent_span_id duplicated as plain
-# string attributes for backends that don't render links well.
-# ---------------------------------------------------------------------------
+# --- Feedback as a linked OTel span (#134, ADR 0007): a new trace whose
+# `links` and parent_* attributes point at the delegation ---
 
-# Helper: a curl mock for delegate-feedback.sh that captures the OTel POST
-# body for inspection. Unlike delegate.sh's mock, this one doesn't need to
-# handle the auto-probe (delegate-feedback.sh doesn't probe) or the
-# dispatch path (no model call) — it only sees /v1/traces.
+# Captures the OTel POST body; the feedback script only ever calls /v1/traces.
 make_mock_curl_fb_otel() {
   local dir="$1" otel_sniff="${2:-/dev/null}" invocations="${3:-/dev/null}" behaviour="${4:-ok}"
   cat > "$dir/curl" <<EOF
@@ -729,9 +644,7 @@ EOF
   chmod +x "$dir/curl"
 }
 
-# seed_metrics_with_otel <file> [<trace_id>] [<span_id>]
-#   Like seed_metrics but includes otel_trace_id / otel_span_id on each
-#   delegate row so the feedback span has a parent linkage.
+# seed_metrics_with_otel <file> [<trace_id>] [<span_id>]: one delegate row with OTel ids.
 seed_metrics_with_otel() {
   local file="$1"
   local tid="${2:-aaaa1111bbbb2222cccc3333dddd4444}"
@@ -742,8 +655,7 @@ seed_metrics_with_otel() {
 EOF
 }
 
-# FB-OT1. DELEGATE_OTEL_ENDPOINT unset → no OTLP POST. Existing feedback
-# behaviour is unchanged when the exporter is disabled.
+# FB-OT1. DELEGATE_OTEL_ENDPOINT unset: no OTLP POST.
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -756,18 +668,12 @@ out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
 assert_eq 0 "$EC" "FB-OT1: endpoint unset → exits 0"
 otel_count=$(grep -c '^args' "$invocations" 2>/dev/null) || otel_count=0
 assert_eq 0 "$otel_count" "FB-OT1: endpoint unset → zero OTel POSTs"
-# Feedback row still written (the exporter is opt-in, the JSONL is not).
 fb_count=$(grep -c '"source":"feedback"' "$tmp/m.jsonl")
 assert_eq 1 "$fb_count" "FB-OT1: feedback row still written when exporter disabled"
 rm -rf "$tmp"
 
-# FB-OT2. DELEGATE_OTEL_ENDPOINT set → exactly one OTLP POST. Payload has the
-# feedback-specific shape: new trace_id, new span_id, kind=1 (INTERNAL),
-# `links` array pointing at the parent, the verdict + parent ID attributes.
-# Track F (#158): the `delegate.feedback.reason` attribute is gated behind
-# DELEGATE_OTEL_INCLUDE_CONTENT=1, so this default-no-content test asserts
-# the verdict + parent IDs travel but the reason does NOT. The opt-in path
-# is exercised in FB-OT3 below.
+# FB-OT2. Endpoint set: exactly one OTLP POST in the feedback shape, with
+# the reason redacted by default (#158).
 tmp=$(mktemp -d)
 PARENT_TID="aaaa1111bbbb2222cccc3333dddd4444"
 PARENT_SID="feedface12345678"
@@ -784,7 +690,6 @@ assert_eq 0 "$EC" "FB-OT2: endpoint set → exits 0"
 otel_count=$(grep -c '^args' "$invocations" 2>/dev/null) || otel_count=0
 assert_eq 1 "$otel_count" "FB-OT2: endpoint set → exactly one OTLP POST"
 otel_body=$(cat "$otel_sniff")
-# JSON validity.
 if echo "$otel_body" | jq -e . >/dev/null 2>&1; then
   echo "  PASS  FB-OT2: body parses as JSON"
   pass=$((pass+1))
@@ -792,28 +697,20 @@ else
   echo "  FAIL  FB-OT2: body is not valid JSON"
   fail=$((fail+1))
 fi
-# Span name format per docs/otel-schema.md.
 assert_contains '"feedback qwen3.6:35b"' "$otel_body" "FB-OT2: span name includes parent model"
-# Span kind 1 = INTERNAL.
 assert_contains '"kind":1' "$otel_body" "FB-OT2: span kind=1 (INTERNAL)"
-# Metadata attributes still present (verdict, parent IDs).
 assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT2: delegate.feedback.verdict attribute"
 assert_contains '"hit"' "$otel_body" "FB-OT2: verdict value is 'hit'"
 assert_contains '"delegate.feedback.parent_trace_id"' "$otel_body" "FB-OT2: parent_trace_id attribute"
 assert_contains "\"$PARENT_TID\"" "$otel_body" "FB-OT2: parent_trace_id value matches delegate row"
 assert_contains '"delegate.feedback.parent_span_id"' "$otel_body" "FB-OT2: parent_span_id attribute"
 assert_contains "\"$PARENT_SID\"" "$otel_body" "FB-OT2: parent_span_id value matches delegate row"
-# delegate.project (#246 follow-up): the feedback span carries the project so
-# per-project calibration dashboards can scope feedback spans the same way
-# they scope delegation spans. It is the referenced delegate row's project,
-# copied (#474) — not the cwd the verdict happened to be recorded from — so
-# the span and the JSONL row carry the same value.
+# delegate.project is the referenced row's project, the same value as the JSONL row.
 assert_contains '"delegate.project"' "$otel_body" "FB-OT2: delegate.project attribute present on feedback span"
 fb_project=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].attributes | map(select(.key == "delegate.project")) | .[0].value.stringValue // ""')
 assert_eq "otel-project" "$fb_project" "FB-OT2: delegate.project is the referenced delegate row's project"
 assert_eq "otel-project" "$(tail -1 "$tmp/m.jsonl" | jq -r '.project // ""')" \
   "FB-OT2: the feedback row carries the same project as the span"
-# Track F default-redaction: reason attribute is OMITTED when the flag is unset.
 case "$otel_body" in
   *'delegate.feedback.reason'*)
     echo "  FAIL  FB-OT2: delegate.feedback.reason MUST be absent without DELEGATE_OTEL_INCLUDE_CONTENT=1 (Track F #158)"
@@ -822,7 +719,6 @@ case "$otel_body" in
     echo "  PASS  FB-OT2: delegate.feedback.reason absent by default (Track F #158)"
     pass=$((pass+1));;
 esac
-# The reason text itself must not appear in the payload anywhere.
 case "$otel_body" in
   *'verbatim used'*)
     echo "  FAIL  FB-OT2: reason text 'verbatim used' must not appear in payload when content is redacted"
@@ -831,13 +727,12 @@ case "$otel_body" in
     echo "  PASS  FB-OT2: reason text not present in payload (no sentinel leak, no key leak)"
     pass=$((pass+1));;
 esac
-# links array points at the parent (the canonical OTel mechanism).
 assert_contains '"links":[' "$otel_body" "FB-OT2: links array present"
 links_trace=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].links[0].traceId')
 links_span=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].links[0].spanId')
 assert_eq "$PARENT_TID" "$links_trace" "FB-OT2: links[0].traceId == parent trace_id"
 assert_eq "$PARENT_SID" "$links_span" "FB-OT2: links[0].spanId == parent span_id"
-# This span has its OWN trace/span ID (new trace per the ADR).
+# The feedback span is a new trace.
 own_trace=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].traceId')
 own_span=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].spanId')
 if [[ "$own_trace" != "$PARENT_TID" ]]; then
@@ -854,24 +749,17 @@ else
   echo "  FAIL  FB-OT2: feedback span_id is the parent's (should be new)"
   fail=$((fail+1))
 fi
-# Privacy: no prompt/output text attributes.
 case "$otel_body" in
   *'gen_ai.prompt'*|*'gen_ai.completion'*|*'delegate.prompt_text'*|*'delegate.output_text'*)
     echo "  FAIL  FB-OT2: body must not contain content-bearing attributes"
     fail=$((fail+1));;
   *) echo "  PASS  FB-OT2: body has no content-bearing attributes"; pass=$((pass+1));;
 esac
-# Feedback row still written.
 fb_count=$(grep -c '"source":"feedback"' "$tmp/m.jsonl")
 assert_eq 1 "$fb_count" "FB-OT2: feedback row still written alongside the OTLP POST"
 rm -rf "$tmp"
 
-# FB-OT3. DELEGATE_OTEL_INCLUDE_CONTENT=1 opt-in: miss verdict + reason →
-# verdict attribute is 'miss', AND `delegate.feedback.reason` is present
-# with the original text. This is the Track F opt-in path — operators
-# pointing the exporter at a trusted collector flip the flag and the
-# reason content travels alongside the verdict for the MISS-reason word
-# cloud in Track D's dashboards.
+# FB-OT3. DELEGATE_OTEL_INCLUDE_CONTENT=1: the reason travels with the verdict.
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -890,9 +778,7 @@ assert_contains '"delegate.feedback.reason"' "$otel_body" "FB-OT3: reason attrib
 assert_contains '"had to rewrite the bullets"' "$otel_body" "FB-OT3: reason text preserved when include-content=1"
 rm -rf "$tmp"
 
-# FB-OT4. hit verdict with NO reason → no delegate.feedback.reason attribute
-# (the schema omits the attribute entirely rather than emitting an empty
-# string). hit is the one verdict a reason is optional on.
+# FB-OT4. A hit with no reason omits the attribute rather than sending "".
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -913,13 +799,11 @@ case "$otel_body" in
     echo "  PASS  FB-OT4: reason attribute absent when no reason supplied"
     pass=$((pass+1));;
 esac
-# verdict attribute still present.
 assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT4: verdict attribute still present"
 rm -rf "$tmp"
 
-# FB-OT5. OTLP failure (curl exit 22) does NOT change exit status. The
-# feedback JSONL row was already appended before the OTel emission runs,
-# so the user's verdict is durable even if the collector is down.
+# FB-OT5. An OTLP failure does not change the exit status; the row was
+# appended before the export ran.
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -970,9 +854,7 @@ assert_contains "Authorization: Bearer x" "$otel_args_line" "FB-OT7: first heade
 assert_contains "X-Tenant: y" "$otel_args_line" "FB-OT7: second header in argv"
 rm -rf "$tmp"
 
-# FB-OT8. Parent row WITHOUT otel_trace_id (pre-exporter row) → feedback
-# span still emits, but without `links` and with empty parent_trace_id.
-# Track E #157 backfills these later.
+# FB-OT8. A parent row without otel ids still gets a span, with no `links`.
 tmp=$(mktemp -d)
 TS_PRE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 cat > "$tmp/m.jsonl" <<EOF
@@ -990,7 +872,6 @@ assert_eq 0 "$EC" "FB-OT8: pre-exporter row → exits 0"
 otel_count=$(grep -c '^args' "$invocations" 2>/dev/null) || otel_count=0
 assert_eq 1 "$otel_count" "FB-OT8: OTel POST happens even without parent IDs"
 otel_body=$(cat "$otel_sniff")
-# The span doesn't have a links array (the parent IDs are empty).
 case "$otel_body" in
   *'"links":['*)
     echo "  FAIL  FB-OT8: links array should be absent when parent IDs unknown"
@@ -999,12 +880,10 @@ case "$otel_body" in
     echo "  PASS  FB-OT8: links array absent when parent IDs unknown"
     pass=$((pass+1));;
 esac
-# verdict attribute still present so the dashboard counts the verdict.
 assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT8: verdict attribute still emitted"
 rm -rf "$tmp"
 
-# FB-OT9. --ts pinning + OTel: when --ts pins a specific delegate row, its
-# trace/span IDs are used for the link (not the most-recent row's IDs).
+# FB-OT9. A --ts pin links to the pinned row's ids, not the newest row's.
 tmp=$(mktemp -d)
 T_OLD=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-200))')
 T_RECENT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -1030,11 +909,8 @@ linked_trace=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[
 assert_eq "$OLD_TID" "$linked_trace" "FB-OT9: links use the --ts pinned row's trace_id, not the most-recent row's"
 rm -rf "$tmp"
 
-# FB-OT10. DELEGATE_OTEL_HEADERS url-decodes header values per the OTel SDK
-# convention so a header value carrying a literal comma (encoded as %2C)
-# survives the outer comma-split intact. Mirrors OT12 in test-delegate.sh
-# for the feedback exporter path; the self-review correctness gap caught
-# during PR #182 review covered BOTH scripts.
+# FB-OT10. DELEGATE_OTEL_HEADERS url-decodes values, so a %2C comma survives
+# the split between headers (mirrors OT12 in test-delegate.sh).
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -1050,26 +926,16 @@ assert_eq 0 "$EC" "FB-OT10: url-encoded comma in header → exits 0"
 otel_args_line=$(grep '^args' "$invocations" | head -1)
 assert_contains "Cookie: a=1, b=2" "$otel_args_line" "FB-OT10: header value's literal comma round-trips after url-decode"
 assert_contains "X-Tenant: y" "$otel_args_line" "FB-OT10: second header still parsed after comma-bearing first header"
-# Three -H flags total: Content-Type + Cookie + X-Tenant. Four would mean
-# the Cookie header got fragmented on the literal `,` — the regression
-# this test guards against.
+# Content-Type + Cookie + X-Tenant; a fragmented Cookie would make four.
 h_count=$(echo "$otel_args_line" | grep -oE '\-H ' | wc -l | tr -d ' ')
 assert_eq 3 "$h_count" "FB-OT10: exactly three -H flags (Content-Type + Cookie + X-Tenant) — not four"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# Phase 11 Track F — privacy redaction default (#158)
-# DELEGATE_OTEL_INCLUDE_CONTENT gates the `delegate.feedback.reason`
-# attribute. Default unset = redact (omit the attribute entirely). Set to
-# `1` = include the attribute with its actual value. Metadata attributes
-# (verdict, parent_trace_id, parent_span_id) stay unconditional.
-# ---------------------------------------------------------------------------
+# --- Privacy redaction (#158): DELEGATE_OTEL_INCLUDE_CONTENT gates the
+# reason attribute; the JSONL row always keeps the reason ---
 
-# FB-OT11. Default redaction with reason supplied: feedback row carries the
-# reason on disk (the JSONL row is the on-host calibration record and is
-# unaffected by the gate), but the OTLP payload OMITS the reason attribute.
-# Asserts the omission is total — no `delegate.feedback.reason` key, no
-# reason text anywhere in the body, no `<redacted>` sentinel.
+# FB-OT11. Default redaction: no reason key, no reason text, no sentinel on
+# the wire; the on-disk row still carries it.
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -1083,7 +949,6 @@ out=$(env -i PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" \
   bash "$SCRIPT" miss "$REASON" 2>&1) || EC=$?
 assert_eq 0 "$EC" "FB-OT11: default redaction → exits 0"
 otel_body=$(cat "$otel_sniff")
-# The OTLP body must NOT contain the reason attribute key OR the reason text.
 case "$otel_body" in
   *'delegate.feedback.reason'*)
     echo "  FAIL  FB-OT11: delegate.feedback.reason key MUST be absent by default"
@@ -1100,7 +965,6 @@ case "$otel_body" in
     echo "  PASS  FB-OT11: reason text omitted from body entirely"
     pass=$((pass+1));;
 esac
-# Sentinel check: no literal '<redacted>' placeholder either (omission, not sentinel).
 case "$otel_body" in
   *'<redacted>'*)
     echo "  FAIL  FB-OT11: no '<redacted>' sentinel should leak into the body"
@@ -1109,18 +973,14 @@ case "$otel_body" in
     echo "  PASS  FB-OT11: no '<redacted>' sentinel in body (omission, not placeholder)"
     pass=$((pass+1));;
 esac
-# Metadata attributes still present.
 assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT11: verdict attribute still present"
 assert_contains '"miss"' "$otel_body" "FB-OT11: verdict value 'miss' still present"
 assert_contains '"delegate.feedback.parent_trace_id"' "$otel_body" "FB-OT11: parent_trace_id attribute still present"
-# JSONL row on disk still carries the reason — the gate is wire-only.
 last_row=$(grep '"source":"feedback"' "$tmp/m.jsonl" | tail -1)
 assert_contains "$REASON" "$last_row" "FB-OT11: reason still recorded on-disk JSONL row (gate is wire-only)"
 rm -rf "$tmp"
 
-# FB-OT12. Opt-in inclusion (DELEGATE_OTEL_INCLUDE_CONTENT=1): the reason
-# attribute is present with its original value. Asserts the opt-in path
-# exercises the same code, just with the gate flipped.
+# FB-OT12. Opt-in: the reason attribute carries its original value.
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -1137,14 +997,11 @@ assert_eq 0 "$EC" "FB-OT12: opt-in include-content → exits 0"
 otel_body=$(cat "$otel_sniff")
 assert_contains '"delegate.feedback.reason"' "$otel_body" "FB-OT12: reason attribute present when opt-in"
 assert_contains "\"$REASON\"" "$otel_body" "FB-OT12: reason value matches input verbatim"
-# Metadata attributes also still present (opt-in doesn't change metadata).
 assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT12: verdict attribute present"
 assert_contains '"miss"' "$otel_body" "FB-OT12: verdict value 'miss' present"
 rm -rf "$tmp"
 
-# FB-OT13. Opt-in with NO reason supplied → still no reason attribute. The
-# gate doesn't synthesise content; it just unlocks the existing
-# "only emit when non-empty" rule. Mirrors FB-OT4 but with the flag on.
+# FB-OT13. Opt-in with no reason still emits no reason attribute.
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -1166,13 +1023,10 @@ case "$otel_body" in
     echo "  PASS  FB-OT13: reason attribute absent when no reason supplied (opt-in is necessary, not sufficient)"
     pass=$((pass+1));;
 esac
-# Verdict attribute still present.
 assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT13: verdict attribute present"
 rm -rf "$tmp"
 
-# FB-OT14. The redact-by-default applies to DELEGATE_OTEL_INCLUDE_CONTENT=0
-# explicitly (not just unset). Defensive: the gate compares string equality
-# to "1" rather than truthiness, so any value other than "1" stays redacted.
+# FB-OT14. An explicit =0 redacts like unset.
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -1196,9 +1050,7 @@ case "$otel_body" in
 esac
 rm -rf "$tmp"
 
-# FB-OT15. The redact-by-default rejects any non-"1" value (true/yes/on are
-# NOT recognised as opt-in). Operators must use the literal string "1" so
-# typos like INCLUDE_CONTENT=true don't silently include content.
+# FB-OT15. Only the literal "1" enables include-content; =true stays redacted.
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -1222,20 +1074,10 @@ case "$otel_body" in
 esac
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# Issue #187 — delegate.recipe on feedback span
-# When the parent delegation used --recipe NAME the recipe field lives on
-# the parent's JSONL row. We copy it onto the feedback span as the
-# `delegate.recipe` attribute so per-recipe HIT-rate dashboards can group
-# by it directly (TraceQL doesn't support cross-trace projection cleanly).
-# Recipe names are metadata (predefined identifiers from prompts/<NAME>.md),
-# not user content, so they travel unconditionally — NOT gated behind
-# DELEGATE_OTEL_INCLUDE_CONTENT.
-# ---------------------------------------------------------------------------
+# --- delegate.recipe on the feedback span (#187): copied from the parent
+# row; a recipe name is metadata, so it is never content-gated ---
 
 # seed_metrics_with_recipe <file> <recipe_name> [<trace_id>] [<span_id>]
-#   Like seed_metrics_with_otel but also includes a `recipe` field on the
-#   delegate row, modelling a parent delegation that used --recipe NAME.
 seed_metrics_with_recipe() {
   local file="$1" recipe="$2"
   local tid="${3:-aaaa1111bbbb2222cccc3333dddd4444}"
@@ -1246,10 +1088,7 @@ seed_metrics_with_recipe() {
 EOF
 }
 
-# FB-OT16. Parent delegation used --recipe NAME → feedback span carries the
-# delegate.recipe attribute with the recipe name. The recipe travels
-# unconditionally — content gating (DELEGATE_OTEL_INCLUDE_CONTENT) does NOT
-# apply because recipe names are predefined metadata, not user input.
+# FB-OT16. A recipe parent puts delegate.recipe on the span without the content gate.
 tmp=$(mktemp -d)
 seed_metrics_with_recipe "$tmp/m.jsonl" "commit-message"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -1264,7 +1103,6 @@ assert_eq 0 "$EC" "FB-OT16: recipe parent → exits 0"
 otel_body=$(cat "$otel_sniff")
 assert_contains '"delegate.recipe"' "$otel_body" "FB-OT16: delegate.recipe attribute present on feedback span"
 assert_contains '"commit-message"' "$otel_body" "FB-OT16: delegate.recipe value matches parent row"
-# Recipe travels unconditionally — verify it's still present even without the include-content flag.
 case "$otel_body" in
   *'delegate.feedback.reason'*)
     echo "  FAIL  FB-OT16: reason should be absent (content gate unchanged)"
@@ -1275,9 +1113,7 @@ case "$otel_body" in
 esac
 rm -rf "$tmp"
 
-# FB-OT17. Bare-tier parent delegation (no --recipe) → feedback span omits
-# the delegate.recipe attribute entirely. Mirrors the parent delegate span's
-# recipe handling (the span only carries the attribute when it has a value).
+# FB-OT17. A bare-tier parent omits the delegate.recipe attribute entirely.
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -1298,20 +1134,12 @@ case "$otel_body" in
     echo "  PASS  FB-OT17: delegate.recipe absent for bare-tier parent (consistent with parent span)"
     pass=$((pass+1));;
 esac
-# Verdict and parent IDs still present — only the recipe attribute is conditional.
 assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT17: verdict attribute still present"
 assert_contains '"delegate.feedback.parent_trace_id"' "$otel_body" "FB-OT17: parent_trace_id attribute still present"
 rm -rf "$tmp"
 
-# FB-OT18. Backwards-compat — feedback rows whose parent delegate row pre-
-# dates the exporter still produce a feedback span. Older JSONL rows carry
-# neither `otel_trace_id` nor `recipe` (the recipe field only started landing
-# once --recipe shipped, and earlier still rows had no telemetry at all);
-# the span emits without `links` and without a delegate.recipe attribute,
-# but the verdict attribute still travels so the dashboard counts the
-# verdict. Track E #157 backfills parent IDs separately; recipe back-fill
-# is out of scope here because the field is genuinely absent on rows that
-# pre-date the --recipe flag.
+# FB-OT18. A parent row with neither otel ids nor recipe still gets a span:
+# no links, no delegate.recipe, verdict present.
 tmp=$(mktemp -d)
 TS_PRE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 cat > "$tmp/m.jsonl" <<EOF
@@ -1337,7 +1165,6 @@ case "$otel_body" in
     echo "  PASS  FB-OT18: delegate.recipe absent on pre-exporter rows (recipe field genuinely missing)"
     pass=$((pass+1));;
 esac
-# Verdict still travels so the dashboard counts the marker event.
 assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT18: verdict still travels"
 case "$otel_body" in
   *'"links":['*)
@@ -1349,9 +1176,7 @@ case "$otel_body" in
 esac
 rm -rf "$tmp"
 
-# FB-OT19. --ts pinning + recipe: the recipe is pulled from the PINNED
-# delegate row, not the most-recent one. Mirrors FB-OT9's check that --ts
-# correctly attaches to the chosen row's metadata.
+# FB-OT19. A --ts pin takes the recipe from the pinned row, not the newest.
 tmp=$(mktemp -d)
 T_OLD=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-200))')
 T_RECENT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -1377,9 +1202,8 @@ recipe_attr=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0
 assert_eq "commit-message" "$recipe_attr" "FB-OT19: delegate.recipe pulled from --ts pinned row, not most-recent"
 rm -rf "$tmp"
 
-# FB-OT20. --id pinning + OTel on a shared second: the link and the project
-# come off the pinned (first) row, not the last row carrying that ts. Uses
-# the same_second_setup fixture from 7c.
+# FB-OT20. --id on a shared second: link and project come off the pinned
+# (first) row, not the last row with that ts.
 same_second_setup
 invocations="$tmp/invocations"; : > "$invocations"
 otel_sniff="$tmp/otel.json"
@@ -1396,18 +1220,10 @@ assert_eq "repo-butler" \
   "FB-OT20: --id on a shared second carries the pinned row's project"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# One verdict tier (ADR 0030, superseding ADR 0015). The agent that used or
-# rewrote the draft records the verdict; there is no human tier, because one
-# filled at a few rows a week and the loop never went fast enough. The
-# recorder must (a) default to agent, (b) write verdict_source:"agent" on
-# every row — the dashboards and consumers filter on it — (c) refuse
-# --source human with a pointer at the ADR, and (d) reject any other value
-# loudly rather than silently accept a tier that does not exist.
-# ---------------------------------------------------------------------------
+# --- One verdict tier (ADR 0030): default agent, verdict_source:"agent" on
+# every row, --source human refused, any other value rejected ---
 
-# FB-SRC1. Default (no --source): the feedback row carries
-# verdict_source:"agent", the same as an explicit --source agent.
+# FB-SRC1. Default (no --source) is agent.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" hit 2>&1) || EC=$?
@@ -1427,9 +1243,7 @@ vs=$(echo "$last" | jq -r '.verdict_source')
 assert_eq "agent" "$vs" "FB-SRC2: verdict_source parses back as agent"
 rm -rf "$tmp"
 
-# FB-SRC3. --source human is refused: the tier no longer exists, and a row
-# written under it would be the one kind the reporting cannot place. Exit 2,
-# the message names ADR 0030, and nothing is appended.
+# FB-SRC3. --source human is refused with exit 2 naming ADR 0030; nothing is appended.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 before=$(grep -c '' "$tmp/m.jsonl")
 EC=0
@@ -1448,8 +1262,7 @@ last=$(tail -1 "$tmp/m.jsonl")
 assert_contains '"verdict_source":"agent"' "$last" "FB-SRC4: equals form sets agent tier"
 rm -rf "$tmp"
 
-# FB-SRC5. An invalid --source value is rejected with exit 2 — a typo must
-# never silently fall back to a tier.
+# FB-SRC5. An invalid --source value is rejected with exit 2.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --source robot hit 2>&1) || EC=$?
@@ -1465,8 +1278,7 @@ assert_eq 2 "$EC" "FB-SRC6: --source with no value → exit 2"
 assert_contains "requires a value" "$out" "FB-SRC6: error explains --source needs a value"
 rm -rf "$tmp"
 
-# FB-SRC7. --source agent composes with --ts and a reason (flags first, then
-# verdict, then reason).
+# FB-SRC7. --source agent composes with --ts and a reason.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --ts "$TS_LATEST" --source agent miss "rewrote the bullets" 2>&1) || EC=$?
@@ -1497,9 +1309,7 @@ src_attr=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].a
 assert_eq "agent" "$src_attr" "FB-SRC8: source attribute value is agent"
 rm -rf "$tmp"
 
-# FB-SRC9. OTel: default (no --source) emits delegate.feedback.source=agent —
-# the attribute is unconditional metadata and carries the same value the JSONL
-# row does, so an OTel-backed dashboard filters on it the same way.
+# FB-SRC9. OTel: the default source is agent on the span too.
 tmp=$(mktemp -d)
 seed_metrics_with_otel "$tmp/m.jsonl"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -1516,28 +1326,18 @@ src_attr=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].a
 assert_eq "agent" "$src_attr" "FB-SRC9: default source attribute value is agent"
 rm -rf "$tmp"
 
-# FB-SRC10. The lib's own defaults agree. delegate-feedback.sh always passes
-# the argument, so the defaults in scripts/lib/otel.sh are reached only by
-# other emitters (backfill-otel.sh), and a "human" left there would label
-# rows with the retired tier. The lib has no suite of its own; pin it here.
+# FB-SRC10. scripts/lib/otel.sh defaults agree; only other emitters reach
+# them, and the lib has no suite of its own.
 assert_eq 0 "$(grep -c ':-human}' "$REPO/scripts/lib/otel.sh")" \
   "FB-SRC10: scripts/lib/otel.sh no longer defaults any verdict_source to human"
 assert_eq 2 "$(grep -c 'verdict_source="\${\(9\|11\):-agent}"' "$REPO/scripts/lib/otel.sh")" \
   "FB-SRC10: both emit_otel_feedback_span entry points default verdict_source to agent"
 
-# ---------------------------------------------------------------------------
-# Scaffold verdict (supervised-draft-delegation G1)
-# A third outcome distinct from hit and miss: the draft was discarded but
-# genuinely useful (divergence/execution improved the final result). Recorded
-# backward-compatibly — the row carries kept:false (so any kept-only reader
-# treats it as "not used verbatim", never inflating hit-rate) plus the new
-# scaffold:true discriminator. It is NOT a miss, so it must not fire the
-# MISS-recurrence nudge, and historical scaffold rows must not be counted as
-# similar misses for a later real miss's nudge.
-# ---------------------------------------------------------------------------
+# --- Scaffold verdict: the draft was discarded but useful. The row carries
+# kept:false (so kept-only readers never inflate hit-rate) plus scaffold:true,
+# and it is not a miss for the recurrence nudge ---
 
-# SC1: scaffold with reason → exit 0, one row carrying scaffold:true + kept:false,
-# stdout reports SCAFFOLD.
+# SC1: scaffold with a reason writes one row with scaffold:true and kept:false.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
 EC=0
@@ -1567,8 +1367,7 @@ assert_contains '"verdict_source":"agent"' "$last" "scaffold --source agent: ver
 assert_contains '"kept":false' "$last" "scaffold --source agent: kept:false"
 rm -rf "$tmp"
 
-# SC3: scaffold with no reason is refused like a miss — a draft that was
-# discarded but useful still needs to say what it taught.
+# SC3: scaffold with no reason is refused like a miss.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 before=$(grep -c '' "$tmp/m.jsonl")
 EC=0
@@ -1578,10 +1377,7 @@ assert_contains "needs a reason" "$out" "scaffold no-reason: the refusal says wh
 assert_eq "$before" "$(grep -c '' "$tmp/m.jsonl")" "scaffold no-reason: no row written"
 rm -rf "$tmp"
 
-# SC4: scaffold does NOT fire the MISS-recurrence nudge even with 5 prior
-# similar MISSes (scaffold is not a miss). seed_history creates 5 miss rows
-# whose reason matches; a real miss here would fire the nudge — a scaffold
-# must stay silent.
+# SC4: a scaffold never fires the recurrence nudge, even with five similar priors.
 tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 5
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" scaffold "pr-description recipe stalled past 30s on prose tier body" 2>&1) || EC=$?
@@ -1590,12 +1386,8 @@ if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  scaffold with si
 else echo "  FAIL  scaffold with similar MISSes: nudge fired (scaffold must not nudge)"; fail=$((fail+1)); fi
 rm -rf "$tmp"
 
-# SC5: historical scaffold rows are NOT counted as similar misses by the nudge
-# matcher. Seed 4 scaffold rows (kept:false, scaffold:true) with a matching
-# reason plus a fresh delegate; recording a real MISS must NOT see those 4 as
-# similar misses — so with no genuine prior misses the nudge stays silent.
-# Without the matcher's scaffold skip, the 4 kept:false rows would count as 4
-# similar misses (4 + 1 ≥ 3 default) and the nudge would fire.
+# SC5: historical scaffold rows (kept:false, scaffold:true) are not similar
+# misses for a later real miss's nudge.
 tmp=$(mktemp -d)
 : > "$tmp/m.jsonl"
 for i in 1 2 3 4; do
@@ -1611,19 +1403,14 @@ if [[ "$out" != *"NOTE: this MISS plus"* ]]; then echo "  PASS  historical scaff
 else echo "  FAIL  historical scaffold rows counted as similar misses (matcher must skip scaffold)"; fail=$((fail+1)); fi
 rm -rf "$tmp"
 
-# SC6: a near-miss verdict word is still rejected (adding 'scaffold' to the
-# case must not weaken the catch-all).
+# SC6: a near-miss verdict word is still rejected.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" scaffolding 2>&1) || EC=$?
 assert_eq 2 "$EC" "near-miss verdict 'scaffolding' -> exit 2 (not silently accepted)"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# FN: --final captures the text that ACTUALLY shipped beside the captured
-# draft, so a rejection carries the (generated, shipped) pair rather than only
-# a prose description of the difference between them.
-# ---------------------------------------------------------------------------
+# --- FN: --final stores the text that shipped beside the captured draft ---
 # FN1: a file path is copied in and named on the row.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 printf 'the reply that actually shipped\n' > "$tmp/final.txt"
@@ -1638,13 +1425,9 @@ assert_eq "the reply that actually shipped" "$(cat "$tmp/drafts/$final_name" 2>/
   "--final: shipped text stored verbatim beside the draft"
 rm -rf "$tmp"
 
-# FN1b: when the delegate row names a draft, the final is named after THAT,
-# not after ref_ts. Timestamps are second-precision and parallel delegations
-# share them, so a ts-derived name would overwrite another delegation's
-# shipped text; naming off draft_file also proves the two halves belong to the
-# same delegation. The appended row shares the seed's fresh second, which is
-# exactly the ambiguity both the implicit lookup and --ts refuse, so the
-# verdict is pinned by id.
+# FN1b: the final is named after the row's draft_file, not ref_ts, since
+# parallel delegations share a second. The appended row shares the seed's
+# second, so the verdict is pinned by id.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 mkdir -p "$tmp/drafts"
 printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"otel_span_id":"dddddddddddddddd","draft_file":"20260826T101206Z-a1b2c3d4.draft.txt"}\n' \
@@ -1657,8 +1440,7 @@ assert_eq "20260826T101206Z-a1b2c3d4.final.txt" \
   "--final: named after the row's draft_file, not after ref_ts"
 rm -rf "$tmp"
 
-# FN1c: the shipped text is the most sensitive artefact of the pair, so
-# neither the directory nor the file may inherit a permissive umask.
+# FN1c: neither the directory nor the file may inherit a permissive umask.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 printf 'shipped\n' > "$tmp/f.txt"
 ( umask 000
@@ -1680,8 +1462,7 @@ assert_eq "shipped via stdin" "$(cat "$tmp/drafts/$final_name" 2>/dev/null)" \
   "--final -: shipped text read from stdin"
 rm -rf "$tmp"
 
-# FN3: a nonexistent path fails BEFORE the verdict row is written, so a typo
-# cannot leave a verdict recorded against evidence that was never stored.
+# FN3: a nonexistent path fails before the verdict row is written.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 before=$(grep -c '' "$tmp/m.jsonl")
 EC=0
@@ -1698,8 +1479,7 @@ out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --final 2>&1) || EC=$?
 assert_eq 2 "$EC" "--final with no value exits 2"
 rm -rf "$tmp"
 
-# FN5: omitting --final leaves the row shape exactly as it was, so every
-# reader written before this flag existed keeps working.
+# FN5: omitting --final leaves the row shape as it was.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
   bash "$SCRIPT" miss "r" >/dev/null 2>&1
@@ -1707,15 +1487,8 @@ assert_eq "false" "$(tail -1 "$tmp/m.jsonl" | jq -r 'has("final_file")')" \
   "--final omitted: no final_file field on the row"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# A rejection needs a reason. Measured 2026-08-26: 12 of the 63 rejections in
-# the live corpus carried none, all from a single bulk sweep, all on the recipe
-# that then sat bottom of the per-recipe ranking with nothing behind its
-# position. The rule used to be scoped to `--source agent`, with the human
-# sweep exempt because "I no longer remember why" was honest there; with one
-# tier (ADR 0030) every verdict is the agent's own just-finished delegation,
-# and it always knows.
-# ---------------------------------------------------------------------------
+# --- A rejection needs a reason: with one tier (ADR 0030) every verdict is
+# the agent's own just-finished delegation ---
 tmp=$(mktemp -d); metrics="$tmp/m.jsonl"
 seed_row() { printf '{"ts":"%s","source":"delegate","recipe":"x","tier":"prose","exit_status":0}\n' "$1" > "$metrics"; }
 fb() { DELEGATE_METRICS_FILE="$metrics" bash "$SCRIPT" --ts 2026-08-26T23:00:00Z "$@" 2>&1; }
@@ -1740,23 +1513,14 @@ assert_eq 0 "$(fbrc --source agent miss 'dropped every file:line anchor')" \
 seed_row 2026-08-26T23:00:00Z
 assert_eq 0 "$(fbrc --source agent hit)" \
   "reason-required: an agent hit needs no reason"
-# No --source is the agent default, not an exemption: a reasonless miss is
-# refused the same way whether or not the flag was typed.
+# No --source is the agent default, not an exemption.
 seed_row 2026-08-26T23:00:00Z
 assert_eq 2 "$(fbrc miss)" \
   "reason-required: a reasonless miss with no --source is refused too"
 assert_eq 1 "$(grep -c . "$metrics")" "reason-required: the refused sourceless row is not written"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# Flags are honoured wherever they appear, not only before the verdict.
-# Measured 2026-08-27: three rejections in the live corpus recorded a reason
-# ending `--final /Users/.../tmp/msg.txt` and no final_file, because parsing
-# stopped at the verdict and swallowed the flag as reason words. Against 17
-# stored finals that is 3 of 20 capture attempts lost — and a lost capture is
-# a rejection that reaches the loop as prose about a draft nobody can look at
-# again, which is the ceiling ADR 0029 exists to break.
-# ---------------------------------------------------------------------------
+# --- Flags are honoured wherever they appear, not only before the verdict ---
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 mkdir -p "$tmp/drafts"
 printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"otel_span_id":"dddddddddddddddd","draft_file":"20260827T090000Z-abcd1234.draft.txt"}\n' \
@@ -1773,8 +1537,7 @@ assert_eq "the reply that actually shipped" "$(cat "$tmp/drafts/20260827T090000Z
   "trailing --final: the stored text is the shipped text"
 rm -rf "$tmp"
 
-# The same permutation for the other two flags, so the rule is "flags are
-# flags", not "--final is special".
+# The same for the other two flags.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
   bash "$SCRIPT" miss "dropped every anchor" --source agent >/dev/null 2>&1
@@ -1795,9 +1558,7 @@ assert_eq "wrong subject" "$(printf '%s' "$last" | jq -r '.reason // ""')" \
   "trailing --ts: the flag is consumed, not left in the reason"
 rm -rf "$tmp"
 
-# A reason that genuinely needs to talk about a flag ends flag parsing with
-# `--`. Without this escape there would be no way to write one, since the
-# permutation above consumes a real flag anywhere in the line.
+# `--` ends flag parsing so a reason can quote a flag.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
   bash "$SCRIPT" -- miss "the nudge should name --final here" >/dev/null 2>&1
@@ -1808,9 +1569,7 @@ assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_file")')" \
   "-- ends flag parsing: the quoted flag stored nothing"
 rm -rf "$tmp"
 
-# An unknown double-dash token is reason text, not an error: the catch-all
-# that made trailing flags reason words in the first place is still what
-# handles anything this script does not define.
+# An unknown double-dash token is reason text, not an error.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
   bash "$SCRIPT" miss "shape was --bulleted not prose" >/dev/null 2>&1
@@ -1818,8 +1577,7 @@ assert_eq "shape was --bulleted not prose" "$(tail -1 "$tmp/m.jsonl" | jq -r '.r
   "unknown --token stays in the reason"
 rm -rf "$tmp"
 
-# A verdict word appearing later in the reason must not be re-read as the
-# verdict: only the first positional is the verdict.
+# Only the first positional is the verdict; later verdict words are reason text.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
   bash "$SCRIPT" scaffold "closer to a hit than a miss" >/dev/null 2>&1
@@ -1831,15 +1589,9 @@ assert_eq "closer to a hit than a miss" "$(printf '%s' "$last" | jq -r '.reason 
 rm -rf "$tmp"
 
 
-# ---------------------------------------------------------------------------
-# Adopting a final the boundary hook already captured. The reply recipes post
-# their output inline, so there is no path for the caller to hand to --final;
-# the hook writes what was posted under the draft's own stem and this adopts
-# it. `final_source` keeps an inferred pair distinguishable from one the caller
-# vouched for.
-# ---------------------------------------------------------------------------
-# The appended row shares the seed's fresh second — the ambiguity the implicit
-# lookup and --ts both refuse — so every call below pins with --id.
+# --- Adopting a final the boundary hook captured under the draft's stem;
+# `final_source` keeps an inferred pair distinguishable from a vouched one.
+# The appended row shares the seed's second, so every call pins with --id ---
 adopt_setup() { # -> tmp with a delegate row naming a draft, and drafts/
   tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
   mkdir -p "$tmp/drafts"
@@ -1858,10 +1610,8 @@ assert_eq "posted" "$(printf '%s' "$last" | jq -r '.final_source // ""')" \
   "adopt: the row records that the pair was inferred from a post"
 rm -rf "$tmp"
 
-# An explicit --final is the caller vouching for the pair, so the row names
-# it and it is not relabelled as inferred. It does not overwrite the hook's
-# capture, though: an existing final is never overwritten (#474), so the
-# caller's text lands in a numbered sibling and the hook's stays on disk.
+# An explicit --final is not relabelled as inferred and never overwrites an
+# existing final (#474): the caller's text lands in a numbered sibling.
 adopt_setup
 printf 'what the hook saw go out' > "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt"
 printf 'what the caller says shipped' > "$tmp/mine.txt"
@@ -1880,13 +1630,8 @@ assert_contains "20260827T100000Z-aaaa1111.final.txt already exists" "$out" \
   "adopt: the caller is told the stem already had a final"
 rm -rf "$tmp"
 
-# The overwrite this replaces was silent and destructive. Measured 2026-09-11:
-# two verdicts from two sessions both named final_file
-# 20260911T054711Z-22a06549.final.txt, so a commit-message draft sat beside a
-# D-Bus badge reply as its "shipped" half and the real commit message was
-# gone. Each further final on the same stem takes the next free number, and
-# every row names the file it actually wrote, so a pair is never two
-# different delegations.
+# Each further final on the same stem takes the next free number, and every
+# row names the file it wrote.
 adopt_setup
 printf 'first shipped' > "$tmp/one.txt"
 printf 'second shipped' > "$tmp/two.txt"
@@ -1906,11 +1651,8 @@ assert_eq "20260827T100000Z-aaaa1111.final.txt 20260827T100000Z-aaaa1111.final.2
   "numbered final: each row names the file it wrote"
 rm -rf "$tmp"
 
-# The name is claimed by the open, not by a stat: a check-then-truncate
-# allocation let 12 parallel `--final` writers on one stem leave 2 files and
-# 11 rows all naming S.final.txt (PR #479 review). Several writers race on
-# one stem here; every one must end up with its own file, and every row must
-# name a distinct file whose content is that writer's.
+# The name is claimed by an exclusive create, not a stat: parallel writers
+# on one stem each get their own file and every row names its own.
 adopt_setup
 writers=8
 for i in $(seq 1 $writers); do
@@ -1927,7 +1669,7 @@ assert_eq "$writers" "$(jq -r 'select(.source=="feedback") | .final_file' "$tmp/
   "parallel finals: every row names a distinct final_file"
 assert_eq "$writers" "$(jq -r 'select(.source=="feedback") | .final_file' "$tmp/m.jsonl" | grep -c '')" \
   "parallel finals: every writer recorded a final_file"
-# Each row's file holds that writer's own text (reason "w N" ↔ "writer N").
+# Reason "w N" pairs with content "writer N".
 mismatch=0
 while IFS=$'\037' read -r r f; do
   n="${r#w }"
@@ -1936,13 +1678,8 @@ done < <(jq -r 'select(.source=="feedback") | [.reason, .final_file] | join("\u0
 assert_eq 0 "$mismatch" "parallel finals: every row's file holds that writer's own text"
 rm -rf "$tmp"
 
-# A claim that succeeds but a copy that fails is not a collision. The source
-# passed the -f check and then became unreadable (permissions, a file that was
-# a pipe, a disappearing tmp dir); the exclusive redirect had already created
-# the name, so treating "the file exists" as "someone else got there first"
-# advanced the number and created an empty file at every step, without end
-# (PR #479 review). The claim is released, the loop stops, the verdict lands
-# without a final_file and says so.
+# A claim that succeeds but a copy that fails is not a collision: the claim
+# is released, the loop stops, and the verdict lands without a final_file.
 adopt_setup
 printf "unreadable after the check" > "$tmp/locked.txt"
 chmod 000 "$tmp/locked.txt"
@@ -1959,11 +1696,8 @@ assert_eq "null" "$(jq -r "select(.source==\"feedback\") | .final_file" "$tmp/m.
 chmod 600 "$tmp/locked.txt"
 rm -rf "$tmp"
 
-# Adopting a final that an earlier verdict on the same row supplied by hand
-# is not inferring one from a post. The adoption path used to label any
-# existing `<stem>.final.txt` as `final_source:"posted"`; when a feedback row
-# on this ref already names the file, the later verdict carries the name
-# with no label.
+# A final an earlier verdict supplied by hand is carried by a later verdict
+# without the posted label.
 adopt_setup
 printf 'what the caller shipped' > "$tmp/mine.txt"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
@@ -1977,8 +1711,7 @@ assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_source")')" \
   "adopt after --final: a hand-supplied final is not relabelled as posted"
 rm -rf "$tmp"
 
-# A hit means the draft shipped as-is, so there is no difference to diff and
-# nothing for the loop to read; adopting would add a field that says nothing.
+# A hit shipped as-is, so there is nothing to adopt.
 adopt_setup
 printf 'what the hook saw go out' > "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
@@ -1990,7 +1723,7 @@ assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_file")')" \
   "adopt: a hit does not adopt a captured final"
 rm -rf "$tmp"
 
-# No capture, no field: every reader written before this existed keeps working.
+# No capture, no field.
 adopt_setup
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
   bash "$SCRIPT" --id dddddddddddddddd --source agent scaffold "r" >/dev/null 2>&1
@@ -2003,10 +1736,8 @@ assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_source")')" \
   "adopt: nothing captured means no final_source"
 rm -rf "$tmp"
 
-# The draft_file this script reads out of the JSONL becomes part of a path it
-# writes to. A hand-edited or corrupted row must not be able to place the
-# stored final outside the drafts directory; a rejected value falls through to
-# the ts-derived stem, the same path a row with no draft takes.
+# draft_file is untrusted input that becomes part of a written path; a
+# rejected value falls through to the ts-derived stem.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 printf '{"ts":"%s","source":"delegate","tier":"prose","exit_status":0,"otel_span_id":"dddddddddddddddd","draft_file":"../escaped.draft.txt"}\n' \
   "$TS_LATEST" >> "$tmp/m.jsonl"
@@ -2020,20 +1751,12 @@ assert_eq "$(printf '%s' "$TS_LATEST" | tr -d ':-')-nodraft.final.txt" \
   "traversing draft_file: falls through to the ts-derived stem"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# Repeated-reason warning (#487). The 16 maintainer-review-reply rejections in
-# the 2026-09-13 corpus all fired at 11:00 and carry one identical reason
-# pasted 16 times, so the loop learned one fact from 16 rows. A reason
-# byte-identical to one on another feedback row inside the last 10 minutes
-# (DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS, default 600) is warned about on
-# stderr with the count, and the row is still written: a pasted verdict is
-# thinner than a fresh one but better than none.
-# ---------------------------------------------------------------------------
+# --- Repeated-reason warning (#487): a reason byte-identical to one on
+# another feedback row inside DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS
+# (default 600) is warned about; the row is still written ---
 
-# seed_repeats <file> <N> <reason> <age_seconds>
-#   Writes N feedback rows carrying <reason> verbatim, each <age_seconds> old
-#   (spread a second apart so their ts values differ), then the fresh delegate
-#   row the new verdict attaches to.
+# seed_repeats <file> <N> <reason> <age_seconds>: N feedback rows a second
+# apart, then the fresh delegate row the new verdict attaches to.
 seed_repeats() {
   local file="$1" n="$2" reason="$3" age="$4"
   : > "$file"
@@ -2049,8 +1772,7 @@ seed_repeats() {
 }
 REPEAT_REASON="restated the fact sheet verbatim as one paragraph with the verdict string as a heading"
 
-# Identical reason on two rows inside the window: the warning names the count
-# and the row is still written.
+# Two identical rows inside the window: warned with the count, row still written.
 tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 2 "$REPEAT_REASON" 120
 EC=0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
@@ -2084,8 +1806,8 @@ if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason outsid
 else echo "  FAIL  repeat reason outside window: warned ($out)"; fail=$((fail+1)); fi
 assert_eq 3 "$(jq -c 'select(.source=="feedback")' "$tmp/m.jsonl" | grep -c '')" \
   "repeat reason outside window: the row is written"
-# Widening the window brings the two seeded rows back in; the miss just
-# recorded above references this same delegation and so does not count.
+# Widening the window brings the seeded rows back in; the miss just recorded
+# references this same delegation and does not count.
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS=1200 \
   bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1)
 assert_contains "this reason was already recorded 2 time(s) in the last 20 min" "$out" \
@@ -2112,9 +1834,8 @@ assert_eq 3 "$(jq -c 'select(.source=="feedback")' "$tmp/m.jsonl" | grep -c '')"
   "repeat reason on a hit: the row is written"
 rm -rf "$tmp"
 
-# A second verdict on the SAME delegation is a revision of one draft's
-# record, not a sweep: rows that reference this row (by ref_id, or by ref_ts
-# on a row that pre-dates ids) never count. PR #488 review.
+# A second verdict on the same delegation is a revision, not a sweep: rows
+# referencing this row (by ref_id, or ref_ts on a row without ids) never count.
 tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 0 "$REPEAT_REASON" 120
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
   bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" >/dev/null 2>&1
@@ -2122,10 +1843,8 @@ out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
   bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1)
 if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason: a revision on the same delegation does not warn"; pass=$((pass+1))
 else echo "  FAIL  repeat reason: a revision on the same delegation warned ($out)"; fail=$((fail+1)); fi
-# A same-SECOND sibling is a different delegation: when both rows carry an
-# id the exclusion compares ids, and only a row without one falls back to
-# ref_ts. Two delegate rows sharing TS_LATEST, a miss on the first, then the
-# same reason on the second — that is a sweep pasting, and it warns.
+# A same-second sibling is a different delegation: with ids on both rows the
+# exclusion compares ids, so the same reason on the sibling warns.
 tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 0 "$REPEAT_REASON" 120
 printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","exit_status":0,"otel_span_id":"0000000000000009"}\n' \
   "$TS_LATEST" >> "$tmp/m.jsonl"
@@ -2136,8 +1855,7 @@ out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
 assert_contains "already recorded 1 time(s)" "$out" \
   "repeat reason: a same-second sibling with its own id still warns"
 rm -rf "$tmp"
-# Same again with a prior row that carries only ref_ts (no ref_id), the shape
-# rows written before the id pin existed have.
+# Same again with a prior row carrying only ref_ts (no ref_id).
 tmp2=$(mktemp -d); seed_repeats "$tmp2/m.jsonl" 0 "$REPEAT_REASON" 120
 printf '{"ts":"%s","source":"feedback","ref_ts":"%s","kept":false,"reason":"%s","verdict_source":"agent"}\n' \
   "$TS_LATEST" "$TS_LATEST" "$REPEAT_REASON" >> "$tmp2/m.jsonl"
@@ -2147,8 +1865,7 @@ if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason: a sam
 else echo "  FAIL  repeat reason: a same-ref_ts row without ref_id counted ($out)"; fail=$((fail+1)); fi
 rm -rf "$tmp" "$tmp2"
 
-# A prior HIT that happens to carry the same reason words is not a pasted
-# rejection: only kept:false rows count.
+# Only kept:false rows count; a prior hit with the same words does not.
 tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 0 "$REPEAT_REASON" 120
 for age in 100 80; do
   hit_ts=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-'"$age"'))')
@@ -2161,10 +1878,9 @@ if [[ "$out" != *"already recorded"* ]]; then echo "  PASS  repeat reason: prior
 else echo "  FAIL  repeat reason: prior hits with the same reason counted ($out)"; fail=$((fail+1)); fi
 rm -rf "$tmp"
 
-# DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS=0 is the off switch (unlike
-# STALE_SECONDS, where 0 means unbounded). The seed rows sit in the current
-# second (age 0), which a zero-width window would still include, so this
-# passes only when 0 switches the comparison off rather than narrowing it.
+# REPEAT_WINDOW_SECONDS=0 is the off switch (unlike STALE_SECONDS, where 0 is
+# unbounded); the seed rows are in the current second so a zero-width window
+# would still include them.
 tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 2 "$REPEAT_REASON" 0
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS=0 \
   bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1)
@@ -2174,8 +1890,7 @@ assert_eq 3 "$(jq -c 'select(.source=="feedback")' "$tmp/m.jsonl" | grep -c '')"
   "repeat reason: REPEAT_WINDOW_SECONDS=0 still writes the row"
 rm -rf "$tmp"
 
-# A value that is not a whole number of seconds falls back to the default,
-# says so, and the warning still fires on the default window.
+# A non-numeric value falls back to the default and says so.
 tmp=$(mktemp -d); seed_repeats "$tmp/m.jsonl" 2 "$REPEAT_REASON" 120
 out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS=10m \
   bash "$SCRIPT" --id "$ID_LATEST" miss "$REPEAT_REASON" 2>&1)
