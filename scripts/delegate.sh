@@ -1,330 +1,68 @@
 #!/usr/bin/env bash
-# Wrap a local-LLM HTTP endpoint (Ollama by default, MLX optional) with
-# tier-based model selection and per-invocation metrics. Use this instead of
-# bare `ollama run` so every delegation is observable and the response is
-# parser-clean (no CLI cursor rewrites or spinner ANSI mixed into stdout).
+# Wrap a local OpenAI-compatible endpoint (MLX, Docker Model Runner or Ollama)
+# with tier-based model selection, calibrated recipes, deterministic output
+# checks and per-invocation metrics. The HTTP body is plain text, so stdout is
+# parser-clean, unlike the `ollama run` CLI this replaced.
 #
 # Usage:
-#   delegate.sh <tier> "<prompt>"                            # context comes from stdin
-#   echo "..." | delegate.sh prose "..."                     # explicit pipe
+#   delegate.sh <tier> "<prompt>"                    # context comes from stdin
+#   echo "..." | delegate.sh prose "..."             # explicit pipe
 #   delegate.sh --recipe NAME [--var k=v ...] ["<prompt>"]
-#                                # prepend prompts/NAME.md template with {{k}} subs.
-#                                # The tier comes from the recipe's frontmatter
-#                                # `tier:`; pass --tier NAME to override it.
+#       prepend prompts/NAME.md with {{k}} substituted ({{stdin}} from the
+#       pipe); the tier comes from the recipe's frontmatter `tier:`, --tier
+#       overrides it. A lone positional is the tier only when it exactly
+#       matches a tier name, otherwise it is the prompt (#411).
+#   --recipe auto   infer the recipe from stdin: a unified diff -> commit-message
+#                   with diff_stat computed from the diff and recent_commits
+#                   backfilled from git log; anything else exits 2, never a guess.
 #
-# Tiers: code | prose | reasoning | long-context | vision | embedding |
-#        premium-general | reasoning-vision  (scripts/pick-model.sh is the source
-#        of truth — this list was four names short, so a valid --tier value looked
-#        invalid to anyone reading the header)
+# Tiers: read from pick-model.sh, the single source of truth.
 #
-# Recipe flag (layer 2 of the training-loop initiative):
-#   --recipe NAME            load prompts/<NAME>.md, extract its '## Prompt
-#                            template' fenced block, prepend it to the input.
-#   --recipe auto            infer the recipe from the piped context (#277):
-#                            a unified diff on stdin -> commit-message, with
-#                            diff_stat computed from the piped diff and
-#                            recent_commits backfilled from git log when not
-#                            passed. Errors (exit 2) if the context is not a
-#                            recognised diff — never a silent guess.
-#   --var key=value          substitute {{key}} placeholders inside the
-#                            recipe template. Repeat for multiple variables.
-#                            Values may contain newlines and special chars.
-#                            A {{stdin}} placeholder is auto-substituted with
-#                            stdin content when stdin is piped in.
-#   Without --recipe both positionals are required. With one, the tier comes
-#   from the recipe's frontmatter `tier:` and <prompt> is optional (the recipe
-#   carries the instruction). A lone positional on a recipe call is read as the
-#   tier only when it exactly matches a known tier name, otherwise as the
-#   prompt — 17 of 20 recipes pass a trailing reinforcement prompt (#411).
+# Env (each DELEGATE_LOCAL_* accepts the old DELEGATE_TO_OLLAMA_* name when unset):
+#   DELEGATE_LOCAL_NO_METRICS=1         skip the metrics row (and the draft capture)
+#   DELEGATE_LOCAL_NO_VERDICT_NUDGE=1   silence the verdict reminder on stderr
+#   DELEGATE_LOCAL_VERDICT_NUDGE_FD=N   fd for the reminder, 1-9 (default 2); the
+#                                       caller must redirect fd N or the write is
+#                                       silently lost
+#   DELEGATE_LOCAL_NO_META=1            silence the `delegate-meta:` stderr line
+#   DELEGATE_PREFLIGHT_TIMEOUT=<s>      recipe-call canary timeout (default 10;
+#                                       0 disables); a stalled probe exits 3
+#   DELEGATE_NO_PREFLIGHT=1             disable the canary
+#   DELEGATE_REQUEST_TIMEOUT=<s>        curl --max-time on the dispatch (default
+#                                       600, which covers a cold model load)
+#   DELEGATE_BASE_URL=<urls>            ordered OpenAI-compatible base URLs; the
+#                                       default list lives in pick-model.sh
+#   MLX_HOST / DOCKER_MODEL_HOST / OLLAMA_HOST   feed that default list
+#   DELEGATE_FORCE_FLAKY=1              send a recipe its frontmatter marks flaky
+#                                       on the resolved model (else exit 4)
+#   DELEGATE_LOCAL_DATA_DIR             per-user data (default ~/.local/share/delegate-local)
+#   DELEGATE_METRICS_FILE=<path>        override the metrics destination
+#   DELEGATE_PROJECT=<name>             the project the delegation is FOR, when
+#                                       the cwd is not it (#342); --project wins
+#   CLAUDE_CODE_SESSION_ID=<uuid>       stamped on the row as `session` so the
+#                                       hooks can credit this session (#476)
+#   DELEGATE_PROMPTS_DIR=<path>         override prompts/ (default <script_dir>/../prompts)
+#   DELEGATE_THINK=true|false           default false; enable_thinking via the
+#                                       chat template
+#   DELEGATE_STRIP_THINK=1|0            strip a leading <think>...</think> trace;
+#                                       on by default for the reasoning tier
+#   DELEGATE_MAX_TOKENS=<int>           default 4096
+#   DELEGATE_TEMPERATURE / DELEGATE_TOP_P / DELEGATE_TOP_K / DELEGATE_PRESENCE_PENALTY
+#                                       sampler overrides (default greedy,
+#                                       temperature 0); non-numeric exits 2
+#   DELEGATE_OTEL_ENDPOINT=<url>        POST one OTLP/HTTP span per call
+#                                       (synchronous: a hung collector adds up
+#                                       to DELEGATE_OTEL_TIMEOUT s of latency)
+#   DELEGATE_OTEL_TIMEOUT=<s>           default 5
+#   DELEGATE_OTEL_VERBOSE=1             log exporter failures (silent by default)
+#   DELEGATE_OTEL_HEADERS=<H: v,H: v>   comma-separated; values url-encoded per
+#                                       the OTel SDK convention
+#   DELEGATE_OTEL_INCLUDE_CONTENT=1     send prompt/context/output in the span;
+#                                       off by default because they may carry
+#                                       secrets (ADR 0007, docs/otel-schema.md)
 #
-#   Optional frontmatter `inputs:` block (Phase 12 Track B, issue #161) lets
-#   a recipe declare flat `key: type` pairs that get validated pre-flight.
-#   Supported types: integer, string, integer?, string? (the `?` suffix means
-#   optional). Recipes without a frontmatter inputs: block skip the check
-#   (lazy migration). Undeclared --var keys pass through untouched (strict
-#   mode deferred). Type-check failure or a missing required input exits 2
-#   with a clear error before the model is contacted.
-#
-# Env:
-#   DELEGATE_LOCAL_NO_METRICS=1              # opt out of metrics logging
-#                                           #   (back-compat: DELEGATE_TO_OLLAMA_NO_METRICS
-#                                           #   is accepted if the new name is unset)
-#   DELEGATE_LOCAL_NO_VERDICT_NUDGE=1        # silence the one-line stderr
-#                                           #   (back-compat: DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE
-#                                           #   is accepted if the new name is unset)
-#                                           #   reminder printed after each
-#                                           #   successful call pointing at
-#                                           #   delegate-feedback.sh. Off-by-
-#                                           #   default; the nudge fires
-#                                           #   unconditionally on success
-#                                           #   when metrics are on,
-#                                           #   regardless of stdin/stdout
-#                                           #   shape (Agent SDK tool calls,
-#                                           #   CI scripts, and other non-
-#                                           #   TTY callers are the highest-
-#                                           #   volume users and their
-#                                           #   verdicts are what closes the
-#                                           #   training-loop gap — see
-#                                           #   issue #149). Three escape
-#                                           #   hatches: this env var (opt
-#                                           #   out per call), NO_METRICS
-#                                           #   (no row to verdict against),
-#                                           #   non-zero exit (failure has
-#                                           #   no output to judge).
-#   DELEGATE_LOCAL_VERDICT_NUDGE_FD=<N>      # redirect the verdict-nudge line
-#                                           #   (back-compat: DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD
-#                                           #   is accepted if the new name is unset)
-#                                           #   to file descriptor N instead
-#                                           #   of fd 2 (stderr). Default
-#                                           #   unset → fd 2, preserving the
-#                                           #   unconditional-fire behaviour
-#                                           #   the #149 reversal pinned. The
-#                                           #   escape hatch for parallel-
-#                                           #   capture callers (issue #139)
-#                                           #   that want clean stdout AND
-#                                           #   coverage tracking: redirect
-#                                           #   stdout+stderr together into a
-#                                           #   single output file and route
-#                                           #   the nudge to a separate fd,
-#                                           #   e.g.
-#                                           #     DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
-#                                           #     bash delegate.sh prose "X" \
-#                                           #     > out.txt 2>&1 3>>nudge.log
-#                                           #   GOTCHA: the caller must
-#                                           #   redirect fd N to somewhere
-#                                           #   (file, pipe, or another fd).
-#                                           #   If fd N is closed when the
-#                                           #   nudge fires, the write fails
-#                                           #   silently — the call still
-#                                           #   succeeds but no nudge lands
-#                                           #   anywhere. Suppression rules
-#                                           #   still apply: NO_VERDICT_NUDGE
-#                                           #   wins (no nudge written),
-#                                           #   NO_METRICS wins (no row to
-#                                           #   verdict), non-zero exit wins
-#                                           #   (no output to judge). Valid
-#                                           #   values: single-digit positive
-#                                           #   integer 1-9. Multi-digit FDs
-#                                           #   are rejected because bash 3.2
-#                                           #   (the project's portability
-#                                           #   floor) does not support the
-#                                           #   `{var}>file` form for high
-#                                           #   FDs and `>&$N` with N>=10
-#                                           #   can silently fail; tightening
-#                                           #   validation makes the failure
-#                                           #   mode loud. 0 (stdin), negative
-#                                           #   numbers, and non-numeric
-#                                           #   values exit 2 with a clear
-#                                           #   error before the model is
-#                                           #   contacted. 1 (stdout) and 2
-#                                           #   (stderr / the default) are
-#                                           #   both accepted.
-#   DELEGATE_PREFLIGHT_TIMEOUT=<s>          # default 10. Only consulted when
-#                                           #   --recipe is set. A 1-token
-#                                           #   canary probe hits the resolved
-#                                           #   model with --max-time S; if
-#                                           #   the probe does not return,
-#                                           #   exit 3 with a stderr message
-#                                           #   listing recovery options
-#                                           #   (raise timeout, smaller model,
-#                                           #   hand-write) before the full
-#                                           #   recipe-shaped request is sent.
-#                                           #   Set 0 to disable the canary.
-#                                           #   Closes the recipe-stall gap
-#                                           #   in issue #110.
-#   DELEGATE_REQUEST_TIMEOUT=<s>            # default 600. curl --max-time on
-#                                           #   the dispatch POST, paired with
-#                                           #   --connect-timeout 5. Bounds the
-#                                           #   whole request including cold
-#                                           #   model load, not just
-#                                           #   generation: 600 preserves
-#                                           #   every genuine call in recorded
-#                                           #   history (largest: 505 s, of
-#                                           #   which 504.6 s was load) while
-#                                           #   killing the 3.2-hour runaway.
-#   DELEGATE_BASE_URL=<urls>                # space-separated ordered list of
-#                                           #   OpenAI-compatible base URLs.
-#                                           #   pick-model.sh walks the list
-#                                           #   and dispatch posts to {base}/
-#                                           #   chat/completions. Defaults to
-#                                           #   MLX, Docker Model Runner and
-#                                           #   Ollama on their standard ports
-#                                           #   — see pick-model.sh, which
-#                                           #   owns the default. The metrics
-#                                           #   backend label is derived from
-#                                           #   the winning URL (mlx / docker /
-#                                           #   ollama, else host:port).
-#   DELEGATE_NO_PREFLIGHT=1                 # alternate disable for the canary
-#                                           #   (equivalent to TIMEOUT=0).
-#   DELEGATE_FORCE_FLAKY=1                  # override the recipe-level flaky-
-#                                           #   on-model gate (Phase 16 Track
-#                                           #   A). When a recipe declares
-#                                           #   `flaky_on_models:` in its
-#                                           #   frontmatter and the resolved
-#                                           #   model matches any listed
-#                                           #   substring (case-insensitive),
-#                                           #   delegate.sh exits 4 with a
-#                                           #   stderr message naming the
-#                                           #   recipe's documented mitigation
-#                                           #   (typically hand-writing). Set
-#                                           #   this env var to send the
-#                                           #   request anyway — useful for
-#                                           #   capturing fresh evidence the
-#                                           #   flaky-class behaviour has
-#                                           #   changed across model upgrades.
-#   DELEGATE_LOCAL_NO_META=1                 # silence the structured
-#                                           #   (back-compat: DELEGATE_TO_OLLAMA_NO_META
-#                                           #   is accepted if the new name is unset)
-#                                           #   `delegate-meta:` summary line
-#                                           #   printed to stderr after each
-#                                           #   successful call. SKILL.md
-#                                           #   teaches the assistant to read
-#                                           #   that line and surface the
-#                                           #   model + tokens_local count to
-#                                           #   the user, so the line is the
-#                                           #   contract surface for "this is
-#                                           #   how much we kept local." Off-
-#                                           #   by-default; opt out for clean
-#                                           #   stderr in batch runs.
-#   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
-#                               (default ~/.local/share/delegate-local)
-#   DELEGATE_METRICS_FILE=<path>            # override metrics destination
-#   DELEGATE_PROJECT=<name>                 # state the project the delegation
-#                                           #   is FOR, instead of deriving it
-#                                           #   from this process's cwd (#342).
-#                                           #   Delegating on behalf of repo X
-#                                           #   while cd'd into the skill
-#                                           #   checkout would otherwise record
-#                                           #   project=delegate-local, which
-#                                           #   never matches the boundary
-#                                           #   hook's own (correct) derivation.
-#                                           #   --project NAME wins over this.
-#   CLAUDE_CODE_SESSION_ID=<uuid>           # set by Claude Code; when non-empty
-#                                           #   it is stamped on the metrics row
-#                                           #   as `session`, so the boundary
-#                                           #   and Stop hooks (which receive
-#                                           #   the same id as `.session_id`)
-#                                           #   can credit a boundary to this
-#                                           #   session's own delegation (#476).
-#   DELEGATE_PROMPTS_DIR=<path>             # override prompts/ directory
-#                                           #   (default: <script_dir>/../prompts)
-#   DELEGATE_THINK=true|false               # default false; set true if the
-#                                           #   model's chain-of-thought
-#                                           #   genuinely helps for the task.
-#                                           #   Maps to Ollama's `think` field
-#                                           #   and to MLX's
-#                                           #   `chat_template_kwargs.enable_thinking`.
-#   DELEGATE_STRIP_THINK=1|0                # Strip a leading <think>...</think>
-#                                           #   reasoning trace from the response
-#                                           #   (drop everything up to and
-#                                           #   including the first </think>,
-#                                           #   trim leading whitespace) so
-#                                           #   structured-output recipes still
-#                                           #   parse when a trace-emitting model
-#                                           #   leaks the trace into the answer
-#                                           #   under think:false. ON by default
-#                                           #   for the reasoning tier (which
-#                                           #   routes trace-emitting models);
-#                                           #   =1 forces it on for any tier; =0
-#                                           #   force-disables it even on the
-#                                           #   reasoning tier, for a reasoning
-#                                           #   recipe whose own output may
-#                                           #   contain </think>.
-#   MLX_HOST=<url>                          # default http://localhost:8080
-#   DOCKER_MODEL_HOST=<url>                 # default http://localhost:12434
-#   OLLAMA_HOST=<url>                       # default http://localhost:11434
-#                                           #   The three feed the default
-#                                           #   DELEGATE_BASE_URL list; see
-#                                           #   pick-model.sh, which owns it.
-#   DELEGATE_MAX_TOKENS=<int>               # default 4096. The OpenAI
-#                                           #   completions shape requires
-#                                           #   max_tokens. Raise
-#                                           #   for long-context tier or
-#                                           #   verbose models.
-#   DELEGATE_TEMPERATURE=<float>            # override sampler temperature.
-#                                           #   Default for all models is 0
-#                                           #   (greedy). Set to opt INTO
-#                                           #   non-greedy sampling per-call;
-#                                           #   the Alibaba-recommended Qwen
-#                                           #   instruct profile is
-#                                           #   DELEGATE_TEMPERATURE=0.7
-#                                           #   DELEGATE_TOP_P=0.8
-#                                           #   DELEGATE_TOP_K=20
-#                                           #   DELEGATE_PRESENCE_PENALTY=1.3.
-#                                           #   Non-numeric value exits 2.
-#   DELEGATE_TOP_P=<float>                  # override top_p. Default unset (no
-#                                           #   top_p key sent in payload).
-#                                           #   Non-numeric exits 2.
-#   DELEGATE_TOP_K=<int>                    # override top_k. Default unset.
-#                                           #   Non-numeric exits 2.
-#   DELEGATE_PRESENCE_PENALTY=<float>       # override presence_penalty.
-#                                           #   Default unset. Non-numeric
-#                                           #   exits 2.
-#   DELEGATE_OTEL_ENDPOINT=<url>            # Phase 11 Track A (#134). When
-#                                           #   set, POST one OTLP/HTTP span
-#                                           #   per invocation to this URL
-#                                           #   (e.g. https://otlp.example
-#                                           #   /v1/traces) after the metrics
-#                                           #   row is written. Off when
-#                                           #   unset — zero overhead. The
-#                                           #   POST is SYNCHRONOUS: a hung
-#                                           #   collector adds up to
-#                                           #   DELEGATE_OTEL_TIMEOUT seconds
-#                                           #   of user-visible latency per
-#                                           #   call. If delegations feel
-#                                           #   sluggish, set DELEGATE_OTEL
-#                                           #   _VERBOSE=1 to see export
-#                                           #   failures or unset the
-#                                           #   endpoint to disable.
-#   DELEGATE_OTEL_TIMEOUT=<s>               # default 5. curl --max-time on
-#                                           #   the OTLP POST so a hung
-#                                           #   collector cannot block the
-#                                           #   caller's pipeline.
-#   DELEGATE_OTEL_VERBOSE=1                 # log exporter failures to stderr.
-#                                           #   Default silent — a misconfigured
-#                                           #   endpoint must not spam the
-#                                           #   caller's tool output. Use this
-#                                           #   to diagnose suspected exporter
-#                                           #   failures (timeouts, auth, DNS).
-#   DELEGATE_OTEL_HEADERS=<H: v,H: v>       # optional. Comma-separated
-#                                           #   Header: value pairs (matches
-#                                           #   OpenTelemetry SDK convention).
-#                                           #   Used for collector auth on
-#                                           #   Grafana Cloud, Langfuse, etc.
-#                                           #   Per OTel SDK convention, header
-#                                           #   values containing commas (or
-#                                           #   any reserved char) MUST be
-#                                           #   url-encoded — the script
-#                                           #   url-decodes each value before
-#                                           #   emitting -H flags so the on-
-#                                           #   wire header is the literal
-#                                           #   original (e.g. `a%2Cb` →
-#                                           #   `a,b`).
-#   DELEGATE_OTEL_INCLUDE_CONTENT=1         # Phase 11 Track F (#158). When =1,
-#                                           #   include prompt / context /
-#                                           #   output content in the OTel span
-#                                           #   as attribute values
-#                                           #   (delegate.prompt,
-#                                           #   delegate.context,
-#                                           #   delegate.output). Default unset
-#                                           #   = redact those fields entirely
-#                                           #   — only metadata (tier, model,
-#                                           #   recipe, char counts, durations)
-#                                           #   leaves the host. WARNING:
-#                                           #   content fields may carry PII,
-#                                           #   API keys, or internal URLs;
-#                                           #   only enable this against
-#                                           #   trusted collectors (a local
-#                                           #   Phoenix instance, a vetted
-#                                           #   private OTel backend, etc.).
-#                                           #   See ADR 0007 + docs/otel-
-#                                           #   schema.md for the field-by-
-#                                           #   field split.
-#
-# Output:  model response on stdout (no ANSI; HTTP body is plain text)
-# Errors:  pick-model failures and HTTP errors propagate as non-zero exit.
-#          A metrics line is still appended with exit_status set. OTLP-export
-#          failures NEVER change exit status — telemetry is non-fatal.
+# Output: model response on stdout. Errors: pick-model and HTTP failures exit
+# non-zero with a metrics row still written; OTLP export never changes the exit.
 
 set -uo pipefail
 
@@ -350,8 +88,7 @@ while (($# > 0)); do
     --recipe=*)
       recipe="${1#--recipe=}"; shift;;
     --var)
-      # As with --recipe/--project, a following flag is the next option rather
-      # than this one's value; accepting it would swallow the flag silently.
+      # A following flag is the next option, not this one's value.
       if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
         echo 'delegate: --var requires key=value' >&2; exit 2
       fi
@@ -359,20 +96,13 @@ while (($# > 0)); do
     --var=*)
       recipe_vars+=("${1#--var=}"); shift;;
     --project)
-      # A next token starting with '-' is the next flag, not the value:
-      # `--project --recipe foo` would otherwise set the project to "--recipe"
-      # and silently swallow the recipe flag.
       if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
         echo 'delegate: --project requires a value' >&2; exit 2
       fi
       project_override="$2"; shift 2;;
     --project=*)
       project_override="${1#--project=}"; shift;;
-    # `--tier` is not a new spelling invented here: the flaky-gate refusal below
-    # already tells callers to "route to a different tier (e.g. --tier code)",
-    # as does ADR 0012, and the argument catch-all was swallowing it as the
-    # positional tier — one live metrics row is literally `tier="--tier"`. Same
-    # following-flag guard as the options above.
+    # Without this branch the catch-all read `--tier` as the positional tier.
     --tier)
       if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
         echo 'delegate: --tier requires a value' >&2; exit 2
@@ -397,36 +127,20 @@ DELEGATE_LOCAL_NO_VERDICT_NUDGE="${DELEGATE_LOCAL_NO_VERDICT_NUDGE:-${DELEGATE_T
 DELEGATE_LOCAL_VERDICT_NUDGE_FD="${DELEGATE_LOCAL_VERDICT_NUDGE_FD:-${DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD:-}}"
 DELEGATE_LOCAL_NO_META="${DELEGATE_LOCAL_NO_META:-${DELEGATE_TO_OLLAMA_NO_META:-}}"
 
-# Validate the verdict-nudge FD env var up-front so a bad value fails fast,
-# before model resolution or the canary probe — a caller who fat-fingers
-# `DELEGATE_LOCAL_VERDICT_NUDGE_FD=foo` shouldn't pay the cold-load cost
-# before discovering the typo. Default 2 (stderr) keeps the back-compat
-# behaviour the #149 reversal pinned. The accepted range is 1-9 (single-
-# digit shell FDs): bash 3.2 — the project's portability floor, macOS-
-# shipped /bin/bash — only supports the `{var}>file` syntax for high FDs
-# from bash 4 onward, so multi-digit FDs via the `>&$N` form are unreliable
-# on the target platform. Restricting validation to 1-9 makes the failure
-# mode loud (clear error here) rather than silent (write-failure at nudge
-# time absorbed by the 2>/dev/null guard below). 0 (stdin) is rejected as
-# nonsense; 1 (stdout) is allowed for callers who genuinely want the nudge
-# inline with the model output.
+# Validated up-front so a bad value fails before the cold-load cost. 1-9 only:
+# bash 3.2 has no `{var}>file` form, so multi-digit FDs via `>&$N` are
+# unreliable on the target platform, and 0 (stdin) is nonsense.
 nudge_fd="${DELEGATE_LOCAL_VERDICT_NUDGE_FD:-2}"
 if ! [[ "$nudge_fd" =~ ^[1-9]$ ]]; then
   echo "delegate: DELEGATE_LOCAL_VERDICT_NUDGE_FD='${DELEGATE_LOCAL_VERDICT_NUDGE_FD:-}' is not a single-digit positive file descriptor (valid: 1-9; 0 is stdin and is rejected, multi-digit FDs are unreliable on bash 3.2)" >&2
   exit 2
 fi
 
-# Reject a --var value that is nothing but an unreplaced angle-bracket
-# stand-in (`--var why='<why this changed>'`). Callers copy these verbatim from
-# a recipe's ## Invocation block; the model then summarises the placeholder
-# instead of the real content, and the metrics row records an ordinary
-# successful delegation, so the failure is invisible (#356). Validated here
-# with the other fail-fast checks, before the cold-load cost.
-#
-# Only a whole-value single bracket token is rejected. Values that merely
-# contain brackets are the common case and must pass: --var diff= carries real
-# hunks, so HTML, C++ generics, `a < b` and shell redirection all have to
-# survive. Glob matching, not a regex engine, so there is nothing to backtrack.
+# Reject a --var value that is nothing but an unreplaced `<placeholder>` copied
+# from a recipe's Invocation block: the model summarises the placeholder and
+# the row records an ordinary success (#356). Only a whole-value single bracket
+# token is rejected; values that merely contain brackets (diff hunks, HTML,
+# `a < b`) must pass. Glob matching, so there is nothing to backtrack.
 for kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
   [[ "$kv" == *"="* ]] || continue
   placeholder_value="${kv#*=}"
@@ -446,19 +160,11 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 
-# Positional resolution runs here rather than beside the argument loop because
-# it needs $pick: the tier vocabulary is read from pick-model.sh's own TIERS
-# line so there is exactly one source of truth for it. Nothing between the loop
-# and this point reads $tier or $prompt.
-#
-# The grammar is `[<tier>] ["<prompt>"]` and both are optional, which is
-# ambiguous for a lone positional. 17 of the 20 recipes carry a trailing
-# reinforcement prompt (commit-message.md calls it load-bearing), so reading a
-# lone positional as the tier would make every documented recipe call fail with
-# "unknown tier: Match the example messages...". A lone positional is therefore
-# the tier only when it EXACTLY matches a known tier name; otherwise it is the
-# prompt and the tier comes from the recipe's frontmatter. Two positionals keep
-# the historical order, so every existing invocation is unchanged.
+# Runs here because it needs $pick: the tier vocabulary is read from
+# pick-model.sh's own TIERS line. A lone positional is the tier only when it
+# EXACTLY matches a known tier name; otherwise it is the prompt and the tier
+# comes from the recipe frontmatter, since most recipes pass a trailing
+# reinforcement prompt (#411).
 known_tiers=$(sed -n 's/^TIERS="\(.*\)"$/\1/p' "$pick" 2>/dev/null | tr '|' ' ')
 is_known_tier() {
   local candidate="$1" t
@@ -485,57 +191,32 @@ if [[ -z "$recipe" ]] && { [[ -z "$tier" ]] || [[ -z "$prompt" ]]; }; then
 fi
 
 metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
-# delegate_project is derived after lib/otel.sh is sourced (it provides
-# delegate_project_name); first used in the metric/span emission near the end.
 # Which base URL wins is not known until the tier is resolved (a provider can
-# be reachable yet hold no model for this tier), so nothing is decided here:
-# both the URL and the metrics label come back from the pick-model call below.
-# This placeholder label only ever reaches a metrics row for a failure that
-# happened before resolution.
+# be reachable yet hold no model for it); this placeholder label only reaches
+# a metrics row for a failure before resolution.
 resolved_base=""
 backend="provider"
 
-# Normalise DELEGATE_THINK to a strict JSON boolean ("true"/"false") before
-# it reaches jq --argjson, so a stray value like "yes" / "True" / " true "
-# doesn't cause a jq parse error that kills the whole delegation.
+# Normalised to a strict JSON boolean before it reaches jq --argjson.
 if [[ "${DELEGATE_THINK:-false}" == "true" ]]; then
   think="true"
 else
   think="false"
 fi
 
-# Single source of truth for the local-tokenizer estimate: total chars in +
-# out divided by 4. Both the JSONL metrics row (estimated_tokens_avoided)
-# and the delegate-meta stderr line (tokens_local) call this helper, so the
-# two surfaces cannot drift on the formula — see gemini-code-assist's PR
-# #133 review concern that the divisor was previously duplicated in two
-# code paths. Bash integer division of a sum of `${#...}` lengths has no
-# zero-divide risk.
+# The one tokens estimate (chars in + out over 4) both the metrics row and
+# the meta line use, so the two surfaces cannot drift on the formula.
 compute_tokens_local() {
   local pchars=$1 cchars=$2 ochars=$3
   echo $(( (pchars + cchars + ochars) / 4 ))
 }
 
-# capture_draft — persist the generated draft next to the metrics row that
-# scores it, and echo the basename for that row's `draft_file` field.
-#
-# Why this exists: until 2026-08-26 the output was never stored, so a MISS
-# recorded only the agent's PROSE DESCRIPTION of what was wrong with a draft
-# nobody could look at again. quality-report.sh says so in its own header —
-# "it does not need the original model output (which is never stored)" — and
-# that is precisely the ceiling on the calibration loop: you cannot fix a
-# recipe from "dropped every load-bearing fact" without seeing which facts and
-# what the draft said instead. With the draft on disk, and the shipped text
-# captured by `delegate-feedback.sh --final`, a MISS becomes a concrete
-# (generated, shipped) pair — the one artefact that makes a recipe edit
-# evidence-driven rather than a guess.
-#
-# Local-only by construction: the files sit beside metrics.jsonl under
-# DELEGATE_LOCAL_DATA_DIR, outside the repo, and nothing ships them anywhere.
-# They hold whatever the model was given, so they inherit the sensitivity of
-# the context you piped in. Opt out per call with DELEGATE_NO_DRAFT_CAPTURE=1;
-# capture is skipped entirely when metrics are off, because without the row
-# there is nothing to join the file to.
+# capture_draft — persist the generated draft beside the metrics row that
+# scores it and echo the basename for the row's `draft_file`. With the shipped
+# text from `delegate-feedback.sh --final` a MISS becomes a (generated,
+# shipped) pair the calibration loop can diff. Local-only: the files sit under
+# DELEGATE_LOCAL_DATA_DIR and inherit the sensitivity of the piped context.
+# DELEGATE_NO_DRAFT_CAPTURE=1 opts out; skipped when metrics are off.
 capture_draft() {
   local text="$1" ts="$2" stem dir max bytes
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
@@ -543,20 +224,12 @@ capture_draft() {
   [[ -n "$text" ]] || return 0
   dir="$(dirname "$metrics_file")/drafts"
   mkdir -p "$dir" 2>/dev/null || return 0
-  # A draft is the model's rendering of whatever context was piped in, so the
-  # directory inherits that content's sensitivity and must not inherit a
-  # permissive umask. 700 on the directory, 600 on the files, and the writes
-  # happen under `umask 077` so there is no window between create and chmod.
+  # 700 on the directory, 600 on the files, writes under `umask 077` so there
+  # is no window between create and chmod.
   chmod 700 "$dir" 2>/dev/null || true
-  # Colons are legal in POSIX filenames but awkward in shell globs and in
-  # Finder, so the ts goes in compacted — but the ts ALONE is not a safe name.
-  # It has second precision, and parallel callers collide: the archived corpus
-  # holds 14 timestamps shared by more than one delegation, one of them by
-  # eight. Two drafts landing on one filename would clobber each other and
-  # leave two metrics rows pointing at a single artefact, which is exactly the
-  # pairing this capture exists to create. The span id (generated
-  # unconditionally for every call, 16 random hex) makes the name unique; the
-  # ts stays in front so the directory still sorts chronologically.
+  # The ts alone is not a safe name: second precision, and parallel callers
+  # collide. The span id makes the stem unique; the ts stays in front so the
+  # directory sorts chronologically, colons dropped for shell globs.
   stem=$(printf '%s' "$ts" | tr -d ':-')
   if [[ -n "${otel_span_id:-}" ]]; then
     stem="$stem-${otel_span_id:0:8}"
@@ -568,9 +241,7 @@ capture_draft() {
     echo "delegate: DELEGATE_DRAFT_MAX_BYTES='$max' is not a positive integer — using 65536" >&2
     max=65536
   fi
-  # Measured in bytes, because the cap is in bytes: ${#text} counts CHARACTERS
-  # under a UTF-8 locale, so a draft of multi-byte text could sail past a byte
-  # cap it had already exceeded several times over.
+  # Bytes, not ${#text}: that counts characters under a UTF-8 locale.
   bytes=$(printf '%s' "$text" | wc -c | tr -d '[:space:]')
   # head -c bounds a runaway generation without failing the call. The marker
   # keeps a truncated file from being read later as a complete draft.
@@ -582,9 +253,8 @@ capture_draft() {
     ( umask 077; printf '%s' "$text" > "$dir/$stem.draft.txt" ) 2>/dev/null || return 0
   fi
   chmod 600 "$dir/$stem.draft.txt" 2>/dev/null || true
-  # Retention prune. Cheap enough to run inline (a few hundred small files at
-  # steady state) and self-limiting, so there is no cron dependency for it.
-  # 0 disables. -mtime +N is POSIX and behaves the same on BSD and GNU find.
+  # Retention prune, inline so there is no cron dependency. 0 disables.
+  # -mtime +N behaves the same on BSD and GNU find.
   local keep="${DELEGATE_DRAFT_RETENTION_DAYS:-14}"
   if [[ "$keep" =~ ^[0-9]+$ ]] && (( 10#$keep > 0 )); then
     find "$dir" -type f -name '*.txt' -mtime "+$keep" -exec rm -f {} + 2>/dev/null || true
@@ -592,13 +262,9 @@ capture_draft() {
   printf '%s' "$stem.draft.txt"
 }
 
-# Returns 0 only when a row was appended: 1 under DELEGATE_LOCAL_NO_METRICS=1
-# and when the append fails (unwritable path). The append used to be
-# `|| true`, and the meta line and verdict nudge went on naming a ts and id
-# for a row that did not exist, which sends the caller straight into a --id
-# refusal; both are gated on this status now (#474). Failure is still
-# non-fatal for the delegation itself — the model output is on stdout either
-# way.
+# Returns 0 only when a row was appended: the meta line and the verdict nudge
+# name that row's ts and id, so both are gated on this status (#474). Failure
+# is non-fatal for the delegation itself.
 log_metric() {
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 1
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
@@ -608,44 +274,13 @@ log_metric() {
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$(( ochars + ${retry_chars:-0} ))")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
-  # source:"delegate" discriminates this from experiment-runner traffic that
-  # writes to the same file via experiments/lib/run_api_cell.sh. backend
-  # discriminates ollama vs mlx traffic — pre-2026-05 rows lack the field and
-  # metrics-summary.sh treats their absence as backend=ollama for back-compat.
-  # duration_ms remains the inclusive total (invoke → response complete) so
-  # downstream consumers (metrics-summary.sh rollups, audit-metrics) keep
-  # seeing the same field they did before #170. queue_wait_ms (invoke →
-  # first byte from the model server) and generation_ms (first byte →
-  # response complete) are emitted alongside so Phase 11 OTel can split the
-  # span into queue-wait and generation attributes, and so parallel-caller
-  # contention shows up in metrics instead of being hidden inside the
-  # generation phase. The two new fields always sum to duration_ms within
-  # rounding.
-  # otel_trace_id / otel_span_id (#134) carry the trace and span identifiers
-  # the OTLP exporter generates so delegate-feedback.sh can join its later
-  # feedback-as-linked-span back to the parent delegation without a second
-  # lookup. They are always written when the exporter generated them (we
-  # generate them unconditionally — the cost is two perl invocations — so
-  # historical backfill (Track E #157) and the feedback-span linkage both
-  # have a stable identifier even when the exporter endpoint is unset).
-  # sampling_temperature / sampling_top_p / sampling_top_k /
-  # sampling_presence_penalty (Track A of #193) record the dispatch sampler
-  # profile so audit-metrics can pivot on greedy-vs-Qwen-profile runs.
-  # Non-Qwen models emit only sampling_temperature (always 0); Qwen models
-  # emit all four; env-var overrides surface as whatever the caller set.
-  # jq builds the line so any quote, backslash, or newline in $model or
-  # $recipe_name (recipe names are filename-safe today but model ids come
-  # from whatever a provider reports and are not under our control) escapes
-  # correctly rather than producing invalid JSON.
-  # recipe joins the other optional fields as a conditional append, so the row
-  # shape (recipe present iff this was a --recipe call) holds without a second
-  # jq block.
-  # session is the Claude Code session id (CLAUDE_CODE_SESSION_ID), the same
-  # UUID the boundary and Stop hooks receive as `.session_id`, so a hook can
-  # credit a projectless boundary only to a delegation from its own session
-  # rather than to any delegation on the machine (#476, #477). Same
-  # conditional shape as project: present when the variable is set, absent
-  # otherwise.
+  # source:"delegate" discriminates from experiment-runner rows in the same
+  # file; a missing backend reads as ollama downstream. duration_ms stays the
+  # inclusive total; queue_wait_ms + generation_ms sum to it within rounding.
+  # The otel ids are written unconditionally so feedback rows and backfills
+  # join without a second lookup. jq builds the line because model ids come
+  # from whatever a provider reports. Optional fields (recipe, project,
+  # session, sampling_*) are present iff set, so the row shape is stable.
   jq -nc \
     --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" --arg model "$model" \
     --arg recipe "$recipe_name" --arg project "$project" --arg session "${CLAUDE_CODE_SESSION_ID:-}" \
@@ -674,52 +309,31 @@ log_metric() {
     >> "$metrics_file" 2>/dev/null
 }
 
-# OTel ID generation and OTLP/HTTP span emission live in scripts/lib/otel.sh —
-# shared with delegate-feedback.sh and backfill-otel.sh (Track E, #157). The
-# lib defines otel_gen_id, otel_deterministic_ids, emit_otel_span, and
-# emit_otel_feedback_span. emit_otel_span carries the Track F redaction
-# behaviour (DELEGATE_OTEL_INCLUDE_CONTENT=1 to include content; default
-# omits prompt/context/output entirely). Sourcing has no side effects.
+# Shared with delegate-feedback.sh and backfill-otel.sh; sourcing has no side effects.
 # shellcheck source=lib/otel.sh
 . "$script_dir/lib/otel.sh"
 # recipe_tier lives in lib/recipe.sh so the boundary hook reads the tier with
-# the exact expression used here (PR #484 review, item I).
+# the exact expression used here.
 # shellcheck source=lib/recipe.sh
 . "$script_dir/lib/recipe.sh"
 
-# Resolve the project name (main repo basename, even inside a git worktree).
-# The caller can state it outright — `--project NAME`, or DELEGATE_PROJECT —
-# because the cwd derivation is only right when delegate.sh runs inside the repo
-# the delegation is FOR. Delegating on behalf of repo X from inside the skill
-# checkout recorded project=delegate-local, so the boundary hook (which derives
-# the project from the *hook's* cwd, i.e. the real repo) never matched the row
-# and nudged despite compliance (#342). Explicit flag beats env beats cwd.
-# The flag is exported rather than kept local so delegate_project_name resolves
-# it. delegate-feedback.sh does not read it: the verdict copies its project
-# off the delegate row it references (#474), so the value recorded here is
-# the one the verdict carries whatever shell records it.
+# The cwd derivation is only right when delegate.sh runs inside the repo the
+# delegation is FOR; delegating for repo X from the skill checkout recorded
+# project=delegate-local and the boundary hook never matched (#342). Flag
+# beats env beats cwd; exported so delegate_project_name resolves it.
 [[ -n "$project_override" ]] && export DELEGATE_PROJECT="$project_override"
 delegate_project=$(delegate_project_name)
 
 ts_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 start_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 
-# Generate trace_id (32 hex / 128 bits) and span_id (16 hex / 64 bits) for
-# the OTel exporter and for the delegate-feedback.sh linkage. We generate
-# them unconditionally — the cost is two short perl invocations — so the
-# JSONL row always carries the identifiers even when the exporter is
-# disabled. That means historical backfill (Track E #157) and feedback-
-# as-linked-span (delegate-feedback.sh) both work without a second pass.
+# Generated unconditionally so the row carries the ids even when the exporter
+# is off; feedback rows and backfills join on them.
 otel_trace_id=$(otel_gen_id 32)
 otel_span_id=$(otel_gen_id 16)
 
-# Emit the metrics row + OTel span for an early-exit failure (pick-model,
-# flaky-gate, canary). All three share the same shape — zero output chars,
-# the whole elapsed time attributed to generation_ms — so the char/duration/
-# token computation and the long log_metric + emit_otel_span argument lists
-# live here once instead of being copy-pasted at each exit. The optional
-# sampling args default to empty for the early paths that fail before the
-# sampler profile is resolved; the canary passes its resolved metric_sampling_*.
+# One metrics row + span for an early-exit failure (pick-model, flaky gate,
+# canary): zero output chars, the elapsed time attributed to generation_ms.
 emit_failure() {
   local fstatus="$1" fmodel="$2" fs_temp="${3:-}" fs_top_p="${4:-}" fs_top_k="${5:-}" fs_pp="${6:-}"
   local fend fdur fp fc ftoks
@@ -732,36 +346,20 @@ emit_failure() {
   emit_otel_span "$start_epoch_ms" "$fdur" "$fstatus" "$otel_trace_id" "$otel_span_id" "$fmodel" "$backend" "$tier" "$recipe" "$fp" "$fc" 0 0 "$fdur" "$ftoks" "${recipe_template}${prompt}" "$context" "" "$delegate_project"
 }
 
-# Read stdin into a variable if anything is piped in (needed early so {{stdin}}
-# substitution can run before the model resolution, and so the recipe-driven
-# error paths still surface with a clean metric line). The probe is
-# `-p /dev/stdin || -s /dev/stdin` rather than the more obvious `! -t 0`
-# because the latter returns true for unix sockets and FIFOs that hold no
-# data, and `cat` on such an FD then blocks forever waiting for EOF that
-# never arrives — the failure mode hit by Agent SDK `run_in_background`
-# callers on 2026-05-22 (#169). `-p` covers ordinary pipes (so the
-# `echo data | delegate.sh ...` flow works whether or not bytes have landed
-# yet), `-s` covers regular files and heredocs that have content, and both
-# are bash 3.2 compatible (the issue's suggested `read -t 0 -N 0` is bash
-# 4+ only — verified on macOS-shipped /bin/bash 3.2.57).
+# stdin is read early so {{stdin}} can be substituted before model resolution.
+# `-p || -s` rather than `! -t 0`: the latter is true for a socket or FIFO
+# holding no data, and `cat` then blocks forever (Agent SDK run_in_background,
+# #169). `read -t 0 -N 0` is bash 4+ only.
 context=""
 if [[ -p /dev/stdin || -s /dev/stdin ]]; then
   context=$(cat)
 fi
 
-# --recipe auto (#277 dir 5): infer the recipe from the piped context so the
-# agent reaches for one call instead of choosing the recipe and assembling
-# every --var by hand. One high-confidence mapping today: a unified diff on
-# stdin → commit-message. diff_stat is computed FROM the piped diff (the source
-# of truth the caller handed us) rather than re-derived from `git diff`, so the
-# summary always matches what was piped and the path works even when the index
-# / working tree is clean (a diff piped from `git show <sha>`, a stash, a
-# `.patch`, or another branch). recent_commits IS genuine repo state, so it is
-# backfilled from `git log` (delegate.sh already shells out to git for project
-# attribution, so this adds no new dependency); outside a repo it stays empty
-# and the normal unsubstituted-placeholder guard surfaces the gap. intent
-# (`why`) is never inferable from a diff, so it stays a required --var. Anything
-# that is not a recognised diff is an explicit error, never a silent guess.
+# --recipe auto (#277): one high-confidence mapping, a unified diff on stdin
+# -> commit-message. diff_stat is computed FROM the piped diff so it matches
+# what was piped even when the index is clean; recent_commits is real repo
+# state, so it is backfilled from git log; `why` is never inferable and stays
+# a required --var. Anything else is an explicit error, never a guess.
 if [[ "$recipe" == "auto" ]]; then
   if [[ -z "$context" ]]; then
     echo "delegate: --recipe auto needs context on stdin to infer a recipe (none piped). Pass --recipe NAME explicitly; see prompts/README.md." >&2
@@ -774,9 +372,8 @@ if [[ "$recipe" == "auto" ]]; then
     recipe="commit-message"
     _auto_have_var() { local k="$1" v; for v in ${recipe_vars[@]+"${recipe_vars[@]}"}; do [[ "$v" == "$k="* ]] && return 0; done; return 1; }
     if ! _auto_have_var diff_stat; then
-      # Derive a per-file +added/-deleted summary from the piped unified diff.
-      # awk, not `git diff --stat`, so the summary reflects exactly what was
-      # piped (not the repo's current index, which may differ or be empty).
+      # awk over the piped diff, not `git diff --stat`, so the summary reflects
+      # exactly what was piped.
       _auto_ds=$(printf '%s\n' "$context" | awk '
         /^diff --git / { if (f != "") printf " %s | +%d -%d\n", f, a, d; f=$3; sub(/^a\//,"",f); a=0; d=0; next }
         /^\+\+\+ / || /^--- / { next }
@@ -807,14 +404,8 @@ if [[ -n "$recipe" ]]; then
     exit 2
   fi
 
-  # Optional frontmatter `tier:` (#411). 39 of the 44 recorded bad-tier calls
-  # supplied a --recipe, and every recipe's production traffic routes to one
-  # dominant tier, so the caller was being asked for a value the recipe already
-  # implies. An explicit tier — positional or --tier — still wins, which is what
-  # keeps the deliberate `commit-message` on `code` runs working. Read with the
-  # same independent single-key awk scan as inputs:/checks:/flaky_on_models:,
-  # so it cannot disturb them and recipes without it still work. The scan is
-  # `recipe_tier` in lib/recipe.sh, shared with the boundary hook.
+  # Frontmatter `tier:` (#411); an explicit tier (positional or --tier) still
+  # wins. Read by `recipe_tier` in lib/recipe.sh, shared with the boundary hook.
   if [[ -z "$tier" ]]; then
     tier=$(recipe_tier "$recipe_file")
     if [[ -z "$tier" ]]; then
@@ -827,15 +418,10 @@ if [[ -n "$recipe" ]]; then
     fi
   fi
 
-  # Optional frontmatter `inputs:` block (Phase 12 Track B, issue #161).
-  # Extracts flat `key: type` pairs only — no nesting, no anchors, no flow
-  # style — so `awk` parses it without `yq` and the "two bash scripts" rule
-  # holds. Supported types: integer, string, integer?, string? (the `?`
-  # suffix means optional). Anything richer is deferred until needed.
-  # Pre-flight type-validation runs BEFORE placeholder substitution so the
-  # caller gets a clear type error rather than an opaque "missing placeholder"
-  # downstream message. Recipes without a frontmatter block (today's
-  # majority) skip the validation entirely — full back-compat.
+  # Frontmatter `inputs:` block: flat `key: type` pairs only (integer, string,
+  # `?` suffix for optional), parsed with awk so there is no yq dependency.
+  # Validated BEFORE placeholder substitution so the caller gets a type error
+  # rather than "missing placeholder"; recipes without the block skip it.
   inputs_block=$(awk '
     BEGIN { in_fm=0; in_inputs=0 }
     NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
@@ -846,21 +432,16 @@ if [[ -n "$recipe" ]]; then
   ' "$recipe_file")
 
   if [[ -n "$inputs_block" ]]; then
-    # Build parallel arrays: declared_keys[i] / declared_types[i] / declared_optional[i].
-    # Bash 3.2 has no associative arrays, so we use indexed arrays and a
-    # linear scan — recipes have at most a handful of inputs so O(n*m) is
-    # fine. The `?` suffix is parsed off the type into a separate optional
-    # flag so the type-check itself stays a clean enum (integer | string).
+    # Parallel indexed arrays: bash 3.2 has no associative arrays. The `?` is
+    # parsed off into declared_optional so the type stays a clean enum.
     declared_keys=()
     declared_types=()
     declared_optional=()
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
-      # Trim leading whitespace and split on colon.
       trimmed="${line#"${line%%[![:space:]]*}"}"
       ikey="${trimmed%%:*}"
       itype_raw="${trimmed#*:}"
-      # Trim whitespace around the type token.
       itype_raw="${itype_raw#"${itype_raw%%[![:space:]]*}"}"
       itype_raw="${itype_raw%"${itype_raw##*[![:space:]]}"}"
       iopt=0
@@ -884,10 +465,8 @@ if [[ -n "$recipe" ]]; then
     done <<< "$inputs_block"
     declared_inputs_present=1
 
-    # Build a map of provided --var keys (and {{stdin}} when stdin is piped)
-    # so we can both type-check each value and detect missing required inputs.
-    # provided_keys is a newline-delimited list; matching uses grep -Fxq for
-    # an exact-line match so a key like `pr` doesn't accidentally match `pr_number`.
+    # provided_keys is newline-delimited and matched with grep -Fxq so `pr`
+    # does not match `pr_number`.
     provided_keys=""
     for kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
       if [[ "$kv" != *"="* ]]; then
@@ -900,10 +479,7 @@ if [[ -n "$recipe" ]]; then
         echo "delegate: --var has empty key in '$kv'" >&2
         exit 2
       fi
-      # Type-check against the declared inputs (if any). Undeclared --var
-      # keys pass through untouched — lazy migration means most recipes
-      # don't declare types yet, and a strict-mode rejection would break
-      # them. Strict mode is deferred until migration is more complete.
+      # Undeclared --var keys pass through untouched (strict mode deferred).
       idx=0
       for dk in "${declared_keys[@]}"; do
         if [[ "$dk" == "$pkey" ]]; then
@@ -916,8 +492,7 @@ if [[ -n "$recipe" ]]; then
               fi
               ;;
             string)
-              # Any value is a valid string. Empty string is permitted so
-              # callers can pass `--var name=` for an intentional blank.
+              # Empty is permitted, for an intentional blank.
               :
               ;;
           esac
@@ -928,12 +503,7 @@ if [[ -n "$recipe" ]]; then
       provided_keys="${provided_keys}${pkey}"$'\n'
     done
 
-    # `{{stdin}}` satisfies a declared `stdin: string` input when piped, so
-    # a recipe can require stdin via the typed surface without forcing the
-    # caller to pass it twice (once as --var, once piped). If the recipe
-    # declares a non-string type for stdin (e.g. `stdin: integer`), the
-    # piped value is type-checked against that declaration here so the
-    # pre-flight covers stdin the same way it covers --var inputs.
+    # Piped stdin satisfies a declared `stdin:` input, type-checked the same way.
     if [[ -n "$context" ]]; then
       provided_keys="${provided_keys}stdin"$'\n'
       sidx=0
@@ -957,10 +527,7 @@ if [[ -n "$recipe" ]]; then
       done
     fi
 
-    # Required-input check: any declared input without the `?` optional
-    # marker MUST be provided. List every missing key in one error so the
-    # caller can fix them in one pass rather than discovering them one at
-    # a time.
+    # Every missing required key is listed in one error.
     missing_required=""
     idx=0
     for dk in "${declared_keys[@]}"; do
@@ -978,11 +545,8 @@ if [[ -n "$recipe" ]]; then
     fi
   fi
 
-  # Extract the first ``` fenced code block under the '## Prompt template'
-  # heading. awk-based — bash 3 / BSD awk safe. The section-end check
-  # `/^## /` is gated on `!in_block` so a markdown heading inside the
-  # fenced block (legitimate prompt content) doesn't prematurely close the
-  # section before the closing ``` is reached.
+  # First fenced block under '## Prompt template'. The `/^## /` section end is
+  # gated on `!in_block` so a heading inside the fenced block does not close it.
   recipe_template=$(awk '
     /^## Prompt template[[:space:]]*$/ { in_section=1; next }
     /^## / && in_section && !in_block { in_section=0 }
@@ -996,20 +560,13 @@ if [[ -n "$recipe" ]]; then
     echo "delegate: recipe '$recipe' has empty or missing '## Prompt template' fenced block" >&2
     exit 2
   fi
-  # Keep the PRE-substitution template. Every later assignment to
-  # $recipe_template folds caller-supplied values into it ({{stdin}}, each
-  # --var, the flavor keys), so by check time it contains the user's own
-  # context and is useless as an "is this line recipe-authored?" oracle. The
-  # raw copy contains only text the recipe author wrote, which is exactly what
-  # the no_example_echo check needs to compare against.
+  # The PRE-substitution template: every later assignment folds caller values
+  # in, and no_example_echo must compare against recipe-authored text only.
   recipe_template_raw="$recipe_template"
 
-  # Optional frontmatter `checks:` block (ADR 0014, deterministic output
-  # constraints). Each indented `name: value` line declares a check that runs
-  # on the finalised output (warn-only). Extracted here so it rides the same
-  # {{key}} substitution as the template below — a check value may reference a
-  # flavor placeholder (e.g. `subject_max: {{flavor_commit_subject_max}}`) and
-  # stay consistent with the prompt. Recipes with no checks: block are untouched.
+  # Frontmatter `checks:` block (ADR 0014), extracted here so it rides the
+  # same {{key}} substitution as the template: a check value may reference a
+  # flavor placeholder and must stay consistent with the prompt.
   recipe_checks=$(awk '
     BEGIN { in_fm=0; in_checks=0 }
     NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
@@ -1019,12 +576,8 @@ if [[ -n "$recipe" ]]; then
     in_fm && in_checks && /^[a-zA-Z_]/ { in_checks=0 }
   ' "$recipe_file")
 
-  # Optional frontmatter `echo_guard_vars:` — a comma-separated list of --var
-  # names whose values are EXEMPLARS (shape anchors) rather than content. Their
-  # text is shown to the model to teach a shape, and must never come back in
-  # the output. `no_example_echo` covers the recipe's own prompt; this covers
-  # the exemplars the caller supplies, which is where the failure that
-  # motivated it actually happened (issue #428).
+  # Frontmatter `echo_guard_vars:`: comma-separated --var names whose values
+  # are shape exemplars and must never come back in the output (#428).
   recipe_echo_guard_vars=$(awk '
     BEGIN { in_fm=0 }
     NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
@@ -1034,16 +587,11 @@ if [[ -n "$recipe" ]]; then
     }
   ' "$recipe_file")
 
-  # Identify the placeholders the *original* template requires. Validating
-  # against this list — not the post-substitution string — means substituted
-  # values that legitimately contain `{{...}}` (Vue/Angular bindings, Go
-  # templates, logs with curly braces) don't trigger a false positive.
+  # Placeholders of the ORIGINAL template, so substituted values that contain
+  # `{{...}}` (Vue bindings, Go templates) do not trip the guard below.
   required_placeholders=$(printf '%s' "$recipe_template" | grep -oE '\{\{[a-zA-Z_][a-zA-Z0-9_]*\}\}' | sort -u)
 
-  # Substitute --var key=value pairs into {{key}} placeholders. Bash
-  # parameter substitution handles the literal {{ }} braces fine since they
-  # are not glob metacharacters; values may contain newlines and arbitrary
-  # punctuation because they came in via argv (no shell re-evaluation).
+  # Values came in via argv, so they may hold newlines and any punctuation.
   satisfied_keys=""
   for kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
     if [[ "$kv" != *"="* ]]; then
@@ -1056,10 +604,8 @@ if [[ -n "$recipe" ]]; then
       echo "delegate: --var has empty key in '$kv'" >&2
       exit 2
     fi
-    # The key is interpolated into a bash pattern replacement below, so glob
-    # metacharacters (* ? [ ]) in a key would produce a malformed/overbroad
-    # substitution instead of a literal {{key}} match. Reject anything that
-    # isn't a plain identifier — the same shape the placeholder scan accepts.
+    # The key is interpolated into a pattern replacement, so a glob
+    # metacharacter in it would make the substitution overbroad.
     if ! [[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
       echo "delegate: --var has invalid key '$key' in '$kv'" >&2
       echo "         keys must match ^[a-zA-Z_][a-zA-Z0-9_]*$ (letters, digits, underscore)" >&2
@@ -1070,22 +616,17 @@ if [[ -n "$recipe" ]]; then
     satisfied_keys="${satisfied_keys}{{${key}}}"$'\n'
   done
 
-  # Per-user flavor profile (ADR 0013): shipped defaults plus an optional user
-  # override, resolved by load-flavor.sh and injected as {{flavor_*}} placeholders.
-  # Runs AFTER the --var loop and only fills placeholders --var didn't already
-  # satisfy, so an explicit --var flavor_x=… still wins. With no profile installed
-  # the defaults reproduce the pre-split prompt verbatim (back-compat). Gated on
-  # the template actually using a {{flavor_*}} placeholder, so recipes that don't
-  # opt in skip the loader subprocess entirely (no cost, zero behaviour change).
-  # Process substitution (not a pipe) so the substitutions land in this shell.
+  # Per-user flavor profile (ADR 0013), injected as {{flavor_*}} placeholders
+  # AFTER the --var loop so an explicit --var flavor_x= still wins. Gated on
+  # the template using one, so other recipes skip the loader subprocess.
+  # Process substitution, not a pipe, so the substitutions land in this shell.
   if [[ "$recipe_template$recipe_checks" == *'{{flavor_'* ]]; then
     while IFS='=' read -r fkey fval; do
-      # Defence-in-depth: only act on flavor_* keys, so a stray line (e.g. a
-      # value with an embedded newline) can't substitute a non-flavor placeholder.
+      # Only flavor_* keys, so a value with an embedded newline cannot
+      # substitute a non-flavor placeholder.
       [[ "$fkey" != flavor_* ]] && continue
-      # The checks block always resolves flavor refs (independent of the
-      # template's --var satisfaction state) so e.g. subject_max stays in sync
-      # with the prompt's flavor cap.
+      # The checks block always resolves flavor refs so subject_max stays in
+      # sync with the prompt's cap.
       recipe_checks="${recipe_checks//\{\{$fkey\}\}/$fval}"
       if ! printf '%s' "$satisfied_keys" | grep -Fxq "{{${fkey}}}"; then
         recipe_template="${recipe_template//\{\{$fkey\}\}/$fval}"
@@ -1094,16 +635,10 @@ if [[ -n "$recipe" ]]; then
     done < <(bash "$script_dir/load-flavor.sh" 2>/dev/null)
   fi
 
-  # Declared-optional inputs (the `?` suffix) the caller did NOT supply have
-  # their {{key}} placeholder collapsed to empty here, BEFORE the unsubstituted-
-  # placeholder guard below. Without this, an optional input whose placeholder
-  # appears in the template body would trip that guard (exit 2) the moment a
-  # caller omitted it — forcing every optional placeholder to be all-or-nothing.
-  # Blanking lets a recipe expose a genuine override (e.g. commit-message
-  # `type`) that most callers leave off, with the template's surrounding prose
-  # handling the empty case. Guarded on declared_inputs_present so recipes with
-  # no inputs: block (today's majority) are untouched, and so "${declared_keys[@]}"
-  # is only expanded when the array was actually built (bash 3.2 + set -u safe).
+  # Optional inputs the caller did not supply collapse to empty BEFORE the
+  # unsubstituted-placeholder guard, so an optional placeholder in the body
+  # does not exit 2. Guarded on declared_inputs_present so "${declared_keys[@]}"
+  # is only expanded when the array was built (bash 3.2 + set -u).
   if (( declared_inputs_present == 1 )); then
     oidx=0
     for dk in "${declared_keys[@]}"; do
@@ -1124,10 +659,8 @@ if [[ -n "$recipe" ]]; then
     satisfied_keys="${satisfied_keys}{{stdin}}"$'\n'
   fi
 
-  # Refuse to invoke the model with required placeholders the caller didn't
-  # supply — the partly-substituted template almost certainly isn't what
-  # they meant. Compare against the original-template placeholder set, not
-  # the post-substitution string, so legit `{{...}}` content survives.
+  # Compared against the original-template placeholder set, not the
+  # post-substitution string, so legit `{{...}}` content survives.
   missing=""
   while IFS= read -r ph; do
     [[ -z "$ph" ]] && continue
@@ -1142,14 +675,9 @@ if [[ -n "$recipe" ]]; then
   fi
 fi
 
-# pick-model.sh separates two failures that need opposite remedies: exit 2 is
-# "that tier does not exist" (the caller mistyped or invented a name) and exit
-# 1 is "the tier is real but no installed model matches it". Swallowing its
-# stderr and reporting both as the latter sent callers off to install a model
-# for a tier that cannot exist — 23 such calls across four projects before this
-# was fixed, several of which concluded the skill itself was broken. The
-# valid-tier list is echoed from pick-model's own message rather than restated
-# here, so there is exactly one source of truth for it.
+# pick-model.sh exit 2 is "that tier does not exist", exit 1 is "no installed
+# model matches it"; the remedies are opposite, and the valid-tier list is
+# echoed from its own message so there is one source of truth.
 pick_err=$(mktemp)
 # One call, not two: --print-resolution returns "<base>\t<model>" so a dead
 # provider in the list is probed once rather than once per question.
@@ -1158,12 +686,9 @@ pick_rc=$?
 if [[ $pick_rc -eq 0 ]]; then
   resolved_base="${_resolved%%	*}"
   model="${_resolved#*	}"
-  # Derive a short metrics label from the base URL. lib/otel.sh maps this to
-  # gen_ai.provider.name and the Grafana overview does sum by (backend), so
-  # emitting the URL would split every historical series and emitting a flat
-  # "provider" would merge every runtime into one. Never falls back to
-  # "openai": that is a registered SemConv value meaning OpenAI, so labelling
-  # a local llama.cpp endpoint with it would be conformant-looking and false.
+  # lib/otel.sh maps this to gen_ai.provider.name and the dashboards sum by
+  # backend, so neither the URL nor a flat "provider" will do. Never "openai":
+  # that is a registered SemConv value meaning OpenAI.
   case "$resolved_base" in
     *:8080*)  backend="mlx" ;;
     *:12434*) backend="docker" ;;
@@ -1203,18 +728,10 @@ if [[ $pick_rc -ne 0 ]]; then
   exit 1
 fi
 
-# Recipe-level flaky-on-model gate (Phase 16 Track A). Recipes that have a
-# documented flaky-on-class can declare a frontmatter `flaky_on_models:`
-# list of case-insensitive substrings; when the resolved model matches any
-# of them, the wrapper refuses (exit 4) with a stderr message naming the
-# recipe's documented mitigation. Opt-out via DELEGATE_FORCE_FLAKY=1 for
-# callers who want to capture fresh evidence that the flaky-class behaviour
-# has changed across model upgrades. Backwards-compat: recipes without a
-# `flaky_on_models:` frontmatter block skip the check entirely. Sits before
-# the pre-flight canary because the gate is structural ("this recipe won't
-# work reliably on this model class") while the canary is dynamic ("the
-# model isn't responding right now") — no point probing a model the recipe
-# already classifies as unreliable.
+# Recipe-level flaky-on-model gate: a frontmatter `flaky_on_models:` list of
+# case-insensitive substrings refuses (exit 4) on a matching model unless
+# DELEGATE_FORCE_FLAKY=1. Before the canary: no point probing a model the
+# recipe already classifies as unreliable.
 if [[ -n "$recipe" ]] && [[ "${DELEGATE_FORCE_FLAKY:-}" != "1" ]]; then
   flaky_list=$(awk '
     BEGIN { in_fm=0; in_flaky=0 }
@@ -1255,30 +772,11 @@ if [[ -n "$recipe" ]] && [[ "${DELEGATE_FORCE_FLAKY:-}" != "1" ]]; then
   fi
 fi
 
-# Resolve the sampler profile for the dispatch call. Default for all models
-# is greedy (temperature=0, no top_p/top_k/presence_penalty in the payload).
-# Per-call overrides via DELEGATE_TEMPERATURE / DELEGATE_TOP_P / DELEGATE_TOP_K
-# / DELEGATE_PRESENCE_PENALTY let callers opt INTO non-greedy sampling — the
-# Alibaba-recommended Qwen3 instruct profile is `DELEGATE_TEMPERATURE=0.7
-# DELEGATE_TOP_P=0.8 DELEGATE_TOP_K=20 DELEGATE_PRESENCE_PENALTY=1.3`. An
-# earlier iteration of this code path auto-applied the Qwen profile on
-# Qwen3-family models, but the T4 A/B (see experiments/results/2026-05-22-
-# track-a-qwen-sampling-ab.md) found that profile regresses commit-message
-# output: temperature=0.7 reintroduces lexical variety that lands on the
-# participial-padding tails the commit-message recipe's guards explicitly
-# reject. Greedy is the empirically-validated default; the env-vars stay so
-# callers can experiment with non-greedy sampling on prose-shaped tasks
-# where temperature-induced variety helps. Qwen-family detection still runs
-# and sets a `model_family` variable as a hook for future audit-metrics
-# work — the field is NOT currently emitted into the JSONL row; a follow-up
-# will wire it in once the calibration backlog needs the pivot.
-#
-# All overrides are validated as numeric (bash 3.2 case-pattern, no
-# associative arrays). Numeric pattern: optional leading minus, digits,
-# optional decimal point and more digits — covers 0, 0.7, 1.3, -42, .5, 1.
-# (top_k is sent as int but the same pattern is used for the validation
-# surface so the error message shape stays consistent across all four
-# overrides).
+# Sampler profile: greedy (temperature 0, no top_p/top_k/presence_penalty)
+# for every model. The Qwen-recommended profile was auto-applied once and
+# measured to regress commit-message output (temperature reintroduces the
+# padding tails the recipe guards reject), so non-greedy is opt-in via the
+# env vars. model_family is not emitted yet; it is a hook for future audit work.
 model_family=""
 model_lc=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
 case "$model_lc" in
@@ -1287,11 +785,8 @@ case "$model_lc" in
     ;;
 esac
 
-# Dispatch-side defaults: greedy. The variables holding what actually goes
-# into the wire payload are populated below; the parallel `metric_*` set
-# captures only what the caller explicitly opted into, so a bare greedy
-# invocation writes no sampling_* keys to the JSONL row (back-compat with
-# pre-Phase-13 rows). When an env var is set, both surfaces carry it.
+# The parallel `metric_*` set carries only what the caller explicitly opted
+# into, so a bare greedy call writes no sampling_* keys to the row.
 sampling_temperature="0"
 sampling_top_p=""
 sampling_top_k=""
@@ -1302,12 +797,8 @@ metric_sampling_top_k=""
 metric_sampling_presence_penalty=""
 
 validate_numeric() {
-  # Bash 3.2 =~ POSIX ERE — same idiom as the canary's preflight_timeout
-  # check at line 711. Accepts: optional leading minus, then digits, or
-  # digits.digits, or digits., or .digits. Rejects strings like `1-2`,
-  # `5-`, `.-` that an earlier permissive `case` pattern passed through
-  # and pushed to jq as garbage --argjson input (the failure surfaced as
-  # an obscure 'invalid JSON text' rather than the script's own clean error).
+  # bash 3.2 =~ POSIX ERE: optional minus, then digits, digits.digits,
+  # digits. or .digits. A permissive `case` pattern let `1-2` reach jq --argjson.
   local name="$1" value="$2"
   if ! [[ "$value" =~ ^-?([0-9]+(\.[0-9]*)?|\.[0-9]+)$ ]]; then
     echo "delegate: $name='$value' is not numeric" >&2
@@ -1336,26 +827,15 @@ if [[ -n "${DELEGATE_PRESENCE_PENALTY:-}" ]]; then
   metric_sampling_presence_penalty="$DELEGATE_PRESENCE_PENALTY"
 fi
 
-# Pre-flight canary — only fires when --recipe is set. Issue #110 documented
-# recipe stalls of 6–10 minutes when a 35B-class prose-tier model was hit
-# with a recipe-shaped prompt; a 1-token probe with a bounded timeout
-# catches that case before the caller's input investment is sunk. The probe
-# uses the same backend, model, and think setting as the real dispatch will
-# — if the model can't return one token to "hi" within the timeout, the
-# real recipe-shaped call definitely won't succeed either. Skipped on bare
-# (non-recipe) calls, where the caller hasn't gathered inputs and the
-# probe overhead doesn't pay off.
+# Pre-flight canary, recipe calls only (#110): a 1-token probe with a bounded
+# timeout on the same backend, model and think setting catches a stalled
+# model before the caller's input investment is sunk.
 preflight_timeout="${DELEGATE_PREFLIGHT_TIMEOUT:-10}"
 if [[ -n "$recipe" ]] \
    && [[ "${DELEGATE_NO_PREFLIGHT:-}" != "1" ]] \
    && [[ "$preflight_timeout" =~ ^[0-9]+$ ]] \
    && (( 10#$preflight_timeout > 0 )); then
-  # The canary is a 1-token probe — "did the model respond at all" is the
-  # only signal we want. Keep it at temperature:0 / greedy so a single fast
-  # deterministic token comes back regardless of the dispatch profile. The
-  # Qwen sampler overrides (top_p, top_k, presence_penalty) are pointless
-  # at num_predict:1 / max_tokens:1 and would only add JSON noise to the
-  # smallest-possible health check.
+  # Greedy, max_tokens 1: the only signal wanted is "did the model respond".
   canary_payload=$(jq -nc --arg m "$model" --argjson et "$think" \
     '{model:$m, messages:[{role:"user", content:"hi"}], stream:false, temperature:0, max_tokens:1, chat_template_kwargs:{enable_thinking:$et}}')
   canary_url="$resolved_base/chat/completions"
@@ -1363,14 +843,7 @@ if [[ -n "$recipe" ]] \
   canary_status=$?
   if (( canary_status != 0 )); then
     emit_failure 3 "$model" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty"
-    # Distinguish curl exit codes so the recovery advice points at the
-    # right knob. 28 is the --max-time-fired timeout (the case the canary
-    # was designed for); 7 is "can't reach host" (the provider daemon is
-    # down, or a host variable points somewhere else); 22 is curl --fail on
-    # a non-2xx response
-    # (e.g. an unknown model name returning 404). Anything else falls
-    # through to a generic curl-exit-N message that names the code so the
-    # caller can look it up.
+    # 28 is --max-time, 7 is connection refused, 22 is --fail on a non-2xx.
     case "$canary_status" in
       28) canary_cause="did not return within ${preflight_timeout}s (curl --max-time fired)" ;;
       7)  canary_cause="could not reach $canary_url (connection refused; backend daemon may be down)" ;;
@@ -1392,13 +865,8 @@ if [[ -n "$recipe" ]] \
   fi
 fi
 
-# Compose the input. The recipe template (if any) carries its own
-# instruction structure, so it goes first; piped context follows unless it
-# was already absorbed via the {{stdin}} marker; the user's prompt arg is
-# the trailing instruction (often a one-line "match the example shape and
-# tone." reinforcement). The leading-instruction-vs-prompt-last debate is
-# settled empirically by the recipe authors — placeholder content lands
-# inside the template, the prompt arg lands after.
+# The recipe template goes first, piped context follows unless {{stdin}}
+# absorbed it, and the prompt arg is the trailing instruction.
 parts=()
 if [[ -n "$recipe_template" ]]; then
   parts+=("$recipe_template")
@@ -1427,61 +895,34 @@ ${p}"
   fi
 done
 
-# Build the JSON payload via jq so prompts containing quotes / backslashes /
-# newlines are escaped correctly. Every provider speaks the same envelope:
-# POST {base}/chat/completions, answer at .choices[0].message.content.
-#
-# curl -w "%{time_starttransfer}" reports seconds-from-curl-start until the
-# first response byte arrived. This is the closest measurable proxy for
-# "time the Ollama/MLX daemon spent queuing this request plus connecting
-# plus model cold-load" — issue #170. We capture body and TTFB separately
-# (-o body_file plus -w on stdout) so the response stays parser-clean and
-# the timing flows into queue_wait_ms / generation_ms without disturbing
-# the existing response-handling path.
+# jq builds the payload so quotes, backslashes and newlines escape correctly.
+# curl -w "%{time_starttransfer}" is the closest proxy for queue wait plus
+# cold load (#170); body and TTFB are captured separately (-o plus -w) so the
+# response stays parser-clean.
 body_file=$(mktemp)
 trap 'rm -f "$body_file"' EXIT
 
-# Sentinel for "the call succeeded but the model returned nothing". Deliberately
-# above curl's exit-code range (curl tops out at 99) so it can never be confused
-# with a transport failure: overloading a real curl code made the dispatch-
-# failure block below print "curl exit 1" and advise restarting the daemon,
-# which is the wrong diagnosis for an exhausted token budget. It also surfaces
-# in the metrics row as exit_status:100, so the miss is visible to
-# metrics-summary instead of looking like an ordinary short answer.
+# Sentinel for "the call succeeded but the model returned nothing", above
+# curl's exit-code range (max 99) so it is never read as a transport failure;
+# it shows in the metrics row as exit_status:100.
 EMPTY_RESPONSE_STATUS=100
-# Set alongside the sentinel; read by the failure block. Initialised here
-# because delegate.sh runs under `set -u`.
+# Initialised here because the script runs under `set -u`.
 empty_finish_reason=""
 
-# dispatch_to_model <model> — build the backend request, POST it, parse the
-# response into $output, and strip any leading reasoning trace. Sets the
-# globals $output, $status, $ttfb_s, $payload. Strip-think is folded in here so
-# a trace-emitting reasoning model has its chain-of-thought removed the same way
-# every other model's output is.
+# dispatch_to_model <model> — POST the request, parse the response into the
+# globals $output, $status, $ttfb_s, $payload, and strip any reasoning trace.
 dispatch_to_model() {
 local _model="$1"
-# Bounds the whole request including cold model load. Deliberately not
-# validated: a non-numeric value makes curl exit 2 with its own clear
-# "expected a proper numerical parameter" message, which is a better error
-# than anything a hand-rolled check would print. Not local — the dispatch-
-# failure guidance below reads it from the caller's scope, the same way it
-# reads $status.
+# Not validated: a non-numeric value makes curl print its own clear error.
+# Not local: the dispatch-failure guidance below reads it.
 request_timeout="${DELEGATE_REQUEST_TIMEOUT:-600}"
-# Every provider is reached the same way: POST {base}/chat/completions with the
-# OpenAI chat shape. /v1/completions is the raw-prompt endpoint — it bypasses
-# the model's chat template, so instruction-tuned models emit whitespace until
-# max_tokens. /chat/completions wraps the input via apply_chat_template and
-# produces real instruction-following output. The response carries
-# .choices[0].message.content (and .choices[0].message.reasoning when thinking
-# is on — chat_template_kwargs.enable_thinking is passed so the content field
-# carries the answer rather than the reasoning trace).
+# /chat/completions, never /v1/completions: the raw-prompt endpoint bypasses
+# the chat template and instruction-tuned models emit whitespace until
+# max_tokens. enable_thinking is passed so `content` carries the answer, not
+# the reasoning trace.
 max_tokens="${DELEGATE_MAX_TOKENS:-4096}"
-# $think is already the normalised "true"/"false" string from the top of the
-# script. Providers honour top_p / top_k / presence_penalty on the top-level
-# options, so the sampler-profile overlay is built via jq additions and the
-# payload carries only the keys the caller opted into via env vars; with no
-# overrides it is the bare {temperature:0} greedy shape regardless of model
-# family.
+# The payload carries only the sampler keys the caller opted into; with none
+# it is the bare {temperature:0} greedy shape.
 payload=$(jq -nc --arg m "$_model" --arg p "$full_input" --argjson mt "$max_tokens" --argjson et "$think" \
   --argjson temp "$sampling_temperature" \
   --arg top_p "$sampling_top_p" --arg top_k "$sampling_top_k" --arg pp "$sampling_presence_penalty" \
@@ -1498,12 +939,9 @@ ttfb_s=$(curl -sS --fail --max-time "$request_timeout" --connect-timeout 5 \
 status=$?
 if [[ "$status" -eq 0 ]]; then
   output=$(jq -r '.choices[0].message.content // ""' < "$body_file")
-  # A well-formed response with empty content is a real failure, not a short
-  # answer. Providers that ignore chat_template_kwargs.enable_thinking spend
-  # the whole budget on reasoning — which lands in a separate `reasoning`
-  # field, so `content` is genuinely empty — and return finish_reason
-  # "length". Measured on Ollama 2026-08-18: at max_tokens 16 the answer is
-  # "" while MLX and Docker Model Runner both return the real answer.
+  # Empty content on a well-formed response is a failure, not a short answer:
+  # a provider that ignores enable_thinking spends the budget on reasoning
+  # and returns finish_reason "length" with `content` empty.
   if [[ -z "$output" ]]; then
     empty_finish_reason=$(jq -r '.choices[0].finish_reason // "unknown"' < "$body_file")
     status=$EMPTY_RESPONSE_STATUS
@@ -1512,12 +950,8 @@ else
   output=""
 fi
 
-# Reasoning-trace strip, folded into dispatch so any trace-emitting reasoning
-# model is stripped. Drops everything up to and
-# including the first </think> and trims leading whitespace. Applies when
-# DELEGATE_STRIP_THINK=1, or for the reasoning tier by default
-# (DELEGATE_STRIP_THINK=0 force-disables even there). No-op when the response
-# has no </think> or the call failed (empty output).
+# Reasoning-trace strip: everything up to the first </think>. On for
+# DELEGATE_STRIP_THINK=1 or the reasoning tier (=0 force-disables).
 local _strip=0
 if [[ "${DELEGATE_STRIP_THINK:-}" == "1" ]]; then
   _strip=1
@@ -1532,10 +966,7 @@ fi
 
 dispatch_to_model "$model"
 
-# Dispatch-failure guidance. curl -sS already printed its own error line
-# (e.g. "curl: (7) Failed to connect"); this adds the delegate-branded
-# context and routes persistent breakage toward the bug template instead
-# of leaving the caller with a bare non-zero exit.
+# curl -sS already printed its own error line; this adds the delegate context.
 if (( status == EMPTY_RESPONSE_STATUS )); then
   {
     echo "delegate: model returned an empty response — model=\"$model\" tier=\"$tier\" backend=\"$backend\""
@@ -1561,40 +992,22 @@ elif (( status != 0 )); then
   } >&2
 fi
 
-# (reasoning-trace strip now happens inside dispatch_to_model, above)
 
-# Every arithmetic comparison below against a value that came from outside this
-# script — a recipe's frontmatter, a flavor profile, an env var — writes the
-# operand as `10#$var`. Bash reads a leading zero as octal, so a zero-padded but
-# perfectly valid limit aborts the arithmetic with "value too great for base" on
-# the caller's stderr AND takes the wrong branch, which for a check means it
-# silently fails open. Verified 2026-08-26: `subject_max: 08` let a 60-character
-# subject through with no warning and leaked the bash error mid-run. The
-# `^[0-9]+$` guards beside them keep the value numeric; `10#` keeps it decimal.
+# Every arithmetic comparison against a value from outside this script (a
+# recipe's frontmatter, a flavor profile, an env var) writes the operand as
+# `10#$var`: bash reads a leading zero as octal, so `subject_max: 08` aborted
+# the arithmetic AND took the wrong branch, failing open. The `^[0-9]+$`
+# guards keep the value numeric; `10#` keeps it decimal.
 #
-# Deterministic output checks (ADR 0014, extended by ADR 0017): a recipe's
-# frontmatter `checks:` block declares constraints that run on the finalised
-# output. Most are warn-only — a failure flags on stderr and never changes the
-# exit status. The one exception is no_padding_tail, which ADR 0017 makes
-# actionable: it AUTO-STRIPS the safe trailing participial-comma padding clause
-# (recorded as checks_autofixed; still never touches the exit status). The value
-# is converting a failure the prompt cannot reliably prevent under greedy
-# decoding (an over-long subject, a trailing padding clause) from "the caller
-# might notice" into "the wrapper always flags it, and fixes it where safe".
-# Gated on the same clean-stderr conditions as the meta line so batch runs
-# (NO_META) and failed calls stay quiet. The counts ride the delegate-meta line
-# below (checks_failed=N / checks_autofixed=N) and persist to the metrics row.
-# run_output_checks — run the recipe's declared deterministic checks on the
-# current $output, setting $checks_run / $checks_failed / $checks_autofixed.
-# $capability_failed counts only the non-style checks (subject_max / subject_type
-# / body_required) and excludes the style check no_padding_tail (the auto-strip
-# owns it). It is retained as an observable counter; nothing currently reads it.
-# retry_constraint_for — one plain sentence per check name, telling the model
-# what it broke when a repair attempt is made (#384). The declared limit is
-# read back out of $recipe_checks, the same post-substitution frontmatter the
-# checks themselves parse, so the sentence and the check cannot drift apart on
-# the number. A check with no entry here still produces a usable line rather
-# than an empty bullet.
+# Deterministic output checks (ADR 0014, ADR 0017): a recipe's `checks:` block
+# declares constraints run on the finalised output. All are warn-only except
+# no_padding_tail, whose safe participial-comma tail is auto-stripped
+# (checks_autofixed). Gated like the meta line, so NO_META and failed calls
+# stay quiet. $capability_failed counts the non-style checks; nothing reads it yet.
+#
+# retry_constraint_for — one sentence per check name for the repair attempt
+# (#384). The limit is read back out of $recipe_checks, the same
+# post-substitution frontmatter the checks parse, so the two cannot drift.
 retry_constraint_for() {
   local name="$1" val
   val=$(printf '%s\n' "${recipe_checks:-}" | awk -v k="$name" '
@@ -1622,35 +1035,21 @@ retry_constraint_for() {
     no_example_echo)
       echo "no_example_echo: do not reproduce any line of this prompt or of an example; write from the input." ;;
     no_context_echo)
-      # Sentences only. This check measures echo, not length, so its notice
-      # must not claim a length rule was broken; max_context_ratio owns that
-      # and carries its own sentence below (#487).
+      # Measures echo, not length; max_context_ratio owns the length rule (#487).
       echo "no_context_echo: reproduce none of the supplied sentences as written; carry their paths, numbers and references inside sentences of your own." ;;
     max_context_ratio)
-      # "Do not copy" left the second generation the same size as the first on
-      # every retry measured over 2026-09-13/14 (1172 chars out for 981 in,
-      # 557 for 560, 940 for 899): a copy ban names words to avoid and says
-      # nothing about length, so this one says the length out loud (#487).
+      # A copy ban says nothing about length, so this one says it out loud (#487).
       echo "max_context_ratio: the answer runs about as long as the supplied facts; curate it to well under the facts' length, carrying every path, number and reference inside new sentences." ;;
     *)
       echo "$name: the constraint of that name, stated above, was not met." ;;
   esac
 }
 
-# echo_normalise — the ONE normalisation both echo checks apply, identically,
-# to every pattern source and to the output. Asymmetry is how no_example_echo
-# failed twice: first the `Wrong:`/`Correct:` label was stripped from the
-# template side only, so an echo that kept its label slipped through; then
-# the conventional-commit prefix was stripped from the output side only, so an
-# echoed template example that began `fix:` stopped matching the pattern it
-# came from. Any future rule added here must go in this function and nowhere
-# else. no_context_echo reuses it unchanged so the two checks cannot drift on
-# what counts as "the same line".
-#
-# sed -E: making the `(scope)` of a conventional-commit prefix optional needs
-# an ERE group, which BRE cannot express in one pass. BSD and GNU both take
-# -E. Order matters — the label comes off before the type prefix, so a
-# `Correct: fix: X` example reduces all the way to `X`.
+# echo_normalise — the ONE normalisation both echo checks apply to every
+# pattern source and to the output; asymmetry is how no_example_echo failed
+# twice. Any new rule goes here and nowhere else. sed -E because the optional
+# `(scope)` needs an ERE group; BSD and GNU both take -E. Order matters: the
+# label comes off before the type prefix.
 echo_normalise() {
   sed -E -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
          -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
@@ -1658,17 +1057,11 @@ echo_normalise() {
          -e 's/[[:space:]]*\(#[0-9]+\)$//'
 }
 
-# echo_matches — the ONE comparison both echo checks run, so the 40-char floor
-# and the output-side normalisation cannot be applied to one check and not the
-# other. Pattern units arrive on stdin RAW, the answer as $1 RAW; each side
-# goes through echo_normalise here and nowhere else (it is not idempotent, so
-# a caller that pre-normalises hands in a pattern the output can never match),
-# units under the floor are dropped from the pattern
-# side (an exact match cannot be shorter than its pattern, so one floor
-# suffices), and the distinct answer units that reproduce a pattern unit are
-# printed. Whole-unit, fixed-string (grep -F, linear), sorted for a stable
-# excerpt. The caller chooses the unit: no_example_echo passes lines,
-# no_context_echo passes sentences (see split_sentences).
+# echo_matches — the ONE comparison both echo checks run. Units arrive RAW on
+# stdin and in $1 and are normalised here exactly once (echo_normalise is not
+# idempotent); pattern units under the 40-char floor are dropped, and the
+# distinct answer units that reproduce a pattern unit are printed. Whole-unit,
+# fixed-string (grep -F, linear). The caller chooses the unit: lines or sentences.
 echo_matches() {
   echo_normalise \
     | awk 'length($0) >= 40' \
@@ -1676,26 +1069,17 @@ echo_matches() {
     | sort -u
 }
 
-# split_sentences — one unit per line: on the newlines already there, and on
-# a `.`, `?` or `!` followed by whitespace. The rejected drafts no_context_echo
-# was measured against are one paragraph line each (row 2026-09-10T20:00:01Z:
-# context 1687 chars, body one 1687-char line), because facts arrive one per
-# line and come back joined, so a whole-line compare found nothing on the very
-# failure it was built for. The terminator is DROPPED from the unit, at a split
-# and at the end of the line alike: a facts file states each fact as a bare
-# line and the model closes it with a full stop, so keeping the terminator
-# made `<fact>` and `<fact>.` different units and the common case never
-# matched (0 of 2 caught, 2 of 2 once the facts carried their own full stops).
-# Abbreviations and dotted names split the same way on both sides, and a
-# fragment that shape falls under the floor.
+# split_sentences — one unit per line, on newlines and on `.`/`?`/`!` followed
+# by whitespace. The terminator is DROPPED on both sides: facts arrive as bare
+# lines and the model closes them with a full stop, so keeping it made
+# `<fact>` and `<fact>.` different units. Abbreviations split the same way on
+# both sides, and a fragment that shape falls under the floor.
 split_sentences() {
   awk '{ gsub(/[.?!]+[[:space:]]+/, "\n"); sub(/[.?!]+[[:space:]]*$/, "") } 1'
 }
 
 run_output_checks() {
-# Locals keep the per-call scratch state out of the global scope now that this
-# is a function (it ran at top level before the refactor). The result and the
-# counters — output, checks_run/failed/autofixed, capability_failed — are
+# The result and the counters (output, checks_*, capability_failed) are
 # deliberately NOT local: they are the function's outputs.
 local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio
 checks_failed=0
@@ -1704,52 +1088,22 @@ checks_run=0
 checks_autofixed=0
 capability_failed=0
 
-# no_example_echo — the one check that is ON by default for every recipe call
-# rather than declared per-recipe, because "the model copied a line out of the
-# prompt instead of writing one" is never a correct outcome for any recipe.
-# Measured 2026-08-26: two `maintainer-reply` calls carrying 7.7k and 7.3k
-# chars of piped context each returned 96 characters, byte-identical, and
-# 96 characters is exactly the recipe's own `Correct:` example line. The
-# contrastive-anchor pattern (ADR 0011) that makes these recipes work is the
-# same pattern that hands the model a fluent, on-topic sentence to fall back
-# on when the real input is long; the earlier AI-815 leak in pr-description
-# was the same shape. Prompt text alone cannot close this — the guards telling
-# the model not to copy are themselves lines it can copy — so it becomes a
-# deterministic post-generation check.
-#
-# Comparison is against $recipe_template_raw (pre-substitution) so only
-# recipe-AUTHORED text is a pattern; the substituted template contains the
-# caller's own context, and legitimately reproducing a supplied fact must
-# never flag. Matching is whole-line, literal (grep -F, no regex, so linear
-# time), after trimming surrounding whitespace and any `Wrong:` / `Correct:`
-# label from the anchor lines. The 40-char floor keeps short shared lines
-# (a heading, a sign-off, a fence) from colliding by coincidence.
-#
-# Opt out per recipe with `no_example_echo: false` in the frontmatter checks
-# block — for a recipe whose output is genuinely supposed to reproduce a long
-# boilerplate line from its own template — or for one call with
-# DELEGATE_NO_ECHO_CHECK=1.
+# no_example_echo — ON by default for every recipe call: a line copied out of
+# the prompt is never a correct outcome, and the contrastive anchors (ADR 0011)
+# hand the model a fluent sentence to fall back on when the input is long.
+# Prompt text cannot close this, since the guards are themselves copyable
+# lines. Compared against $recipe_template_raw so only recipe-AUTHORED text is
+# a pattern. Opt out with `no_example_echo: false` or DELEGATE_NO_ECHO_CHECK=1.
 if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
    && [[ -n "${recipe_template_raw:-}" ]] \
    && [[ "${DELEGATE_NO_ECHO_CHECK:-}" != "1" ]] \
    && [[ "${recipe_checks:-}" != *"no_example_echo: false"* ]]; then
   checks_run=$((checks_run + 1))
-  # Exemplar --var values join the template as forbidden-output patterns when
-  # the recipe declares them (issue #428). Verified case: `commit-message` was
-  # handed three real recent commits as shape anchors and returned one of them
-  # as its subject, so the message named v4.37.6 — the version the change was
-  # bumping AWAY from — and dropped half the change. The exemplar reads to the
-  # model as something to copy rather than as background.
-  #
-  # Two normalisations make that catchable. The conventional-commit type
-  # prefix and a trailing ` (#123)` are stripped from both sides, because the
-  # echo arrived as `ci: <copied subject>` against an anchor of
-  # `chore(deps): <same subject> (#253)` — a whole-line compare without them
-  # misses the most common shape of the bug. And a line that appears in MORE
-  # than one exemplar is dropped from the pattern set: repeated across the
-  # anchors means convention or boilerplate (a trailer, a generated-by line, a
-  # section heading), which the output is supposed to reproduce. Only a line
-  # unique to a single exemplar is that exemplar's own content.
+  # Exemplar --var values join the pattern set when the recipe declares them
+  # (#428): commit-message returned one of its shape-anchor commits as its
+  # subject. A line repeated across exemplars is convention (a trailer, a
+  # footer) the output is supposed to reproduce, so only a line unique to one
+  # exemplar is that exemplar's own content.
   echo_exemplars=""
   if [[ -n "${recipe_echo_guard_vars:-}" ]]; then
     for _egv in $(printf '%s' "$recipe_echo_guard_vars" | tr ',' ' '); do
@@ -1761,20 +1115,11 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
       done
     done
   fi
-  # The comparison itself is echo_matches (above run_output_checks, shared
-  # with no_context_echo), which normalises both sides and applies the floor.
-  # Every pattern source reaches it RAW and is normalised there exactly once.
-  # The convention filter still has to judge on the normalised form, so that
-  # `ci: X` and `chore(deps): X (#253)` count as one line repeated, but it
-  # must not hand the helper the normalised text: echo_normalise is not
-  # idempotent (the type-prefix strip takes one prefix per pass), so an
-  # exemplar `chore: fix: X` normalised twice became the pattern `X` while the
-  # same line echoed in the output normalised once to `fix: X`, and the most
-  # literal echo of all was the one that slipped through. So each raw line is
-  # paired with its normalised form (US-separated; paste keeps them aligned
-  # because echo_normalise never drops a line), the form is counted, and the
-  # RAW line of every form seen exactly once goes to the helper. Anything
-  # repeated is convention the output is meant to reproduce.
+  # The convention filter judges on the normalised form (so `ci: X` and
+  # `chore(deps): X (#253)` count as one line repeated) but hands echo_matches
+  # the RAW line: echo_normalise is not idempotent, and a twice-normalised
+  # pattern never matches a once-normalised echo. paste keeps the pairs
+  # aligned because echo_normalise never drops a line.
   echoed_line=$( { printf '%s\n' "$recipe_template_raw"
     if [[ -n "$echo_exemplars" ]]; then
       paste -d "$(printf '\037')" \
@@ -1790,11 +1135,8 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
     echo "  exemplars you passed as a shape anchor) instead of writing one from your" >&2
     echo "  content: \"${echoed_line:0:120}\"" >&2
     echo "  The draft is not grounded in the input. Re-run or hand-write; do not ship it." >&2
-    # A line every artifact in the target repo carries — a generated-by footer,
-    # a sign-off, a badge — is boilerplate the answer is SUPPOSED to reproduce,
-    # and the convention filter only reaches it when more than one exemplar
-    # carries it. Naming that here turns a confusing rejection into an
-    # actionable one; the fix belongs in the exemplar, never in the answer.
+    # Boilerplate every artifact carries reaches the convention filter only
+    # when more than one exemplar carries it; the fix belongs in the exemplar.
     echo "  If that line is boilerplate every artifact in the repo carries, strip it from" >&2
     echo "  the exemplar you passed (and pass two, so shared lines can be recognised as" >&2
     echo "  convention) rather than removing it from the answer." >&2
@@ -1805,64 +1147,23 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
 fi
 
 if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${recipe_checks:-}" ]]; then
-  # Signatures of the recurring BODY_NO_PADDING failure: a trailing participial
-  # clause, a "This-X" declarative rephrase, or a known restating phrase. The
-  # participial arm is STRUCTURAL — `, <word>ing` matches any gerund tail rather
-  # than an enumerated verb list, because the 2026-06-07 MISS-cluster analysis
-  # showed ~3/4 of cited padding verbs (confirming, lifting, undermining,
-  # preserving, documenting…) were unenumerated: per-verb enumeration is a
-  # treadmill the model walks off by reaching for the next unlisted verb. This
-  # mirrors the proven matcher in experiments/score-t4.sh (`[a-z]{3,}ing`, whose
-  # {3,} floor carries the same trade-off, documented there). The participial arm
-  # is anchored to the end of the line: the check is named for a TAIL, and an
-  # unanchored arm flagged load-bearing mid-sentence clauses as padding.
-  #
-  # Measured 2026-08-19 over the last PROSE line of 301 commits that have a real
-  # body: the unanchored form raises 12 flags, of which 7 are false positives,
-  # and this arm raises 4 flags, all of them genuine padding tails. Git trailers
-  # are stripped before taking that line; an earlier count of "297 bodies" was
-  # 93% trailers, because bash `case` is case-sensitive and so missed GitHub's
-  # squash-merge `Co-authored-by:`.
-  #
-  # Three details below are load-bearing and each was measured, so do not
-  # "simplify" them away:
-  #   - the `([[:space:]]…)?` keeps `ing` a WORD ending. Dropping it makes
-  #     `[a-z]{3,}ing` a prefix match and every `-ings` plural (settings,
-  #     warnings, findings, strings, mappings) becomes a false positive.
-  #   - the class permits commas, so a genuine tail may contain them
-  #     (`, ensuring the cache, the limiter and the queue stay in sync`); what it
-  #     may not do is cross a sentence boundary.
-  #   - the `{0,200}` bound keeps the match linear. Unbounded, the comma-crossing
-  #     class makes each comma position rescan the rest of the line: GNU grep in
-  #     a UTF-8 locale (what CI and the Docker image run) measured 6336ms on a
-  #     72KB line against 3ms for the bounded form.
-  # ACCEPTED GAP: a tail containing a non-terminal full stop (`, ensuring parity
-  # with Node.js consumers.`, a version number, a dotted filename) is not
-  # detected. #390 proposed recovering it and was measured and DECLINED: on the
-  # no-match path production actually takes, the candidate ran 41ms to 6881ms as
-  # the line grew 5KB to 83KB (quadratic), dropping the {0,200} bound would have
-  # silently auto-stripped filler tails over 200 chars, and the recovered shapes
-  # can never be auto-fixed anyway because the perl strip's own [^,.!?]* cannot
-  # cross a dot either. Roughly 1 body in 300 carries the shape. Do not retry
-  # without reading #390 first.
-  # The This-X arm stays enumerated to bound false positives
-  # but is extended with the gap verbs the same analysis surfaced (prevents,
-  # avoids, serves). Warn-only framing keeps any false positive cheap.
+  # The participial arm is structural (`, <word>ing`) because per-verb
+  # enumeration is a treadmill, and anchored to the line end because an
+  # unanchored arm flagged mid-sentence clauses. Measured, do not simplify:
+  # `([[:space:]]…)?` keeps `ing` a word ending (else every -ings plural
+  # matches); the class permits commas but not a sentence boundary; `{0,200}`
+  # keeps the match linear (unbounded is quadratic on a long line). ACCEPTED
+  # GAP: a tail with a non-terminal full stop is not detected; #390 measured
+  # recovering it and declined. The This-X arm stays enumerated.
   padding_re=',[[:space:]]+[a-z]{3,}ing([[:space:]][^.!?]{0,200})?[.!?]?[[:space:]]*$|(^|[.!?][[:space:]]+)(this[[:space:]]+(means|approach|ensures|enables|guarantees|delivers|provides|prevents|avoids|serves)|in summary|overall|consequently|ultimately|in effect|as a result)\b|(going|moving)[[:space:]]+forward|clos(es|ing)[[:space:]]+the[[:space:]]+(gap|loop)'
-  # ADR 0017's adoption rule, held byte-identical to the pre-anchor expression on
-  # purpose. The strip is gated twice by a padding match: once to fire, and again
-  # here to decide whether the stripped text is clean enough to adopt. Anchoring
-  # THAT second gate would widen the strip, because a result still carrying a
-  # mid-line participial would newly read as clean and be adopted, silently
-  # mutating output ADR 0017 deliberately left alone with a warning. Detection
-  # narrows; adoption does not.
+  # ADR 0017's adoption rule, byte-identical to the pre-anchor expression on
+  # purpose: anchoring this second gate would widen the strip, adopting output
+  # that still carries a mid-line participial. Detection narrows; adoption does not.
   padding_re_adopt=',[[:space:]]+[a-z]{3,}ing([[:space:]]|[.!?,]|$)|(^|[.!?][[:space:]]+)(this[[:space:]]+(means|approach|ensures|enables|guarantees|delivers|provides|prevents|avoids|serves)|in summary|overall|consequently|ultimately|in effect|as a result)\b|(going|moving)[[:space:]]+forward|clos(es|ing)[[:space:]]+the[[:space:]]+(gap|loop)'
   check_first_line=$(printf '%s' "$output" | awk 'NF { print; exit }')
   check_last_line=$(printf '%s' "$output" | awk 'NF { l=$0 } END { print l }')
   while IFS= read -r cline; do
-    # Parse `  key: value` in-process (no sed subshells in this per-line loop);
-    # non-matching/blank lines are skipped. The nested-expansion trim drops any
-    # trailing whitespace on the value (bash 3.2 safe).
+    # In-process parse, no sed subshell per line.
     if [[ "$cline" =~ ^[[:space:]]*([a-zA-Z_]+):[[:space:]]*(.*)$ ]]; then
       ckey="${BASH_REMATCH[1]}"
       cval="${BASH_REMATCH[2]}"
@@ -1886,20 +1187,12 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         if [[ "$cval" == "true" ]]; then
           checks_run=$((checks_run + 1))
           if printf '%s' "$check_last_line" | grep -Eiq "$padding_re"; then
-            # Padding detected. Detection (above) is intentionally broad — any
-            # `, <gerund>` tail — for full recall. The auto-strip is deliberately
-            # NARROWER for precision: it fires only on a trailing
-            # ", <filler-gerund> ...<end>" clause where the gerund is one of a
-            # focused FILLER-verb allowlist and there is no comma inside the
-            # clause. The allowlist (not the broad structural matcher) is what
-            # keeps the mutation from deleting a meaningful participial like
-            # "..., preserving insertion order" — those stay a FAILED warning for
-            # the reviewer rather than being silently removed. The strip is then
-            # adopted only if it is non-empty (a perl failure returns nothing) AND
-            # actually clears the padding; otherwise the original output is kept
-            # untouched, so a FAILED verdict always matches the emitted text. The
-            # "This-X"/"in summary" shapes are never auto-stripped. Opt out with
-            # DELEGATE_NO_AUTOFIX=1.
+            # Detection is broad for recall; the auto-strip is NARROWER for
+            # precision: only a trailing ", <filler-gerund> ...<end>" clause
+            # with the gerund in an allowlist and no comma inside, so a
+            # meaningful participial stays a FAILED warning. Adopted only when
+            # non-empty AND it clears the padding, so a FAILED verdict always
+            # matches the emitted text. DELEGATE_NO_AUTOFIX=1 opts out.
             stripped=0
             if [[ "${DELEGATE_NO_AUTOFIX:-}" != "1" ]]; then
               new_output=$(printf '%s' "$output" | perl -0777 -pe '
@@ -1933,16 +1226,11 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         fi
         ;;
       subject_type)
-        # Caller-supplied conventional-commit type the subject MUST carry. The
-        # value rides {{key}} substitution, so `subject_type: {{type}}` is the
-        # caller's --var type=X echoed here; an omitted (optional) type collapses
-        # to empty and the check is skipped — it only fires when the caller
-        # asserted a type and the model ignored it (a recurring MISS the recipe
-        # was built to catch). Compared with pure
-        # string ops, not a regex built from cval, so a regex metacharacter in
-        # the caller's --var type can't break the match. Strips the optional
-        # `!` and `(scope)` from the subject's pre-colon segment so the full
-        # conventional shape (type, type(scope), type!, type(scope)!) is honoured.
+        # `subject_type: {{type}}` is the caller's --var echoed; an omitted
+        # optional type collapses to empty and the check is skipped. Pure
+        # string ops, not a regex built from cval, so a metacharacter in the
+        # --var cannot break the match; `!` and `(scope)` are stripped so the
+        # full conventional shape is honoured.
         if [[ -n "$cval" ]]; then
           checks_run=$((checks_run + 1))
           subj_type="${check_first_line%%:*}"   # segment before the first colon
@@ -1957,14 +1245,10 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         fi
         ;;
       body_required)
-        # A commit body is required: fail when the model returns a subject-only
-        # message (fewer than 2 non-empty lines). Mirrors the no_padding_tail
-        # boolean gate. `printf '%s\n'` guarantees a trailing newline so awks that
-        # drop a final unterminated line still count it; `tr -d '\r'` strips CRs
-        # portably so a CRLF blank separator (a lone \r is non-whitespace to awk)
-        # is not miscounted; the NF idiom then counts non-empty lines so an LF
-        # blank separator between subject and body is not counted. The `+ 0` keeps
-        # the count numeric (0) on empty output so the compare can't choke.
+        # `printf '%s\n'` guarantees a trailing newline so awks that drop a
+        # final unterminated line still count it; `tr -d '\r'` so a CRLF blank
+        # separator (a lone \r is non-whitespace to awk) is not miscounted;
+        # `+ 0` keeps the count numeric on empty output.
         if [[ "$cval" == "true" ]]; then
           checks_run=$((checks_run + 1))
           body_lines=$(printf '%s\n' "$output" | tr -d '\r' | awk 'NF { n++ } END { print n + 0 }')
@@ -1977,25 +1261,14 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         fi
         ;;
       body_max_words)
-        # ADR 0014 length check for the BODY (everything after the first blank
-        # line), counted in words. Added 2026-08-26 after eight rejections in a
-        # week named an over-long body and three captured draft/final pairs
-        # separated cleanly: every shipped body came in at 31-45 words, every
-        # draft that had to be cut at 56-104, with nothing in between. The
-        # prompt has asked for "1-2 short flowing-prose paragraphs" under a
-        # "mandatory, non-negotiable" heading the whole time, which is why this
-        # is a check rather than a third rewording of the instruction.
-        #
-        # The limit is a flavor placeholder, not a constant: how long a commit
-        # body should be is house style, and the shipped default only enforces
-        # the prompt's own stated contract. Tighten it in profile.sh.
+        # Body length in words (everything after the first blank line). The
+        # limit is a flavor placeholder: how long a body should be is house
+        # style, tuned in profile.sh.
         if [[ "$cval" =~ ^[0-9]+$ ]]; then
           checks_run=$((checks_run + 1))
-          # tr -d '\r' first, for the same reason body_required does it: a CRLF
-          # blank separator is a lone \r, which some awks do not count as
-          # [[:space:]], and the separator would then never be found so the
-          # body would measure 0 words and always pass. BWK awk (macOS) does
-          # match it and the bug is invisible there; CI runs mawk.
+          # tr -d '\r' first: a CRLF blank separator is a lone \r, which mawk
+          # (CI) does not count as [[:space:]], so the body would measure 0
+          # words and always pass; BWK awk (macOS) hides the bug.
           body_words=$(printf '%s\n' "$output" | tr -d '\r' | awk '
             BEGIN { s = 0 }
             s { n += NF; next }
@@ -2010,25 +1283,11 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         fi
         ;;
       no_single_item_list)
-        # A numbered list holding exactly ONE item is never a correct reply.
-        # Both reply recipes say so from opposite directions: MULTI-ASK-SPLIT
-        # rule 2 gives each of two-or-more asks its own item, and rule 4 says a
-        # single ask is one sentence however many clauses it carries. So a
-        # one-item list breaks the recipe on whichever branch the caller is on,
-        # and the check needs no knowledge of how many asks were passed in.
-        #
-        # This is the third attempt at the same defect and the first that is
-        # not prompt text. MULTI-ASK-SPLIT (2026-08-03) introduced the numbered
-        # shape, rules 4 and 5 (2026-08-26) tried to bound it to genuine
-        # multi-ask input, and hours after those landed a single ask came back
-        # as `1. Would you like to apply the two inline suggestions ...` on
-        # pr-agent. Per docs/self-improvement-loop.md, a defect that survives
-        # two rewordings gets a check instead of a third one.
-        #
-        # Warn-only, like every declared check except no_padding_tail. The
-        # counting matches body_required's idiom: `printf '%s\n'` guarantees a
-        # final newline, `tr -d '\r'` keeps a CRLF line from hiding the marker
-        # from awks that do not treat a lone \r as whitespace.
+        # A one-item numbered list breaks both reply recipes whichever branch
+        # applies (two-plus asks get items, one ask is a sentence), so the
+        # check needs no knowledge of the ask count. A check, not a third
+        # rewording: the defect survived two prompt edits. Counting matches
+        # body_required's idiom (`printf '%s\n'`, `tr -d '\r'`).
         if [[ "$cval" == "true" ]]; then
           checks_run=$((checks_run + 1))
           list_items=$(printf '%s\n' "$output" | tr -d '\r' \
@@ -2042,31 +1301,16 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         fi
         ;;
       no_invented_task_list)
-        # A markdown task list the model made up. Observed 2026-08-26T20:02:51Z:
-        # asked for a PR body, `pr-description` appended a `## Test plan`
-        # section of unchecked items reading "(not run yet)" directly after a
-        # paragraph of its own that named the suites and their passing counts.
-        # Either box state is a claim the model cannot support: an unchecked one
-        # asserts work was not done, a ticked one asserts it was, and neither is
-        # knowable from the input. Both are counted.
-        #
-        # A blanket ban would be wrong. This recipe's shape authority is the
-        # merged-PR examples the caller passes in, and a repo whose PR template
-        # carries "- [ ] I have added tests" SHOULD get that shape back. So the
-        # value of this key names the --var holding those examples, and the
-        # check fires only when the output has a task list and the examples
-        # have none: the model invented the shape rather than matching it.
-        #
-        # Counting is awk rather than `grep -c` because grep exits 1 on no
-        # match, and the `|| echo 0` workaround for that double-emits (it
-        # prints grep's own "0" and then the fallback), which then breaks the
-        # arithmetic compare. awk always exits 0 and prints one number.
+        # Either box state is a claim the model cannot support. A blanket ban
+        # would be wrong: a repo whose PR template carries task boxes SHOULD
+        # get them back, so the value names the --var holding the shape
+        # authority and the check fires only when the output has a task list
+        # and the examples have none. awk, not `grep -c`, because grep exits 1
+        # on no match and the `|| echo 0` workaround double-emits.
         if [[ -n "$cval" ]]; then
           checks_run=$((checks_run + 1))
-          # The pattern is the awk PROGRAM, not an -v assignment: awk performs
-          # escape processing on -v values, so `\[` collapses to `[` there and
-          # the bracket expression stops matching `- [ ]` entirely. Verified
-          # against the real captured draft, which the -v form did not flag.
+          # The pattern is the awk PROGRAM, not a -v value: awk escape-processes
+          # -v values, so `\[` collapses to `[` and the bracket expression breaks.
           task_prog='/^[[:space:]]*[-*+][[:space:]]+\[[ xX]\][[:space:]]/ { n++ } END { print n + 0 }'
           out_tasks=$(printf '%s\n' "$output" | tr -d '\r' | awk "$task_prog")
           if [[ "$out_tasks" =~ ^[0-9]+$ ]] && (( out_tasks > 0 )); then
@@ -2087,36 +1331,15 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         fi
         ;;
       no_invented_headings)
-        # A markdown heading the model made up. Measured 2026-08-27 with
-        # DELEGATE_NO_RETRY=1 so the first pass is visible: handed two
-        # merged-PR exemplars verified heading-free by this same scan (`#422`,
-        # `#424`) and the facts of a change as terse notes, `pr-description`
-        # invented at least one markdown heading on 4 runs of 4. The SHAPE
-        # section states the constraint in prose — "Do NOT add '## Summary',
-        # '## Test plan', or any heading that the examples themselves do not
-        # use" — and it has been restated across several revisions of that
-        # recipe without holding.
-        #
-        # Verify an exemplar is heading-free before concluding a heading was
-        # invented. The first version of this measurement used `#413`, which
-        # carries three `###` headings, so the output it called invented was
-        # the model matching a shape it had been shown; this check stayed
-        # silent on that input, which is how the error surfaced.
-        #
-        # Same contract as no_invented_task_list, deliberately: a blanket ban
-        # would be wrong, because a repo whose merged PRs all carry
-        # `## Summary` SHOULD get that shape back. The value names the --var
-        # carrying the shape authority, and the check fires only when the
-        # output has a heading and the examples have none.
-        #
-        # Fenced blocks are skipped on both sides. A PR body pasting a shell
-        # snippet carries `# comment` lines that are not headings, and counting
-        # them would fire on output that matched its examples perfectly. The
-        # `#+[[:space:]]` shape also leaves `#!/usr/bin/env bash` alone.
+        # Same contract as no_invented_task_list: the value names the --var
+        # holding the shape authority, and the check fires only when the
+        # output has a heading and the examples have none. Verify an exemplar
+        # is heading-free before concluding a heading was invented. Fenced
+        # blocks are skipped on both sides (a pasted shell snippet carries
+        # `# comment` lines), and `#+[[:space:]]` leaves a shebang alone.
         if [[ -n "$cval" ]]; then
           checks_run=$((checks_run + 1))
-          # The pattern is the awk PROGRAM for the same reason the task-list
-          # one is: awk escape-processes -v values, which breaks the pattern.
+          # The awk PROGRAM, for the same reason as the task-list one.
           head_prog='/^[[:space:]]*```/ { fence = !fence; next } !fence && /^[[:space:]]*#+[[:space:]]/ { n++ } END { print n + 0 }'
           out_heads=$(printf '%s\n' "$output" | tr -d '\r' | awk "$head_prog")
           if [[ "$out_heads" =~ ^[0-9]+$ ]] && (( out_heads > 0 )); then
@@ -2137,31 +1360,13 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         fi
         ;;
       no_invented_refs)
-        # A trailer identifier the model made up. `pr-description`'s 2026-08-21
-        # calibration entry documents the shape: given examples ending in
-        # `Refs: AI-812` / `Refs: AI-806` and a Context naming no ticket, the
-        # model emits `Refs: AI-813`, continuing the numbering. Four prompt-side
-        # attempts were made and all reverted, and one made things actively
-        # worse — its `Wrong:` example carried a literal identifier and the
-        # model emitted exactly that identifier, copying the value straight out
-        # of the prohibition. The entry's own conclusion is that this needs a
-        # post-generation check, which is this one.
-        #
-        # The grounding set is the CALLER's inputs only: every --var value plus
-        # the piped context. The recipe template is deliberately NOT in it. That
-        # is the whole lesson of the reverted attempt above: an identifier
-        # sitting in the recipe's own prose is precisely what gets copied, so
-        # grounding against the template would license the copy it is meant to
-        # catch.
-        #
-        # Only trailer-shaped lines are scanned (`Key: value`), because that is
-        # where the defect lives and because prose is full of hyphenated tokens
-        # that are not identifiers. Two token shapes are recognised: `#123` and
-        # a ticket like `AI-813`. The ticket pattern requires two or more
-        # trailing digits, which keeps `UTF-8` out of it. KNOWN GAP: a trailer
-        # line carrying something like `SHA-256` still matches the shape and
-        # would flag if the inputs never mention it. Warn-only, so the cost of
-        # that is a line on stderr.
+        # A trailer identifier the model made up by continuing the examples'
+        # numbering. Prompt-side attempts failed, and a `Wrong:` example
+        # carrying a literal identifier was copied verbatim, so the grounding
+        # set is the CALLER's inputs only (every --var plus stdin), never the
+        # recipe template. Only trailer-shaped lines are scanned; the ticket
+        # shape needs two-plus trailing digits so `UTF-8` stays out. KNOWN
+        # GAP: `SHA-256` in a trailer would flag.
         if [[ "$cval" == "true" ]]; then
           checks_run=$((checks_run + 1))
           ref_ground=""
@@ -2170,11 +1375,8 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
 "
           done
           ref_ground="${ref_ground}${context}"
-          # Grounding is compared token-for-token, not as a substring. A plain
-          # `grep -F` for `#427` matches inside an input that says `#4271`, so an
-          # invented reference one digit short of a real one would pass as
-          # grounded. The same identifier shapes are extracted from the inputs
-          # and matched whole-line with `grep -qxF`.
+          # Token-for-token, not substring: a `grep -F` for `#427` matches
+          # inside `#4271`, so an invented reference one digit short would pass.
           ref_ground=$(printf '%s\n' "$ref_ground" \
             | grep -oE '#[0-9]+|[A-Z][A-Z0-9]+-[0-9]{2,}' | sort -u)
           invented_refs=""
@@ -2195,29 +1397,13 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         fi
         ;;
       no_context_echo)
-        # The piped context handed straight back. no_example_echo compares
-        # against the recipe's own prompt and deliberately never against the
-        # caller's context (reproducing a supplied fact must not flag), which
-        # left the opposite failure uncaught: measured 2026-09-11, 63 of 97
-        # reply-recipe rejections said the draft restated the context, and
-        # rejected maintainer-review-reply output ran p50 1637 chars against a
-        # context p50 of 1627 — the draft was its input. Every one of them
-        # carried checks_failed=0, so none took the #384 retry (#475).
-        #
-        # Same machinery as no_example_echo (echo_matches: literal, both sides
-        # through echo_normalise, 40-char floor) with one difference of unit:
-        # both sides are split into SENTENCES first, because the facts arrive
-        # one per line and the rejected drafts return them joined into a
-        # paragraph, so a whole-line compare matched none of the 46 drafts it
-        # was measured against. The pattern set is the piped stdin ONLY, never
-        # the --var values: a --var is a verdict or an ask the recipe tells the
-        # model to place, and the exemplar half already has echo_guard_vars.
-        # The threshold is TWO distinct sentences. One quoted back is the
-        # evidence-carrying the reply recipes ask for ("every anchor spelled
-        # exactly as the facts spell it"), and a one-fact context legitimately
-        # comes back as that fact plus an ask; two is the draft giving up on
-        # curating. Opt-in per recipe, warn-only like the rest, and silenced
-        # by DELEGATE_NO_ECHO_CHECK=1 alongside the check it mirrors.
+        # The piped context handed straight back, the mirror of no_example_echo
+        # (#475). Same machinery (echo_matches) with the unit changed to
+        # SENTENCES: facts arrive one per line and come back joined into a
+        # paragraph, so a whole-line compare matched nothing. The pattern set
+        # is stdin ONLY, never --var values (a --var is a verdict or ask the
+        # recipe tells the model to place). Threshold TWO sentences: one
+        # quoted back is the anchor-carrying the reply recipes ask for.
         if [[ "$cval" == "true" ]] && [[ "${DELEGATE_NO_ECHO_CHECK:-}" != "1" ]]; then
           checks_run=$((checks_run + 1))
           context_echoed=$(printf '%s\n' "$context" | split_sentences \
@@ -2233,24 +1419,13 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         fi
         ;;
       max_context_ratio)
-        # A length ceiling relative to the piped context (#487). The reply
-        # recipes' failure after #475 was the fact sheet handed back at input
-        # size: 1172 chars out for 981 in, 557 for 560, 940 for 899, and the
-        # no_context_echo retry came back the same size every time, because
-        # that check measures echo and its notice says nothing about length.
-        # A prose rule ("the reply is shorter than the FACTS block") was tried
-        # first and withdrawn: it contradicted the recipe's own LENGTH
-        # paragraph, could not be met on a three-line fact list once opener,
-        # verdict, anchors, ask and sign-off are all mandatory, and 3 of the
-        # 16 rejected rows (557/560, 547/578, 318/329) were already shorter
-        # and still echoing. So the ceiling is a declared check with its own
-        # retry constraint, and it only applies where curation is possible:
-        # the context must be at least min_context_chars (a sibling key in
-        # the same checks block, default 400), because a two-line fact list
-        # legitimately comes back as those facts plus an ask. The ratio is a
-        # decimal, compared in awk since bash arithmetic is integer-only.
-        # Warn-only like the rest; capability rather than style, so it counts
-        # toward capability_failed.
+        # A length ceiling relative to the piped context (#487): the reply
+        # recipes handed the fact sheet back at input size, and no_context_echo
+        # measures echo, not length. A prose rule was tried and withdrawn (it
+        # cannot be met on a three-line fact list). Applies only when the
+        # context is at least min_context_chars (sibling key, default 400).
+        # The ratio is a decimal, compared in awk since bash arithmetic is
+        # integer-only. Capability, so it counts toward capability_failed.
         if [[ "$cval" =~ ^[0-9]*\.?[0-9]+$ ]]; then
           checks_run=$((checks_run + 1))
           ctx_floor=$(printf '%s\n' "$recipe_checks" | awk '
@@ -2274,9 +1449,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         # setting, not a check of its own, so it is accepted and does nothing.
         ;;
       no_example_echo)
-        # Handled before this loop (it is on by default for every recipe, not
-        # declared per-recipe); the frontmatter key exists only as an opt-out
-        # switch, so it is accepted here and does nothing.
+        # Handled before this loop (on by default); the key is only an opt-out.
         ;;
       *)
         echo "delegate: unknown check '$ckey' in recipe '$recipe' — ignored" >&2
@@ -2286,31 +1459,16 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
 fi
 }
 
-# Run the checks on the primary (tier-resolved) output.
-# One bounded repair attempt (#384). A declared check that failed used to
-# report and stop: ten failures in the 7-day window to 2026-08-27 across
-# `commit-message` and `pr-description`, ten hand-edits or discards. At that
-# moment the wrapper holds both the exact prompt that produced the bad output
-# and the name of the constraint it broke, so naming the failure and spending
-# one more generation is cheaper than the rewrite it replaces.
-#
-# Exactly one retry, never a loop. A second failure is evidence the model
-# cannot satisfy the constraint on this input, and a third call would spend
-# latency to learn nothing. `no_padding_tail` reaches here only when the
-# auto-strip declined the shape (ADR 0017 leaves checks_failed at 0 when it
-# repairs), which is precisely the case worth re-asking about.
-#
-# The first pass's stderr is captured rather than printed, because a failure
-# that is about to be repaired is not the caller's problem. It is released
-# unchanged whenever no retry follows — a passing call (where it still carries
-# any autofix notice), an opted-out call, or a bare call — so the only output
-# the retry suppresses is a complaint about a draft nobody will ever see.
+# One bounded repair attempt (#384): the wrapper holds the exact prompt and
+# the name of the constraint it broke, so one more generation is cheaper than
+# the rewrite. Exactly one retry, never a loop: a second failure means the
+# model cannot satisfy the constraint on this input. no_padding_tail reaches
+# here only when the auto-strip declined. The first pass's stderr is captured
+# and released unchanged only when no retry follows.
 checks_stderr=$(mktemp)
 trap 'rm -f "$body_file" "$checks_stderr"' EXIT
-# Banked before the checks run, because run_output_checks can MUTATE $output:
-# the ADR 0017 auto-strip removes a trailing padding clause in place. Reading
-# the length afterwards would charge the retry for the post-strip text and
-# under-count the generation that was actually rejected.
+# Banked before the checks run, because run_output_checks can MUTATE $output
+# (the auto-strip); reading afterwards would under-count the rejected generation.
 rejected_output_chars=${#output}
 run_output_checks 2>"$checks_stderr"
 
@@ -2319,12 +1477,9 @@ if (( status == 0 )) && (( checks_failed > 0 )) \
    && [[ -n "$recipe" ]] \
    && [[ "${DELEGATE_NO_RETRY:-}" != "1" ]]; then
   retried="true"
-  # The rejected generation and the notice appended to the prompt are real
-  # local work, and tokens_local is defined as total chars in + out over 4.
-  # They are carried in their own field rather than folded into
-  # prompt_chars / output_chars, which keep meaning "the request that
-  # produced the answer you got"; the row still reproduces its own token
-  # count as (prompt + context + output + retry) / 4.
+  # The rejected generation and the appended notice are real local work,
+  # carried in their own field so prompt_chars / output_chars keep meaning
+  # "the request that produced the answer you got".
   retry_chars=$rejected_output_chars
   retry_notice=""
   for _rc in $(printf '%s' "$checks_failed_names" | tr ',' ' '); do
@@ -2332,20 +1487,16 @@ if (( status == 0 )) && (( checks_failed > 0 )) \
 "
   done
   echo "delegate: check(s) ${checks_failed_names} failed — regenerating once." >&2
-  # Appended to the SAME templated prompt rather than sent as a fresh one:
-  # the rules the model broke are in there, and re-stating them out of context
-  # would be a second, differently-worded prompt whose failures could not be
-  # attributed to the recipe.
+  # Appended to the SAME templated prompt: a fresh, differently worded prompt
+  # would have failures that could not be attributed to the recipe.
   retry_input_before=${#full_input}
   full_input="${full_input}
 
 Your previous answer was REJECTED. It broke these constraints:
 ${retry_notice}Write the answer again, in full, obeying every rule above. Output only the answer."
   retry_chars=$(( retry_chars + ${#full_input} - retry_input_before ))
-  # queue_wait_ms means "invoke to first byte", and duration_ms covers both
-  # dispatches, so a retried call has to carry both waits or the whole of the
-  # rejected call's time lands in generation_ms. dispatch_to_model overwrites
-  # ttfb_s, so the first one is banked here and the two are summed after.
+  # duration_ms covers both dispatches, so both waits are summed or the whole
+  # rejected call lands in generation_ms; dispatch_to_model overwrites ttfb_s.
   ttfb_prev="${ttfb_s:-0}"
   dispatch_to_model "$model"
   ttfb_s=$(awk -v a="${ttfb_prev:-0}" -v b="${ttfb_s:-0}" 'BEGIN { printf "%.6f", a + b }')
@@ -2357,16 +1508,9 @@ fi
 end_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 duration_ms=$((end_epoch_ms - start_epoch_ms))
 
-# Derive queue_wait_ms and generation_ms from curl's time_starttransfer
-# (seconds-float). awk handles the float→int conversion without depending
-# on bc (not always installed on stripped CI images). If curl failed or
-# emitted an empty TTFB (some failure modes leave ttfb_s blank), fall back
-# to attributing the whole duration to generation_ms so the two fields
-# still sum to duration_ms and consumers can detect "no queue split
-# available" by queue_wait_ms == 0 on a failed call. Clamp queue_wait_ms
-# at duration_ms in case clock skew or sub-millisecond rounding pushes
-# it above; the generation_ms = duration_ms - queue_wait_ms invariant
-# stays intact.
+# awk for the float-to-int conversion (bc is not always installed). A failed
+# call or an empty TTFB attributes the whole duration to generation_ms, so
+# the two still sum to duration_ms; queue_wait_ms is clamped at duration_ms.
 queue_wait_ms=0
 if [[ -n "${ttfb_s:-}" ]] && [[ "$status" -eq 0 ]]; then
   queue_wait_ms=$(awk -v s="$ttfb_s" 'BEGIN { printf "%.0f", s * 1000 }')
@@ -2376,12 +1520,7 @@ if [[ -n "${ttfb_s:-}" ]] && [[ "$status" -eq 0 ]]; then
 fi
 generation_ms=$((duration_ms - queue_wait_ms))
 
-# Char counts that feed both the metrics row and the stderr meta line. Both
-# surfaces route through compute_tokens_local so the two cannot drift on
-# the formula — the assistant surfaces `tokens_local` from the stderr line
-# while metrics-summary.sh rolls up `estimated_tokens_avoided` from the
-# JSONL; if they ever disagreed, "how much have I saved" would mean two
-# different things depending on which surface you ask.
+# Both surfaces route through compute_tokens_local so they cannot drift.
 prompt_chars=$(( ${#recipe_template} + ${#prompt} ))
 context_chars=${#context}
 output_chars=${#output}
@@ -2397,37 +1536,18 @@ row_written=false
 log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}" && row_written=true
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project" "${retry_chars:-}"
 
-# Structured stderr contract — the line SKILL.md teaches the assistant to
-# read after every delegation, so it can tell the user which model handled
-# the work and how many tokens stayed on-device. Format is parser-friendly
-# `key=value` pairs separated by spaces (matches the verdict-nudge plain-text
-# convention rather than the JSONL machine surface — humans skim this line
-# too). Conditions: successful call only (status==0; meaningless on a failed
-# call where there's no output to count), silenceable via NO_META for batch
-# runs that want clean stderr. The `tokens_local` value is the local-model
-# tokenizer's view (chars/4 estimate, same number as the JSONL row's
-# `estimated_tokens_avoided`) — not Anthropic's tokenizer, hence "kept local"
-# framing in SKILL.md rather than "saved from Claude".
+# The stderr line SKILL.md teaches the assistant to read after every
+# delegation: `key=value` pairs, successful calls only, silenced by NO_META.
+# tokens_local is the chars/4 estimate, the same number as the row's
+# estimated_tokens_avoided: "kept local", not "saved from Claude".
 if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] \
    && (( status == 0 )); then
-  # String-typed fields are quoted so a model or recipe name containing a
-  # space stays a single token rather than ambiguating the format ("recipe=my
-  # name" otherwise reads as `recipe=my` + bare `name`). Today's Ollama tags
-  # and MLX HF identifiers don't have spaces, but model ids come from whatever
-  # a provider reports and the JSONL surface already escapes them via jq;
-  # the stderr surface owes the same defensive shape — flagged on PR #133.
-  # Integer fields (tokens_local, duration_ms) stay bare to avoid visual
-  # noise on the line.
+  # String fields are quoted because model ids come from whatever a provider
+  # reports; integers stay bare.
   meta="model=\"$model\" tier=\"$tier\" backend=\"$backend\" tokens_local=$tokens_local duration_ms=$duration_ms"
-  # ts and id name the metrics row this call wrote, byte for byte (#474). id
-  # is the row's otel_span_id and the pin `delegate-feedback.sh --id` takes:
-  # ts has second precision and parallel delegations share it, so it is kept
-  # for humans skimming the line, not as the key. Before either was shown,
-  # the feedback script's refusals said "pass --ts" for a value nobody had,
-  # and every verdict went to whichever delegation was newest — 20 ref_ts
-  # carried two or more verdicts within three weeks of the corpus reset.
-  # Omitted when no row was written (metrics off, or the append failed):
-  # there is no row for them to name.
+  # ts and id name the row this call wrote (#474). id is the otel_span_id and
+  # the pin `delegate-feedback.sh --id` takes: ts has second precision and
+  # parallel delegations share it. Omitted when no row was written.
   if [[ "$row_written" == "true" ]]; then
     meta="$meta ts=\"$ts_start\" id=\"$otel_span_id\""
   fi
@@ -2443,59 +1563,21 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] \
   echo "delegate-meta: $meta" >&2
 fi
 
-# Verdict nudge — without it the metrics file accumulates "untracked" rows
-# (delegate row with no matching feedback row) and the recipe library can't
-# self-correct from production data. Fires unconditionally on success when
-# metrics are on, regardless of stdin/stdout shape. A TTY-only gate was
-# considered (issue #139 / PR #140) to avoid noisy CI stderr, but the cost
-# of the silent-skip on Agent SDK callers — the highest-volume users of
-# delegate.sh and the only ones whose verdicts feed future recipe iterations
-# — proved higher than the cost of an extra stderr line in CI logs. Lifetime
-# coverage was 47.8% under the TTY-gate approach; removing the gate is the
-# fix for issue #149. The three escape hatches stay: NO_VERDICT_NUDGE (opt
-# out per call), no row written (NO_METRICS, or the append failed → nothing
-# to verdict against), and non-zero exit (failed calls have no model output
-# to judge). Issue #139
-# (parallel-capture callers contaminating stdout via 2>&1) is addressed
-# without re-introducing the coverage-losing gate by routing the nudge to a
-# caller-chosen file descriptor via DELEGATE_LOCAL_VERDICT_NUDGE_FD=N
-# (default 2 = back-compat); the caller-side recipe is to redirect fd N
-# alongside the 2>&1 capture so coverage tracking stays intact while stdout
-# stays clean.
+# Verdict nudge: without it the metrics file accumulates untracked rows and
+# the recipe library cannot self-correct. Fires unconditionally on success
+# when a row was written: a TTY-only gate silently skipped the Agent SDK
+# callers whose verdicts matter most (#149). DELEGATE_LOCAL_VERDICT_NUDGE_FD
+# routes it off stderr for callers capturing 2>&1 (#139).
 if [[ "$row_written" == "true" ]] \
    && [[ "${DELEGATE_LOCAL_NO_VERDICT_NUDGE:-}" != "1" ]] \
    && (( status == 0 )); then
-  # nudge_fd was validated up-front (see "Validate the verdict-nudge FD"
-  # block at the top); the value here is guaranteed to be a positive integer.
-  # The fd=2 path is the default, back-compat shape — write directly so the
-  # nudge can't be lost. The fd!=2 path wraps the echo + redirect in a
-  # compound `{ ...; } 2>/dev/null` so bash's "Bad file descriptor" error
-  # (emitted by the shell when the >&N redirect can't be set up against a
-  # closed fd, not by the echo command) is absorbed. A bare `echo ... >&"$N"
-  # 2>/dev/null` only catches what echo writes; the redirect-failure noise
-  # would still leak back to the very fd 2 the caller was trying to keep
-  # clean. The two branches keep fd=2 callers simple and only pay the
-  # absorption cost on the gotcha-prone redirect path. Pin verified on
-  # macOS bash 3.2.57.
-  # The nudge names the WHOLE contract, because it is the only place most
-  # callers ever read it. It listed two verdicts and no --final until
-  # 2026-08-26, and the corpus showed the cost: of 47 rejections only 2 carried
-  # the text that actually shipped, and 12 carried no reason at all, so the
-  # calibration loop had almost nothing to diff. `scaffold` is here for the
-  # same reason — a draft you edited and shipped is not a miss, and recording
-  # it as one both understates quality and fires the recurrence nudge on a
-  # non-defect.
-  # The command carries `--id` with this call's row otel_span_id already
-  # filled in (#474). Without a pin the verdict attaches to whichever
-  # delegate row is newest, which with parallel sessions is routinely someone
-  # else's; the feedback script now refuses that lookup when more than one
-  # row is fresh, so a caller who copies this line never hits the refusal.
-  # The id, not the ts: ts is second-precision and siblings share it. Each
-  # verdict is a complete command on its own line, because the line is copied
-  # as printed: `a | b | c` ran as a pipeline and `a, b or c` passed `hit,` as
-  # the verdict, and delegate-feedback.sh rejected both. <reason> is the one
-  # placeholder left, since it cannot be pre-filled; the note after each
-  # command is a shell comment so a whole-line copy still runs.
+  # The fd!=2 path wraps echo + redirect in `{ ...; } 2>/dev/null` so bash's
+  # own "Bad file descriptor" (raised by the shell, not by echo) is absorbed
+  # rather than leaking to the fd 2 the caller wanted clean (macOS bash 3.2.57).
+  # The nudge names the WHOLE contract with `--id` pre-filled (#474): ts is
+  # second-precision and siblings share it. Each verdict is a complete command
+  # on its own line, because the line is copied as printed (`a | b | c` ran as
+  # a pipeline); the note after each is a shell comment so a copy still runs.
   nudge_msg="delegate: record verdict → bash scripts/delegate-feedback.sh --source agent --id $otel_span_id hit                  # shipped as-is
 delegate:                  bash scripts/delegate-feedback.sh --source agent --id $otel_span_id scaffold \"<reason>\"  # edited and shipped
 delegate:                  bash scripts/delegate-feedback.sh --source agent --id $otel_span_id miss \"<reason>\"      # thrown away

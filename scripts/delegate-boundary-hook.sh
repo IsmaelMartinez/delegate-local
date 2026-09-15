@@ -190,13 +190,12 @@ boundary="" recipe=""
 # Any command word added to classify_segment must also appear in the pre-filter
 # grep above, or the branch is dead code that never fires.
 # The text a boundary is about to publish, read ONCE from the raw text of the
-# MATCHED segment (never $scan, which blanks quoted runs, and never the whole
+# MATCHED segment (never $scan, which blanks quoted runs, never the whole
 # command) and shared by the length split, the floor and the ADR 0029 capture.
 # Nothing here is executed. A body file wins over an inline body; repeated
-# inline bodies of one command are joined with a blank line as git does with
-# `-m`. A body holding an unresolved `$`, backtick or `$( … )` is unmeasurable
-# and treated like no body, except `-m "$(cat <<'EOF' … EOF\n)"` as the whole
-# value, whose heredoc body is the message.
+# inline bodies are joined with a blank line as git does with `-m`. Unresolved
+# shell (`$`, backtick, `$( … )`) makes a body unmeasurable, except the
+# `-m "$(cat <<'EOF' … EOF\n)"` shape, whose heredoc body is the message.
 _posted_body_scan() {
   local raw="$1"
   # One left-to-right pass: each flag at a word boundary, then its argument (a
