@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/apply-and-test.sh.
-# Builds tiny synthetic fixtures (source.py + test_source.py) and synthetic
-# patch files exercising every verdict path: PASS, FAIL, PARSE, APPLY (empty,
-# unmatched, ambiguous), REFUSE, plus usage errors.
+# Unit tests for scripts/apply-and-test.sh: synthetic fixtures and patches
+# exercising every verdict path.
 
 set -u
 
-# pytest is not optional here: both suites below assert on real test runs, so
-# without it every PASS-path assertion fails with an unhelpful import error
-# rather than one clear message. Skip locally, fail in CI, so a runner missing
-# pytest can never look like a green run.
+# pytest is required: skip locally, fail in CI, so a runner missing it can
+# never look like a green run.
 py="${APPLY_AND_TEST_PYTHON:-python3}"
 if ! "$py" -m pytest --version >/dev/null 2>&1; then
   msg="pytest not installed for $py; this suite runs real tests and verifies nothing without it"
