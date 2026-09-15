@@ -21,16 +21,16 @@ The user has a branch with one or more commits and wants a GitHub PR description
 ## Context to gather first
 
 ```bash
-# TWO examples, with the generated-by footer stripped out of each. Both halves
-# matter: see the 2026-08-27 calibration note.
+# TWO examples, with the generated-by footer AND any Refs/trailer line stripped
+# out of each. Both halves matter: see the 2026-08-27 calibration note.
 gh pr list --repo <owner>/<repo> --state merged --limit 2 \
   --json title,body,number \
-  --jq '.[] | "<<<EXAMPLE_BEGIN PR #\(.number)>>>\nTITLE: \(.title)\nBODY:\n\(.body | split("\n") | map(select(test("^[[:space:]]*🤖 Generated with|^https://claude\\.ai/code/") | not)) | join("\n"))\n<<<EXAMPLE_END>>>\n"'
+  --jq '.[] | "<<<EXAMPLE_BEGIN PR #\(.number)>>>\nTITLE: \(.title)\nBODY:\n\(.body | split("\n") | map(select(test("^[[:space:]]*🤖 Generated with|^https://claude\\.ai/code/|^[[:space:]]*(Refs|Co-Authored-By|Claude-Session):"; "i") | not)) | join("\n"))\n<<<EXAMPLE_END>>>\n"'
 git diff <base-branch> --stat                    # what changed
 git log <base-branch>..HEAD --pretty=oneline    # commit-by-commit shape
 ```
 
-Two of them, not one, and with the generated-by footer removed. `no_example_echo` classifies a line as shared convention when it appears in more than one exemplar, so a single exemplar leaves the check with nothing to compare and its boilerplate reads as that exemplar's own content; and a footer that only some merged PRs carry defeats the rule even at two, which is why it is stripped rather than left to repetition. The filter is anchored to the start of the line, so it removes the footer itself and never a paragraph that merely mentions it. The recent merged-PR body is the load-bearing context. The model learns the project's bullet-vs-prose shape, the standard subsection headings, and the test-plan-checkbox convention from the literal, not from descriptors.
+Two of them, not one, and with the generated-by footer removed. `no_example_echo` classifies a line as shared convention when it appears in more than one exemplar, so a single exemplar leaves the check with nothing to compare and its boilerplate reads as that exemplar's own content; and a footer that only some merged PRs carry defeats the rule even at two, which is why it is stripped rather than left to repetition. A `Refs:` line is stripped for a different reason: on 2026-09-15 two drafts carried the example's `Refs: #487` verbatim while describing other issues, and a reference copied from the exemplar is wrong every time (#501). The filter is anchored to the start of the line, so it removes the footer itself and never a paragraph that merely mentions it. The recent merged-PR body is the load-bearing context. The model learns the project's bullet-vs-prose shape, the standard subsection headings, and the test-plan-checkbox convention from the literal, not from descriptors.
 
 **Superseded 2026-06-28: the blocker is cold-LOAD latency, not generation (see the 2026-06-28 calibration note).** The earlier 2026-05-10/11/13 measurements timed wall-clock from a cold (or memory-evicted) state on the 35B/80B prose and long-context tiers and attributed the disk-load latency to generation — concluding, wrongly, that the failure axis was model parameter count at recipe-sized prompts. The 2026-06-28 probe showed the MLX 35B generates a grade-A PR body in ~6 s once warm; the only slow part is the ~77 s cold-load. The active mitigation is therefore NOT hand-writing: on a host where the prose tier resolves to a 35B-class MLX model, set `DELEGATE_PREFLIGHT_TIMEOUT=90` on the first (cold) call so the pre-flight canary tolerates the load window — warm calls return in seconds and need nothing. Keep the model resident (Ollama `keep_alive`, or `mlx_lm.server` holding the last model) to avoid paying cold-load repeatedly. The recipe also passes where the prose tier resolves to a smaller model.
 

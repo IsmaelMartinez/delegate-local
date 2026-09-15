@@ -24,7 +24,8 @@ The user has staged a change and wants a git commit message in the project's voi
 Run all three before invoking the recipe:
 
 ```bash
-git log <main-branch> --pretty=fuller -3   # 3 verbatim recent commits as shape anchors
+git log <main-branch> --pretty=fuller -3 \
+  | grep -viE '^[[:space:]]*(Refs|Co-Authored-By|Claude-Session|Signed-off-by):'   # 3 recent commits as shape anchors, trailers dropped (GitHub writes Co-authored-by, so -i)
 git diff --cached --stat                    # what changed
 git diff --cached                           # full diff if the change is small enough
 ```
@@ -133,7 +134,7 @@ Output ONLY the commit message itself, nothing else.
 
 ## Variables
 
-- `{{recent_commits}}` — output of `git log <main-branch> --pretty=fuller -3`. Load-bearing shape anchor.
+- `{{recent_commits}}` — output of `git log <main-branch> --pretty=fuller -3` with the `Refs:`, `Co-Authored-By:`, `Claude-Session:` and `Signed-off-by:` lines removed (`--recipe auto` does this itself). Load-bearing shape anchor: the bodies teach the shape, the trailers only get copied with the wrong issue number (#501).
 - `{{diff_stat}}` — output of `git diff --cached --stat` (and optionally the full `git diff --cached` if small).
 - `{{why}}` — one or two sentences explaining the motivation: what bug, what user-visible change, what reviewer feedback. Authored by the agent, not gathered from a command.
 - `{{type}}` — OPTIONAL. The conventional-commit type (any type in the flavor vocabulary, e.g. `feat`, `fix`, `docs`) when the caller already knows it. When set, it overrides the TYPE-selection priority list and forces the subject prefix verbatim, sidestepping the model's type inference entirely. Omit it to let the priority rules choose; an omitted value is blanked by `delegate.sh` so the placeholder collapses to empty. When set, it also feeds the frontmatter `subject_type: {{type}}` check (ADR 0014), which warns on stderr if the emitted subject does not start with that type — the deterministic backstop for the recurring "model ignored the explicit override" MISS.
