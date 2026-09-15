@@ -52,16 +52,11 @@ out=$(ALLOW_FILE="$ALLOW" bash "$SCRIPT" "$FIX/content-sec_permissive.md" 2>&1);
 assert_exit 0 "$ec" "allowlist suppresses sec_permissive hit by sha256 key"
 rm -f "$ALLOW"
 
-# 12-14. URL_EXTERNAL scope-decision regression (issue #172).
-# The decision is to keep the validator file-agnostic but only invoke it on
-# SKILL.md from CI and the post-edit hook. Contributor docs under prompts/
-# legitimately cite external sources as design-decision evidence. Encode the
-# scope decision as tests so a future widening (or an accidental rewiring of
-# the gates) trips a regression.
+# 12-14. URL_EXTERNAL scope (#172): the validator stays file-agnostic but CI
+# and the post-edit hook invoke it on SKILL.md only, since prompts/ cites
+# external sources legitimately.
 
-# 12. Validator code is unchanged: pointing it at a file with external URLs
-#     still flags. This proves the asymmetry is in the invocation gates, not
-#     in the validator logic.
+# 12. The validator itself still flags a file with external URLs.
 out=$(ALLOW_FILE="$EMPTY_ALLOW" bash "$SCRIPT" "$REPO/prompts/README.md" 2>&1); ec=$?
 assert_exit 1 "$ec" "prompts/README.md flags URL_EXTERNAL when validator is pointed at it directly"
 assert_contains "URL_EXTERNAL" "$out" "prompts/README.md hit names URL_EXTERNAL"
@@ -83,9 +78,7 @@ else
   fi
 fi
 
-# 14. Post-edit hook only calls the validator inside the *SKILL.md case branch.
-# Parse the case statement: the validator must appear under the *SKILL.md)
-# pattern and nowhere else.
+# 14. The post-edit hook calls the validator only inside its *SKILL.md) case branch.
 HOOK="$REPO/.claude/hooks/post-edit-validate.sh"
 HOOK_INVOCATIONS=$(grep -nE 'validate-skill-content\.sh' "$HOOK" | grep -v '^[[:space:]]*#' || true)
 if [[ -z "$HOOK_INVOCATIONS" ]]; then

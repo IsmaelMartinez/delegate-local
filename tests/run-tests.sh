@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for pick-model.sh and audit-models.sh.
-# Uses mock `ollama` and `llmfit` binaries on a restricted PATH so the
-# tests run the same everywhere regardless of what's installed.
+# Unit tests for pick-model.sh, init.sh and audit-models.sh, against mock
+# binaries on a restricted PATH.
 
 set -u
 
@@ -39,13 +38,9 @@ assert_contains() {
   fi
 }
 
-# Mock curl answering GET {base}/models with an OpenAI models list. $2 is a
-# space-separated "port:id,id" spec; a port absent from the spec exits 7
-# (connection refused) so a dead provider can be simulated without binding a
-# socket, and a port with an empty id list answers with an empty data array so
-# "reachable but serving nothing" is distinguishable from "unreachable".
-# Discovery is the only thing pick-model.sh curls, so this mock needs no
-# chat-completions arm.
+# Mock curl answering GET {base}/models. $2 is a space-separated "port:id,id"
+# spec: a port absent from it exits 7 (unreachable), a port with no ids
+# answers an empty list (reachable, serving nothing).
 make_mock_provider() {
   local dir="$1" spec="$2"
   cat > "$dir/curl" <<EOF
@@ -75,7 +70,7 @@ EOF
   chmod +x "$dir/curl"
 }
 
-# pick-model.sh does not need llmfit, but audit-models.sh does. Keep a simple stub.
+# audit-models.sh needs an llmfit stub.
 make_mock_llmfit() {
   local dir="$1"
   cat > "$dir/llmfit" <<'EOF'
@@ -87,16 +82,12 @@ EOF
 }
 
 run() {
-  # run <PATH> <cmd...> -> writes stdout to $OUT, stderr to $ERR, sets $EC.
-  # HOME is sandboxed to a tmp dir so a real per-user override config in
-  # the developer's actual ~/.claude/skills/... can't leak into test runs.
-  # If $DELEGATE_LOCAL_CONFIG is set in the parent environment, it is
-  # forwarded so override tests can opt in to a specific config path.
+  # run <PATH> <cmd...> -> $OUT, $ERR, $EC. HOME is sandboxed so a real
+  # per-user override config cannot leak in; DELEGATE_LOCAL_CONFIG is forwarded.
   local custom_path="$1"; shift
   local sandbox_home; sandbox_home=$(mktemp -d)
-  # One provider, on Ollama's port, so a mock built by make_mock_provider with
-  # an "1:..." spec answers it. Tests that install no mock get a real curl
-  # against a closed port, which refuses instantly rather than resolving DNS.
+  # One provider on port 1, so a "1:..." mock spec answers it and a test with
+  # no mock hits a closed port that refuses instantly.
   local extra=(DELEGATE_BASE_URL=http://localhost:1/v1)
   if [[ -n "${DELEGATE_LOCAL_CONFIG:-}" ]]; then
     extra+=(DELEGATE_LOCAL_CONFIG="$DELEGATE_LOCAL_CONFIG")
@@ -253,9 +244,7 @@ EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" reasoning-vision || true
 assert_eq "qwen3-vl:30b-a3b-thinking" "$OUT" "reasoning-vision falls back to qwen3-vl thinking"
 rm -rf "$tmp"
 
-# 20b. reasoning tier prefers deepseek-r1 over phi4-reasoning when both are
-# installed. Pinned by the 2026-05-03 v6 baseline (deepseek-r1 5/5 vs
-# phi4-reasoning 3.33/5 on directive-rule severity classification, same prompt).
+# 20b. reasoning prefers deepseek-r1 over phi4-reasoning (baseline-measured).
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:deepseek-r1:32b,phi4-reasoning:plus"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" reasoning || true
@@ -265,8 +254,7 @@ rm -rf "$tmp"
 echo
 echo "=== pick-model.sh override (Phase 9) ==="
 
-# 21. Override file reorders prefs: prose normally picks qwen3.6 first, but
-# an override that puts gemma4 ahead must win.
+# 21. An override file that reorders prefs wins.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:qwen3.6:35b-a3b,gemma4:latest"
 cat > "$tmp/config.sh" <<'EOF'
@@ -352,16 +340,13 @@ assert_eq "1" "$EC" "init: empty provider list -> exit 1"
 assert_contains "nothing to personalise" "$ERR" "init: empty list -> hint message"
 rm -rf "$tmp"
 
-# 27. With installed models, init prints a valid bash override that, when
-# fed back into pick-model.sh, resolves to the same model.
+# 27. init prints a bash override that round-trips through pick-model.sh.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:qwen3.6:35b-a3b,gemma4:latest"
 EC=0; run "$tmp:$SAFE_PATH" bash "$INIT" || true
 assert_eq "0" "$EC" "init: happy path exits 0"
 assert_contains "case \"\$tier\" in" "$OUT" "init: emits a case-on-tier block"
 assert_contains "prose) prefs=(" "$OUT" "init: includes prose tier"
-# Round-trip: write the generated override and check pick-model still picks
-# qwen3.6 for prose (currently-installed-first ordering preserves the win).
 echo "$OUT" > "$tmp/config.sh"
 EC=0
 DELEGATE_LOCAL_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
@@ -372,8 +357,7 @@ rm -rf "$tmp"
 echo
 echo "=== audit-models.sh ==="
 
-# A. Nothing reachable is a report, not a failure: the audit is what a user
-# runs to find out why delegation stopped working.
+# A. Nothing reachable is a report, not a failure.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" ""
 EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
@@ -389,15 +373,12 @@ assert_eq "0" "$EC" "audit: no llmfit -> exit 0"
 assert_contains "Upgrade check skipped" "$OUT" "audit: no llmfit -> skip message"
 rm -rf "$tmp"
 
-# (The "no jq" path is hard to simulate portably since macOS 15+ ships
-# /usr/bin/jq. The graceful-exit check in audit-models.sh is exercised by
-# code review instead.)
+# The "no jq" path is not simulated: macOS 15+ ships /usr/bin/jq.
 
 echo
 echo "=== pick-model.sh: --print-providers / --print-installed ==="
 
-# Both surfaces answer without a tier argument — a caller asking "which
-# providers are in effect?" has no tier to name.
+# Both surfaces answer without a tier argument.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:qwen3.6:35b-a3b-q8_0,gemma4:latest"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" --print-providers || true
@@ -410,9 +391,7 @@ assert_eq "gemma4:latest
 qwen3.6:35b-a3b-q8_0" "$OUT" "--print-installed lists what the provider serves"
 rm -rf "$tmp"
 
-# The default list is built from the host variables, not from literal ports:
-# hardcoding them would make a non-default port or a remote daemon unreachable
-# while silently reporting localhost as the target.
+# The default list is built from the host variables, not literal ports.
 EC=0
 OUT=$(env -i PATH="$SAFE_PATH" HOME="$tmp" \
   MLX_HOST=http://mlx.test:1234 \
@@ -430,9 +409,8 @@ assert_eq "http://localhost:8080/v1
 http://localhost:12434/engines/v1
 http://localhost:11434/v1" "$OUT" "--print-providers defaults to MLX, Docker Model Runner, Ollama in that order"
 
-# Nothing reachable is reported as such. Collapsing it into "no provider holds
-# a model for this tier" sent debugging after a model pull on a host where the
-# real problem was that no daemon was running.
+# "Nothing reachable" and "reachable but no tier match" need opposite
+# remedies, so they are reported apart.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" ""
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
@@ -440,8 +418,6 @@ assert_eq "1" "$EC" "no provider reachable -> exit 1"
 assert_contains "no provider is reachable" "$ERR" "no provider reachable -> says so"
 rm -rf "$tmp"
 
-# Reachable but holding nothing this tier wants is the other failure, and it
-# needs the opposite remedy.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:unrelated:model"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
@@ -452,9 +428,7 @@ rm -rf "$tmp"
 echo
 echo "=== audit-models.sh: provider awareness ==="
 
-# The audit has to name the providers it is reporting on: printing one
-# daemon's inventory on a host whose routing consulted another sent debugging
-# at the wrong model set (issue #344).
+# The audit names the providers it reports on (#344).
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:qwen3-coder:30b"
 EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
@@ -464,8 +438,8 @@ assert_contains "qwen3-coder:30b" "$OUT" "audit: inventory is what the provider 
 assert_contains "reasoning-vision" "$OUT" "audit: routing table covers the scaffolded tiers"
 rm -rf "$tmp"
 
-# A host with no ollama binary at all still gets a full routing report instead
-# of an early exit 1: nothing on the routing path needs the CLI any more.
+# No ollama binary still gets a full routing report: nothing on the routing
+# path needs the CLI.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:qwen3.6:35b-a3b-q8_0"
 EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
@@ -474,10 +448,8 @@ assert_contains "prose" "$OUT" "audit: still prints tier routing without the oll
 assert_contains "Upgrade check skipped" "$OUT" "audit: no ollama -> llmfit cross-check skipped, not fatal"
 rm -rf "$tmp"
 
-# The embedding tier carries no special case any more: it resolves against the
-# same list as every other tier, to whichever provider serves an embedding
-# model. The audit used to pin it to Ollama and label it, which was a
-# display-layer patch over a routing-layer fact (issue #357).
+# The embedding tier resolves like every other tier, with no per-tier
+# provider pin (#357).
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:nomic-embed-text:v1.5"
 EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
@@ -489,11 +461,8 @@ rm -rf "$tmp"
 echo
 echo "=== no installer-breaking AAIF self-symlink ==="
 
-# Regression guard for the `npx skills add` ENAMETOOLONG failure. A symlink under
-# .agents/skills/ that resolves to the repo root makes Vercel's `skills` CLI recurse
-# .agents/skills/<name>/.agents/skills/<name>/... forever while it copies the skill,
-# dying with ENAMETOOLONG — and it exits 0, so the failure is silent. The skill is
-# discovered from the root SKILL.md instead, so no repo-root self-symlink may exist.
+# A symlink under .agents/skills/ resolving to the repo root makes `npx skills
+# add` recurse until ENAMETOOLONG, silently; the root SKILL.md is the install source.
 SELF_LINK="$SKILL_DIR/.agents/skills/delegate-local"
 if [[ -L "$SELF_LINK" ]] && \
    [[ "$(cd "$(dirname "$SELF_LINK")" && cd "$(readlink "$SELF_LINK" 2>/dev/null)" 2>/dev/null && pwd -P)" == "$(cd "$SKILL_DIR" && pwd -P)" ]]; then
@@ -514,11 +483,8 @@ fi
 echo
 echo "=== commit-message body-drop bench (wiring smoke — no model contact) ==="
 
-# This is a deliberately OFFLINE smoke: it never runs the bench (which would
-# contact a model). It only proves the bench stays wired to its fixtures and
-# its scorer matches production. The live, model-driven gate is opt-in:
+# Offline: never runs the bench. The live gate is opt-in:
 #   BENCH_GATE=1 BENCH_BACKENDS="mlx ollama" bash tests/bench-commit-message-body.sh
-# run by a human / CI with a model — see docs/adr/0026-*.md.
 BENCH="$SKILL_DIR/tests/bench-commit-message-body.sh"
 CM_FIX="$SKILL_DIR/tests/fixtures/commit-message"
 
@@ -545,8 +511,7 @@ missing_why=0
 for d in "$CM_FIX"/*.diff; do [[ -f "${d%.diff}.why" ]] || missing_why=$((missing_why+1)); done
 assert_eq "0" "$missing_why" "every bench .diff has a paired .why"
 
-# Unit-test the ACTUAL score_body from the bench (single source of truth) without
-# running the bench: grab its one-line definition and eval it here.
+# The bench's own score_body, eval'd from its one-line definition.
 eval "$(grep -E '^score_body\(\) ' "$BENCH")"
 if score_body "$(printf 'subject line\n\nbody paragraph')"; then
   echo "  PASS  score_body accepts a subject+body (>=2 non-empty lines)"
@@ -566,8 +531,7 @@ fi
 echo
 echo "=== doc-section padding bench (wiring smoke — no model contact) ==="
 
-# Offline smoke for tests/bench-doc-section-padding.sh: never runs the bench
-# (which would contact a model). The live gate is opt-in:
+# Offline: never runs the bench. The live gate is opt-in:
 #   BENCH_GATE=1 BENCH_BACKENDS="mlx ollama" bash tests/bench-doc-section-padding.sh
 DSBENCH="$SKILL_DIR/tests/bench-doc-section-padding.sh"
 DS_FIX="$SKILL_DIR/tests/fixtures/doc-section"
@@ -590,11 +554,8 @@ else
   fail=$((fail+1))
 fi
 
-# Unit-test the bench's OWN scorers without running the bench: extract padding_re
-# from delegate.sh (the same source the bench reads) and the two scorer functions
-# from the bench, then exercise them on a known recap vs a clean paragraph. Guard
-# the extraction: if any grep finds nothing (bench renamed / pattern drift), fail
-# this check cleanly instead of erroring on an undefined function below.
+# The bench's own scorers, with padding_re from delegate.sh as the bench reads
+# it; a failed extraction fails cleanly rather than on an undefined function.
 eval "$(grep -E '^[[:space:]]*padding_re=' "$SKILL_DIR/scripts/delegate.sh" | head -1)"
 eval "$(grep -E '^has_padding\(\) ' "$DSBENCH")"
 eval "$(grep -E '^count_sentences\(\) ' "$DSBENCH")"
@@ -632,8 +593,8 @@ got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
 assert_eq "mlx-community/Qwen3.6-35B-A3B-8bit" "$got" "provider list: first provider wins"
 rm -rf "$tmp"
 
-# An unreachable first provider is skipped, not fatal. This is the case that
-# regresses if the probe is written as a bare assignment under set -e.
+# An unreachable first provider is skipped, not fatal (a bare assignment
+# under set -e would abort here).
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "11434:qwen3.6-ollama"
 got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
@@ -661,8 +622,7 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
 assert_eq "1" "$EC" "provider list: all providers unreachable exits 1"
 rm -rf "$tmp"
 
-# The dry-run trace names the provider it skipped, so a misconfigured list is
-# diagnosable without a packet capture.
+# The dry-run trace names the provider it skipped.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "11434:qwen3.6-ollama"
 trace=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
@@ -671,8 +631,7 @@ trace=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
 assert_contains "localhost:9" "$trace" "provider list: trace names the skipped provider"
 rm -rf "$tmp"
 
-# Sorting the reported ids makes a two-match preference deterministic; daemon
-# ordering is not stable (ollama list is recency-ordered).
+# Reported ids are sorted, since daemon ordering is recency-based.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "8080:qwen3.6-b,qwen3.6-a"
 got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
@@ -681,8 +640,7 @@ got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
 assert_eq "qwen3.6-a" "$got" "provider list: sorted ids make two matches deterministic"
 rm -rf "$tmp"
 
-# --print-resolution returns base and model in one call, so delegate.sh probes
-# a dead provider once rather than once per question.
+# --print-resolution returns base and model in one probe.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "8080:mlx-community/Qwen3.6-35B-A3B-8bit"
 got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
@@ -702,8 +660,7 @@ assert_eq "http://localhost:8080/v1	mlx-community/Qwen3.6-35B-A3B-8bit" "$got" \
   "provider list: one trailing slash is stripped"
 rm -rf "$tmp"
 
-# A userinfo URL is rejected before any request leaves the process: it would
-# otherwise reach the metrics label and the dry-run trace.
+# A userinfo URL is rejected before any request leaves the process.
 tmp=$(mktemp -d)
 cat > "$tmp/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -723,8 +680,6 @@ esac
 rm -rf "$tmp"
 
 # --print-installed reports what the providers serve, not an HF cache scan.
-# Without the provider arm the "provider" backend label falls through to the
-# MLX arm and this surface silently reports a set routing never consults.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "8080:mlx-a,mlx-b 11434:ollama-a"
 got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
@@ -733,8 +688,7 @@ got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
 assert_eq "mlx-a mlx-b ollama-a " "$got" "provider list: --print-installed unions the providers"
 rm -rf "$tmp"
 
-# An unreachable provider is skipped by --print-installed too, rather than
-# aborting the listing under set -e.
+# An unreachable provider is skipped by --print-installed too.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "11434:ollama-a"
 got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
@@ -743,9 +697,7 @@ got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
 assert_eq "ollama-a " "$got" "provider list: --print-installed skips an unreachable provider"
 rm -rf "$tmp"
 
-# --print-resolution needs no explicit list: the default is a real list, so
-# the flag answers from it. This is the assertion that fails if the default is
-# ever taken back out.
+# --print-resolution answers from the default list with no explicit one set.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "11434:qwen3.6-ollama"
 got=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$tmp" \
@@ -754,14 +706,9 @@ assert_eq "http://localhost:11434/v1	qwen3.6-ollama" "$got" \
   "provider list: --print-resolution answers from the default list"
 rm -rf "$tmp"
 
-# Structural guard for the deletion. The native /api/generate arm and
-# DELEGATE_BACKEND are both easy to reintroduce by copy-paste from git
-# history, and a reintroduced arm is invisible to behavioural tests for as
-# long as the OpenAI arm keeps working. The file list is explicit rather than
-# a tree walk: scripts/eval-skill-triggers.sh still posts to /api/generate and
-# is tracked separately, and scripts/metrics-summary.sh names DELEGATE_BACKEND
-# in a comment about pre-2026-05 metrics rows that really were written that
-# way.
+# No native /api/generate arm or DELEGATE_BACKEND comes back: a reintroduced
+# arm is invisible to behavioural tests. The file list is explicit because
+# eval-skill-triggers.sh still posts to /api/generate legitimately.
 leftovers=$(grep -l 'api/generate\|DELEGATE_BACKEND' \
   "$SKILL_DIR/scripts/delegate.sh" "$SKILL_DIR/scripts/pick-model.sh" \
   "$SKILL_DIR/scripts/embed.sh" "$SKILL_DIR/scripts/audit-models.sh" 2>/dev/null || true)

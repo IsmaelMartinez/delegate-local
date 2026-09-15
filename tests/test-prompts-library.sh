@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Validate that each prompts/<task>.md recipe has the four required sections
-# (When to use, Context to gather first, Prompt template, Calibration notes)
-# and that prompts/README.md references the file. Catches drift early — a
-# recipe missing its calibration provenance loses its empirical anchor; one
-# missing the prompt template is unusable; one missing from the README is
-# invisible to future agents loading the skill.
+# Structural checks on every prompts/<task>.md recipe: required sections,
+# documented placeholders, README listing, and per-recipe directive pins.
 
 set -u
 
@@ -20,12 +16,9 @@ assert_contains() {
   else echo "  FAIL  $name (missing '$needle')"; fail=$((fail+1)); fi
 }
 
-# Print every fenced code block under the given '## ' heading. Fence state is
-# tracked so a '## ' heading appearing *inside* an example does not end the
-# section early — github-issue-body.md passes literal '## Summary' lines as a
-# --var value, and without the gating everything past them goes unchecked.
-# This mirrors the fence-aware extraction scripts/delegate.sh performs when it
-# loads a recipe template, so the tests shadow the production reader.
+# Print every fenced block under the given '## ' heading. Fence state is
+# tracked so a '## ' line inside an example does not end the section, as
+# delegate.sh's own extraction does.
 extract_fenced() {
   local file="$1" heading="$2"
   awk -v heading="$heading" '
@@ -69,9 +62,7 @@ for recipe in "$PROMPTS_DIR"/*.md; do
   [[ "$base" == "README.md" ]] && continue
   recipe_count=$((recipe_count + 1))
   body=$(cat "$recipe")
-  # Title must match filename: prompts/foo.md → "# foo" as the first heading.
-  # Optional YAML frontmatter (Phase 12 Track B, #161) is stripped first so a
-  # recipe declaring an inputs: block still passes the title-prefix check.
+  # The title must match the filename, after any YAML frontmatter is stripped.
   expected_title="# ${base%.md}"
   body_after_fm="$body"
   if [[ "$body" == "---"$'\n'* ]]; then
@@ -82,11 +73,8 @@ for recipe in "$PROMPTS_DIR"/*.md; do
   else
     echo "  FAIL  $base: expected first line '$expected_title' after optional frontmatter"; fail=$((fail+1))
   fi
-  # If the recipe has frontmatter with an `inputs:` block, validate it
-  # against the flat `key: type` constraint Convention 2 (Phase 12 Track B,
-  # #161) imposes. Nested keys, anchors, or flow style are rejected by the
-  # convention so `awk` in delegate.sh stays small. Supported types:
-  # integer | string | integer? | string?.
+  # An `inputs:` block must be flat `key: type[?]` pairs (integer | string)
+  # so the awk in delegate.sh stays small.
   if [[ "$body" == "---"$'\n'* ]]; then
     inputs_lines=$(awk '
       BEGIN { in_fm=0; in_inputs=0 }
@@ -100,7 +88,6 @@ for recipe in "$PROMPTS_DIR"/*.md; do
       bad_inputs=0
       while IFS= read -r iline; do
         [[ -z "$iline" ]] && continue
-        # Each non-empty inputs line must match the flat `  key: type[?]` shape.
         if ! [[ "$iline" =~ ^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*(integer|string)\??[[:space:]]*$ ]]; then
           bad_inputs=1
           echo "  FAIL  $base: inputs: line violates flat key:type convention: '$iline'"; fail=$((fail+1))
@@ -114,9 +101,7 @@ for recipe in "$PROMPTS_DIR"/*.md; do
   for section in "${required_sections[@]}"; do
     assert_contains "$section" "$body" "$base: contains '$section'"
   done
-  # Every {{placeholder}} in the prompt template must be documented in the
-  # '## Variables' section so future agents know what each --var expects.
-  # `{{stdin}}` is the implicit pipe slot and does not need explicit doc.
+  # Every {{placeholder}} except {{stdin}} must be documented under '## Variables'.
   template=$(extract_fenced "$recipe" "## Prompt template")
   if [[ -z "$template" ]]; then
     echo "  FAIL  $base: '## Prompt template' has no fenced code block"; fail=$((fail+1))
@@ -131,23 +116,15 @@ for recipe in "$PROMPTS_DIR"/*.md; do
       echo "  FAIL  $base: {{$name}} used in template but not listed in '## Variables'"; fail=$((fail+1))
     fi
   done
-  # Catch the legacy `<paste X here>` style — every such marker should now be
-  # a {{name}} placeholder so --recipe can substitute it programmatically.
+  # The legacy `<paste X here>` marker cannot be substituted by --recipe.
   if printf '%s' "$template" | grep -qE '<paste .* here>'; then
     echo "  FAIL  $base: legacy '<paste ... here>' marker found in template (use {{name}})"; fail=$((fail+1))
   else
     echo "  PASS  $base: no legacy '<paste ... here>' markers"; pass=$((pass+1))
   fi
-  # The '## Invocation' example must be free of shell command substitution
-  # (issue #350). Sandboxed agent harnesses — including a Claude Code session
-  # working inside a git worktree — refuse `$(...)`, and because the refusal
-  # arrives on the agent's first --recipe call it reads as "delegate-local is
-  # broken" rather than "this shell won't run that shape". Literal --var values
-  # work everywhere and the caller already holds them from its own earlier
-  # git/gh step, so the literal form is the documented one; the gathering
-  # commands live under '## Context to gather first' instead.
-  # Only the fenced example is scanned: it is the copy-paste surface, and
-  # restricting to it keeps inline `code` in the surrounding prose out of scope.
+  # The fenced '## Invocation' example must be free of command substitution
+  # (#350): sandboxed harnesses refuse `$(...)`, so literal --var values are
+  # the documented form.
   invocation_example=$(extract_fenced "$recipe" "## Invocation")
   if [[ -z "$invocation_example" ]]; then
     echo "  FAIL  $base: '## Invocation' has no fenced example to check"; fail=$((fail+1))
@@ -156,8 +133,6 @@ for recipe in "$PROMPTS_DIR"/*.md; do
   else
     echo "  PASS  $base: '## Invocation' free of command substitution"; pass=$((pass+1))
   fi
-  # README must list this recipe in the "Current recipes" section so future
-  # agents can discover it. Match by filename anywhere in the README.
   if [[ "$readme" == *"$base"* ]]; then
     echo "  PASS  $base: listed in README"; pass=$((pass+1))
   else
@@ -177,17 +152,11 @@ skill_body=$(cat "$REPO/SKILL.md")
 assert_contains "## Recipes" "$skill_body" "SKILL.md has '## Recipes' section"
 assert_contains "prompts/" "$skill_body" "SKILL.md '## Recipes' references prompts/"
 
-# 6. Recipe-specific structural pins. Each entry names the recipe and the
-# named directives that calibration history shows must survive future
-# "simplification" passes — without these pins a refactor can silently drop
-# a guard whose absence cost real session iterations to add.
+# 6. Recipe-specific pins: directives that calibration showed must stay
+# inside the prompt template, not in an advisory note.
 
-# commit-message.md: the 2026-05-22 calibration entry promoted SUBJECT_LEN
-# and TYPE-selection into template-body first-match-wins directives after
-# three MISS rows (ts=2026-05-22T09:42:54Z, 11:14:13Z, 09:40:45Z) confirmed
-# the trailing-prompt reinforcement was insufficient. Pin both directive
-# headings inside the prompt template so a future simplification cannot
-# silently revert to advisory enumeration.
+# commit-message.md: SUBJECT_LEN and TYPE selection are first-match-wins
+# directives in the template body.
 commit_message_template=$(awk '
   /^## Prompt template[[:space:]]*$/ { in_section=1; next }
   in_section && /^```/ { in_block = !in_block; print; next }
@@ -204,8 +173,7 @@ assert_contains "OMIT-EMPTY-SECTION" "$summarise_issue_body" \
   "summarise-issue.md names OMIT-EMPTY-SECTION rule"
 assert_contains "COMMENT-N-CITATION" "$summarise_issue_body" \
   "summarise-issue.md names COMMENT-N-CITATION rule"
-# The Anti-hallucination guards section must explicitly enumerate both rules
-# so the calibration provenance for each guard is anchored in the document.
+# Both rules appear in the Anti-hallucination guards section.
 guards_section=$(awk '
   /^## Anti-hallucination guards/ { in_section=1; next }
   /^## / && in_section { in_section=0 }
@@ -215,11 +183,7 @@ assert_contains "OMIT-EMPTY-SECTION" "$guards_section" \
   "summarise-issue.md '## Anti-hallucination guards' names OMIT-EMPTY-SECTION"
 assert_contains "COMMENT-N-CITATION" "$guards_section" \
   "summarise-issue.md '## Anti-hallucination guards' names COMMENT-N-CITATION"
-# The OMIT-EMPTY-SECTION rule's Wrong/Correct anchors must cover BOTH
-# `## What's blocking` and `## What's next` per the PR #173 dual-anchoring
-# principle. PR #180 added the What's-next symmetric pair after gemini and
-# self-review flagged the asymmetry. Pin the symmetric anchor so a future
-# refactor cannot silently revert to a blockers-only anchor set.
+# The OMIT-EMPTY-SECTION anchors cover both `## What's blocking` and `## What's next`.
 prompt_template_section=$(awk '
   /^## Prompt template[[:space:]]*$/ { in_section=1; next }
   in_section && /^```/ { in_block = !in_block; print; next }
@@ -228,26 +192,15 @@ prompt_template_section=$(awk '
 ' "$PROMPTS_DIR/summarise-issue.md")
 assert_contains "## What's next" "$prompt_template_section" \
   "summarise-issue.md prompt template references What's next section"
-# The Wrong-shape anchor for the What's-next zero-comments case must be
-# present — proxy for "the symmetric anchor pair survives refactors".
 assert_contains "no next-action stated" "$prompt_template_section" \
   "summarise-issue.md prompt template anchors no-next-action Wrong shape"
 
-# plan-section-intro.md — heading-line and FACTS-echo Wrong/Correct anchoring.
-# Pinned after the two confirming 2026-05-22 dogfood MISS observations
-# (ts=2026-05-22T11:12:12Z + verdict ts=2026-05-22T11:12:47Z; and
-# ts=2026-05-22T11:43:18Z + verdict ts=2026-05-22T11:43:47Z) prompted the
-# sharpening. Without these pins a future refactor could silently drop a
-# guard whose absence cost two dogfood iterations to add. Same discipline
-# the OMIT-EMPTY-SECTION + COMMENT-N-CITATION pins above apply to
-# summarise-issue.md.
+# plan-section-intro.md: NO-HEADING-LINE and FACTS-BLOCK-REPHRASE.
 plan_section_intro_body=$(cat "$PROMPTS_DIR/plan-section-intro.md")
 assert_contains "NO-HEADING-LINE" "$plan_section_intro_body" \
   "plan-section-intro.md names NO-HEADING-LINE rule"
 assert_contains "FACTS-BLOCK-REPHRASE" "$plan_section_intro_body" \
   "plan-section-intro.md names FACTS-BLOCK-REPHRASE rule"
-# Both rules must appear in the Anti-hallucination guards section so the
-# calibration provenance for each guard is anchored in the document.
 plan_guards_section=$(awk '
   /^## Anti-hallucination guards/ { in_section=1; next }
   /^## / && in_section { in_section=0 }
@@ -257,12 +210,7 @@ assert_contains "NO-HEADING-LINE" "$plan_guards_section" \
   "plan-section-intro.md '## Anti-hallucination guards' names NO-HEADING-LINE"
 assert_contains "FACTS-BLOCK-REPHRASE" "$plan_guards_section" \
   "plan-section-intro.md '## Anti-hallucination guards' names FACTS-BLOCK-REPHRASE"
-# The Wrong/Correct anchor for NO-HEADING-LINE must be grounded in the
-# actual observed dogfood failure (the `### Phase 13 — Cross-machine
-# calibration aggregation` heading from the 2026-05-22T11:12:12Z dogfood)
-# rather than an abstract Wrong shape. Pinning the literal heading string
-# guards against a future refactor that paraphrases the anchor away from
-# the failure shape it was grounded in.
+# The Wrong anchors stay grounded in the observed failures, not paraphrased.
 plan_template_section=$(awk '
   /^## Prompt template[[:space:]]*$/ { in_section=1; next }
   in_section && /^```/ { in_block = !in_block; print; next }
@@ -275,22 +223,11 @@ assert_contains "FACTS-BLOCK-REPHRASE" "$plan_template_section" \
   "plan-section-intro.md prompt template carries FACTS-BLOCK-REPHRASE directive"
 assert_contains "Phase 13 — Cross-machine calibration aggregation" "$plan_template_section" \
   "plan-section-intro.md prompt template anchors heading-line Wrong shape to observed dogfood failure"
-# The FACTS-BLOCK-REPHRASE Wrong/Correct anchor must reference the actual
-# observed verbatim-echo from the 2026-05-22T11:43:18Z second dogfood
-# (the SCOPE last sentence "The aggregator is opt-in, single-user..."),
-# proxy for "the Wrong shape stays grounded in real failure rather than
-# drifting to an abstract paraphrase".
 assert_contains "The aggregator is opt-in, single-user" "$plan_template_section" \
   "plan-section-intro.md prompt template anchors FACTS-echo Wrong shape to observed dogfood failure"
 
-# maintainer-reply.md — MULTI-ASK-SPLIT and NO-FACT-DROP. Pinned after the
-# 2026-08-03 metrics sweep measured 0 keeps out of 13 on multi-ask
-# teams-for-linux replies (against 92% on single-ask work, same model, same
-# backend, unedited template). The two-sentence cap was merging distinct asks
-# into one run-on question and, in one row, discarding a supplied fact
-# outright. Both directives must stay inside the prompt template — the old
-# scope note asked callers to split multi-ask replies themselves and was
-# ignored 13 consecutive times, so an advisory line is demonstrably not enough.
+# maintainer-reply.md: MULTI-ASK-SPLIT and NO-FACT-DROP must be inside the
+# template; an advisory scope note was ignored.
 maintainer_reply_template=$(awk '
   /^## Prompt template[[:space:]]*$/ { in_section=1; next }
   in_section && /^```/ { in_block = !in_block; print; next }
@@ -310,23 +247,14 @@ assert_contains "MULTI-ASK-SPLIT" "$maintainer_reply_guards" \
   "maintainer-reply.md '## Anti-hallucination guards' names MULTI-ASK-SPLIT"
 assert_contains "NO-FACT-DROP" "$maintainer_reply_guards" \
   "maintainer-reply.md '## Anti-hallucination guards' names NO-FACT-DROP"
-# STATED-NOT-ASKED and NO-CLAIMED-ACTION (#487). Pinned after the 2026-09-14
-# window put the recipe at 47% usable over n=21 with 15 of 38 rejection
-# reasons across the two reply recipes saying the model turned a supplied
-# fact into a question to the contributor, and one saying it reported a fix
-# it had only been given to suggest. Both resolve a tension between "exactly
-# one ask" and "do not restate the facts" that the template creates, so a
-# tidy-up that dropped either would bring the tic straight back.
+# STATED-NOT-ASKED and NO-CLAIMED-ACTION (#487) resolve the tension between
+# "exactly one ask" and "do not restate the facts".
 assert_contains "STATED-NOT-ASKED — non-negotiable" "$maintainer_reply_template" \
   "maintainer-reply.md prompt template carries STATED-NOT-ASKED directive"
 assert_contains "NO-CLAIMED-ACTION — non-negotiable" "$maintainer_reply_template" \
   "maintainer-reply.md prompt template carries NO-CLAIMED-ACTION directive"
-# STATED-NOT-ASKED must not contradict MULTI-ASK-SPLIT rule 2: two or more
-# asks ARE a numbered list of questions, so the block says the caller's asks
-# are the questions (a list of them included) and exempts the verbatim slots
-# (opener, sign-off, anchors such as a URL with `?`) from the no-other-
-# question-mark rule. Its first wording called a questionnaire a defect
-# outright (PR #488 review).
+# STATED-NOT-ASKED must not contradict MULTI-ASK-SPLIT rule 2: a numbered
+# list of the caller's asks is correct, and verbatim slots are exempt.
 assert_contains "a numbered list of the caller's asks, one question each, is correct" "$maintainer_reply_template" \
   "maintainer-reply.md STATED-NOT-ASKED keeps a numbered list of the caller's asks correct"
 assert_contains "Outside the supplied opener, sign-off and anchors" "$maintainer_reply_template" \
@@ -341,19 +269,8 @@ assert_contains "STATED-NOT-ASKED" "$maintainer_reply_guards" \
 assert_contains "NO-CLAIMED-ACTION" "$maintainer_reply_guards" \
   "maintainer-reply.md '## Anti-hallucination guards' names NO-CLAIMED-ACTION"
 
-# pr-description.md — EVIDENCE precedence, SHAPE deference, test-plan sourcing.
-# Pinned after the 2026-08-03 sweep put the recipe at 0 keeps out of 10 in the
-# window, and re-pinned 2026-08-21 after a reproducible fabrication: anchored on
-# a merged PR whose template quotes a pytest run, and given a Context silent
-# about testing, the recipe emitted a ticked box and an invented "24 passed in
-# 1.12s" log. The old guard could not stop it — SHAPE was "non-negotiable" and
-# came first, while the evidence rule scoped itself out with "applies only when
-# the examples use a test plan", and that example had a Verification section,
-# not a test plan. EVIDENCE now outranks SHAPE explicitly, and the ban is on
-# boxes that ASSERT a verification, not on every `- [x]`: a box that classifies
-# the change ("- [x] Bug fix") states intent and is legitimate in templates that
-# use one. Assert the precedence, or a future edit silently restores the
-# fabrication.
+# pr-description.md: EVIDENCE outranks SHAPE explicitly, and the ban is on
+# boxes that assert a verification, not on every `- [x]`.
 pr_description_template=$(awk '
   /^## Prompt template[[:space:]]*$/ { in_section=1; next }
   in_section && /^```/ { in_block = !in_block; print; next }
@@ -370,21 +287,16 @@ assert_contains "NEVER tick a box that asserts a verification" "$pr_description_
   "pr-description.md prompt template bans the verification-asserting checked box"
 assert_contains "NEVER write a command's output, a pass/fail count, or a timing" "$pr_description_template" \
   "pr-description.md prompt template bans fabricated command output"
-# The gather block must fetch MORE THAN ONE example and strip the generated-by
-# footer out of each. Both halves are load-bearing and both are easy to undo by
-# accident. `no_example_echo` classifies a line as shared convention only when
-# it appears in more than one exemplar, so `--limit 1` leaves the check nothing
-# to compare and its boilerplate is read as that exemplar's own content — the
-# 2026-08-27 double failure. And a footer that only some merged PRs carry
-# (measured: 1 of the last 8 in this repo) defeats the rule even at two.
+# The gather block fetches more than one example and strips the generated-by
+# footer: no_example_echo treats a line as convention only when more than one
+# exemplar carries it.
 pr_description_gather=$(awk '
   /^## Context to gather first[[:space:]]*$/ { in_section=1; next }
   in_section && /^## / { exit }
   in_section { print }
 ' "$PROMPTS_DIR/pr-description.md")
-# Asserted POSITIVELY on the number, not as the absence of `--limit 1`: a
-# regression to `--limit 0`, or to no `--limit` at all, breaks the same
-# invariant and a negative match would wave both through.
+# Asserted on the number, not the absence of `--limit 1`, so `--limit 0` or
+# no --limit also fails.
 pr_description_limit=$(printf '%s' "$pr_description_gather" \
   | sed -nE 's/^.*[[:space:]]--limit[[:space:]]+([0-9]+).*$/\1/p' | head -n 1)
 if [[ "$pr_description_limit" =~ ^[0-9]+$ ]] && (( 10#$pr_description_limit >= 2 )); then
@@ -405,15 +317,9 @@ assert_contains "SHAPE — the examples govern" "$pr_description_guards" \
 assert_contains "EVIDENCE — outranks SHAPE" "$pr_description_guards" \
   "pr-description.md '## Anti-hallucination guards' names the EVIDENCE precedence guard"
 
-# Every dispatchable recipe declares a frontmatter `tier:` (#411). 39 of the 44
-# recorded bad-tier calls supplied a --recipe, so the tier left the documented
-# invocation entirely; a recipe without one puts the guess back and fails at
-# call time instead. Scoped to files that delegate.sh can actually dispatch:
-# README.md has no frontmatter, and semantic-search.md says in its own body that
-# "there is no `delegate.sh --recipe` call because the wrapper assumes text-in /
-# text-out" — it is a shell-pipeline recipe, not a model prompt.
-# Read the vocabulary from pick-model.sh's own TIERS line rather than restating
-# it, so this test cannot drift from the source of truth the wrapper uses.
+# Every dispatchable recipe declares a frontmatter `tier:` (#411); README.md
+# and the shell-pipeline semantic-search.md are not dispatchable. The
+# vocabulary is read from pick-model.sh's TIERS line so this cannot drift.
 VALID_TIERS=$(sed -n 's/^TIERS="\(.*\)"$/\1/p' "$REPO/scripts/pick-model.sh" | tr '|' ' ')
 if [[ -z "$VALID_TIERS" ]]; then
   echo "  FAIL  could not read TIERS from scripts/pick-model.sh"; fail=$((fail+1))
@@ -447,17 +353,9 @@ for recipe_file in "$PROMPTS_DIR"/*.md; do
   fi
 done
 
-# The tier left the documented invocation, so no recipe may still show one.
-# The section-end check is gated on being OUTSIDE the fence: a --var value may
-# legitimately contain markdown headings (github-issue-body.md passes a
-# `--var sections` listing '## Summary' and friends), and exiting on those
-# reintroduced the same silent truncation one level down.
-# Scan the whole fenced block under '## Invocation', not backslash-continued
-# lines: the earlier `exit`-on-first-line-without-a-trailing-backslash stopped
-# at the first multi-line --var value, so pr-description.md — whose recent_prs
-# example spans lines — was scanned two lines deep and passed while still
-# documenting a positional `prose` tier. A silent skip in an invariant is worse
-# than no invariant, because the PASS line asserts coverage that did not happen.
+# No invocation may still show a tier. The whole fenced block is scanned
+# (multi-line --var values exist), and the section-end check is gated on
+# being outside the fence (a --var value may contain '## ' headings).
 for recipe_file in "$PROMPTS_DIR"/*.md; do
   base=$(basename "$recipe_file" .md)
   inv=$(awk '
@@ -468,12 +366,8 @@ for recipe_file in "$PROMPTS_DIR"/*.md; do
   ' "$recipe_file" | tr '\n' ' ')
   [[ -z "$inv" ]] && continue
   tier_alt=$(printf '%s' "$VALID_TIERS" | tr ' ' '|' | sed 's/^|//; s/|$//')
-  # Pin both truncation bugs. pr-description.md's first --var spans lines, so a
-  # scanner that stops at the first line without a trailing backslash never
-  # reaches the trailing prompt. github-issue-body.md's --var sections contains
-  # '## ' headings, so a scanner that treats any '## ' as the section end stops
-  # just as early. Both shipped as green PASS lines. If either assertion fails,
-  # the scan narrowed again and every FAIL below became unreachable.
+  # Sentinels prove the scan reaches the trailing prompt on both shapes; a
+  # truncated scan makes every FAIL below unreachable.
   case "$base" in
     pr-description)    sentinel='NO invented example output' ;;
     github-issue-body) sentinel='No title line, no closing summary' ;;
@@ -493,17 +387,8 @@ for recipe_file in "$PROMPTS_DIR"/*.md; do
   fi
 done
 
-# ---------------------------------------------------------------------------
-# Every backticked `<name>.md` in a recipe or in SKILL.md must resolve to a
-# file in prompts/. Recipes cross-reference each other constantly to say which
-# shape belongs where, and a reference to a deleted recipe sends the caller
-# looking for a file that is not there. `7a64d46` pruned three zero-use recipes
-# without updating their referrers, and `maintainer-reply.md` then spent months
-# offering `polish-reply.md` as one of only two alternatives while never
-# mentioning `maintainer-review-reply.md`, the recipe built for the workload it
-# kept absorbing. Convention: a pruned recipe is named WITHOUT the extension
-# (`summarise-diff`), so a backticked name ending in .md is always a live file.
-# ---------------------------------------------------------------------------
+# Every backticked `<name>.md` in a recipe or SKILL.md resolves to a file in
+# prompts/; a pruned recipe is named without the extension.
 dangling=""
 while read -r ref; do
   [[ -z "$ref" ]] && continue
@@ -517,22 +402,12 @@ else
   echo "  PASS  every backticked <name>.md cross-reference resolves to a recipe"; pass=$((pass+1))
 fi
 
-# ---------------------------------------------------------------------------
-# `pr-review-reply` must not go back to capping its body at one clause. The
-# `pr-review-comment` boundary fired 49 times without ever being credited, and
-# the reason was this cap: the 23 replies actually posted on PRs #440-#452
-# measure a median of 312 characters with only 4 under 100, against a recipe
-# that permitted the opener plus one short clause. The cap looks like concision
-# and reads like a bug in the trigger rate, so pin its removal and pin the
-# check that took over its anti-padding half.
-# ---------------------------------------------------------------------------
+# pr-review-reply must not cap its body at one clause again; no_padding_tail
+# took over the anti-padding half.
 prr="$PROMPTS_DIR/pr-review-reply.md"
 prr_template=$(awk '/^## Prompt template/{f=1} f' "$prr" 2>/dev/null | awk '/^```/{n++; next} n==1')
 if [[ -z "$prr_template" ]]; then
-  # A silent skip in an invariant is worse than no invariant: the grep below
-  # cannot match an empty string, so a heading rename or a fence change would
-  # turn this into a PASS asserting coverage that never happened. Same lesson
-  # as the positional-tier truncation pinned above.
+  # An empty template would pass the grep below, so it is a failure of its own.
   echo "  FAIL  pr-review-reply.md prompt template could not be extracted"; fail=$((fail+1))
 elif printf '%s' "$prr_template" | grep -qiE 'at most one short clause|no additional sentences|one-sentence reply'; then
   echo "  FAIL  pr-review-reply.md prompt template still caps the body at one clause"; fail=$((fail+1))
@@ -545,15 +420,8 @@ else
   echo "  FAIL  pr-review-reply.md does not declare no_padding_tail (the check that replaced the clause cap)"; fail=$((fail+1))
 fi
 
-# ---------------------------------------------------------------------------
-# The two maintainer reply recipes must keep no_context_echo declared and the
-# opener as a caller-supplied input (#475). 63 of 97 rejections in the
-# fortnight to 2026-09-11 said the draft restated the piped context, none of
-# them failed a check, and 39 wanted a thanks opener the template forbade.
-# The check is opt-in, so a frontmatter tidy-up could silently drop it; the
-# opener is what stops the model inventing gratitude, so the old "do not open
-# by thanking" wording must not come back either.
-# ---------------------------------------------------------------------------
+# The two maintainer reply recipes keep no_context_echo declared (it is
+# opt-in) and the opener as a caller-supplied input (#475).
 for base in maintainer-reply maintainer-review-reply; do
   rf="$PROMPTS_DIR/$base.md"
   rf_fm=$(awk '/^---[[:space:]]*$/{d++; if (d==2) exit; next} d==1' "$rf" 2>/dev/null)
@@ -567,16 +435,8 @@ for base in maintainer-reply maintainer-review-reply; do
   else
     echo "  FAIL  $base.md does not declare opener: string?"; fail=$((fail+1))
   fi
-  # The length ceiling relative to the input is a declared check, not a prose
-  # rule (#487): after the 2026-09-11 rewording the recipe still shipped 16 of
-  # 16 drafts the size of their FACTS block (1172 chars out for 981 in, 557
-  # for 560, 940 for 899) and the no_context_echo retry did not move them,
-  # because that check measures echo and says nothing about length. An
-  # unconditional "shorter than the FACTS block" rule was tried and withdrawn
-  # in review of PR #488 (it contradicted LENGTH, cannot be met on a
-  # three-line fact list, and 3 of the 16 were already shorter). Both reply
-  # recipes declare max_context_ratio, so a frontmatter tidy-up cannot drop
-  # the one thing that makes the ceiling retry-able.
+  # The length ceiling is a declared, retry-able check (#487), not a prose
+  # rule; the unconditional SHORTER rule contradicted LENGTH.
   if printf '%s\n' "$rf_fm" | grep -qE '^[[:space:]]+max_context_ratio:[[:space:]]*0\.8'; then
     echo "  PASS  $base.md declares max_context_ratio: 0.8"; pass=$((pass+1))
   else
@@ -593,10 +453,7 @@ for base in maintainer-reply maintainer-review-reply; do
   else
     echo "  PASS  $base.md prompt template carries no unconditional SHORTER rule"; pass=$((pass+1))
   fi
-  # The prose side of the ceiling lives only in the evidence-led recipe: a
-  # CURATION rule consistent with its LENGTH paragraph (anchors and judgement,
-  # never the facts' sentences, well under the facts' length on a list of
-  # more than a few lines).
+  # The prose side of the ceiling (CURATION) lives only in the evidence-led recipe.
   if [[ "$base" == maintainer-review-reply ]]; then
     assert_contains "CURATION: the reply carries the anchors" "$rf_template" \
       "$base.md prompt template carries the CURATION rule"

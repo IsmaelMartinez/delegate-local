@@ -1,23 +1,8 @@
 #!/usr/bin/env bash
-# Validate the committed Loki-powered dashboard JSON in dashboards/grafana/.
-#
-# The dashboards query Loki (LogQL over the delegate metrics JSONL, pushed by
-# scripts/sync-metrics-to-loki.sh) rather than Tempo, because Loki can chart
-# the full history while Tempo indexes by ingestion time. The assertions pin
-# that contract:
-#
-# 1. Each .json under dashboards/grafana/ is valid JSON (jq parses it).
-# 2. Each dashboard has the keys Grafana needs to import: title, panels,
-#    schemaVersion — and a `project` template variable.
-# 3. Every panel target uses datasource.uid "loki" and selects the
-#    service="delegate-local" stream.
-# 4. Every JSONL field referenced by a LogQL `unwrap X` / `| json | X` clause
-#    is in the known JSONL field allowlist, so a dashboard cannot chart a
-#    field the exporter never writes.
-# 5. The calibration dashboard keeps a per-recipe adoption-rate panel (`by (recipe)`).
-# 6. The Langfuse README (no-portable-JSON backend) still exists.
-#
-# bash-3.2 portable: no associative arrays, no `grep -P`.
+# Validate the committed Loki dashboards in dashboards/grafana/: valid JSON,
+# importable keys, the loki datasource and service stream, every LogQL field
+# in the JSONL allowlist, and the panel shapes pinned below. bash-3.2
+# portable: no associative arrays, no `grep -P`.
 
 set -u
 
@@ -38,14 +23,8 @@ if [[ ! -d "$DASHBOARDS/grafana" ]]; then
   echo; echo "$pass passed, $((fail+1)) failed"; exit 1
 fi
 
-# Allowlist of JSONL field names the dashboards may reference. These are the
-# fields scripts/delegate.sh, delegate-feedback.sh, embed.sh and the eval
-# harness write to metrics.jsonl (plus recipe/tier, which the sync script
-# enriches onto feedback rows from the parent delegation), and the fields of
-# the source:"opportunity" row scripts/delegate-boundary-hook.sh writes
-# (boundary, suggested_recipe, delegated, and since #483 body_chars,
-# below_floor, denied, enforce_skipped). A LogQL reference to anything
-# outside this set is almost certainly a typo or schema drift.
+# The JSONL fields the scripts write (the sync script enriches feedback rows
+# with recipe/tier); a LogQL reference outside this set is a typo or drift.
 KNOWN_FIELDS="ts source project tier recipe backend model service \
 prompt_chars context_chars output_chars duration_ms queue_wait_ms \
 generation_ms exit_status estimated_tokens_avoided kept reason ref_ts \
@@ -103,10 +82,8 @@ for dash in "$DASHBOARDS/grafana"/*.json; do
     echo "  FAIL  $base: $bad_svc query(ies) do not select service=\"delegate-local\""; fail=$((fail+1))
   fi
 
-  # 4. Field allowlist: pull every `unwrap X`, `by (X)`, `| X(=|!=|=~)` filter,
-  #    and `line_format` `{{.X}}` reference from the panel exprs and confirm each
-  #    is a known JSONL field. Scanning line_format too means a typo'd field in a
-  #    logs panel (e.g. `{{.resaon}}`) is caught, not just the metric filters.
+  # 4. Every `unwrap X`, `by (X)`, `| X op` filter and `line_format` `{{.X}}`
+  #    reference is a known JSONL field.
   exprs=$(jq -r '[.panels[].targets[]?.expr // ""] | join("\n")' "$dash")
   fields=$(printf '%s\n' "$exprs" \
     | grep -oE 'unwrap [a-z_]+|by \([a-z_]+\)|\| [a-z_]+(=|!=|=~)|\{\{ *\.[a-z_]+ *\}\}' \
@@ -124,13 +101,9 @@ for dash in "$DASHBOARDS/grafana"/*.json; do
     echo "  PASS  $base: all LogQL field references are known JSONL fields"; pass=$((pass+1))
   fi
 
-  # 5. Single-value-per-category panels (bargauge, piechart) MUST use instant
-  #    queries. As RANGE queries with a `[$__range]` selector they would return
-  #    ~the full-range total at every step, and the panel's "sum" reduce would
-  #    then add all those steps together — inflating every value by the step
-  #    count (e.g. a 61 K total shown as 8.8 M per bar). Instant evaluates once.
-  # `.. | objects` (recursive descent) rather than `.panels[]` so panels nested
-  # inside Grafana row panels are validated too, not just top-level ones.
+  # 5. bargauge/piechart panels use instant queries: a range query returns
+  #    the full-range total at every step and the sum reduce adds the steps.
+  #    `.. | objects` reaches panels nested inside Grafana row panels.
   range_reduced=$(jq -r '[.. | objects | select(.type=="bargauge" or .type=="piechart") | select((.targets // []) | any((.queryType // "range") != "instant")) | .title] | join(", ")' "$dash")
   if [[ -z "$range_reduced" ]]; then
     echo "  PASS  $base: bargauge/piechart panels use instant queries"; pass=$((pass+1))
@@ -138,12 +111,8 @@ for dash in "$DASHBOARDS/grafana"/*.json; do
     echo "  FAIL  $base: bargauge/piechart panel(s) not instant (step-sum inflation risk): $range_reduced"; fail=$((fail+1))
   fi
 
-  # 5b. Those same panels MUST also set reduceOptions.values=true. An instant
-  #    `sum by (label) (...)` comes back as a `numeric-multi` frame; with
-  #    values:false the bargauge/piechart applies its reduce calc ACROSS the
-  #    series and collapses them into a single bar/slice (e.g. all projects
-  #    summed into one 50 K bar). values:true renders every series value as its
-  #    own bar/slice — the one-bar-per-label breakdown these panels exist for.
+  # 5b. Those panels also set reduceOptions.values=true, or the reduce
+  #    collapses every series into one bar/slice.
   collapse=$(jq -r '[.. | objects | select(.type=="bargauge" or .type=="piechart") | select((.options.reduceOptions.values // false) != true) | .title] | join(", ")' "$dash")
   if [[ -z "$collapse" ]]; then
     echo "  PASS  $base: bargauge/piechart panels show all values (no series collapse)"; pass=$((pass+1))
@@ -159,13 +128,8 @@ else
   echo "  PASS  dashboards/grafana/ contains $dash_count dashboard(s)"; pass=$((pass+1))
 fi
 
-# 5. The calibration dashboard keeps a per-recipe adoption-rate panel. Per-recipe
-#    breakdown is the load-bearing shape (#187) — it is what makes a bad recipe
-#    visible rather than averaged away; the sync script enriches feedback rows
-#    with the parent recipe so this is a LogQL `by (recipe)` group-by. Pin it so
-#    a future edit cannot silently drop it. The rate is the agent's own hit
-#    verdicts over all its verdicts, which is the one calibration tier there
-#    is (ADR 0030).
+# 5. The calibration dashboard keeps a per-recipe adoption-rate panel (#187):
+#    a `by (recipe)` group-by is what makes a bad recipe visible.
 CALIBRATION="$DASHBOARDS/grafana/delegate-calibration.json"
 if [[ -f "$CALIBRATION" ]]; then
   per_recipe=$(jq -r '[.panels[] | select((.targets // []) | map(.expr // "") | join(" ") | (contains("by (recipe)") and contains("kept=")))] | length' "$CALIBRATION" 2>/dev/null)
@@ -178,12 +142,8 @@ else
   echo "  FAIL  delegate-calibration.json missing"; fail=$((fail+1))
 fi
 
-# 5f. The Overview dashboard keeps a trigger-rate panel (#483). Volume and
-#     latency were charted from the start; the rate was not, so 15% over 680
-#     boundaries went unseen in the browser. The panel reads the opportunity
-#     stream and leaves out the rows the hook marks below_floor and denied —
-#     the first is not drafting, the second never posted — so a panel that
-#     drops either filter would quietly reintroduce the distortion.
+# 5f. The Overview dashboard keeps a trigger-rate panel (#483) that filters
+#     out below_floor (not drafting) and denied (never posted) rows.
 OVERVIEW="$DASHBOARDS/grafana/delegate-overview.json"
 if [[ -f "$OVERVIEW" ]]; then
   trigger_panel=$(jq -r '[.panels[] | select((.targets // []) | map(.expr // "") | join(" ")
@@ -206,13 +166,8 @@ else
   echo "  FAIL  delegate-overview.json missing"; fail=$((fail+1))
 fi
 
-# 5c. The per-recipe adoption-rate panel is a percentunit ratio time series. Its
-#     legend reduce MUST NOT be `sum`: summing a fractional per-step ratio over
-#     every step in the range adds the steps together and the percentunit unit
-#     then multiplies by 100, surfacing impossible values like 5955%. A ratio
-#     legend reduces with mean/lastNotNull (each bounded in [0,1]), never sum.
-#     Same step-sum inflation class as the bargauge/pie fix (#249), different
-#     surface (a timeseries legend calc instead of a panel-level reduce).
+# 5c. The adoption-rate legend must not reduce with `sum`: summing a per-step
+#     ratio over the range and multiplying by 100 shows values like 5955%.
 if [[ -f "$CALIBRATION" ]]; then
   recipe_sum_calc=$(jq -r '[.. | objects | select((.targets // []) | map(.expr // "") | join(" ") | (contains("by (recipe)") and contains("kept="))) | .options.legend.calcs // [] | index("sum")] | map(select(. != null)) | length' "$CALIBRATION" 2>/dev/null)
   if [[ "$recipe_sum_calc" == "0" ]]; then
@@ -222,11 +177,8 @@ if [[ -f "$CALIBRATION" ]]; then
   fi
 fi
 
-# 5d. The canary-failure stat panel MUST key on the exit code delegate.sh
-#     actually writes for a pre-flight canary/preflight-timeout stall. That is
-#     exit_status=3 (scripts/delegate.sh `emit_failure 3` then `exit 3` on the
-#     DELEGATE_PREFLIGHT_TIMEOUT path); exit_status=2 is validation/usage only
-#     and never reaches metrics.jsonl, so a panel keyed to 2 always reads 0.
+# 5d. The canary-failure panel keys on exit_status=3, the code delegate.sh
+#     writes for a canary stall; exit 2 is usage only and never reaches metrics.
 ERRORS="$DASHBOARDS/grafana/delegate-errors.json"
 if [[ -f "$ERRORS" ]]; then
   canary_expr=$(jq -r '[.. | objects | select((.title // "") | test("[Cc]anary")) | .targets?.[0].expr // ""] | join(" ")' "$ERRORS" 2>/dev/null)

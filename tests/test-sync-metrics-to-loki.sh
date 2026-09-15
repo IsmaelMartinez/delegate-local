@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/sync-metrics-to-loki.sh. Mocks curl on a restricted
-# PATH so the Loki push body is captured to a file instead of escaping the
-# host, and asserts the stream grouping, ns-timestamp encoding, feedback
-# recipe/tier enrichment, watermark idempotency, and dry-run behaviour.
+# Unit tests for scripts/sync-metrics-to-loki.sh, with curl mocked so the
+# push body is captured rather than sent.
 
 set -u
 
@@ -15,10 +13,8 @@ fail=0
 assert_eq() { if [[ "$1" == "$2" ]]; then echo "  PASS  $3"; pass=$((pass+1)); else echo "  FAIL  $3 (expected '$1', got '$2')"; fail=$((fail+1)); fi; }
 assert_contains() { case "$2" in *"$1"*) echo "  PASS  $3"; pass=$((pass+1));; *) echo "  FAIL  $3 (missing '$1')"; fail=$((fail+1));; esac; }
 
-# Mock curl: capture the --data-binary push body to $BODY, respond 204 to the
-# push and flush; everything else 204. The real caller streams the body on
-# stdin as `--data-binary @-` (a full-history payload exceeds ARG_MAX as an
-# argv element), so `@-` means "read the body from stdin" here too.
+# Mock curl: captures the push body to $BODY and responds 204. The caller
+# streams the body as `--data-binary @-`, so `@-` reads stdin here too.
 make_mock_curl() {
   local dir="$1" body="$2"
   cat > "$dir/curl" <<EOF
@@ -37,10 +33,8 @@ EOF
   chmod +x "$dir/curl"
 }
 
-# As make_mock_curl, but also appends each invocation's argv to $3 as a single
-# space-joined line. Appends rather than overwrites because the success path
-# calls curl twice (the push, then the best-effort flush) and the timeout
-# assertions need both lines; grep on the URL separates them.
+# As make_mock_curl, but appends each invocation's argv to $3 (the success
+# path calls curl twice: push, then flush).
 make_mock_curl_argv() {
   local dir="$1" body="$2" argv_file="$3"
   cat > "$dir/curl" <<EOF
@@ -158,11 +152,8 @@ assert_eq "0" "$EC" "T8: push run exits 0 with TMPDIR override"
 leftover=$(ls -A "$tmpd" 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "0" "$leftover" "T8: no tempfile leaked in TMPDIR after exit"
 
-# --- T9: ns timestamp is content-derived, stable across file POSITION --------
-# The hardening: a row re-pushed at a different line number must get the SAME
-# ns, so re-syncing a rewritten/reordered file does not duplicate it. The old
-# line-number-as-ns scheme failed this and caused the 2026-06-19 feedback
-# doubling in the local Loki.
+# --- T9: the ns timestamp is content-derived, so a row re-pushed at a
+# different line number is not duplicated -----------------------------------
 row9='{"ts":"2026-05-10T11:11:11Z","source":"delegate","tier":"prose","estimated_tokens_avoided":5,"exit_status":0,"project":"repo-z"}'
 met9a="$tmp/m9a.jsonl"; met9b="$tmp/m9b.jsonl"
 state9a="$tmp/s9a"; state9b="$tmp/s9b"; body9a="$tmp/b9a.json"; body9b="$tmp/b9b.json"
@@ -180,14 +171,9 @@ ns9b=$(jq -r '.streams[].values[] | select((.[1]|fromjson).project=="repo-z") | 
 assert_eq "$ns9a" "$ns9b" "T9: same row -> same ns regardless of file position (re-sync idempotent)"
 
 # --- T10: a payload larger than ARG_MAX still pushes -------------------------
-# Regression guard for the 2026-07-27 failure: the push body used to be passed
-# to curl as an argv element, so a full-history sync (~2 MB once tojson
-# escaping is applied) died with "Argument list too long" before curl ran.
-# Incremental syncs were small enough to hide it. A REAL /usr/bin/curl is used
-# here — the mock is a bash script and would hit the same exec limit for the
-# wrong reason — pointed at a closed port, so the run fails at connect (exit 1)
-# rather than at exec. The assertion is on the stderr signature: an ARG_MAX
-# regression says "Argument list too long"; a correctly-streamed body does not.
+# A real /usr/bin/curl against a closed port (the bash mock would hit the
+# exec limit itself); the assertion is that stderr never says "Argument
+# list too long".
 row10='{"ts":"2026-05-11T09:00:00Z","source":"delegate","tier":"prose","exit_status":0,"project":"argmax","note":"'"$(printf 'x%.0s' $(seq 1 900))"'"}'
 met10="$tmp/m10.jsonl"; state10="$tmp/s10"
 : > "$met10"

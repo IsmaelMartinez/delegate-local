@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Tests for experiments/quality-trend.py — the reproducible weekly-quality
-# rollup over the metrics JSONL. Feeds a hand-authored fixture so the
-# hit-rate / coverage / per-recipe maths is pinned and future augmentation
-# can't silently drift the numbers.
+# Tests for experiments/quality-trend.py, the weekly-quality rollup, against
+# a hand-authored fixture so the maths is pinned.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,11 +25,9 @@ assert_eq() {
   fi
 }
 
-# Fixture: 8 delegations (6 commit-message across two weeks, 2 bare), 7 verdicts.
-# commit-message: 5 HIT / 1 MISS = 6 verdicts, 83%. bare: 1 HIT. One bare
-# delegation has no verdict (untracked) so coverage is 7/8 = 88%.
-# All fixtures are temp files cleaned up by a trap, so an early exit or
-# interrupt cannot leave them behind.
+# Fixture: 8 delegations (6 commit-message across two weeks, 2 bare), 7
+# verdicts: commit-message 5 HIT / 1 MISS (83%), bare 1 HIT, one bare
+# untracked, so coverage is 7/8 = 88%.
 fixture="" nofb="" malformed="" phantom="" nots="" lowweek=""
 trap 'rm -f "$fixture" "$nofb" "$malformed" "$phantom" "$nots" "$lowweek"' EXIT
 fixture=$(mktemp)
@@ -139,13 +135,9 @@ out=$(python3 "$TREND" "$lowweek" 2>&1); ec=$?
 assert_eq 0 "$ec" "sub-50% week renders without IndexError"
 assert_contains "lifetime  1/4 HIT = 25%" "$out" "sub-50% week counted correctly"
 
-# Phase E agent-observed verdict tier. Fixture: 9 commit-message delegations.
-# Human verdicts on D0-D5: 5 HIT + 1 MISS (= 6 human verdicts, 83%). Agent
-# verdicts on D6-D8: 2 used + 1 rewrote (= 3 agent verdicts, 67% usage). All 9
-# delegations are covered → 100% coverage. The honesty property: the human
-# hit-rate (5/6) must NOT be inflated by the agent HITs, the per-recipe quality
-# count must be the 6 human verdicts (not 9), and the agent tier is its own
-# lifetime figure.
+# Agent-observed verdict tier: 9 commit-message delegations, human verdicts
+# on D0-D5 (5 HIT + 1 MISS, 83%), agent verdicts on D6-D8 (2 used + 1
+# rewrote, 67%). The human hit-rate must not be inflated by the agent HITs.
 agentq=$(mktemp)
 agentonly=$(mktemp)
 trap 'rm -f "$fixture" "$nofb" "$malformed" "$phantom" "$nots" "$lowweek" "$agentq" "$agentonly"' EXIT

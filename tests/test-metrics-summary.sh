@@ -81,9 +81,8 @@ assert_contains "2026-05-04-code-delegation-probe" "$out" "mixed: session label 
 assert_contains "Per-tier (delegate):" "$out" "mixed: per-tier header present for delegate rows"
 rm -f "$mixed"
 
-# 5. Feedback rollup: delegate events with hit/miss/untracked feedback rows.
-# Verifies that miss (kept:false) is counted, not silently dropped by the
-# jq // alternative-operator quirk.
+# 5. Feedback rollup: a miss (kept:false) is counted, not dropped by jq's
+# `//` treating false as absent.
 fb=$(mktemp)
 cat > "$fb" <<'EOF'
 {"ts":"2026-05-09T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","prompt_chars":40,"context_chars":160,"output_chars":200,"duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":100}
@@ -98,27 +97,19 @@ EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$fb" 2>&1) || EC=$?
 assert_eq 0 "$EC" "feedback: exits 0"
-# Only delegate calls counted in invocations; feedback rows are zero-cost.
 assert_contains "delegate=4" "$out" "feedback: 4 delegate invocations counted"
 assert_contains "Delegation feedback (hit/miss):" "$out" "feedback: section header"
 assert_contains "prose" "$out" "feedback: prose row appears"
 assert_contains "reasoning" "$out" "feedback: reasoning row appears"
-# Specific counts: prose has 1 hit + 1 miss + 0 untracked.
 assert_contains "prose           n=2  hits=1  misses=1  untracked=0" "$out" "feedback: prose hit/miss exact counts"
-# Reasoning has 1 miss + 1 untracked (no feedback for the second reasoning call).
 assert_contains "reasoning       n=2  hits=0  misses=1  untracked=1" "$out" "feedback: reasoning miss not silently dropped"
-# Recipe-scoped coverage headline: 4 recipe delegations, 3 with feedback = 75%.
 assert_contains "coverage=75%" "$out" "feedback: recipe verdict coverage headline (recipe-scoped)"
-# Feedback rows must NOT inflate Tokens avoided (they have no token field).
-# Sum of delegate-only tokens: 100+120+150+160 = 530.
+# Feedback rows carry no token field and must not inflate the sum.
 assert_contains "Tokens avoided (≈):  530" "$out" "feedback: tokens not inflated by feedback rows"
 rm -f "$fb"
 
-# 5b. Failed delegations (exit_status != 0) are excluded from the coverage
-# denominator: a canary-timeout (exit 3) produced no output, so it cannot carry a
-# hit/miss verdict and must not count as "untracked". Fixture: one successful
-# recipe delegation with a hit, plus one failed (exit 3) recipe delegation with
-# no verdict. Coverage must be 100% (1/1), not 50% (1/2).
+# 5b. Failed delegations (exit_status != 0) produced no output to judge, so
+# they leave the coverage denominator: 100% (1/1), not 50% (1/2).
 fbx=$(mktemp)
 cat > "$fbx" <<'EOF'
 {"ts":"2026-06-15T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -132,9 +123,7 @@ assert_contains "Recipe delegations (calibration signal): n=1  hits=1  misses=0 
 assert_contains "coverage=100%" "$out" "failed-excluded: coverage over successful delegations only (not 50%)"
 rm -f "$fbx"
 
-# 6. Latest-feedback-wins: two feedback rows for the same delegate, recorded
-# in chronological order (hit, then miss). The later miss should win — the
-# user revised their verdict — and be counted as the miss.
+# 6. Latest feedback wins: a later miss overrides an earlier hit on the same row.
 revised=$(mktemp)
 cat > "$revised" <<'EOF'
 {"ts":"2026-05-09T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":50}
@@ -148,8 +137,7 @@ assert_eq 0 "$EC" "revised: exits 0"
 assert_contains "prose           n=1  hits=0  misses=1  untracked=0" "$out" "revised: latest feedback wins (miss overrides earlier hit)"
 rm -f "$revised"
 
-# 7. Per-backend section: only shown when 2+ distinct backends appear.
-# Single-backend fixture (only ollama-tagged rows) -> no Per-backend section.
+# 7. Per-backend section is hidden with a single backend.
 single=$(mktemp)
 cat > "$single" <<'EOF'
 {"ts":"2026-05-12T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -164,8 +152,7 @@ case "$out" in
 esac
 rm -f "$single"
 
-# 8. Mixed-backend fixture: rows from both ollama and mlx -> Per-backend
-# section appears with per-backend n/tokens/p50/p95.
+# 8. Two backends: the Per-backend section appears.
 mixed=$(mktemp)
 cat > "$mixed" <<'EOF'
 {"ts":"2026-05-12T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -181,9 +168,7 @@ assert_contains "ollama" "$out" "mixed-backend: ollama row present"
 assert_contains "mlx" "$out" "mixed-backend: mlx row present"
 rm -f "$mixed"
 
-# 9. Back-compat: rows missing the backend field (pre-2026-05) are bucketed
-# as 'ollama'. Combined with an mlx row, the Per-backend section should
-# show both with the unset rows counted under ollama.
+# 9. Rows with no backend field are bucketed as 'ollama'.
 backcompat=$(mktemp)
 cat > "$backcompat" <<'EOF'
 {"ts":"2026-04-29T08:00:00Z","source":"delegate","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -194,18 +179,13 @@ EC=0
 out=$(bash "$SCRIPT" --file "$backcompat" 2>&1) || EC=$?
 assert_eq 0 "$EC" "back-compat: exits 0"
 assert_contains "Per-backend (delegate):" "$out" "back-compat: section header present"
-# The two pre-backend rows should land under ollama (n=2 with tokens=210),
-# and the single mlx row stays under mlx (n=1).
 assert_contains "ollama" "$out" "back-compat: pre-2026-05 rows bucketed under ollama"
 assert_contains "n=2" "$out" "back-compat: ollama bucket gets the 2 unset-backend rows"
 assert_contains "n=1" "$out" "back-compat: mlx bucket gets its single row"
 rm -f "$backcompat"
 
-# 10. Per-backend section is robust to missing estimated_tokens_avoided and
-# duration_ms fields. The gemini-code-assist PR #106 review flagged that
-# without // 0 defaults, an MLX bucket containing only rows with absent
-# fields would render "tokens≈null  p50=nullms  p95=nullms". The defaults
-# make sure the line stays numeric.
+# 10. Missing estimated_tokens_avoided / duration_ms default to 0 in the
+# Per-backend line rather than rendering "null".
 sparse=$(mktemp)
 cat > "$sparse" <<'EOF'
 {"ts":"2026-05-12T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -215,10 +195,7 @@ EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$sparse" 2>&1) || EC=$?
 assert_eq 0 "$EC" "sparse: exits 0"
-# Extract only the Per-backend section's body so the assertion is scoped to
-# the new code introduced in this PR. (Per-tier and Per-source have the same
-# null-leak class but are pre-existing and out of scope here — fix when
-# evidence demands it, not speculatively.)
+# Scoped to the Per-backend section only.
 per_backend=$(echo "$out" | awk '/^Per-backend \(delegate\):/{flag=1; next} /^$/{flag=0} flag')
 case "$per_backend" in
   *"null"*) echo "  FAIL  sparse: 'null' leaked into Per-backend output ($per_backend)"; fail=$((fail+1));;
@@ -228,9 +205,7 @@ assert_contains "tokens≈0" "$per_backend" "sparse: missing tokens default to 0
 assert_contains "p50=0ms" "$per_backend" "sparse: missing duration_ms defaults to 0 in Per-backend p50"
 rm -f "$sparse"
 
-# 11. Per-project section: 2+ distinct projects -> section printed with
-# correct hits/misses/untracked (mirroring the feedback join) and p50 latency.
-# Project "alpha": 2 calls, 1 hit + 1 miss. Project "beta": 1 call, untracked.
+# 11. Per-project section with two projects: hit/miss/untracked and p50 per project.
 multiproj=$(mktemp)
 cat > "$multiproj" <<'EOF'
 {"ts":"2026-05-25T10:00:00Z","source":"delegate","project":"alpha","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -247,9 +222,8 @@ assert_contains "alpha                 n=2  hits=1  misses=1  untracked=0  p50=4
 assert_contains "beta                  n=1  hits=0  misses=0  untracked=1  p50=6000ms" "$out" "per-project: beta untracked when no feedback"
 rm -f "$multiproj"
 
-# 12. Per-project negative gate: single distinct project -> section hidden.
-# (Rows missing the project field form their own `(no project)` bucket, so a
-# fixture mixing them with one named project is two distinct values — see 12d.)
+# 12. A single project hides the section (projectless rows are their own
+# bucket, see 12d).
 singleproj=$(mktemp)
 cat > "$singleproj" <<'EOF'
 {"ts":"2026-05-25T10:00:00Z","source":"delegate","project":"alpha","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -264,9 +238,7 @@ case "$out" in
 esac
 rm -f "$singleproj"
 
-# 13. Per-recipe section: delegate rows carrying a recipe field -> section
-# printed grouped by recipe with hit/miss/untracked. commit-message: 2 calls,
-# 1 hit + 1 untracked. summarise-issue: 1 call, 1 miss.
+# 13. Per-recipe section groups by recipe with hit/miss/untracked.
 recipefix=$(mktemp)
 cat > "$recipefix" <<'EOF'
 {"ts":"2026-05-26T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -299,9 +271,8 @@ case "$out" in
 esac
 rm -f "$norecipe"
 
-# 15. Verdict coverage is scoped to recipe delegations; raw / no-recipe calls
-# (ad-hoc + benchmark/audit traffic) are reported separately and do NOT inflate
-# the recipe untracked count. 2 recipe calls (1 tracked) + 2 raw calls (1 tracked).
+# 15. Verdict coverage is scoped to recipe delegations; raw calls are reported
+# separately and do not inflate the recipe untracked count.
 denoise=$(mktemp)
 cat > "$denoise" <<'EOF'
 {"ts":"2026-05-27T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -320,11 +291,8 @@ assert_contains "Raw / no-recipe" "$out" "denoise: raw/no-recipe line present"
 assert_contains "n=2  tracked=1  untracked=1" "$out" "denoise: raw calls bucketed separately, not in recipe untracked"
 rm -f "$denoise"
 
-# 12. Trigger rate (#277): source:"opportunity" rows (from the delegate-boundary
-# hook) drive a per-project trigger-rate section and must NOT be counted as
-# invocations or errors — they carry no exit_status, so before the call-filter
-# guard they would have inflated the error count. Fixture: project "alpha" has 2
-# boundaries (1 delegated), "beta" has 1 boundary (missed).
+# 12. Trigger rate (#277): opportunity rows drive a per-project section and
+# are not counted as invocations or errors (they carry no exit_status).
 opp=$(mktemp)
 cat > "$opp" <<'EOF'
 {"ts":"2026-06-08T10:00:00Z","source":"delegate","project":"alpha","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -342,20 +310,13 @@ assert_contains "alpha" "$out" "trigger-rate: alpha project listed"
 assert_contains "beta" "$out" "trigger-rate: beta project listed"
 assert_contains "opportunities=2  delegated=1  missed=1  rate=50%" "$out" "trigger-rate: alpha 50% (2 opps, 1 delegated)"
 assert_contains "opportunities=1  delegated=0  missed=1  rate=0%" "$out" "trigger-rate: beta 0% (1 opp, missed)"
-# Opportunity rows must not leak into the Per-source model/latency rollup.
 case "$out" in
   *"opportunity     n="*) echo "  FAIL  trigger-rate: opportunity must not appear as a Per-source call row"; fail=$((fail+1));;
   *) echo "  PASS  trigger-rate: opportunity excluded from Per-source rollup"; pass=$((pass+1));;
 esac
 rm -f "$opp"
 
-# 12b. Legacy state:"pre-drafted" opportunity rows (#349) used to sit outside
-# both halves of the ratio. #465 removed that exclusion — the hook could not
-# tell an approved body file from one the agent wrote a call earlier, and the
-# same act was counted whenever the write and the post shared a Bash call — so
-# the rows that survive in older corpora now count as ordinary misses. Fixture:
-# alpha has a 1-delegated / 1-missed pair plus 2 legacy pre-drafted rows, which
-# read 1/4 rather than the 1/2 the exclusion used to print.
+# 12b. Legacy state:"pre-drafted" rows count as ordinary misses (#465).
 predraft=$(mktemp)
 cat > "$predraft" <<'EOF'
 {"ts":"2026-06-08T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true}
@@ -374,13 +335,9 @@ case "$out" in
 esac
 rm -f "$predraft"
 
-# 12c. Opportunity rows with no project (#476). The boundary hook records none
-# outside a git repository, mirroring delegate.sh, so such rows are real and
-# recurring — a session started in the parent folder that holds the checkouts.
-# They must not be dropped, must not print as `null`, and must not be ranked
-# among the projects by count: one `(no project)` line AFTER the per-project
-# rows, whose own numbers are untouched. Fixture: alpha has 1 boundary, the
-# projectless bucket has 3 (so a count-ranked sort would put it first).
+# 12c. Projectless opportunity rows (#476) print as one `(no project)` line
+# after the per-project rows, never as null and never count-ranked above
+# them (the bucket has 3 rows to alpha's 1).
 noproj=$(mktemp)
 cat > "$noproj" <<'EOF'
 {"ts":"2026-06-08T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true}
@@ -401,23 +358,15 @@ case "$trig" in
   *null*) assert_eq "absent" "present" "no-project opportunities: never printed as null" ;;
   *)      assert_eq "absent" "absent"  "no-project opportunities: never printed as null" ;;
 esac
-# Among the project rows (the `excluded …` footer since #483 is not one).
+# Among the project rows; the `excluded …` footer is not one.
 assert_contains "(no project)" "$(grep -F 'opportunities=' <<<"$trig" | tail -1)" \
   "no-project opportunities: listed after the per-project rows, not ranked by count"
 rm -f "$noproj"
 
-# 12e. #483: the rate is about real drafting. A row the hook marked
-# `below_floor:true` (a body under the floor — an applied-in hash, a
-# dependabot command) is neither a hit nor a miss and leaves both halves of
-# the ratio. A `denied:true` row is an attempt the hook blocked; when the same
-# session retried that boundary within the window, the retry is the row that
-# counts and the denial leaves the ratio — but a denial never retried (or
-# retried through a bypass) is the miss it is and stays (PR #484 review,
-# item K). An `enforce_skipped` row (no provider answered, the post went
-# through undrafted) is a real miss and counts as before. Fixture: alpha has
-# 1 delegated, 1 plain miss, 1 no-provider miss, 1 below-floor row, 1 denied
-# attempt that session s1 retried two minutes later, and 1 denied attempt
-# session s2 never retried — 1/4, not 1/6 and not 1/3.
+# 12e. The rate is about real drafting (#483): a `below_floor:true` row
+# leaves the ratio; a `denied:true` row retried by the same session within
+# the window leaves it (the retry counts instead) while an unretried denial
+# stays a miss; an `enforce_skipped` row is a real miss.
 floor=$(mktemp)
 cat > "$floor" <<'EOF'
 {"ts":"2026-09-13T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":true,"body_chars":312,"session":"s1"}
@@ -438,8 +387,7 @@ assert_contains "excluded 1 boundaries under the floor (20 chars for git-commit,
   "body floor: one line under the table names the excluded count and the per-boundary floors"
 assert_contains "excluded 1 denied attempts retried within 480m" "$trig" \
   "body floor: retried denials are reported on their own, not as misses"
-# The floor named is the one in force. A global override is read with the
-# same guard the hook applies: numeric, else the defaults.
+# The floor named is the one in force, read with the hook's own guard.
 out=$(DELEGATE_BOUNDARY_MIN_CHARS=80 bash "$SCRIPT" --file "$floor" 2>&1)
 assert_contains "under 80 chars" "$out" "body floor: the line reads a numeric DELEGATE_BOUNDARY_MIN_CHARS"
 out=$(DELEGATE_BOUNDARY_MIN_CHARS=lots bash "$SCRIPT" --file "$floor" 2>&1)
@@ -451,11 +399,7 @@ assert_contains "opportunities=6  delegated=2  missed=4  rate=33%" "$out" \
   "body floor: a denial retried outside DELEGATE_BOUNDARY_WINDOW_MIN counts as a miss"
 rm -f "$floor"
 # 12e-ii. A retry is a later row that is itself a counted post: a denial
-# followed by a below-floor one-liner, or by a retry-cap post (an undrafted
-# post the cap let through), is not "retried" — it stays the miss it is
-# (third review round on PR #484). Fixture: s1 denied then posted a
-# below-floor row; s2 denied then hit the retry cap; s3 denied then posted a
-# real retry. Only s3's denial leaves the ratio.
+# followed by a below-floor or retry-cap row stays a miss.
 notretry=$(mktemp)
 cat > "$notretry" <<'EOF'
 {"ts":"2026-09-13T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s1"}
@@ -472,11 +416,8 @@ assert_contains "opportunities=4  delegated=1  missed=3  rate=25%" "$trig" \
 assert_contains "excluded 1 denied attempts retried" "$trig" \
   "retry: only the denial followed by a real post is excluded"
 rm -f "$notretry"
-# 12e-iii. The retry has to be the SAME repo's boundary, and "later" is append
-# order, not a strictly greater second (fourth review round on PR #484).
-# Matching on session alone let a later commit in another repo erase this
-# repo's denial, and `epoch >` on second-precision timestamps counted a
-# denial and its redraft in the same second as both a miss and a hit.
+# 12e-iii. The retry must be the same repo's boundary, and "later" is append
+# order, not a strictly greater second.
 xrepo=$(mktemp)
 cat > "$xrepo" <<'EOF'
 {"ts":"2026-09-13T10:01:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s1"}
@@ -492,8 +433,8 @@ assert_contains "alpha                 opportunities=1  delegated=0  missed=1  r
   "retry: a later commit in another repo does not erase this repo's denial"
 assert_contains "gamma                 opportunities=1  delegated=1  missed=0  rate=100%" "$trig" \
   "retry: a denial and its redraft in the same second count once"
-# A row appended later but stamped EARLIER (clock skew, a merged file) is
-# not a retry: the window has a lower bound of zero (fifth round).
+# A row appended later but stamped earlier is not a retry: the window has a
+# lower bound of zero.
 assert_contains "delta                 opportunities=2  delegated=1  missed=1  rate=50%" "$trig" \
   "retry: a later-appended row with an earlier timestamp does not satisfy the window"
 assert_contains "excluded 1 denied attempts retried" "$trig" \
@@ -512,12 +453,8 @@ case "$out" in
 esac
 rm -f "$opp2"
 
-# 12d. The per-project DELEGATE section carries the same projectless rows
-# (#476): delegate.sh records no project outside a repository, so they are
-# current and deliberate, not a legacy artefact. Same label and same
-# placement as the trigger-rate section — `(no project)`, after the named
-# projects, never count-ranked above one. Fixture: alpha has 1 delegation,
-# the projectless bucket 2.
+# 12d. The per-project delegate section lists projectless rows the same way
+# (#476): `(no project)`, after the named projects, never count-ranked above one.
 noprojdel=$(mktemp)
 cat > "$noprojdel" <<'EOF'
 {"ts":"2026-06-08T10:00:00Z","source":"delegate","project":"alpha","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -538,11 +475,9 @@ assert_contains "(no project)" "$(grep -v '^$' <<<"$perproj" | tail -1)" \
   "no-project delegations: listed after the named projects, not ranked by count"
 rm -f "$noprojdel"
 
-# 16. One verdict tier (ADR 0030). Fixture: 4 commit-message recipe
-# delegations — D1 HIT on a legacy row with no verdict_source, D2 HIT and D3
-# MISS tagged agent, D4 untracked. Every feedback row is the signal: hits=2,
-# misses=1, untracked=1, coverage=75%, and neither the `agent=` column nor the
-# "Agent-observed (usage, not quality)" line ADR 0015 printed exists any more.
+# 16. One verdict tier (ADR 0030): every feedback row counts whether or not
+# it carries verdict_source, and the ADR 0015 agent= column and
+# "usage, not quality" line are gone.
 agenttier=$(mktemp)
 cat > "$agenttier" <<'EOF'
 {"ts":"2026-06-14T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -596,19 +531,16 @@ assert_eq 0 "$EC" "legacy rows: exits 0"
 assert_contains "Recipe delegations (calibration signal): n=1  hits=1  misses=0  untracked=0  coverage=100%" "$out" "legacy rows: line shape unchanged"
 rm -f "$noagent"
 
-# 17. --since window: restricts every section to rows at or after the cutoff.
-# Fixture spans three dates; --since 2026-06-15 keeps the last two.
+# 17. --since restricts every section to rows at or after the cutoff.
 windowfix=$(mktemp)
 cat > "$windowfix" <<'EOF'
 {"ts":"2026-01-01T08:00:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
 {"ts":"2026-06-15T08:00:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":200}
 {"ts":"2026-06-16T08:00:00Z","source":"delegate","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":300}
 EOF
-# Baseline (no window): all 3 rows.
 out=$(bash "$SCRIPT" --file "$windowfix" 2>&1)
 assert_contains "Total invocations:   3" "$out" "window: no flag -> all 3 rows"
 case "$out" in *"Window:"*) echo "  FAIL  window: no Window line without a flag"; fail=$((fail+1));; *) echo "  PASS  window: no Window line without a flag"; pass=$((pass+1));; esac
-# --since DATE form: 2026-06-15 keeps the 06-15 and 06-16 rows.
 EC=0
 out=$(bash "$SCRIPT" --file "$windowfix" --since 2026-06-15 2>&1) || EC=$?
 assert_eq 0 "$EC" "window: --since exits 0"
@@ -616,19 +548,17 @@ assert_contains "Window:              since 2026-06-15T00:00:00Z  (2 of 3 rows)"
 assert_contains "Total invocations:   2" "$out" "window: --since drops the pre-cutoff row"
 assert_contains "Tokens avoided (≈):  500" "$out" "window: --since tokens summed over window only"
 assert_contains "Time range:          2026-06-15T08:00:00Z" "$out" "window: --since first ts is in-window"
-# --since full ISO timestamp form: keeps only the 06-16 row.
 out=$(bash "$SCRIPT" --file "$windowfix" --since 2026-06-16T00:00:00Z 2>&1)
 assert_contains "Total invocations:   1" "$out" "window: --since ISO timestamp keeps one row"
 assert_contains "Tokens avoided (≈):  300" "$out" "window: --since ISO tokens over one row"
-# Window that matches nothing -> exit 0 with an explicit note (not the empty-file note).
+# An empty window gets its own note, not the empty-file one.
 EC=0
 out=$(bash "$SCRIPT" --file "$windowfix" --since 2030-01-01 2>&1) || EC=$?
 assert_eq 0 "$EC" "window: empty window exits 0"
 assert_contains "no rows in window" "$out" "window: empty window gives a windowed note, not 'empty file'"
 rm -f "$windowfix"
 
-# 18. --days window: relative to now. Build one row ~now and one ~100 days old;
-# --days 30 keeps only the recent one.
+# 18. --days is relative to now.
 now_s=$(date -u +%s)
 recent_ts=$(jq -rn --argjson n "$now_s" '$n | todateiso8601')
 old_ts=$(jq -rn --argjson n "$now_s" '($n - 100 * 86400) | todateiso8601')
@@ -657,8 +587,7 @@ assert_eq 2 "$EC" "window: non-integer --days -> exit 2"
 assert_contains "positive integer" "$out" "window: --days integer message"
 EC=0; out=$(bash "$SCRIPT" --file "$vfix" --days 0 2>&1) || EC=$?
 assert_eq 2 "$EC" "window: --days 0 -> exit 2"
-# Value-taking flags with no following value exit 2 cleanly — under set -u this
-# would otherwise crash with 'unbound variable' (gemini/Copilot HIGH on PR #312).
+# A value-taking flag with no value exits 2 rather than faulting under set -u.
 for flag in --file --since --days; do
   EC=0; out=$(bash "$SCRIPT" "$flag" 2>&1) || EC=$?
   assert_eq 2 "$EC" "window: $flag with no value -> exit 2 (not unbound-var crash)"
@@ -666,13 +595,8 @@ for flag in --file --since --days; do
 done
 rm -f "$vfix"
 
-# 20. Scaffold verdict (supervised-draft-delegation G1). A third outcome
-# distinct from hit and miss: a discarded-but-useful draft. It must report as
-# its own count in the calibration sections, must NOT be folded into hits or
-# misses, and a scaffold-covered delegation counts toward coverage. Fixture:
-# 4 code-draft recipe delegations — D1 human HIT, D2 human MISS, D3 human
-# SCAFFOLD, D4 untracked. Expected: hits=1 misses=1 scaffold=1 untracked=1,
-# coverage=75% (3 of 4 covered).
+# 20. A scaffold verdict is its own count, not folded into hits or misses,
+# and counts toward coverage.
 scaf=$(mktemp)
 cat > "$scaf" <<'EOF'
 {"ts":"2026-06-22T10:00:00Z","source":"delegate","recipe":"code-draft","tier":"code","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -688,18 +612,15 @@ out=$(bash "$SCRIPT" --file "$scaf" 2>&1) || EC=$?
 assert_eq 0 "$EC" "scaffold: exits 0"
 assert_contains "Delegation feedback (hit/miss/scaffold):" "$out" "scaffold: section header is self-describing when scaffold rows present"
 assert_contains "Recipe delegations (calibration signal): n=4  hits=1  misses=1  scaffold=1  untracked=1  coverage=75%" "$out" "scaffold: headline reports scaffold as its own count, not folded into hits/misses"
-# Per-tier row carries the scaffold column.
 code_tier_line=$(printf '%s\n' "$out" | grep -E "^    code" | tail -1)
 assert_contains "scaffold=1" "$code_tier_line" "scaffold: per-tier row carries scaffold column"
 assert_contains "hits=1" "$code_tier_line" "scaffold: per-tier hits unchanged by scaffold"
 assert_contains "misses=1" "$code_tier_line" "scaffold: per-tier misses excludes the scaffold"
-# Per-recipe row carries the scaffold column.
 recipe_line=$(printf '%s\n' "$out" | grep -E "^  code-draft" | tail -1)
 assert_contains "scaffold=1" "$recipe_line" "scaffold: per-recipe row carries scaffold column"
 rm -f "$scaf"
 
-# 20b. Negative gate: a fixture with hit/miss but NO scaffold row must NOT
-# print any `scaffold=` column — legacy output stays byte-for-byte as before.
+# 20b. Without a scaffold row no `scaffold=` column prints.
 noscaf=$(mktemp)
 cat > "$noscaf" <<'EOF'
 {"ts":"2026-06-22T10:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -720,8 +641,7 @@ esac
 assert_contains "Recipe delegations (calibration signal): n=1  hits=1  misses=0  untracked=0  coverage=100%" "$out" "no-scaffold: legacy line shape unchanged"
 rm -f "$noscaf"
 
-# 20c. A tagged scaffold beside an untagged hit: one tier, so the scaffold
-# counts in the headline scaffold column and the hit in hits.
+# 20c. A tagged scaffold beside an untagged hit: one tier, both count.
 agentscaf=$(mktemp)
 cat > "$agentscaf" <<'EOF'
 {"ts":"2026-06-22T11:00:00Z","source":"delegate","recipe":"code-draft","tier":"code","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
@@ -735,11 +655,8 @@ assert_eq 0 "$EC" "agent-scaffold: exits 0"
 assert_contains "Recipe delegations (calibration signal): n=2  hits=1  misses=0  scaffold=1  untracked=0  coverage=100%" "$out" "agent-scaffold: a tagged scaffold counts in the headline scaffold column"
 rm -f "$agentscaf"
 
-# Tokens-avoided decomposition (#412). estimated_tokens_avoided is written on
-# every row including failures and rewritten drafts, so the bare headline reads
-# as a saving when much of it is not. The headline itself is deliberately
-# unchanged (the cross-source assertion above pins that); the qualification is
-# printed beneath it.
+# Tokens-avoided decomposition (#412): the headline is unchanged and the
+# qualification prints beneath it.
 decomp=$(mktemp)
 cat > "$decomp" <<'EOF'
 {"ts":"2026-04-29T08:00:00Z","source":"delegate","tier":"prose","exit_status":0,"estimated_tokens_avoided":1000}
@@ -754,24 +671,19 @@ cat > "$decomp" <<'EOF'
 {"ts":"2026-04-29T09:03:00Z","source":"feedback","ref_ts":"2026-04-29T08:03:00Z","kept":true}
 EOF
 out=$(bash "$SCRIPT" --file "$decomp" 2>&1)
-# 1000+200+300+400+77+55 = 2032, unchanged and still cross-source.
+# The sub-lines (55 + 77 + 1900) reconcile to the headline exactly.
 assert_contains "Tokens avoided (≈):  2032" "$out" "decomposition: headline is unchanged and still cross-source"
 assert_contains "excluded: experiment rows       tokens≈55  n=1" "$out" "decomposition: experiment rows excluded"
 assert_contains "excluded: failed delegations    tokens≈77  n=1" "$out" "decomposition: failed calls excluded"
 assert_contains "successful delegations          tokens≈1900  n=4" "$out" "decomposition: successful subtotal"
-# 55 + 77 + 1900 = 2032: the sub-lines reconcile to the headline exactly.
-# 1000 (tagged hit) + 400 (untagged legacy hit) — one tier, so both land in
-# the same bucket.
+# One tier: the tagged and the untagged hit land in the same bucket.
 assert_contains "shipped as-is     tokens≈1400  73.7%  n=2" "$out" "decomposition: tagged and untagged hits both count as shipped"
 assert_contains "rewritten         tokens≈200  10.5%  n=1" "$out" "decomposition: miss is rewritten"
 assert_contains "used as scaffold  tokens≈300  15.8%  n=1" "$out" "decomposition: scaffold is its own bucket"
-# The 400-token row carries an untagged legacy verdict. Filing it under "no
-# verdict" would be the exact mislabel this section exists to remove.
 assert_contains "no verdict        tokens≈0  0.0%  n=0" "$out" "decomposition: an untagged verdict is not 'no verdict'"
 rm -f "$decomp"
 
-# A delegation carrying several verdicts is counted once, under its LAST.
-# Iterating feedback rows instead would add the parent's tokens per verdict.
+# A delegation with several verdicts is counted once, under its last.
 multi=$(mktemp)
 cat > "$multi" <<'EOF'
 {"ts":"2026-04-29T08:00:00Z","source":"delegate","tier":"prose","exit_status":0,"estimated_tokens_avoided":500}
@@ -784,34 +696,28 @@ assert_contains "rewritten         tokens≈500  100.0%  n=1" "$out" "multi-verd
 assert_contains "shipped as-is     tokens≈0  0.0%  n=0" "$out" "multi-verdict: superseded verdict does not double-count"
 rm -f "$multi"
 
-# A row with no `source` field is a delegation (metrics-summary treats a missing
-# source as delegate); filtering on .source=="delegate" would drop it and the
-# buckets would stop reconciling with the headline.
+# A row with no `source` field is a delegation, so the buckets still reconcile.
 nosrc=$(mktemp)
 printf '%s\n' '{"ts":"2026-04-29T08:00:00Z","tier":"prose","exit_status":0,"estimated_tokens_avoided":640}' > "$nosrc"
 out=$(bash "$SCRIPT" --file "$nosrc" 2>&1)
 assert_contains "successful delegations          tokens≈640  n=1" "$out" "sourceless row counts as a delegation"
 rm -f "$nosrc"
 
-# No feedback at all: the whole successful total is unverdicted rather than the
-# section vanishing. The existing feedback rollup sits inside `if n_feedback > 0`,
-# which is why this block needs its own pass.
+# No feedback at all: the successful total is unverdicted, the section still prints.
 nofb=$(mktemp)
 printf '%s\n' '{"ts":"2026-04-29T08:00:00Z","source":"delegate","tier":"prose","exit_status":0,"estimated_tokens_avoided":800}' > "$nofb"
 out=$(bash "$SCRIPT" --file "$nofb" 2>&1)
 assert_contains "no verdict        tokens≈800  100.0%  n=1" "$out" "no feedback: all tokens report as unverdicted"
 rm -f "$nofb"
 
-# Every delegation failed: jq's `[] | add` is null and `n / 0` aborts the whole
-# program with exit 5, so both are guarded.
+# Every delegation failed: jq's `[] | add` is null and `n / 0` aborts with exit 5.
 allfail=$(mktemp)
 printf '%s\n' '{"ts":"2026-04-29T08:00:00Z","source":"delegate","tier":"prose","exit_status":3,"estimated_tokens_avoided":90}' > "$allfail"
 EC=0
 out=$(bash "$SCRIPT" --file "$allfail" 2>&1) || EC=$?
 assert_eq 0 "$EC" "all-failed file: exits 0"
 assert_contains "successful delegations          tokens≈0  n=0" "$out" "all-failed file: reports 0, not null"
-# Scoped to this block's own lines: `p50=nullms` in Per-source is a pre-existing
-# null of the same class in a different section, out of scope here.
+# Scoped to the decomposition lines; Per-source has its own null of the same class.
 decomp_lines=$(printf '%s\n' "$out" | grep -E '^  (excluded|successful)|^    ' || true)
 case "$decomp_lines" in
   *null*) assert_eq "no null" "null printed" "all-failed file: no null in the decomposition" ;;
@@ -819,10 +725,8 @@ case "$decomp_lines" in
 esac
 rm -f "$allfail"
 
-# A file whose delegate rows carry no estimated_tokens_avoided made `add`
-# return null, which @tsv renders as an empty field — and because tab is IFS
-# whitespace, bash read collapsed the double-tab and shifted every later column
-# left, so errors/delegate/experiment were all wrong at once with no error.
+# Rows with no estimated_tokens_avoided: a null sum renders as an empty @tsv
+# field, and bash read collapses the double tab and shifts the later columns.
 shift_fx=$(mktemp)
 cat > "$shift_fx" <<'EOF'
 {"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","exit_status":0}
@@ -850,11 +754,8 @@ cat > "$sf" <<'EOF'
 {"ts":"2026-06-01T10:07:00Z","source":"feedback","ref_ts":"2026-06-01T09:03:00Z","kept":false}
 EOF
 out=$(bash "$SCRIPT" --file "$sf" 2>&1)
-# ADR 0015 printed an "Agent self-flattery" line here, comparing the agent's
-# hits against a human verdict on the same delegation. With one tier there is
-# nothing to compare against; the pairs above are revisions, and the later
-# verdict wins: 09:00 miss, 09:01 hit, 09:02 miss. 09:03 has no recipe and
-# lives in the Raw block.
+# One tier: no ADR 0015 self-flattery line, the pairs are revisions and the
+# later verdict wins; 09:03 has no recipe and lives in the Raw block.
 case "$out" in
   *"self-flattery"*) assert_eq "absent" "present" "one tier: no self-flattery comparison line" ;;
   *)                 assert_eq "absent" "absent"  "one tier: no self-flattery comparison line" ;;
@@ -863,10 +764,8 @@ assert_contains "Recipe delegations (calibration signal): n=3  hits=1  misses=2 
   "one tier: a tagged/untagged pair on one delegation resolves to the later verdict"
 rm -f "$sf"
 
-# A feedback row with no ref_ts (and no ref_id) cannot be joined to anything.
-# The verdict map used to index by .ref_ts without a null guard in three of
-# its four passes, so one such row aborted the jq and the whole section
-# vanished while the script exited 0. Two projects so Per-project prints too.
+# A feedback row with no ref_ts and no ref_id joins nothing and must not
+# abort the jq. Two projects so Per-project prints too.
 nullref=$(mktemp)
 cat > "$nullref" <<'EOF'
 {"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","project":"a","exit_status":0,"estimated_tokens_avoided":100}
@@ -887,10 +786,8 @@ case "$out" in
 esac
 rm -f "$nullref"
 
-# Join by ref_id first, ref_ts second (#481). Two delegations share a second;
-# a verdict pinned by --id carries ref_id, and must land on its own row only.
-# A legacy feedback row (ref_ts, no ref_id) still joins by ts — and on a shared
-# second still reaches both siblings, which is the best a row with no id can do.
+# Join by ref_id first, ref_ts second (#481): a --id verdict lands on its own
+# row only; a ref_ts-only row on a shared second reaches both siblings.
 sib=$(mktemp)
 cat > "$sib" <<'EOF'
 {"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","project":"p","exit_status":0,"estimated_tokens_avoided":100,"otel_span_id":"aaaa000000000001"}
@@ -919,12 +816,8 @@ assert_contains "Recipe delegations (calibration signal): n=2  hits=2  misses=0 
   "ref_id join: a legacy ref_ts-only verdict on a shared second still reaches both siblings"
 rm -f "$sib2"
 
-# Captured-pair coverage (#461 follow-up). The two ways a rejection acquires its
-# shipped half are not interchangeable — `--final` needs the caller to remember,
-# the boundary hook infers it from a credited post — so the line splits them.
-# `inferred=0` is the whole reason it exists: the hook capture shipped in #457
-# and did not fire once for eleven days, and the field simply being absent from
-# every row was indistinguishable from having no reply traffic at all.
+# Captured-pair coverage (#461) splits hook-inferred finals from hand-supplied
+# ones: `inferred=0` is what a hook capture that never fires looks like.
 cp=$(mktemp)
 cat > "$cp" <<'EOF'
 {"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0}
@@ -941,8 +834,7 @@ assert_contains "Captured pairs (rejections with the shipped text stored): n=2/3
   "captured pairs: inferred and hand-supplied are counted apart, and a kept row is not a rejection"
 rm -f "$cp"
 
-# The absent case is the one that mattered: every final hand-supplied reads as
-# inferred=0, which is a claim about the hook rather than a missing field.
+# Every final hand-supplied reads as inferred=0, a claim about the hook.
 cp2=$(mktemp)
 cat > "$cp2" <<'EOF'
 {"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0}

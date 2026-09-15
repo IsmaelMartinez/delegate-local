@@ -54,12 +54,8 @@ EC=0; out=$(bash "$SCRIPT" --file "$tmp/m.jsonl" --bogus 2>&1) || EC=$?
 assert_eq 2 "$EC" "unknown argument exits 2"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# A seeded corpus with the three shapes the bundle has to render: a rejection
-# with a captured draft/final pair, a rejection with NEITHER captured (the
-# common case today, and the one that exposed the field-shift bug), and a kept
-# delegation that must not appear in the rejection list at all.
-# ---------------------------------------------------------------------------
+# --- A seeded corpus with the three shapes the bundle renders: a rejection
+# with a draft/final pair, a rejection with neither, and a kept delegation ---
 seed() {
   local dir="$1" t1 t2 t3
   t1=$(iso_ago 3600); t2=$(iso_ago 1800); t3=$(iso_ago 600)
@@ -103,10 +99,8 @@ assert_contains "usable=50%" "$out" "per-recipe section computes a usable rate"
 # 6. Deterministic check failures are clustered by recipe and name.
 assert_contains "commit-message: no_padding_tail × 1" "$out" "check failures cluster by recipe and check name"
 
-# 7. The rejection with an empty draft_file/final_file still renders its
-# verdict and reason. This is the regression guard for the field-shift bug:
-# a tab-separated record read with IFS=$'\t' collapses the two empty fields
-# and silently shifts verdict and reason out of the record.
+# 7. A rejection with empty draft_file/final_file still renders verdict and
+# reason: IFS=$'\t' collapses adjacent empty fields and shifts the record.
 assert_contains "[rewrote]" "$out" "rejection with no captured files still shows its verdict"
 assert_contains "two paragraphs against a one-sentence house style" "$out" \
   "rejection with no captured files still shows its reason"
@@ -116,9 +110,7 @@ assert_contains "(not captured)" "$out" "uncaptured draft is reported as such"
 rejections=$(printf '%s\n' "$out" | sed -n '/rejected drafts/,/capture coverage/p')
 assert_not_contains "[kept]" "$rejections" "kept delegations are excluded from the rejection list"
 
-# 9. The draft/final pair produces the objective diff. DROPPED is the signal
-# the free-text reason cannot give: which specific anchors the human had to
-# put back.
+# 9. The draft/final pair produces the objective diff (DROPPED anchors).
 assert_contains "DROPPED" "$out" "captured pair yields a DROPPED list"
 assert_contains "src/main.js" "$out" "DROPPED names the anchor the draft omitted"
 assert_contains "#2632" "$out" "DROPPED names the issue reference the draft omitted"
@@ -173,13 +165,8 @@ out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jso
 assert_contains "tab here and newline there" "$out" "control characters in a reason are flattened, not framed"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# One verdict tier (ADR 0030). ADR 0015 split the tally into a human "quality"
-# line and an agent "usage" line, and this script printed `h=` on every
-# per-recipe row to say how much of it was human judgment — a count that was
-# zero everywhere. The tally now quotes one keep rate from every row, tagged
-# or not, and neither the tier lines nor the h= column exist.
-# ---------------------------------------------------------------------------
+# --- One verdict tier (ADR 0030): one keep rate from every row, no tier
+# lines and no h= column ---
 tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
 t1=$(iso_ago 3600); t2=$(iso_ago 1800); t3=$(iso_ago 900)
 cat > "$tmp/m.jsonl" <<EOF
@@ -196,9 +183,7 @@ assert_contains "Verdicts on those delegations: n=3  kept=1  scaffold=1  rewrote
 assert_not_contains "human (quality)" "$out" "one tier: no human tier line"
 assert_not_contains "agent (usage)" "$out" "one tier: no agent usage line"
 assert_not_contains "no keep rate to quote" "$out" "one tier: the keep rate is quoted"
-# Ranking is on kept+scaffold. Two of the three commit-message drafts were used
-# (one kept, one edited and shipped), so the row must read 66%, not the 33% a
-# kept-only rate would give.
+# Ranking is on kept+scaffold: 66%, not the 33% a kept-only rate would give.
 recipe_row=$(printf '%s\n' "$out" | grep -E '^  commit-message')
 assert_contains "n=3  kept=1  scaffold=1  rewrote=1  usable=66%" "$recipe_row" \
   "one tier: the per-recipe rate counts scaffolded drafts as used"
@@ -231,12 +216,7 @@ assert_not_contains "usable=" "$(printf '%s\n' "$out" | grep -F 'Verdicts on tho
   "one tier: no rate is quoted over zero verdicts"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# A revised verdict counts once, under its latest. The tally and the per-recipe
-# ranking used to count raw feedback rows, so kept:false then kept:true on one
-# delegation read `n=2 usable=50%` while metrics-summary.sh printed `n=1
-# hits=1` for the same file.
-# ---------------------------------------------------------------------------
+# --- A revised verdict counts once, under its latest, as metrics-summary.sh counts it ---
 tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
 r1=$(iso_ago 3600)
 cat > "$tmp/m.jsonl" <<EOF
@@ -251,14 +231,9 @@ assert_contains "  commit-message  n=1  kept=1  scaffold=0  rewrote=0  usable=10
   "revision: the per-recipe row counts the delegation once, under its latest verdict"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# Join by ref_id first, ref_ts second (#481). Two delegations share a second;
-# the verdict names the FIRST by ref_id. INDEX(.ts) kept the second, so the
-# rejection was filed under the wrong recipe and project and its draft
-# fallback pointed at the sibling's file. There is nothing ambiguous about a
-# ref_id row, so the AMBIGUOUS warning stays quiet; a ref_ts-only row on a
-# shared second is still ambiguous and still says so.
-# ---------------------------------------------------------------------------
+# --- Join by ref_id first, ref_ts second (#481): a ref_id verdict on a shared
+# second lands on its own row with no AMBIGUOUS warning; a ref_ts-only one
+# still warns ---
 tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
 st=$(iso_ago 600)
 cat > "$tmp/m.jsonl" <<EOF
@@ -286,12 +261,8 @@ out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tm
 assert_contains "AMBIGUOUS: 1 verdict(s)" "$out" "ref_id join: a ref_ts-only verdict on a shared second is flagged"
 rm -rf "$tmp"
 
-# A feedback row with neither ref_id nor ref_ts references nothing, and is
-# skipped everywhere, as metrics-summary.sh skips it: it cannot be attributed
-# to a recipe, paired with a draft, or counted against a delegation. Two of
-# them, so that the skip is a skip and not a collapse — keyed on the empty
-# reference they would have shared one pkey and INDEX would have kept one,
-# counting "a verdict" that nobody recorded on anything.
+# A feedback row with neither ref_id nor ref_ts is skipped everywhere. Two
+# of them, so a skip is not a collapse onto one shared empty key.
 tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
 o1=$(iso_ago 600)
 cat > "$tmp/m.jsonl" <<EOF
@@ -311,16 +282,9 @@ assert_contains "rejections=0" "$out" "orphan: capture coverage does not count u
 assert_not_contains "jq: error" "$out" "orphan: no jq error leaks into the bundle"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# 12. CUT vs INVENTED. A salient token present in the draft and absent from the
-# shipped text has two causes that need opposite responses, and calling both
-# INVENTED made the loop's own instrument report a hallucination on the most
-# common rejection shape there is: the human cutting clauses for length.
-#
-# Its own fixture rather than an extension of seed(): the counts asserted
-# above (delegation total, verdict tally, capture coverage) are regression
-# guards, and growing the shared corpus would have moved all four.
-# ---------------------------------------------------------------------------
+# --- 12. CUT vs INVENTED: a token in the draft and absent from the shipped
+# text is a cut for length unless something new replaced it. Its own fixture,
+# since growing seed() would move the counts asserted above ---
 tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
 c1=$(iso_ago 900); c2=$(iso_ago 600)
 cat > "$tmp/m.jsonl" <<EOF
@@ -372,10 +336,7 @@ assert_contains "DROPPED" "$replacement" \
   "the replacement pair still reports what the human had to put back"
 assert_not_contains "CUT" "$replacement" "a replacement is not labelled CUT"
 
-# 12c. A shipped text LONGER than the draft, where the human still put nothing
-# back, is CUT and not INVENTED. Invention is a claim that something was WRONG
-# and had to be replaced; a longer result with no new salient token is prose
-# added around material that was removed, which is no evidence of that at all.
+# 12c. A longer shipped text with no new salient token is still CUT, not INVENTED.
 cat > "$tmp/drafts/C1.final.txt" <<'EOF'
 fix: widen the tier scan in delegate.sh
 
@@ -393,12 +354,8 @@ assert_contains "CUT" "$longer" \
   "an expansion that puts nothing back is still a removal"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# A final the boundary hook inferred from the post is labelled as such. The
-# hook runs BEFORE the post, so it stores what was about to go out rather than
-# what demonstrably did, and the maintainer reading the bundle should be able
-# to tell the two apart. One the caller passed with --final carries no label.
-# ---------------------------------------------------------------------------
+# --- A final the boundary hook inferred is labelled as such (the hook runs
+# before the post); one passed with --final carries no label ---
 tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
 ft=$(iso_ago 600)
 cat > "$tmp/m.jsonl" <<EOF
@@ -421,13 +378,9 @@ assert_contains "trimmed it" "$out" \
   "the unlabelled row still shows its reason"
 rm -rf "$tmp"
 
-# ---------------------------------------------------------------------------
-# A numbered final (`<stem>.final.2.txt`, written when the stem already had
-# one — #474) still pairs with its own draft by name. Two delegations share
-# the second here, so the INDEX(.ts) fallback would hand back the OTHER
-# delegation's draft; only the final's own name says which draft it belongs
-# to.
-# ---------------------------------------------------------------------------
+# --- A numbered final (`<stem>.final.2.txt`, #474) pairs with its own draft
+# by name; two delegations share the second so a ts fallback would pick the
+# wrong draft ---
 tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
 nt=$(iso_ago 600)
 cat > "$tmp/m.jsonl" <<EOF

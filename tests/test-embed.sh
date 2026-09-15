@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/embed.sh.
-# Mocks `curl` — used by pick-model.sh for discovery and by embed.sh to call
-# {base}/embeddings — on a restricted PATH so the test runs the same
-# everywhere.
+# Unit tests for scripts/embed.sh. Mocks `curl` on a restricted PATH.
 
 set -u
 
@@ -29,9 +26,8 @@ assert_not_contains() {
   else echo "  FAIL  $name (contained '$needle' but should not)"; fail=$((fail+1)); fi
 }
 
-# The id list every mock curl serves from GET {base}/models. pick-model.sh
-# resolves the embedding tier over HTTP now, so a test that needs resolution
-# to fail sets this to something the tier does not prefer.
+# The id list every mock curl serves from GET {base}/models; a test that
+# needs resolution to fail sets it to something the tier does not prefer.
 MOCK_MODELS='nomic-embed-text:latest'
 mock_models_json() {
   local out="" id
@@ -43,13 +39,8 @@ mock_models_json() {
 }
 
 make_mock_curl_ok() {
-  # Mock curl that drains stdin, optionally records the JSON payload to a
-  # sniff file, and writes a canned embedding response either to stdout or
-  # to the -o file. Returns a 4-dim vector to keep the test deterministic
-  # and to make the .embeddings[0] | length check trivially 4. $3 optionally
-  # records curl's own argv as one space-joined line, so a test can assert on
-  # the flags embed.sh passes ("--max-time 60" as a phrase) rather than on
-  # the payload it sends.
+  # Drains stdin, records the payload to $2 and the space-joined argv to $3,
+  # and answers with a canned 4-dim vector on stdout or the -o file.
   local dir="$1" sniff="${2:-/dev/null}" argv_sniff="${3:-/dev/null}"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
@@ -111,9 +102,7 @@ EC=0
 out=$(env -i PATH="$SAFE_PATH" HOME="$HOME" bash "$SCRIPT" --text 2>&1) || EC=$?
 assert_eq 2 "$EC" "--text without value -> exit 2"
 
-# 4. Happy path via stdin: tier resolves, curl returns canned vector,
-# output is a one-line JSON array on stdout, metrics row written with
-# the right fields.
+# 4. Happy path via stdin: one-line JSON array on stdout, metrics row written.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
@@ -137,9 +126,8 @@ line=$(cat "$metrics")
 assert_contains '"source":"embed"' "$line" "metrics: source=embed"
 assert_contains '"tier":"embedding"' "$line" "metrics: tier=embedding"
 assert_contains '"model":"nomic-embed-text:latest"' "$line" "metrics: model field"
-# The mock answers every provider, so the first entry of the default list
-# wins and the label is derived from its URL. The case that matters — a
-# different winner produces a different label — is the pinned test below.
+# The mock answers every provider, so the first default entry wins and the
+# label follows its URL (a different winner is test 17).
 assert_contains '"backend":"mlx"' "$line" "metrics: backend derived from the winning provider"
 assert_contains '"input_chars":11' "$line" "metrics: input_chars counted (len('hello world')=11)"
 assert_contains '"embedding_dim":4' "$line" "metrics: embedding_dim parsed from response"
@@ -312,9 +300,7 @@ assert_eq 0 "$EC" "jq round-trip: exit 0"
 assert_eq "4" "$parsed" "jq round-trip: vector length = 4"
 rm -rf "$tmp" "$metrics"
 
-# 17. Pinning the list changes both the endpoint and the metrics label: the
-# embedding tier is no longer wired to one daemon, so the label has to follow
-# the provider that actually answered.
+# 17. Pinning the list changes both the endpoint and the metrics label.
 tmp=$(mktemp -d)
 argv_sniff="$tmp/argv.txt"
 make_mock_curl_ok "$tmp" "/dev/null" "$argv_sniff"

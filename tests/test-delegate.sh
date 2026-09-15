@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/delegate.sh.
-# Mocks `curl` on a restricted PATH — used by pick-model.sh for provider
-# discovery and by delegate.sh for dispatch — so the test runs the same
-# everywhere, including on a machine with a live model server.
+# Unit tests for scripts/delegate.sh. Mocks `curl` on a restricted PATH so the
+# run is the same on a machine with a live model server.
 
 set -u
 
@@ -24,11 +22,10 @@ assert_contains() {
   else echo "  FAIL  $name (missing '$needle')"; fail=$((fail+1)); fi
 }
 
-# Every mock curl below answers GET {base}/models from this list: resolution
-# now happens over HTTP for every provider, so a mock that only knew the
-# dispatch call would fail to resolve a tier — or hang, because the discovery
-# request carries no stdin. A test that needs a different model resolved sets
-# MOCK_MODELS before building its mock and restores it afterwards.
+# Every mock curl answers GET {base}/models from this list: a mock that only
+# knew the dispatch call would fail to resolve a tier, or hang because the
+# discovery request carries no stdin. Tests set MOCK_MODELS before building a
+# mock and restore it afterwards.
 MOCK_MODELS='qwen3.6:35b-a3b'
 mock_models_json() {
   local out="" id
@@ -57,20 +54,10 @@ EOF
 }
 
 make_mock_curl_ok() {
-  # Mock curl: drain stdin (so the pipeline closes cleanly), copy the JSON
-  # payload to a sniff file if requested, then emit a canned JSON response.
-  # The /v1/models arm answers provider discovery with $MOCK_MODELS, so the
-  # tier resolves against the mock rather than against whatever the host
-  # happens to be running.
-  #
-  # #170: delegate.sh now invokes the dispatch curl with `-o body_file -w
-  # "%{time_starttransfer}"` so it can capture time-to-first-byte and split
-  # duration_ms into queue_wait_ms + generation_ms. The mock parses -o /
-  # -w out of argv: with -o the canned response goes to the named file
-  # (the body curl would normally write to stdout); with -w the mock emits
-  # a synthetic TTFB on stdout (0.001 seconds → 1 queue_wait_ms after
-  # awk-rounding). Without -o / -w (older callers), the canned response
-  # still goes to stdout for back-compat.
+  # Drains stdin, copies the JSON payload to a sniff file if asked, answers
+  # discovery with $MOCK_MODELS, and honours the -o body_file / -w
+  # "%{time_starttransfer}" pair delegate.sh uses for TTFB (a synthetic 0.001s
+  # becomes queue_wait_ms=1).
   local dir="$1" sniff="${2:-/dev/null}"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
@@ -103,11 +90,8 @@ EOF
 }
 
 make_mock_curl_fail() {
-  # Mock curl that exits non-zero (HTTP error or connection refused). #170:
-  # the dispatch now uses `-o body_file -w "%{time_starttransfer}"`; on a
-  # failure the body file stays empty and no TTFB is emitted, so the mock
-  # exits before writing anything. delegate.sh handles the empty-ttfb_s
-  # case by defaulting queue_wait_ms = 0 (and generation_ms = duration_ms).
+  # Exits non-zero before writing a body or a TTFB, as a refused connection
+  # does; delegate.sh must then default queue_wait_ms to 0.
   local dir="$1"
   cat > "$dir/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -125,10 +109,8 @@ EOF
 }
 
 make_mock_curl_think() {
-  # Mock curl whose Ollama .response carries a <think>...</think> reasoning
-  # trace before the answer, to exercise DELEGATE_STRIP_THINK. $2 is the
-  # JSON-escaped .response value (use \n for newlines). Mirrors
-  # make_mock_curl_ok's -o / -w / probe handling.
+  # Like make_mock_curl_ok but the content is $2, a JSON-escaped string (use
+  # \n for newlines), for the <think> stripping tests.
   local dir="$1" resp="$2"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
@@ -159,11 +141,8 @@ EOF
 }
 
 make_mock_curl_argv() {
-  # Mock curl that records its own argv to $2 as one space-joined line, then
-  # behaves like make_mock_curl_ok. Lets a test assert on the flags
-  # delegate.sh passes rather than on the payload it sends. Space-joined so a
-  # test can assert the flag and its value together ("--max-time 600") rather
-  # than matching a bare "600" that any other argument could satisfy.
+  # Records its own argv to $2 as one space-joined line (so a test can assert
+  # "--max-time 600" as a unit), then behaves like make_mock_curl_ok.
   local dir="$1" argv_file="$2"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
@@ -229,11 +208,8 @@ if [[ -s "$sniff" ]]; then
   assert_contains '"model":"qwen3.6:35b-a3b"' "$payload" "payload: model field"
   assert_contains '"enable_thinking":false' "$payload" "payload: enable_thinking:false default"
   assert_contains '"stream":false' "$payload" "payload: stream:false"
-  # Default sampling is greedy for ALL models (Qwen3 included) since the
-  # T4 A/B in 2026-05-22-track-a-qwen-sampling-ab.md found the Alibaba-
-  # recommended profile regresses commit-message output. Env vars opt INTO
-  # non-greedy sampling — bare invocation must have bare temperature:0 and
-  # NO top_p/top_k/presence_penalty.
+  # A bare call is greedy for every model: temperature:0 and no
+  # top_p/top_k/presence_penalty; env vars opt in to sampling.
   assert_contains '"temperature":0' "$payload" "payload: bare greedy temperature:0"
   case "$payload" in
     *'"top_p"'*) echo "  FAIL  payload: bare greedy must NOT carry top_p"; fail=$((fail+1));;
@@ -250,9 +226,7 @@ if [[ -s "$sniff" ]]; then
 else
   echo "  FAIL  payload sniff: file empty"; fail=$((fail+1))
 fi
-# Bare greedy invocation must NOT write any sampling_* keys to the metrics
-# row (back-compat with pre-Phase-13 rows). Env-var opt-in adds them; absent
-# any env var the row carries no sampling fields.
+# A bare call writes no sampling_* keys to the row.
 case "$line" in
   *'"sampling_temperature"'*) echo "  FAIL  metrics: bare greedy must omit sampling_temperature"; fail=$((fail+1));;
   *) echo "  PASS  metrics: bare greedy omits sampling_temperature"; pass=$((pass+1));;
@@ -281,9 +255,8 @@ fi
 rm -rf "$tmp"
 
 # 4. pick-model failure (no matching model served) is reflected in metrics +
-# exit. The mock serves a model no tier prefers rather than serving nothing:
-# without a curl mock at all, the real curl in SAFE_PATH would reach a live
-# daemon on the developer's machine and resolve a real model.
+# exit. The mock serves a model no tier prefers rather than nothing: without a
+# mock, the real curl would reach a live daemon and resolve a real model.
 tmp=$(mktemp -d)
 MOCK_MODELS='unrelated:model'
 make_mock_curl_models_only "$tmp"
@@ -356,10 +329,8 @@ fi
 assert_contains '"exit_status":7' "$(cat "$metrics")" "metrics: HTTP failure exit_status logged"
 rm -rf "$tmp" "$metrics"
 
-# 8. --recipe NAME loads prompts/NAME.md, extracts the '## Prompt template'
-# fenced block, and prepends it to the model input. Variable values
-# substituted via --var land inside {{key}} placeholders; the metrics line
-# carries a "recipe":"NAME" field for layer-2 telemetry.
+# 8. --recipe NAME prepends the '## Prompt template' fenced block of
+# prompts/NAME.md, substitutes --var values into {{key}}, and tags the row.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
@@ -580,10 +551,8 @@ assert_eq 2 "$EC" "--var without '=' -> exit 2"
 assert_contains "key=value" "$out" "--var: error mentions key=value form"
 rm -rf "$tmp" "$metrics"
 
-# 14a. --var key containing glob metacharacters is rejected. The key is
-# interpolated into a bash pattern replacement (`${tpl//\{\{$key\}\}/...}`),
-# so a non-identifier key would produce a malformed/overbroad substitution
-# instead of a literal {{key}} match — reject with a clear error instead.
+# 14a. --var key with glob metacharacters is rejected: the key goes into a
+# bash pattern replacement, where it would match wider than the literal {{key}}.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
@@ -643,10 +612,8 @@ assert_eq 0 "$EC" "--var with identifier key (underscore + digit): exits 0"
 assert_contains 'hello ok' "$(cat "$sniff")" "--var: identifier key substituted into payload"
 rm -rf "$tmp" "$metrics"
 
-# 15. --var value containing {{...}} (Vue/Angular bindings, Go templates,
-# logs with curly braces) must NOT trigger the unsubstituted-placeholder
-# guard. The guard checks the original template's placeholders, not the
-# post-substitution string, so substituted content can contain anything.
+# 15. A --var value containing {{...}} must not trip the unsubstituted-
+# placeholder guard, which checks the template's placeholders, not the result.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
@@ -676,9 +643,7 @@ assert_eq 0 "$EC" "--var with {{...}} content: exits 0 (no false-positive on sub
 assert_contains 'Hello {{name}}, your value is {{value}}' "$(cat "$sniff")" "--var with curly content: payload preserved verbatim"
 rm -rf "$tmp" "$metrics"
 
-# 16. Recipe with a markdown heading inside the fenced block must extract
-# the full block — the awk section-end check should not fire while inside
-# a code block.
+# 16. A markdown heading inside the fenced block must not end the section.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
@@ -714,8 +679,7 @@ assert_contains 'Inner heading one' "$payload" "--recipe: heading inside fence p
 assert_contains 'END_OF_TEMPLATE' "$payload" "--recipe: full block extracted past inner headings"
 rm -rf "$tmp" "$metrics"
 
-# 17. Recipe metric: prompt_chars includes the recipe template length so a
-# 2-char prompt arg doesn't under-report a multi-line recipe template.
+# 17. prompt_chars includes the recipe template length.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -735,8 +699,6 @@ AAAAAAAAAA
 ## Calibration notes
 n/a
 EOF
-# Template body is "AAAAAAAAAA" (10 chars; bash command substitution
-# strips the trailing newline from awk's output).
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
@@ -744,20 +706,15 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --recipe sized prose "go" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "--recipe metric: exits 0"
 line=$(cat "$metrics")
-# 10 (template "AAAAAAAAAA") + 2 (prompt "go") = 12
+# 10 (template, trailing newline stripped by command substitution) + 2 ("go").
 assert_contains '"prompt_chars":12' "$line" "--recipe metric: prompt_chars includes template length"
 rm -rf "$tmp" "$metrics"
 
-# 12. dispatches to /v1/chat/completions, parses
+# 12. MLX: dispatches to /v1/chat/completions, parses
 # .choices[0].message.content, and tags the metrics line with backend:"mlx".
 make_mock_curl_mlx_ok() {
-  # Mock curl that succeeds on both discovery (/v1/models) and the dispatch
-  # call (/v1/chat/completions — returns the chat-completions shape). The argv
-  # sniff captures the LAST curl invocation, which is always the dispatch
-  # (discovery runs first).
-  # #170: dispatch now uses `-o body_file -w "%{time_starttransfer}"`; the
-  # mock parses both and writes the body to the named file when present,
-  # while emitting a synthetic 1-ms TTFB to stdout via the -w format.
+  # Answers discovery and dispatch in the chat-completions shape. The argv
+  # sniff holds the last invocation, which is always the dispatch.
   local dir="$1" payload_sniff="${2:-/dev/null}" argv_sniff="${3:-/dev/null}"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
@@ -795,9 +752,8 @@ EOF
   chmod +x "$dir/curl"
 }
 
-# 12a. Happy path with MLX backend: fake HF hub, fake curl, assert dispatch.
+# 12a. Happy path with the MLX backend.
 tmp=$(mktemp -d)
-# Fake hub with a Qwen3.6 MLX model so prose tier resolves.
 payload_sniff="$tmp/payload.json"
 argv_sniff="$tmp/argv.txt"
 MOCK_MODELS='mlx-community/Qwen3.6-35B-A3B-Instruct-4bit'
@@ -814,10 +770,8 @@ line=$(cat "$metrics")
 assert_contains '"backend":"mlx"' "$line" "MLX metrics: backend field"
 assert_contains '"model":"mlx-community/Qwen3.6-35B-A3B-Instruct-4bit"' "$line" "MLX metrics: model field"
 assert_contains '"tier":"prose"' "$line" "MLX metrics: tier field"
-# Sniffed argv must contain the chat-completions endpoint, not /api/generate
-# or the raw /v1/completions endpoint (which bypasses the chat template and
-# produces whitespace-only output on instruction-tuned models — see ROADMAP
-# MLX backend track 2026-05-12).
+# Raw /v1/completions bypasses the chat template and returns whitespace on
+# instruction-tuned models.
 argv=$(cat "$argv_sniff")
 assert_contains "/v1/chat/completions" "$argv" "MLX dispatch hits /v1/chat/completions"
 case "$argv" in
@@ -828,16 +782,11 @@ case "$argv" in
   *"/v1/completions"*) echo "  FAIL  MLX dispatch must not hit raw /v1/completions"; fail=$((fail+1));;
   *) echo "  PASS  MLX dispatch does not hit raw /v1/completions"; pass=$((pass+1));;
 esac
-# Sniffed payload uses the chat-completions shape: a messages array with a
-# user-role entry, plus max_tokens, temperature:0, and
-# chat_template_kwargs.enable_thinking:false (mirroring Ollama's think:false
-# default so the response carries the answer in .content rather than the
-# reasoning trace in .reasoning).
+# enable_thinking:false mirrors Ollama's think:false so the answer lands in
+# .content rather than .reasoning.
 payload=$(cat "$payload_sniff")
 assert_contains '"model":"mlx-community/Qwen3.6-35B-A3B-Instruct-4bit"' "$payload" "MLX payload: model field"
 assert_contains '"max_tokens":' "$payload" "MLX payload: max_tokens (OpenAI shape)"
-# MLX bare invocation also stays greedy (default flipped 2026-05-23). Env
-# vars opt INTO sampling per call on either backend.
 assert_contains '"temperature":0' "$payload" "MLX payload: bare greedy temperature=0"
 case "$payload" in
   *'"top_p"'*) echo "  FAIL  MLX payload: bare greedy must NOT carry top_p"; fail=$((fail+1));;
@@ -892,10 +841,7 @@ assert_eq 0 "$EC" "DELEGATE_MAX_TOKENS override: exits 0"
 assert_contains '"max_tokens":16384' "$(cat "$payload_sniff")" "DELEGATE_MAX_TOKENS override flows into payload"
 rm -rf "$tmp" "$metrics"
 
-# 12f. DELEGATE_THINK=true on MLX flips chat_template_kwargs.enable_thinking
-# to true (the inverse mapping of Ollama's think field — Ollama's think:true
-# enables reasoning; MLX's enable_thinking:true does the same via the chat
-# template).
+# 12f. DELEGATE_THINK=true on MLX flips chat_template_kwargs.enable_thinking.
 tmp=$(mktemp -d)
 payload_sniff="$tmp/payload.json"
 make_mock_curl_mlx_ok "$tmp" "$payload_sniff"
@@ -909,11 +855,8 @@ assert_eq 0 "$EC" "DELEGATE_THINK=true on MLX: exits 0"
 assert_contains '"enable_thinking":true' "$(cat "$payload_sniff")" "DELEGATE_THINK=true flips enable_thinking on for MLX"
 rm -rf "$tmp" "$metrics"
 
-# 13. jq-based metrics line correctly escapes a model name with embedded
-# double quotes (regression: the prior printf %s implementation would have
-# emitted invalid JSON for such names). Ollama tag rules don't permit
-# quotes today, but pick-model returns whatever a provider reports, so
-# defending against future schema changes is cheap.
+# 13. A model name with an embedded double quote still yields valid JSON:
+# pick-model returns whatever a provider reports.
 tmp=$(mktemp -d)
 MOCK_MODELS='qwen3.6:35b"weird-name'
 make_mock_curl_ok "$tmp"
@@ -925,7 +868,6 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "jq-metrics: weird model name still exits 0"
 line=$(cat "$metrics")
-# The line must be valid JSON (jq -e would have failed under the old printf path).
 if echo "$line" | jq -e . >/dev/null 2>&1; then
   echo "  PASS  jq-metrics: line is valid JSON despite embedded quote in model"
   pass=$((pass+1))
@@ -934,15 +876,11 @@ else
   echo "        line: $line"
   fail=$((fail+1))
 fi
-# The decoded model field round-trips exactly.
 decoded_model=$(echo "$line" | jq -r '.model')
 assert_eq 'qwen3.6:35b"weird-name' "$decoded_model" "jq-metrics: model field decodes to original string"
 rm -rf "$tmp" "$metrics"
 
-# 14. Verdict nudge prints to stderr on a successful call. The nudge is the
-# 2026-05-18 intervention against the untracked-verdict gap (65% of prose
-# delegations carried no feedback row at that point). Captures stderr
-# separately from stdout so the assertion is unambiguous.
+# 14. Verdict nudge prints to stderr on a successful call.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -954,17 +892,14 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "verdict-nudge: happy path exits 0"
 stderr_content=$(cat "$stderr_file")
 assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge: prints to stderr on success"
-# The nudge is the only place most callers read the verdict contract, so it has
-# to name all three verdicts and --final. Coverage measured 2026-08-26: 2 of 47
-# rejections carried the shipped text, and the nudge mentioned neither.
+# The nudge is the only place most callers read the verdict contract, so it
+# names all three verdicts and --final.
 assert_contains "scaffold" "$stderr_content" "verdict-nudge: names the scaffold verdict"
 assert_contains "--final" "$stderr_content" "verdict-nudge: names --final so the pair gets captured"
 assert_contains "delegate-feedback.sh --source agent --id " "$stderr_content" "verdict-nudge: names --source agent and --id"
-# Each verdict is its own complete command on its own line, copied as printed.
-# `a | b | c` ran as a pipeline and `a, b or c` passed `hit,` as the verdict;
-# both were rejected by delegate-feedback.sh. The only placeholder left is
-# <reason>, which cannot be pre-filled, and the annotation after each command
-# is a shell comment so a whole-line copy still runs.
+# Each verdict is its own complete command on its own line: `a | b | c` runs
+# as a pipeline and `a, b or c` passes `hit,` as the verdict. The note after a
+# command is a shell comment so a whole-line copy still runs.
 nudge_cmds=$(printf '%s\n' "$stderr_content" | grep -F 'delegate-feedback.sh')
 assert_eq 3 "$(printf '%s\n' "$nudge_cmds" | grep -c '')" "verdict-nudge: three verdict commands, one per line"
 nudge_re='bash scripts/delegate-feedback\.sh --source agent --id [0-9a-f]{16} (scaffold "<reason>"|miss "<reason>"|hit)( +# [a-z -]+)?$'
@@ -981,8 +916,7 @@ case "$stderr_content" in
   *"drop --source"*|*"taste judgment"*) echo "  FAIL  verdict-nudge: no human-tier hand-off"; fail=$((fail+1));;
   *) echo "  PASS  verdict-nudge: no human-tier hand-off"; pass=$((pass+1));;
 esac
-# Nudge stays on stderr — stdout should hold only the model output, so
-# downstream pipes (e.g. `delegate.sh prose "..." | jq ...`) keep working.
+# stdout holds only the model output so downstream pipes keep working.
 if echo "$out" | grep -q "record verdict"; then
   echo "  FAIL  verdict-nudge: leaked into stdout"; fail=$((fail+1))
 else
@@ -990,34 +924,20 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 14a. Non-TTY caller still gets the nudge — pins the issue #149 fix in
-# place. A previous TTY-gate proposal (PR #140 / issue #139) would have
-# silenced the nudge whenever stderr wasn't a terminal, causing Agent SDK
-# tool calls, scheduled routines, and `2>logfile` redirects to all skip
-# verdict tracking. Lifetime coverage measured 47.8% under that gate. This
-# test invokes delegate.sh with stdin piped from a here-string and stderr
-# captured via a pipeline (both definitely non-TTY) and asserts the nudge
-# still lands. If a future PR re-introduces a `[[ -t 2 ]]` gate on the
-# verdict-nudge code path, this test fails loud.
+# 14a. A non-TTY caller still gets the nudge (#149): a `[[ -t 2 ]]` gate would
+# silence it for Agent SDK tool calls, routines and `2>logfile` redirects.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
-# Pipe stdin in (non-TTY), redirect stderr to a file via the shell (non-TTY).
-# Both file-descriptors are pipes/files, never terminals — exactly what an
-# Agent SDK `run_in_background` caller or a CI step sees.
 out=$(echo "some context" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge non-TTY: exits 0 with piped stdin and redirected stderr"
 stderr_content=$(cat "$stderr_file")
 assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge non-TTY: nudge still printed when neither stdin nor stderr is a TTY"
-# Belt-and-braces: also pipe stdout through `cat` so stdout is unambiguously
-# a pipe (the variable-capture path above already deattaches it from any
-# TTY, but a future test reader looking for "was stdout a pipe?" sees the
-# explicit pipeline here without having to know about command-substitution
-# semantics).
+# Also with stdout explicitly piped.
 EC=0
 piped=$(echo "ctx" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
@@ -1046,14 +966,10 @@ if echo "$stderr_content" | grep -q "record verdict"; then
 else
   echo "  PASS  verdict-nudge opt-out: silenced"; pass=$((pass+1))
 fi
-# Metrics row still written under opt-out (the opt-out targets nudge only,
-# not metrics — that's NO_METRICS).
 assert_eq 1 "$(grep -c '^' "$metrics")" "verdict-nudge opt-out: metrics row still written"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 16. NO_METRICS=1 also silences the nudge, because there's no metrics row
-# to point a verdict at. Without this guard the nudge would tell users to
-# record a verdict that delegate-feedback.sh would then reject as orphan.
+# 16. NO_METRICS=1 also silences the nudge: there is no row to verdict.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); rm -f "$metrics"
@@ -1072,8 +988,7 @@ else
 fi
 rm -rf "$tmp" "$stderr_file"
 
-# 17. Non-zero exit (pick-model failure) also silences the nudge — verdicts
-# on failed calls are meaningless because there's no model output to judge.
+# 17. A non-zero exit also silences the nudge: there is no output to judge.
 tmp=$(mktemp -d)
 MOCK_MODELS='unrelated:model'
 make_mock_curl_models_only "$tmp"
@@ -1093,18 +1008,10 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 17a. DELEGATE_LOCAL_VERDICT_NUDGE_FD=N redirects the nudge to fd N
-# instead of fd 2. Closes issue #139 (parallel-capture callers contaminating
-# stdout via 2>&1) without re-introducing the TTY-gate that the #149
-# reversal showed dropped lifetime verdict coverage from 82% interactive to
-# 47.8% lifetime. The recipe a parallel-capture caller wants is:
-#   DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 bash delegate.sh prose "X" \
-#     > out.txt 2>&1 3>>nudge.log
-# stdout+stderr go to out.txt unaffected; the nudge lands on nudge.log via
-# fd 3 so coverage tracking stays intact.
+# 17a. DELEGATE_LOCAL_VERDICT_NUDGE_FD=N redirects the nudge to fd N, for
+# callers that capture 2>&1 and want stderr clean (#139).
 
-# 17a-1. Happy path: fd 3 redirected to a file; nudge lands on the file, not
-# on fd 2.
+# 17a-1. fd 3 redirected to a file: nudge lands there, not on fd 2.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -1124,7 +1031,6 @@ else
   echo "  PASS  verdict-nudge FD=3: fd 2 stays clean"; pass=$((pass+1))
 fi
 assert_contains "delegate: record verdict" "$nudge_content" "verdict-nudge FD=3: nudge lands on fd 3"
-# Belt-and-braces: stdout still carries only the model output.
 if echo "$out" | grep -q "record verdict"; then
   echo "  FAIL  verdict-nudge FD=3: nudge leaked into stdout"; fail=$((fail+1))
 else
@@ -1132,11 +1038,9 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file" "$nudge_file"
 
-# 17a-2. fd 3 set but NOT redirected → silent write-failure. The call still
-# succeeds (the model output is on stdout, exit 0) but the nudge has nowhere
-# to go and the failed write is absorbed via `2>/dev/null` on the echo so
-# the gotcha-mode caller doesn't see "Bad file descriptor" noise back on
-# the fd 2 they were trying to keep clean.
+# 17a-2. fd 3 set but not redirected: the call still succeeds and the failed
+# write is absorbed, so no "Bad file descriptor" lands on the fd 2 the caller
+# wanted clean.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -1153,22 +1057,15 @@ if echo "$stderr_content" | grep -q "record verdict"; then
 else
   echo "  PASS  verdict-nudge FD=3 no redirect: fd 2 stays clean"; pass=$((pass+1))
 fi
-# The "Bad file descriptor" stderr from the failed write is suppressed by
-# the `2>/dev/null` redirect on the echo in delegate.sh — this assertion
-# pins that behaviour so a future refactor can't silently regress it.
 if echo "$stderr_content" | grep -qi "bad file descriptor"; then
   echo "  FAIL  verdict-nudge FD=3 no redirect: 'Bad file descriptor' leaked back to fd 2"; fail=$((fail+1))
 else
   echo "  PASS  verdict-nudge FD=3 no redirect: failed write absorbed silently"; pass=$((pass+1))
 fi
-# Metrics row was still written; coverage tracking against the JSONL surface
-# stays intact regardless of where the nudge landed.
 assert_eq 1 "$(grep -c '^' "$metrics")" "verdict-nudge FD=3 no redirect: metrics row still written"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 17a-3. FD=2 is the default-equivalent — back-compat check that explicitly
-# setting the env var to the default value behaves the same as leaving it
-# unset (the test in 14/14a covers unset; this pins the explicit-2 path).
+# 17a-3. An explicit FD=2 behaves like unset.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -1183,9 +1080,7 @@ stderr_content=$(cat "$stderr_file")
 assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge FD=2: nudge lands on fd 2 (back-compat)"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 17a-4. FD=1 is allowed — some callers may want the nudge inline with the
-# model output on stdout. Unusual but harmless; the validation accepts any
-# positive integer.
+# 17a-4. FD=1 is allowed: the nudge lands inline on stdout.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -1209,8 +1104,7 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 17a-5. FD=0 (stdin) is rejected — writing to stdin is nonsense, so a clear
-# error fires before the model is contacted. exit 2.
+# 17a-5. FD=0 is rejected with exit 2 before the model is contacted.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -1224,8 +1118,6 @@ assert_eq 2 "$EC" "verdict-nudge FD=0: exits 2 (stdin rejected)"
 stderr_content=$(cat "$stderr_file")
 assert_contains "DELEGATE_LOCAL_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=0: error names the env var"
 assert_contains "valid: 1-9" "$stderr_content" "verdict-nudge FD=0: error mentions the valid shape (1-9 single-digit range)"
-# No metrics row should have been written — validation fires before model
-# contact, so no delegation row exists to verdict against.
 if [[ -s "$metrics" ]]; then
   echo "  FAIL  verdict-nudge FD=0: metrics row written despite pre-flight rejection"; fail=$((fail+1))
 else
@@ -1248,11 +1140,7 @@ stderr_content=$(cat "$stderr_file")
 assert_contains "DELEGATE_LOCAL_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=foo: error names the env var"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 17a-7. FD=-1 (negative) is rejected. The regex `^[1-9]$` matches single-
-# digit positive integers only — the leading `-` makes the match fail,
-# same path as the non-numeric case but worth pinning explicitly because
-# a future relaxation of the regex (e.g. accidentally adding a `-?` to
-# handle "0 or negative") would silently break this.
+# 17a-7. FD=-1 (negative) is rejected.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -1265,11 +1153,8 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 2 "$EC" "verdict-nudge FD=-1: exits 2 (negative rejected)"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 17a-7b. FD=10 (multi-digit) is rejected. bash 3.2 — the project's
-# portability floor — does not reliably support `>&$N` for N>=10 because
-# the `{var}>file` form is bash 4+. Restricting validation to single
-# digits makes the failure mode loud (exit 2 here) instead of silent
-# (write fails at nudge time, absorbed by the 2>/dev/null guard).
+# 17a-7b. FD=10 (multi-digit) is rejected: bash 3.2 has no reliable `>&$N`
+# for N>=10, so the validation fails loud rather than the write failing silently.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -1284,8 +1169,7 @@ stderr_content=$(cat "$stderr_file")
 assert_contains "DELEGATE_LOCAL_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=10: error names the env var"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 17a-7c. FD=99 (larger multi-digit) is also rejected. Same reasoning as
-# 17a-7b — anchors the regex tightness against future relaxation.
+# 17a-7c. FD=99 is also rejected.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -1298,8 +1182,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 2 "$EC" "verdict-nudge FD=99: exits 2 (multi-digit rejected)"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 17a-8. FD set AND NO_VERDICT_NUDGE=1 → NO_VERDICT_NUDGE wins. Suppression
-# beats redirect.
+# 17a-8. FD set and NO_VERDICT_NUDGE=1: suppression beats redirect.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -1326,8 +1209,7 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file" "$nudge_file"
 
-# 17a-9. FD set AND NO_METRICS=1 → NO_METRICS wins (no metrics row → nothing
-# to verdict against, same as today's NO_METRICS behaviour).
+# 17a-9. FD set and NO_METRICS=1: no row, so no nudge.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); rm -f "$metrics"
@@ -1348,9 +1230,7 @@ else
 fi
 rm -rf "$tmp" "$stderr_file" "$nudge_file"
 
-# 17a-10. FD set on non-zero exit (pick-model failure) → no nudge. Same as
-# today's non-zero-exit behaviour; failed calls have no model output to
-# judge, so no verdict should be invited.
+# 17a-10. FD set on a non-zero exit: no nudge.
 tmp=$(mktemp -d)
 MOCK_MODELS='unrelated:model'
 make_mock_curl_models_only "$tmp"
@@ -1372,28 +1252,11 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file" "$nudge_file"
 
-# 18. Pre-flight canary on --recipe. Issue #110 documented stalls of 6–10
-# minutes when a 35B-class prose-tier model was hit with a recipe-shaped
-# prompt; the canary is a 1-token probe that fails loud before the input
-# investment is sunk. The probe is identified inside the mock by its
-# `"num_predict":1` (Ollama) or `"max_tokens":1` (MLX) signature; the real
-# dispatch uses different values so the mock can route the two responses
-# independently. Each canary test sets up a `--recipe` invocation against
-# a tiny prompts/ dir and asserts (a) the probe ran, (b) the dispatch
-# either followed or was skipped based on the canary outcome, and (c) the
-# metrics row + exit code reflect the right state.
-#
-# Helper: a curl mock that distinguishes discovery (/v1/models — returns the
-# model list), the pre-flight canary (1-token payload —
-# behaviour controlled by $4), and the real dispatch (everything else —
-# always returns the canned response). Each invocation logs `canary` or
-# `dispatch` to an invocations file so tests can count the dispatches.
+# 18. Pre-flight canary on --recipe (#110): a 1-token probe fails loud before
+# the input investment is sunk. The mock tells the canary from the dispatch by
+# its `"num_predict":1` / `"max_tokens":1` signature, behaves per $4 on the
+# canary, and logs `canary` or `dispatch` per invocation so tests can count.
 make_mock_curl_probe_aware() {
-  # #170: dispatch invocations now pass `-o body_file -w "%{time_starttransfer}"`;
-  # the mock parses both and routes the canned dispatch body into the file
-  # when -o is present, emitting a synthetic 1-ms TTFB on stdout via -w.
-  # Canary invocations don't use -o/-w (delegate.sh sends canary output to
-  # /dev/null) so their handling is unchanged.
   local dir="$1" sniff="${2:-/dev/null}" invocations_log="${3:-/dev/null}" canary_behaviour="${4:-ok}"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
@@ -1486,10 +1349,8 @@ canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
 dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
 assert_eq 1 "$canary_count" "canary success: probe was called exactly once"
 assert_eq 1 "$dispatch_count" "canary success: dispatch followed exactly once"
-# Sniff carries the dispatch payload — recipe template body must be in it.
 assert_contains 'CANARY-TEST TEMPLATE BODY' "$(cat "$sniff")" "canary success: dispatch carries recipe template"
-# Single metrics row with status:0 (the canary itself doesn't write a row
-# on success — only the final dispatch does).
+# The canary writes no row on success.
 lines=$(grep -c '^' "$metrics")
 assert_eq 1 "$lines" "canary success: one metrics row"
 assert_contains '"exit_status":0' "$(cat "$metrics")" "canary success: dispatch logged status:0"
@@ -1515,8 +1376,6 @@ canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
 dispatch_count=$(grep -c '^dispatch' "$invocations" 2>/dev/null) || dispatch_count=0
 assert_eq 1 "$canary_count" "canary timeout: probe was called"
 assert_eq 0 "$dispatch_count" "canary timeout: dispatch was NOT called"
-# Sniff was not overwritten by the canary (canary doesn't write the
-# sniff; only dispatch does).
 if [[ -s "$sniff" ]]; then
   echo "  FAIL  canary timeout: dispatch sniff should be empty"; fail=$((fail+1))
 else
@@ -1524,9 +1383,7 @@ else
 fi
 stderr_content=$(cat "$stderr_file")
 assert_contains "pre-flight canary" "$stderr_content" "canary timeout: stderr names the canary"
-# Cause-specific message — gemini-code-assist flagged that the original
-# wording attributed every failure to a timeout regardless of curl exit.
-# Exit 28 must now read "did not return within Ns (curl --max-time fired)".
+# The message names the cause for this curl exit, not "timeout" for every failure.
 assert_contains "did not return within 10s" "$stderr_content" "canary timeout: stderr names the timeout duration"
 assert_contains "curl --max-time fired" "$stderr_content" "canary timeout: stderr names the curl flag that fired"
 assert_contains "recipe='canary-recipe'" "$stderr_content" "canary timeout: stderr names recipe"
@@ -1534,7 +1391,6 @@ assert_contains "model='qwen3.6:35b-a3b'" "$stderr_content" "canary timeout: std
 assert_contains "DELEGATE_PREFLIGHT_TIMEOUT" "$stderr_content" "canary timeout: stderr suggests timeout override"
 assert_contains "DELEGATE_NO_PREFLIGHT=1" "$stderr_content" "canary timeout: stderr names the opt-out"
 assert_contains "hand-write" "$stderr_content" "canary timeout: stderr suggests hand-writing"
-# Metrics row tagged status:3 so audit-metrics can pivot on it later.
 lines=$(grep -c '^' "$metrics")
 assert_eq 1 "$lines" "canary timeout: one metrics row"
 metric_line=$(cat "$metrics")
@@ -1549,9 +1405,7 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 18c. DELEGATE_NO_PREFLIGHT=1 skips the canary entirely. With a canary
-# mock that would have timed out, the dispatch still runs (and the mock's
-# dispatch path returns success).
+# 18c. DELEGATE_NO_PREFLIGHT=1 skips the canary; the dispatch still runs.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -1591,11 +1445,9 @@ canary_count=$(grep -c '^canary' "$invocations" 2>/dev/null) || canary_count=0
 assert_eq 0 "$canary_count" "PREFLIGHT_TIMEOUT=0: probe was NOT called"
 rm -rf "$tmp" "$metrics"
 
-# 18e. DELEGATE_PREFLIGHT_TIMEOUT=N flows into curl's --max-time argv on
-# the canary call. Capture the canary's argv into a sniff file and assert.
+# 18e. DELEGATE_PREFLIGHT_TIMEOUT=N flows into the canary's --max-time.
 tmp=$(mktemp -d)
-# Custom mock that records the canary's argv specifically (not the
-# auto-probe's, not the dispatch's).
+# Records the canary's argv only.
 canary_argv="$tmp/canary-argv.txt"; : > "$canary_argv"
 cat > "$tmp/curl" <<EOF
 #!/usr/bin/env bash
@@ -1650,8 +1502,7 @@ assert_eq 0 "$EC" "PREFLIGHT_TIMEOUT=7: exits 0"
 assert_contains "--max-time 7" "$(cat "$canary_argv")" "PREFLIGHT_TIMEOUT=7 flows into curl --max-time"
 rm -rf "$tmp" "$metrics"
 
-# 18f. No --recipe → canary is skipped. A canary mock that would time out
-# does not affect bare delegations (the only call is the dispatch).
+# 18f. No --recipe: the canary is skipped.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -1668,9 +1519,8 @@ assert_eq 0 "$canary_count" "no --recipe: probe was NOT called"
 assert_eq 1 "$dispatch_count" "no --recipe: dispatch was called"
 rm -rf "$tmp" "$metrics"
 
-# 18g. MLX backend canary uses /v1/chat/completions with max_tokens:1.
-# The canary mock writes its payload to a separate sniff file so we can
-# assert against the MLX shape independently of the dispatch shape.
+# 18g. MLX canary uses /v1/chat/completions with max_tokens:1; the mock
+# sniffs the canary payload separately from the dispatch.
 tmp=$(mktemp -d)
 canary_payload_sniff="$tmp/canary-payload.json"; : > "$canary_payload_sniff"
 canary_argv_sniff="$tmp/canary-argv.txt"; : > "$canary_argv_sniff"
@@ -1737,9 +1587,8 @@ assert_contains '"content":"hi"' "$canary_payload" "MLX canary: minimal 'hi' con
 assert_contains '"enable_thinking":false' "$canary_payload" "MLX canary: enable_thinking:false (mirrors dispatch default)"
 rm -rf "$tmp" "$metrics"
 
-# names the right cause (backend daemon may be down) rather than the
-# generic timeout copy. Addresses gemini-code-assist's PR #129 review
-# concern that --fail conflates non-timeout failures with timeouts.
+# 18i. Canary connection refused (curl exit 7): exit 3 and stderr names that
+# cause rather than the timeout copy.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -1770,9 +1619,7 @@ esac
 assert_contains '"exit_status":3' "$(cat "$metrics")" "canary refused: metrics row tagged status:3"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 18j. Canary HTTP-error (curl --fail on 4xx, exit 22) → exit 3 + stderr
-# names the right cause (HTTP error, bad model name / invalid payload)
-# rather than the generic timeout copy. Same gemini-code-assist concern.
+# 18j. Canary HTTP error (curl exit 22): exit 3 and stderr names that cause.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -1802,11 +1649,8 @@ esac
 assert_contains '"exit_status":3' "$(cat "$metrics")" "canary http_error: metrics row tagged status:3"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 19. delegate-meta stderr line is the contract surface SKILL.md teaches
-# the assistant to read. On success, the line carries model / tier / backend
-# / tokens_local / duration_ms as space-separated key=value pairs. The test
-# captures stderr separately so the assertions are unambiguous against the
-# verdict nudge that also fires on the same path.
+# 19. The delegate-meta stderr line is the contract surface SKILL.md teaches
+# the assistant to read.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -1818,27 +1662,18 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "delegate-meta: happy path exits 0"
 stderr_content=$(cat "$stderr_file")
 assert_contains "delegate-meta:" "$stderr_content" "delegate-meta: line prefix on stderr"
-# String-typed fields are quoted so values containing spaces stay one
-# token; integer fields stay bare. Asserting the opening quote captures
-# the format contract that PR #133's gemini-code-assist review tightened.
+# String fields are quoted so values with spaces stay one token; integers stay bare.
 assert_contains 'model="qwen3.6:35b-a3b' "$stderr_content" "delegate-meta: model field (quoted)"
 assert_contains 'tier="prose"' "$stderr_content" "delegate-meta: tier field (quoted)"
 assert_contains 'backend="mlx"' "$stderr_content" "delegate-meta: backend field (quoted)"
 assert_contains "tokens_local=" "$stderr_content" "delegate-meta: tokens_local field (bare integer)"
 assert_contains "duration_ms=" "$stderr_content" "delegate-meta: duration_ms field (bare integer)"
-# Line is stderr-only — model output on stdout must NOT contain the meta marker.
 if echo "$out" | grep -q "delegate-meta:"; then
   echo "  FAIL  delegate-meta: leaked into stdout"; fail=$((fail+1))
 else
   echo "  PASS  delegate-meta: stdout unaffected"; pass=$((pass+1))
 fi
-# tokens_local matches the chars/4 formula across prompt + context + output.
-# Prompt "Summarise" is 9 chars; no context (stdin closed); output is the
-# mock's "mock-model-output: ok\n" which is 21 chars after the JSON-encoded
-# newline becomes literal. (9 + 0 + 21) / 4 = 7. Extract the value and
-# compare numerically rather than asserting a literal string so any future
-# adjustment to the mock output is caught as a clean mismatch rather than a
-# silent equality drift.
+# tokens_local is (prompt + context + output chars) / 4, compared numerically.
 meta_line=$(grep '^delegate-meta:' "$stderr_file")
 tokens_val=$(printf '%s' "$meta_line" | grep -oE 'tokens_local=[0-9]+' | cut -d= -f2)
 if [[ -n "$tokens_val" && "$tokens_val" =~ ^[0-9]+$ ]] && (( tokens_val >= 0 )); then
@@ -1850,14 +1685,9 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 19a. The meta line names the row it wrote, and the nudge hands that ts back
-# as the --ts argument (#474). Until then the staleness refusal in
-# delegate-feedback.sh told the caller to "pass --ts" for a value the caller
-# had never been shown, so nobody did, and every verdict landed on whichever
-# delegation was newest: 20 ref_ts carried two or more verdicts within three
-# weeks of the corpus reset. The value has to be the row's ts byte for byte —
-# a reformatted or re-read clock would match no row and send the caller
-# straight into the --ts refusal.
+# 19a. The meta line names the row it wrote so the nudge can hand the pin
+# back (#474). The value must be the row's ts byte for byte: a reformatted
+# or re-read clock matches no row.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -1873,9 +1703,8 @@ else
 fi
 meta_ts=$(grep '^delegate-meta:' "$stderr_file" | grep -oE 'ts="[^"]*"' | cut -d'"' -f2)
 assert_eq "$row_ts" "$meta_ts" "delegate-meta ts: ts field is the metrics row's ts, byte for byte"
-# ts is second-precision and parallel delegations share it, so the pin the
-# nudge hands out is the row's otel_span_id (16 hex, generated on every row
-# whether or not the exporter is on). ts stays on the meta line for humans.
+# ts is second-precision and parallel delegations share it, so the pin is the
+# row's otel_span_id (16 hex, generated on every row).
 row_id=$(jq -r '.otel_span_id' "$metrics")
 if [[ "$row_id" =~ ^[0-9a-f]{16}$ ]]; then
   echo "  PASS  delegate-meta id: the metrics row carries a 16-hex otel_span_id ($row_id)"; pass=$((pass+1))
@@ -1888,12 +1717,8 @@ assert_contains "--id $row_id " "$(grep 'record verdict' "$stderr_file")" \
   "verdict-nudge: the copyable command already carries --id with the row's span id"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 19c. A row that could not be appended is not a row. log_metric's append
-# used to fail silently (`>> ... 2>/dev/null || true`) while the meta line
-# and nudge went on naming a ts and id that matched nothing, sending the
-# caller into a --id refusal. A metrics path under a file cannot be created,
-# so the append fails; the call still succeeds, but names no row and does
-# not nudge for a verdict there is nothing to attach to.
+# 19c. A row that could not be appended is not a row: the call still
+# succeeds, but the meta line names no ts/id and nothing nudges for a verdict.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 stderr_file=$(mktemp)
@@ -1917,12 +1742,9 @@ else
 fi
 rm -rf "$tmp" "$stderr_file"
 
-# 19d. The delegate row is stamped with the Claude Code session id when the
-# environment carries one. The boundary and Stop hooks receive the same UUID
-# as `.session_id` in their payload, so a projectless boundary can be
-# credited only to a projectless delegation from the same session instead of
-# to any delegation on the machine (#476, #477). Same conditional shape as
-# `project`: present when set, absent when unset — never an empty string.
+# 19d. The row carries CLAUDE_CODE_SESSION_ID so the hooks can scope a
+# projectless lookup to the session (#476): present when set, absent when
+# unset, never an empty string.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -1962,10 +1784,8 @@ else
 fi
 rm -rf "$tmp" "$stderr_file"
 
-# 20. DELEGATE_LOCAL_NO_META=1 silences the meta line but the rest of
-# the delegation still runs (metrics row written, model output on stdout,
-# verdict nudge still fires — meta and nudge are independent surfaces with
-# independent opt-outs).
+# 20. DELEGATE_LOCAL_NO_META=1 silences the meta line only; the nudge and
+# the metrics row are unaffected.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -1982,14 +1802,11 @@ if echo "$stderr_content" | grep -q "delegate-meta:"; then
 else
   echo "  PASS  delegate-meta opt-out: silenced"; pass=$((pass+1))
 fi
-# Verdict nudge still fires — opt-out is meta-only.
 assert_contains "record verdict" "$stderr_content" "delegate-meta opt-out: verdict nudge unaffected"
-# Metrics row still written — opt-out is meta-only.
 assert_eq 1 "$(grep -c '^' "$metrics")" "delegate-meta opt-out: metrics row still written"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 21. Non-zero exit (pick-model failure) silences the meta line — counts
-# on a failed call would point at nothing, since there's no model output.
+# 21. A non-zero exit silences the meta line.
 tmp=$(mktemp -d)
 MOCK_MODELS='unrelated:model'
 make_mock_curl_models_only "$tmp"
@@ -2009,12 +1826,8 @@ else
 fi
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 22. --recipe NAME adds a `recipe=NAME` field to the meta line so the
-# assistant can mention which recipe routed the work ("Delegated via the
-# commit-message recipe to qwen3.6:35b — ~578 tokens kept local"). The
-# --recipe pre-flight canary (test 18) runs first; the dispatch path is
-# what emits the meta line, so use the probe-aware mock with `ok` so the
-# canary passes and dispatch runs through to the meta-line code path.
+# 22. --recipe NAME adds recipe=NAME to the meta line. The probe-aware mock
+# with `ok` lets the canary pass so the dispatch emits the line.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -2046,15 +1859,10 @@ assert_eq 0 "$EC" "delegate-meta with --recipe: exits 0"
 assert_contains 'recipe="meta-test"' "$(cat "$stderr_file")" "delegate-meta: recipe field present and quoted when --recipe used"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# 23. Stdin probe regression for #169. The original `[[ ! -t 0 ]]` check
-# returned true for unix-socket FDs (and other non-tty, non-pipe FDs) that
-# hold no data, then `cat` blocked forever on them — hit on 2026-05-22 by
-# Agent SDK callers running delegate.sh with `run_in_background:true`.
-# These tests pin the new `-p /dev/stdin || -s /dev/stdin` probe.
+# 23. Stdin probe (#169): `[[ ! -t 0 ]]` is true for an empty unix socket and
+# `cat` then blocks forever; the probe is `-p /dev/stdin || -s /dev/stdin`.
 
-# 23a. </dev/null redirect: not a pipe, holds no data — cat is skipped,
-# context_chars==0, no hang. This is the workaround the parallel agents
-# manually applied; the script now does it implicitly.
+# 23a. </dev/null: not a pipe, holds no data, so cat is skipped.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -2067,9 +1875,7 @@ assert_eq 0 "$EC" "stdin probe: </dev/null exits 0 (no hang)"
 assert_contains '"context_chars":0' "$(cat "$metrics")" "stdin probe: </dev/null skips cat (context_chars=0)"
 rm -rf "$tmp" "$metrics"
 
-# 23b. Real piped stdin still works — the fix must not break the documented
-# `echo data | delegate.sh ...` flow. Mirrors test 5 but with the explicit
-# perl-alarm wrapper to assert no-hang.
+# 23b. Piped stdin still works, under the perl alarm to assert no hang.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -2082,14 +1888,8 @@ assert_eq 0 "$EC" "stdin probe: piped data exits 0"
 assert_contains '"context_chars":10' "$(cat "$metrics")" "stdin probe: piped data captured (10 chars)"
 rm -rf "$tmp" "$metrics"
 
-# 23c. Socket-FD simulation — the actual bug-mode regression test. perl's
-# socketpair() gives a real AF_UNIX SOCK_STREAM pair; we hand one end to
-# delegate.sh as stdin and keep the other end open in a child process
-# without ever writing or closing it. Under the old `! -t 0` check, `cat`
-# would block waiting for an EOF that never arrives; under the new probe,
-# the script sees neither a pipe nor data and skips cat. The perl alarm
-# kills the run after 5s if the bug returns — exit 142 from a hang is a
-# clear regression signal versus exit 0 with context_chars=0 from the fix.
+# 23c. An empty AF_UNIX socket as stdin, the other end held open and never
+# written: the alarm exits 142 if cat blocks.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -2117,16 +1917,8 @@ assert_eq 0 "$EC" "stdin probe: empty unix socket exits 0 (no hang, #169 regress
 assert_contains '"context_chars":0' "$(cat "$metrics")" "stdin probe: empty unix socket skips cat (context_chars=0)"
 rm -rf "$tmp" "$metrics"
 
-# 24. Queue-wait / generation-time split (#170). On a successful delegation
-# the metrics row carries queue_wait_ms (time spent waiting for the Ollama
-# daemon to start streaming — surfaces concurrent-caller queueing under
-# parallel agents) and generation_ms (the actual model-generation slice),
-# while duration_ms remains the inclusive total so existing
-# metrics-summary.sh rollups still work. The mock's synthetic TTFB is
-# 0.001 s → 1 ms queue_wait_ms after awk-rounding, which is below most
-# real-world numbers but exercises the float→int conversion path and
-# proves the field shape end-to-end. The sum-equals-duration invariant
-# is the contract we promise downstream consumers (Phase 11 OTel).
+# 24. Queue-wait / generation split (#170): queue_wait_ms + generation_ms ==
+# duration_ms is the contract downstream consumers rely on.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -2136,15 +1928,9 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "queue-wait split: happy path exits 0"
 line=$(cat "$metrics")
-# Field presence — both new keys must be in the JSONL row.
 assert_contains '"queue_wait_ms":' "$line" "queue-wait split: queue_wait_ms field present"
 assert_contains '"generation_ms":' "$line" "queue-wait split: generation_ms field present"
-# Existing duration_ms field is preserved (rollups in metrics-summary.sh
-# read it; #170 promises not to break them).
 assert_contains '"duration_ms":' "$line" "queue-wait split: duration_ms field preserved"
-# Both new fields are integers (jq's @numeric output for --argjson, so the
-# JSON type is number; we additionally check the string match has no
-# decimal point inside the value).
 qwait_val=$(echo "$line" | jq -r '.queue_wait_ms')
 gen_val=$(echo "$line" | jq -r '.generation_ms')
 dur_val=$(echo "$line" | jq -r '.duration_ms')
@@ -2162,9 +1948,6 @@ else
   echo "  FAIL  queue-wait split: generation_ms not an integer ('$gen_val')"
   fail=$((fail+1))
 fi
-# Sum-equals-duration invariant — the two new fields together must equal
-# duration_ms (no rounding gap; both are derived from integer arithmetic
-# after the awk float→int conversion, so the math is exact).
 sum=$((qwait_val + gen_val))
 if [[ "$sum" == "$dur_val" ]]; then
   echo "  PASS  queue-wait split: queue_wait_ms + generation_ms == duration_ms ($qwait_val + $gen_val == $dur_val)"
@@ -2173,16 +1956,12 @@ else
   echo "  FAIL  queue-wait split: $qwait_val + $gen_val != $dur_val"
   fail=$((fail+1))
 fi
-# The mock emits time_starttransfer=0.001 (1 ms after rounding), so we
-# expect queue_wait_ms to be exactly 1 — exercising the float→int path
-# rather than the empty-string-falls-to-zero fallback.
+# Exactly 1 proves the float-to-int path ran, not the empty-string-to-zero fallback.
 assert_eq 1 "$qwait_val" "queue-wait split: synthetic 0.001s TTFB → 1 ms queue_wait_ms"
 rm -rf "$tmp" "$metrics"
 
-# 25. On a failed dispatch (HTTP error / connection refused), queue_wait_ms
-# defaults to 0 so the sum-equals-duration invariant still holds. The
-# split is meaningful only on success; on failure consumers can detect
-# "no split available" by queue_wait_ms == 0 alongside exit_status != 0.
+# 25. On a failed dispatch queue_wait_ms is 0 and generation_ms absorbs the
+# whole duration, so the sum invariant still holds.
 tmp=$(mktemp -d)
 make_mock_curl_fail "$tmp"
 metrics=$(mktemp); : > "$metrics"
@@ -2202,8 +1981,6 @@ qwait_val=$(echo "$line" | jq -r '.queue_wait_ms')
 gen_val=$(echo "$line" | jq -r '.generation_ms')
 dur_val=$(echo "$line" | jq -r '.duration_ms')
 assert_eq 0 "$qwait_val" "queue-wait split on failure: queue_wait_ms is 0"
-# generation_ms absorbs the whole duration on failure so the sum invariant
-# still holds — same shape downstream consumers can rely on.
 sum=$((qwait_val + gen_val))
 if [[ "$sum" == "$dur_val" ]]; then
   echo "  PASS  queue-wait split on failure: sum-equals-duration invariant holds ($qwait_val + $gen_val == $dur_val)"
@@ -2214,11 +1991,8 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
-# 26. Pick-model failure (no model installed) records queue_wait_ms = 0
-# and generation_ms = duration_ms — the failure happens before any HTTP
-# call so the queue/generation split is structurally undefined. The two
-# fields are emitted anyway so the JSON shape stays consistent across
-# success and failure rows.
+# 26. A pick-model failure still emits both fields (queue_wait_ms = 0) so
+# the row shape is the same on success and failure.
 tmp=$(mktemp -d)
 MOCK_MODELS='unrelated:model'
 make_mock_curl_models_only "$tmp"
@@ -2230,22 +2004,15 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 1 "$EC" "queue-wait split on pick-model failure: exit 1"
 line=$(cat "$metrics")
-# Both fields are still present even though the model never started — the
-# shape is the contract surface, missing fields would break Phase 11
-# OTel translation logic.
 assert_contains '"queue_wait_ms":' "$line" "queue-wait split on pick-model failure: queue_wait_ms still emitted"
 assert_contains '"generation_ms":' "$line" "queue-wait split on pick-model failure: generation_ms still emitted"
 assert_eq 0 "$(echo "$line" | jq -r '.queue_wait_ms')" "queue-wait split on pick-model failure: queue_wait_ms == 0"
 
-# 27. Pre-flight inputs: type validation (Phase 12 Track B, issue #161).
-# Optional frontmatter `inputs:` block declares flat key:type pairs that
-# delegate.sh validates before contacting the model. Supported types:
-# integer | string | integer? | string? (the `?` suffix means optional).
-# Lazy migration: recipes without a frontmatter inputs: block keep their
-# pre-existing behaviour, and undeclared --var keys pass through.
+# 27. Frontmatter `inputs:` (#161) declares key: integer|string with a `?`
+# suffix for optional, validated before the model is contacted; recipes
+# without the block keep their old behaviour.
 
-# Helper: write a recipe with optional frontmatter + inputs block. Body uses
-# {{key}} placeholders that --var will substitute.
+# Writes a recipe with the given frontmatter and {{pr_number}}/{{body}} placeholders.
 make_typed_recipe() {
   local path="$1" frontmatter="$2"
   cat > "$path" <<RECIPE
@@ -2324,9 +2091,8 @@ tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
-# Recipe declares anchor: string? as optional; body of template references
-# {{pr_number}} only so the missing --var anchor doesn't fail placeholder
-# substitution.
+# The template references {{pr_number}} only, so the missing anchor cannot
+# fail placeholder substitution.
 cat > "$prompts/typed-recipe.md" <<'RECIPE'
 ---
 inputs:
@@ -2359,10 +2125,8 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "inputs: optional --var missing → exits 0"
 rm -rf "$tmp" "$metrics"
 
-# 27d2. Optional input WITH a {{placeholder}} in the body, --var provided →
-# the value is substituted into the template. This is the override case the
-# explicit commit-message `type` lever relies on. The marker line collapses
-# to `override:spicy:end` so a single assert_contains proves substitution.
+# 27d2. An optional input with a placeholder in the body, --var provided:
+# the value is substituted.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
@@ -2403,11 +2167,8 @@ assert_eq 0 "$EC" "inputs: optional placeholder provided → exits 0"
 assert_contains 'override:spicy:end' "$(cat "$sniff")" "inputs: optional --var substituted into template"
 rm -rf "$tmp" "$metrics"
 
-# 27d3. Same recipe with the optional --var OMITTED → the {{flavour}}
-# placeholder is blanked rather than tripping the unsubstituted-placeholder
-# guard. The marker collapses to `override::end`, which the literal-placeholder
-# bug would have rendered as `override:{{flavour}}:end` — so a positive
-# assert_contains on `override::end` proves the blanking happened.
+# 27d3. The same recipe with the optional --var omitted: the placeholder is
+# blanked rather than tripping the unsubstituted-placeholder guard.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
@@ -2448,9 +2209,7 @@ assert_eq 0 "$EC" "inputs: optional placeholder omitted → exits 0 (blanked, no
 assert_contains 'override::end' "$(cat "$sniff")" "inputs: omitted optional placeholder collapsed to empty"
 rm -rf "$tmp" "$metrics"
 
-# 27e. Recipe without a frontmatter inputs: block → back-compat path, no
-# type-check runs. This is the lazy-migration safety net so existing recipes
-# work unchanged until they're touched for other reasons.
+# 27e. No inputs: block: no type check runs.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -2482,9 +2241,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "inputs: no inputs: block → exits 0 (back-compat)"
 rm -rf "$tmp" "$metrics"
 
-# 27f. Undeclared --var passes through untouched (lazy migration — strict
-# mode is deferred). A recipe declaring only `body: string` accepts a
-# caller-supplied --var extra=value without complaint.
+# 27f. An undeclared --var passes through untouched.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -2521,8 +2278,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "inputs: undeclared --var passes through → exits 0"
 rm -rf "$tmp" "$metrics"
 
-# 27g. Optional `integer?` --var present but invalid → exit 2 (the `?` only
-# affects whether it's required, not whether the type check applies).
+# 27g. An optional `integer?` that is present is still type-checked.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
@@ -2560,8 +2316,7 @@ assert_contains "age" "$out" "inputs: optional type error names key"
 assert_contains "integer" "$out" "inputs: optional type error names integer"
 rm -rf "$tmp" "$metrics"
 
-# 27h. Unsupported type in inputs: block → exit 2 (recipe authoring error).
-# Today only integer/string and their `?` forms are supported.
+# 27h. An unsupported type in inputs: is a recipe authoring error, exit 2.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
@@ -2635,9 +2390,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "inputs: negative integer accepted → exits 0"
 rm -rf "$tmp" "$metrics"
 
-# 27j. {{stdin}} satisfies a declared `stdin: string` input. Lets a recipe
-# require the piped context via the typed surface without forcing the
-# caller to pass it twice (--var + pipe).
+# 27j. Piped stdin satisfies a declared `stdin: string` input.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -2669,8 +2422,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "inputs: stdin: string satisfied by pipe → exits 0"
 rm -rf "$tmp" "$metrics"
 
-# 23k. stdin: integer type-checks the piped value. Numeric piped value
-# satisfies; non-numeric exits 2.
+# 23k. stdin: integer type-checks the piped value.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -2710,8 +2462,7 @@ assert_eq 2 "$EC" "inputs: stdin: integer rejects non-numeric pipe → exits 2"
 assert_contains "stdin expected type 'integer'" "$out" "inputs: stdin: integer error names the type"
 rm -rf "$tmp" "$metrics"
 
-# 23l. Missing-required error message has no trailing space (cosmetic
-# fix). Pin so a future refactor doesn't re-introduce the dangling space.
+# 23l. The missing-required error has no trailing space.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -2741,7 +2492,6 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_PROMPTS_DIR="$prompts" \
   bash -c 'bash "$0" --recipe required-foo prose "tail"' "$SCRIPT" 2>&1) || EC=$?
 assert_eq 2 "$EC" "inputs: missing required exits 2"
-# Capture just the first error line and assert no trailing space.
 first_line=$(printf '%s\n' "$out" | grep -F 'missing required inputs:' | head -1)
 if [[ "$first_line" == *' ' ]]; then
   echo "  FAIL  inputs: missing-required error has trailing whitespace"
@@ -2753,22 +2503,12 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
-# ---------------------------------------------------------------------------
-# Phase 11 Track A — OTLP/HTTP exporter (#134)
-# When DELEGATE_OTEL_ENDPOINT is set, delegate.sh POSTs one OTLP span per
-# invocation to that endpoint after the metrics row is written. The exporter
-# is off by default; failures never change exit status; payload shape matches
-# ADR 0007 / docs/otel-schema.md.
-# ---------------------------------------------------------------------------
+# --- OTLP/HTTP exporter (#134): off by default, one span per call when
+# DELEGATE_OTEL_ENDPOINT is set, failures never change the exit status,
+# payload per docs/otel-schema.md ---
 
-# Curl mock that distinguishes three call types by URL:
-#   - discovery (/v1/models)  — returns the model list
-#   - dispatch (/v1/chat/completions) — returns canned body
-#   - otel    (/v1/traces)    — captures body to $sniff_otel, returns 200
-# Each invocation appends one "ARGS: ..." line to $invocations_log and one
-# "OTEL_BODY: ..." line per OTel call so the test can count call types and
-# assert OTel payload shape. Forced-failure on the OTel POST is controlled
-# by $otel_behaviour: "ok" returns 0, "fail" returns 22.
+# Routes by URL: discovery, dispatch, or /v1/traces (body to $otel_sniff,
+# exit per $otel_behaviour); logs `otel`/`dispatch` per invocation.
 make_mock_curl_otel_aware() {
   local dir="$1" dispatch_sniff="${2:-/dev/null}" otel_sniff="${3:-/dev/null}" invocations_log="${4:-/dev/null}" otel_behaviour="${5:-ok}"
   cat > "$dir/curl" <<EOF
@@ -2818,9 +2558,7 @@ EOF
   chmod +x "$dir/curl"
 }
 
-# OT1. DELEGATE_OTEL_ENDPOINT unset → no OTLP POST attempted. The mock's
-# OTel path would never fire because the dispatch is the only http call
-# made (besides the auto-probe which exits 7).
+# OT1. DELEGATE_OTEL_ENDPOINT unset: no OTLP POST.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -2834,14 +2572,10 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "OT1: endpoint unset → exits 0"
 otel_count=$(grep -c '^otel' "$invocations" 2>/dev/null) || otel_count=0
 assert_eq 0 "$otel_count" "OT1: endpoint unset → zero OTel POSTs"
-# Metrics row still written (the exporter is opt-in, the JSONL is not).
 assert_eq 1 "$(grep -c '^' "$metrics")" "OT1: metrics row still written when exporter disabled"
 rm -rf "$tmp" "$metrics"
 
-# OT2. DELEGATE_OTEL_ENDPOINT set → exactly one OTLP POST per delegate call.
-# Asserts payload contains the spec's required gen_ai.* and delegate.*
-# attributes; the resourceSpans → scopeSpans → spans envelope; the span
-# kind/status; the traceId/spanId fields.
+# OT2. Endpoint set: exactly one OTLP POST, in the schema's shape.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -2856,14 +2590,12 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "OT2: endpoint set → exits 0"
 otel_count=$(grep -c '^otel' "$invocations" 2>/dev/null) || otel_count=0
 assert_eq 1 "$otel_count" "OT2: endpoint set → exactly one OTLP POST"
-# Shape assertions on the OTel body.
 otel_body=$(cat "$otel_sniff")
 assert_contains '"resourceSpans"' "$otel_body" "OT2: body has resourceSpans envelope"
 assert_contains '"scopeSpans"' "$otel_body" "OT2: body has scopeSpans"
 assert_contains '"spans"' "$otel_body" "OT2: body has spans array"
 assert_contains '"traceId":' "$otel_body" "OT2: body has traceId"
 assert_contains '"spanId":' "$otel_body" "OT2: body has spanId"
-# Validate it's actual JSON.
 if echo "$otel_body" | jq -e . >/dev/null 2>&1; then
   echo "  PASS  OT2: body parses as JSON"
   pass=$((pass+1))
@@ -2871,7 +2603,6 @@ else
   echo "  FAIL  OT2: body is not valid JSON"
   fail=$((fail+1))
 fi
-# Required gen_ai.* attributes per docs/otel-schema.md.
 assert_contains '"gen_ai.operation.name"' "$otel_body" "OT2: gen_ai.operation.name"
 assert_contains '"chat"' "$otel_body" "OT2: operation.name value is 'chat'"
 assert_contains '"gen_ai.provider.name"' "$otel_body" "OT2: gen_ai.provider.name"
@@ -2879,7 +2610,6 @@ assert_contains '"mlx"' "$otel_body" "OT2: provider.name value is 'mlx'"
 assert_contains '"gen_ai.request.model"' "$otel_body" "OT2: gen_ai.request.model"
 assert_contains '"qwen3.6:35b-a3b"' "$otel_body" "OT2: request.model is the resolved model"
 assert_contains '"gen_ai.request.temperature"' "$otel_body" "OT2: gen_ai.request.temperature"
-# Required delegate.* attributes per docs/otel-schema.md.
 assert_contains '"delegate.tier"' "$otel_body" "OT2: delegate.tier"
 assert_contains '"prose"' "$otel_body" "OT2: delegate.tier value is 'prose'"
 assert_contains '"delegate.prompt_chars"' "$otel_body" "OT2: delegate.prompt_chars"
@@ -2889,25 +2619,20 @@ assert_contains '"delegate.queue_wait_ms"' "$otel_body" "OT2: delegate.queue_wai
 assert_contains '"delegate.generation_ms"' "$otel_body" "OT2: delegate.generation_ms"
 assert_contains '"delegate.estimated_tokens_avoided"' "$otel_body" "OT2: delegate.estimated_tokens_avoided"
 assert_contains '"delegate.exit_status"' "$otel_body" "OT2: delegate.exit_status"
-# Span kind 3 = CLIENT per the schema doc.
 assert_contains '"kind":3' "$otel_body" "OT2: span kind=3 (CLIENT)"
-# Status code 1 = OK on a successful call.
 assert_contains '"status":{"code":1}' "$otel_body" "OT2: span status OK on exit 0"
-# resource.service.name attribute.
 assert_contains '"service.name"' "$otel_body" "OT2: resource has service.name"
 assert_contains '"delegate-local"' "$otel_body" "OT2: resource service.name value"
-# Metrics row carries the same trace/span IDs (cross-correlation enabler).
+# The metrics row carries the same trace/span ids, which is the linkage.
 metric_line=$(cat "$metrics")
 assert_contains '"otel_trace_id":"' "$metric_line" "OT2: metrics row has otel_trace_id"
 assert_contains '"otel_span_id":"' "$metric_line" "OT2: metrics row has otel_span_id"
-# Same IDs in the OTel body and the metrics row (the linkage is the whole point).
 trace_in_metrics=$(echo "$metric_line" | jq -r '.otel_trace_id')
 trace_in_otel=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].traceId')
 assert_eq "$trace_in_metrics" "$trace_in_otel" "OT2: trace_id matches between metrics row and OTel body"
 span_in_metrics=$(echo "$metric_line" | jq -r '.otel_span_id')
 span_in_otel=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].spanId')
 assert_eq "$span_in_metrics" "$span_in_otel" "OT2: span_id matches between metrics row and OTel body"
-# trace_id is 32 hex chars, span_id is 16 hex chars.
 if [[ "$trace_in_otel" =~ ^[0-9a-f]{32}$ ]]; then
   echo "  PASS  OT2: trace_id is 32 hex chars"
   pass=$((pass+1))
@@ -2922,8 +2647,7 @@ else
   echo "  FAIL  OT2: span_id is not 16 hex chars (got '$span_in_otel')"
   fail=$((fail+1))
 fi
-# Privacy assertion: ADR 0007's no-content rule means no prompt/output text
-# attributes are present, regardless of env-var settings.
+# No-content rule (ADR 0007): no prompt or output text on the span.
 case "$otel_body" in
   *'gen_ai.prompt'*)
     echo "  FAIL  OT2: body must not contain gen_ai.prompt (no-content rule)"
@@ -2944,9 +2668,7 @@ case "$otel_body" in
 esac
 rm -rf "$tmp" "$metrics"
 
-# OT3. OTel POST failure (curl exit non-zero) does NOT change delegate.sh's
-# exit status. The original prose response still lands on stdout. The
-# metrics JSONL row still gets written.
+# OT3. An OTel POST failure does not change the exit status, stdout or the row.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -2961,13 +2683,12 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "OT3: OTel HTTP error → delegate.sh STILL exits 0"
 assert_contains "mock-model-output: ok" "$out" "OT3: model output still reaches stdout"
 assert_eq 1 "$(grep -c '^' "$metrics")" "OT3: metrics row still written when OTel POST fails"
-# The OTel POST WAS attempted (we want failure to be silent, not skipped).
+# Silent, not skipped.
 otel_count=$(grep -c '^otel' "$invocations" 2>/dev/null) || otel_count=0
 assert_eq 1 "$otel_count" "OT3: OTel POST was attempted (one curl call to the endpoint)"
 rm -rf "$tmp" "$metrics"
 
-# OT4. OTel timeout (curl exit 28 from --max-time) also doesn't change exit
-# status. Same invariant as OT3 but exercises a different failure mode.
+# OT4. An OTel timeout (curl exit 28) does not change the exit status either.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -2983,8 +2704,7 @@ assert_eq 0 "$EC" "OT4: OTel timeout → delegate.sh STILL exits 0"
 assert_contains "mock-model-output: ok" "$out" "OT4: model output still reaches stdout"
 rm -rf "$tmp" "$metrics"
 
-# OT5. DELEGATE_OTEL_TIMEOUT=1 flows into curl's --max-time argv. Capture
-# the OTel curl invocation's args and assert --max-time 1.
+# OT5. DELEGATE_OTEL_TIMEOUT flows into the OTel curl's --max-time.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -3002,8 +2722,7 @@ otel_args_line=$(grep '^otel' "$invocations" | head -1)
 assert_contains "--max-time 1" "$otel_args_line" "OT5: --max-time 1 in OTel curl argv"
 rm -rf "$tmp" "$metrics"
 
-# OT6. DELEGATE_OTEL_HEADERS splits on comma and emits one -H per header.
-# This is the auth-pass-through path Grafana Cloud / Langfuse both use.
+# OT6. DELEGATE_OTEL_HEADERS splits on comma into one -H per header.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -3020,22 +2739,19 @@ assert_eq 0 "$EC" "OT6: headers → exits 0"
 otel_args_line=$(grep '^otel' "$invocations" | head -1)
 assert_contains "Authorization: Bearer x" "$otel_args_line" "OT6: first header in argv"
 assert_contains "X-Tenant: y" "$otel_args_line" "OT6: second header in argv"
-# Each header is preceded by -H so they're treated as separate flags.
 auth_h=$(echo "$otel_args_line" | grep -o "\-H Authorization" | head -1)
 tenant_h=$(echo "$otel_args_line" | grep -o "\-H X-Tenant" | head -1)
 assert_eq "-H Authorization" "$auth_h" "OT6: -H prefix on Authorization header"
 assert_eq "-H X-Tenant" "$tenant_h" "OT6: -H prefix on X-Tenant header"
 rm -rf "$tmp" "$metrics"
 
-# OT7. --recipe call emits delegate.recipe as a span attribute. Bare prose-
-# tier calls (OT2 above) explicitly omit the attribute per the schema.
+# OT7. A --recipe call emits delegate.recipe as a span attribute; a bare
+# call omits it.
 tmp=$(mktemp -d)
 sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
-# probe-aware mock that ALSO recognises the OTel endpoint. Compose by
-# layering: dispatch/probe path same as make_mock_curl_probe_aware (with
-# canary=ok), then add the /v1/traces branch.
+# Probe-aware mock (canary ok) that also answers /v1/traces.
 cat > "$tmp/curl" <<EOF
 #!/usr/bin/env bash
 url=""
@@ -3108,12 +2824,10 @@ assert_eq 0 "$EC" "OT7: recipe call → exits 0"
 otel_body=$(cat "$otel_sniff")
 assert_contains '"delegate.recipe"' "$otel_body" "OT7: recipe call → delegate.recipe attribute present"
 assert_contains '"otel-recipe"' "$otel_body" "OT7: delegate.recipe value matches recipe name"
-# Metrics row carries the recipe too.
 assert_contains '"recipe":"otel-recipe"' "$(cat "$metrics")" "OT7: metrics row carries recipe field"
 rm -rf "$tmp" "$metrics"
 
-# OT8. Pick-model failure → exit 1 still happens, OTel span is emitted with
-# status ERROR (code 2). The metrics row also has exit_status:1.
+# OT8. A pick-model failure still emits a span, with status ERROR (code 2).
 tmp=$(mktemp -d)
 MOCK_MODELS='unrelated:model'
 dispatch_sniff="$tmp/dispatch.json"
@@ -3135,8 +2849,7 @@ assert_contains '"status":{"code":2}' "$otel_body" "OT8: span status ERROR (code
 assert_contains '"delegate.exit_status"' "$otel_body" "OT8: exit_status attribute present on failure span"
 rm -rf "$tmp" "$metrics"
 
-# OT9. DELEGATE_OTEL_VERBOSE=1 + failing endpoint → stderr names the failure.
-# Default (verbose unset) is silent — caller doesn't see the error.
+# OT9. DELEGATE_OTEL_VERBOSE=1 names an export failure on stderr.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -3155,9 +2868,7 @@ stderr_content=$(cat "$stderr_file")
 assert_contains "OTLP export failed" "$stderr_content" "OT9: verbose logs failure to stderr"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# OT10. Default (verbose unset) + failing endpoint → no OTLP-error mention
-# on stderr. Pin the silent-by-default behaviour so a future change doesn't
-# accidentally spam the caller's tool output.
+# OT10. With verbose unset an export failure is silent.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -3182,11 +2893,8 @@ case "$stderr_content" in
 esac
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# OT11. Always-emit metrics IDs: trace_id / span_id are written to the
-# JSONL row even when DELEGATE_OTEL_ENDPOINT is unset. This is what lets
-# delegate-feedback.sh emit a linked feedback span even on rows where the
-# original delegation didn't export (e.g. exporter was turned on between
-# the delegation and the verdict).
+# OT11. trace_id / span_id are written to the row even with the exporter
+# unset, so a later feedback span can still link to it.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -3200,13 +2908,8 @@ assert_contains '"otel_trace_id":"' "$line" "OT11: metrics row carries otel_trac
 assert_contains '"otel_span_id":"' "$line" "OT11: metrics row carries otel_span_id even with exporter unset"
 rm -rf "$tmp" "$metrics"
 
-# OT12. DELEGATE_OTEL_HEADERS url-decodes header values per the OTel SDK
-# convention, so a header value carrying a literal comma (encoded as %2C)
-# round-trips to the on-wire header without fragmenting the comma-split.
-# This is the self-review correctness gap caught during PR #182 review:
-# unencoded `Cookie: a=1, b=2` would fragment into two malformed -H flags;
-# the documented fix is for callers to url-encode the value (`a%3D1%2C%20b%3D2`)
-# and rely on the script to decode it before emitting -H.
+# OT12. DELEGATE_OTEL_HEADERS url-decodes values (OTel SDK convention), so a
+# comma encoded as %2C survives the comma split between headers.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -3214,7 +2917,6 @@ invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
 metrics=$(mktemp)
 EC=0
-# `a%3D1%2C%20b%3D2` decodes to `a=1, b=2` — a literal comma in the value.
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
@@ -3222,25 +2924,15 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "OT12: url-encoded comma in header → exits 0"
 otel_args_line=$(grep '^otel' "$invocations" | head -1)
-# The decoded value must contain the literal `,` and `=` — proving the
-# perl url-decode ran and the comma was NOT mistaken for a header
-# separator. The X-Tenant header following the comma in the env var
-# must also still be present, proving the script's split is on the
-# OUTER comma (between header pairs) and the inner %2C was preserved.
 assert_contains "Cookie: a=1, b=2" "$otel_args_line" "OT12: header value's literal comma round-trips after url-decode"
 assert_contains "X-Tenant: y" "$otel_args_line" "OT12: second header still parsed after comma-bearing first header"
-# Three -H flags total: Content-Type (always present), Cookie, X-Tenant.
-# A fragmented Cookie header would push the count to four; the literal
-# `,` proves the value was NOT split.
+# Content-Type + Cookie + X-Tenant; a fragmented Cookie would make four.
 h_count=$(echo "$otel_args_line" | grep -oE '\-H ' | wc -l | tr -d ' ')
 assert_eq 3 "$h_count" "OT12: exactly three -H flags (Content-Type + Cookie + X-Tenant) — not four (would mean Cookie fragmented)"
 rm -rf "$tmp" "$metrics"
 
-# OT13. OTLP/JSON int64 attribute values are encoded as JSON strings per the
-# proto3 JSON mapping (AnyValue.int_value is int64). The exporter passes
-# integer attribute values via jq --arg (not --argjson) so they emerge as
-# quoted strings in the wire payload. status.code and span.kind are int32
-# enums and stay JSON numbers.
+# OT13. int64 attribute values are JSON strings per the proto3 JSON mapping;
+# status.code and span.kind are int32 enums and stay numbers.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -3254,12 +2946,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "OT13: int64-as-string export → exits 0"
 otel_body=$(cat "$otel_sniff")
-# delegate.exit_status is always 0 here (successful call); the OTLP int64
-# encoding must wrap that 0 in quotes. Same for the other int attributes.
-# Use jq to inspect the actual JSON type rather than substring-matching
-# the wire bytes (which would conflate `"0"` and `0` if the surrounding
-# tokens overlap). pchars/cchars/ochars are non-zero for the prompt
-# `"Summarise"` and the canned mock response.
+# jq reports the JSON type; a substring match would conflate `"0"` and `0`.
 exit_status_type=$(echo "$otel_body" | jq -r '
   .resourceSpans[0].scopeSpans[0].spans[0].attributes
   | map(select(.key == "delegate.exit_status"))
@@ -3275,34 +2962,21 @@ tokens_type=$(echo "$otel_body" | jq -r '
   | map(select(.key == "delegate.estimated_tokens_avoided"))
   | .[0].value.intValue | type')
 assert_eq "string" "$tokens_type" "OT13: delegate.estimated_tokens_avoided intValue is JSON string"
-# span.kind and status.code stay int32 (JSON numbers) — they're enums
-# in the proto, not int64 fields.
 kind_type=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].kind | type')
 assert_eq "number" "$kind_type" "OT13: span.kind stays a JSON number (int32 enum)"
 status_code_type=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].status.code | type')
 assert_eq "number" "$status_code_type" "OT13: status.code stays a JSON number (int32 enum)"
-# startTimeUnixNano / endTimeUnixNano are fixed64 — also JSON strings.
 start_type=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].startTimeUnixNano | type')
 assert_eq "string" "$start_type" "OT13: startTimeUnixNano is JSON string (fixed64)"
 end_type=$(echo "$otel_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].endTimeUnixNano | type')
 assert_eq "string" "$end_type" "OT13: endTimeUnixNano is JSON string (fixed64)"
 rm -rf "$tmp" "$metrics"
 
-# ---------------------------------------------------------------------------
-# Phase 11 Track F — privacy redaction default (#158)
-# DELEGATE_OTEL_INCLUDE_CONTENT gates `delegate.prompt`, `delegate.context`,
-# `delegate.output`. Default unset = redact (omit the three attributes
-# entirely). Set to `1` = include them with their actual values. Metadata
-# attributes (tier, model, char counts, durations, exit_status) stay
-# unconditional.
-# ---------------------------------------------------------------------------
+# --- Privacy redaction (#158): DELEGATE_OTEL_INCLUDE_CONTENT=1 opts the
+# delegate.prompt/context/output attributes in; unset omits them entirely ---
 
-# OT14. Default redaction: with DELEGATE_OTEL_ENDPOINT set but
-# DELEGATE_OTEL_INCLUDE_CONTENT unset, the OTLP body contains the metadata
-# attributes (prompt_chars, context_chars, output_chars, tier, model) but
-# does NOT contain delegate.prompt, delegate.context, or delegate.output.
-# The actual content text (the prompt arg and the canned mock response)
-# must not appear anywhere in the body — no key, no value, no sentinel.
+# OT14. Default redaction: metadata present, content keys absent, and the
+# content text itself appears nowhere in the body.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -3318,12 +2992,10 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "$SENTINEL_PROMPT" <<<"$SENTINEL_CONTEXT" 2>&1) || EC=$?
 assert_eq 0 "$EC" "OT14: default redaction → exits 0"
 otel_body=$(cat "$otel_sniff")
-# Metadata still present.
 assert_contains '"delegate.tier"' "$otel_body" "OT14: metadata delegate.tier present"
 assert_contains '"delegate.prompt_chars"' "$otel_body" "OT14: metadata delegate.prompt_chars present"
 assert_contains '"delegate.context_chars"' "$otel_body" "OT14: metadata delegate.context_chars present"
 assert_contains '"delegate.output_chars"' "$otel_body" "OT14: metadata delegate.output_chars present"
-# Content attribute keys MUST be absent.
 case "$otel_body" in
   *'"delegate.prompt"'*)
     echo "  FAIL  OT14: delegate.prompt key MUST be absent by default"
@@ -3348,7 +3020,6 @@ case "$otel_body" in
     echo "  PASS  OT14: delegate.output key absent by default"
     pass=$((pass+1));;
 esac
-# Content TEXT itself must not appear anywhere in the body.
 case "$otel_body" in
   *"$SENTINEL_PROMPT"*)
     echo "  FAIL  OT14: prompt sentinel text MUST NOT appear in payload"
@@ -3365,7 +3036,6 @@ case "$otel_body" in
     echo "  PASS  OT14: context sentinel text omitted from body"
     pass=$((pass+1));;
 esac
-# Output text (canned `mock-model-output: ok`) must also be absent.
 case "$otel_body" in
   *'mock-model-output: ok'*)
     echo "  FAIL  OT14: model output text MUST NOT appear in payload"
@@ -3374,7 +3044,7 @@ case "$otel_body" in
     echo "  PASS  OT14: model output text omitted from body"
     pass=$((pass+1));;
 esac
-# No '<redacted>' sentinel either — the schema is omission, not placeholder.
+# The schema is omission, not a placeholder.
 case "$otel_body" in
   *'<redacted>'*)
     echo "  FAIL  OT14: no '<redacted>' sentinel should leak into the body"
@@ -3385,9 +3055,8 @@ case "$otel_body" in
 esac
 rm -rf "$tmp" "$metrics"
 
-# OT15. Opt-in inclusion (DELEGATE_OTEL_INCLUDE_CONTENT=1): all three content
-# attributes are present with their actual values. The metadata attributes
-# also stay present — opt-in adds content, it doesn't replace metadata.
+# OT15. DELEGATE_OTEL_INCLUDE_CONTENT=1: the three content attributes carry
+# their values and the metadata stays.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -3404,18 +3073,14 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "$SENTINEL_PROMPT" <<<"$SENTINEL_CONTEXT" 2>&1) || EC=$?
 assert_eq 0 "$EC" "OT15: opt-in include-content → exits 0"
 otel_body=$(cat "$otel_sniff")
-# All three content attribute KEYS present.
 assert_contains '"delegate.prompt"' "$otel_body" "OT15: delegate.prompt key present when opt-in"
 assert_contains '"delegate.context"' "$otel_body" "OT15: delegate.context key present when opt-in"
 assert_contains '"delegate.output"' "$otel_body" "OT15: delegate.output key present when opt-in"
-# Content TEXT present.
 assert_contains "$SENTINEL_PROMPT" "$otel_body" "OT15: prompt text preserved verbatim when opt-in"
 assert_contains "$SENTINEL_CONTEXT" "$otel_body" "OT15: context text preserved verbatim when opt-in"
 assert_contains 'mock-model-output: ok' "$otel_body" "OT15: output text preserved verbatim when opt-in"
-# Metadata still present (opt-in is additive, not replacement).
 assert_contains '"delegate.prompt_chars"' "$otel_body" "OT15: char-count metadata still present"
 assert_contains '"delegate.tier"' "$otel_body" "OT15: tier metadata still present"
-# Use jq to confirm the content attributes have the right structural shape.
 prompt_val=$(echo "$otel_body" | jq -r '
   .resourceSpans[0].scopeSpans[0].spans[0].attributes
   | map(select(.key == "delegate.prompt"))
@@ -3428,9 +3093,7 @@ context_val=$(echo "$otel_body" | jq -r '
 assert_eq "$SENTINEL_CONTEXT" "$context_val" "OT15: delegate.context stringValue matches input"
 rm -rf "$tmp" "$metrics"
 
-# OT16. Explicit =0 redacts same as unset. Defensive: the gate compares
-# string equality to "1" rather than truthiness, so any value other than
-# "1" stays redacted.
+# OT16. An explicit =0 redacts like unset.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -3455,9 +3118,7 @@ case "$otel_body" in
 esac
 rm -rf "$tmp" "$metrics"
 
-# OT17. Only literal "1" enables include-content (typo-safe). Operators
-# who set INCLUDE_CONTENT=true or =yes expecting truthiness get the safer
-# default (redact) instead of accidentally shipping content.
+# OT17. Only the literal "1" enables include-content; =true stays redacted.
 tmp=$(mktemp -d)
 dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
@@ -3482,25 +3143,11 @@ case "$otel_body" in
 esac
 rm -rf "$tmp" "$metrics"
 
-# ---------------------------------------------------------------------------
-# Track A of #193 — opt-in sampler overrides (delegate.sh)
-# Default sampler is greedy for ALL models (temperature=0, no top_p/top_k/
-# presence_penalty in the payload, no sampling_* keys in the metrics row).
-# An earlier iteration of this code path auto-applied the Alibaba-recommended
-# Qwen3 instruct profile (temperature=0.7, top_p=0.8, top_k=20,
-# presence_penalty=1.3) on Qwen3-family models, but the T4 A/B in
-# experiments/results/2026-05-22-track-a-qwen-sampling-ab.md found the
-# profile regresses commit-message output. The default flipped back to
-# greedy 2026-05-23; the four env-var overrides (DELEGATE_TEMPERATURE /
-# DELEGATE_TOP_P / DELEGATE_TOP_K / DELEGATE_PRESENCE_PENALTY) remain so
-# callers can opt INTO the Qwen profile (or any other profile) per call.
-# Non-numeric env vars exit 2 with a named error. Canary preflight stays
-# greedy regardless. The metrics row carries sampling_* keys only when the
-# caller explicitly set the corresponding env var.
-# ---------------------------------------------------------------------------
+# --- Sampler overrides (#193): greedy for every model by default; the four
+# DELEGATE_TEMPERATURE / TOP_P / TOP_K / PRESENCE_PENALTY env vars opt in per
+# call, and the row carries sampling_* keys only for those the caller set ---
 
-# QS1. Qwen-family model with no overrides → bare greedy on the Ollama
-# dispatch payload AND on the JSONL metrics row (no sampling_* keys at all).
+# QS1. A Qwen model with no overrides is greedy on the payload and the row.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
@@ -3529,8 +3176,6 @@ case "$payload" in
   *) echo "  PASS  QS1: bare invocation omits presence_penalty"; pass=$((pass+1));;
 esac
 line=$(cat "$metrics")
-# Metrics row carries NO sampling_* keys on bare greedy — back-compat with
-# pre-Phase-13 JSONL rows.
 case "$line" in
   *'"sampling_temperature"'*) echo "  FAIL  QS1: bare metrics row must omit sampling_temperature"; fail=$((fail+1));;
   *) echo "  PASS  QS1: bare metrics row omits sampling_temperature"; pass=$((pass+1));;
@@ -3549,8 +3194,7 @@ case "$line" in
 esac
 rm -rf "$tmp" "$metrics"
 
-# QS2. Non-Qwen model also stays greedy by default (same default for all
-# models). Verifies the default-flip applies uniformly, not just to non-Qwen.
+# QS2. A non-Qwen model is greedy by default too.
 tmp=$(mktemp -d)
 MOCK_MODELS='deepseek-r1:32b'
 sniff="$tmp/payload.json"
@@ -3584,9 +3228,7 @@ case "$line" in
 esac
 rm -rf "$tmp" "$metrics"
 
-# QS3. Full Qwen profile opt-in via the four env vars on a Qwen model. The
-# env vars provide both the dispatch payload sampler and the metrics row
-# entries — surfacing what the caller chose to set.
+# QS3. All four env vars set: the payload and the row carry each value.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
@@ -3612,10 +3254,7 @@ assert_contains '"sampling_top_k":20' "$line" "QS3: opt-in metrics row carries s
 assert_contains '"sampling_presence_penalty":1.3' "$line" "QS3: opt-in metrics row carries sampling_presence_penalty"
 rm -rf "$tmp" "$metrics"
 
-# QS3b. Partial opt-in — only DELEGATE_TEMPERATURE is set. The dispatch
-# payload carries the override but no top_p/top_k/presence_penalty (those
-# stay unset because the caller didn't request them). Metrics row mirrors:
-# sampling_temperature present, others omitted.
+# QS3b. Only DELEGATE_TEMPERATURE set: the others stay off the payload and the row.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
@@ -3656,8 +3295,7 @@ assert_contains "DELEGATE_TEMPERATURE" "$stderr_content" "QS4: stderr names the 
 assert_contains "not numeric" "$stderr_content" "QS4: stderr names the failure mode"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# QS4b. Each of the four overrides validates independently — non-numeric
-# DELEGATE_TOP_P / DELEGATE_TOP_K / DELEGATE_PRESENCE_PENALTY all exit 2.
+# QS4b. Each override validates independently.
 for vname in DELEGATE_TOP_P DELEGATE_TOP_K DELEGATE_PRESENCE_PENALTY; do
   tmp=$(mktemp -d)
   make_mock_curl_ok "$tmp"
@@ -3673,12 +3311,8 @@ for vname in DELEGATE_TOP_P DELEGATE_TOP_K DELEGATE_PRESENCE_PENALTY; do
   rm -rf "$tmp" "$metrics" "$stderr_file"
 done
 
-# QS4c. Edge-case rejected values. The validator must catch shapes that
-# `[!0-9.-]` character-class checks would let through but jq --argjson
-# rejects (`1-2`, `5-`, `.-`, `1.5.6`). Each must exit 2 with the script's
-# own clean error, not jq's 'invalid JSON text' surface. Pins the
-# bash-3.2-compatible `=~` regex against regression to the permissive
-# case-pattern form.
+# QS4c. Shapes a `[!0-9.-]` character class would let through but jq
+# --argjson rejects must fail with the validator's own error, not jq's.
 for bad in "1-2" "5-" ".-" "1.5.6" "-" "."; do
   tmp=$(mktemp -d)
   make_mock_curl_ok "$tmp"
@@ -3694,9 +3328,7 @@ for bad in "1-2" "5-" ".-" "1.5.6" "-" "."; do
   rm -rf "$tmp" "$metrics" "$stderr_file"
 done
 
-# QS4d. Valid numeric shapes the validator must continue to accept:
-# integers, negatives, floats, leading-dot decimals, trailing-dot integers.
-# Each should pass through to dispatch (exit 0).
+# QS4d. Valid numeric shapes still pass.
 for good in "0" "1" "-1" "0.7" "1.3" ".5" "1." "-42" "-0.5"; do
   tmp=$(mktemp -d)
   make_mock_curl_ok "$tmp"
@@ -3710,10 +3342,8 @@ for good in "0" "1" "-1" "0.7" "1.3" ".5" "1." "-42" "-0.5"; do
   rm -rf "$tmp" "$metrics"
 done
 
-# QS5. MLX backend, Qwen3 model, full opt-in via env vars. Profile lands on
-# /v1/chat/completions as top-level keys (OpenAI shape), not inside an
-# `options` object. Mirror QS3 to confirm MLX dispatch honours the same
-# env-var surface as Ollama.
+# QS5. On MLX the overrides land as top-level keys (OpenAI shape), not in
+# an `options` object.
 tmp=$(mktemp -d)
 payload_sniff="$tmp/payload.json"
 make_mock_curl_mlx_ok "$tmp" "$payload_sniff"
@@ -3734,8 +3364,7 @@ assert_contains '"top_k":20' "$payload" "QS5: MLX payload has opt-in top_k"
 assert_contains '"presence_penalty":1.3' "$payload" "QS5: MLX payload has opt-in presence_penalty"
 rm -rf "$tmp" "$metrics"
 
-# QS5b. Non-numeric override on MLX path also exits 2 (same validator runs
-# before the dispatch envelope is built, regardless of backend).
+# QS5b. A non-numeric override exits 2 on MLX too.
 tmp=$(mktemp -d)
 make_mock_curl_mlx_ok "$tmp"
 metrics=$(mktemp); : > "$metrics"
@@ -3749,9 +3378,7 @@ assert_eq 2 "$EC" "QS5b: MLX + bad DELEGATE_TOP_P exits 2"
 assert_contains "DELEGATE_TOP_P" "$(cat "$stderr_file")" "QS5b: MLX validator stderr names env var"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# QS6. The canary stays greedy regardless of the dispatch profile. With
-# --recipe set it fires before dispatch; its payload must carry
-# temperature:0 and max_tokens:1, never the Qwen profile.
+# QS6. The canary stays greedy regardless of the dispatch profile.
 tmp=$(mktemp -d)
 canary_payload_sniff="$tmp/canary-payload.json"; : > "$canary_payload_sniff"
 cat > "$tmp/curl" <<EOF
@@ -3817,15 +3444,9 @@ case "$canary_payload" in
 esac
 rm -rf "$tmp" "$metrics"
 
-# OT18. Pick-model failure path with content-include opt-in: prompt
-# content is emitted (the prompt was real, the model resolution failed).
-# Empty-string content attributes are OMITTED entirely, not emitted as
-# `stringValue: ""` — gemini-code-assist review on PR #188 flagged this
-# inconsistency: `delegate.recipe` is omitted when empty, so the content
-# attributes should follow the same convention. Consumers can rely on
-# attribute presence as a meaningful signal that content exists. On the
-# failure path, output_text is "" so `delegate.output` is absent; the
-# success-path test (OT15) covers the non-empty case.
+# OT18. Pick-model failure with content opt-in: delegate.prompt is emitted,
+# and empty content attributes are omitted rather than sent as "" (the same
+# convention as delegate.recipe).
 tmp=$(mktemp -d)
 MOCK_MODELS='unrelated:model'
 dispatch_sniff="$tmp/dispatch.json"
@@ -3842,12 +3463,8 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "FailurePathSentinel" </dev/null 2>&1) || EC=$?
 assert_eq 1 "$EC" "OT18: pick-model failure with opt-in → exit 1"
 otel_body=$(cat "$otel_sniff")
-# delegate.prompt still emitted (the prompt text is non-empty on failure span).
 assert_contains '"delegate.prompt"' "$otel_body" "OT18: delegate.prompt present on failure span with opt-in"
 assert_contains 'FailurePathSentinel' "$otel_body" "OT18: prompt content matches input on failure span"
-# delegate.output should be ABSENT because output_text is empty on the
-# failure path (no model response was generated). Empty-string content
-# attributes are omitted per the gemini consistency fix.
 case "$otel_body" in
   *'"delegate.output"'*)
     echo "  FAIL  OT18: delegate.output MUST be absent when output is empty (gemini consistency fix)"
@@ -3856,8 +3473,6 @@ case "$otel_body" in
     echo "  PASS  OT18: delegate.output omitted when output_text is empty (consistent with delegate.recipe)"
     pass=$((pass+1));;
 esac
-# delegate.context is also empty on this failure-path call (no stdin), so
-# it should also be absent.
 case "$otel_body" in
   *'"delegate.context"'*)
     echo "  FAIL  OT18: delegate.context MUST be absent when context is empty"
@@ -3868,11 +3483,9 @@ case "$otel_body" in
 esac
 rm -rf "$tmp" "$metrics"
 
-# --- Phase 16 Track A: flaky_on_models tier-gate ---
-# A recipe with a flaky_on_models frontmatter list refuses (exit 4) when
-# the resolved model matches any case-insensitive substring. The match is
-# logged via metrics row with exit_status:4 so audit-metrics can pivot.
-# DELEGATE_FORCE_FLAKY=1 overrides the gate and sends the request.
+# --- flaky_on_models gate: a recipe refuses with exit 4 when the resolved
+# model matches a listed case-insensitive substring; DELEGATE_FORCE_FLAKY=1
+# overrides ---
 
 setup_flaky_recipe() {
   local dir="$1"
@@ -3924,11 +3537,8 @@ n/a
 RECIPE
 }
 
-# F1. Resolved model matches a flaky pattern → exit 4, no canary call,
-# stderr names the recipe + model + matched pattern + recovery options.
-# The mock ollama exposes `qwen3.6:35b-a3b` which pick-model.sh resolves
-# for the prose tier; the recipe's frontmatter pattern `qwen3.6:35b` is a
-# case-insensitive substring of that, so the gate fires.
+# F1. The resolved model matches a pattern: exit 4 before the canary, and
+# stderr names recipe, model, pattern and the override.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3953,7 +3563,6 @@ assert_contains "'flaky-recipe'" "$stderr_content" "flaky-gate: stderr names the
 assert_contains "'qwen3.6:35b-a3b'" "$stderr_content" "flaky-gate: stderr names the resolved model"
 assert_contains "qwen3.6:35b" "$stderr_content" "flaky-gate: stderr names the matched pattern"
 assert_contains "DELEGATE_FORCE_FLAKY=1" "$stderr_content" "flaky-gate: stderr names the override env var"
-# Metrics row recorded with exit_status:4.
 if [[ -s "$metrics" ]]; then
   metrics_row=$(tail -1 "$metrics")
   assert_contains '"exit_status":4' "$metrics_row" "flaky-gate: metrics row tagged exit_status:4"
@@ -3964,8 +3573,7 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
-# F2. DELEGATE_FORCE_FLAKY=1 overrides the gate — request flows through to
-# the canary + dispatch even when the model matches a flaky pattern.
+# F2. DELEGATE_FORCE_FLAKY=1 overrides the gate.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -3986,9 +3594,7 @@ assert_eq 1 "$canary_count" "flaky-gate override: canary was called"
 assert_eq 1 "$dispatch_count" "flaky-gate override: dispatch was called"
 rm -rf "$tmp" "$metrics"
 
-# F3. Resolved model does NOT match any flaky pattern → no refusal, full
-# request proceeds (canary + dispatch). The recipe's flaky_on_models lists
-# only non-matching strings; the mock's qwen3.6:35b-a3b is unaffected.
+# F3. No pattern matches: the request proceeds.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -4008,8 +3614,7 @@ assert_eq 1 "$canary_count" "flaky-gate non-match: canary was called"
 assert_eq 1 "$dispatch_count" "flaky-gate non-match: dispatch was called"
 rm -rf "$tmp" "$metrics"
 
-# F4. Recipe WITHOUT flaky_on_models frontmatter skips the gate entirely
-# (back-compat — recipes that pre-date the convention keep working).
+# F4. A recipe without the frontmatter skips the gate.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -4029,12 +3634,8 @@ assert_eq 1 "$canary_count" "flaky-gate back-compat: canary was called"
 assert_eq 1 "$dispatch_count" "flaky-gate back-compat: dispatch was called"
 rm -rf "$tmp" "$metrics"
 
-# F5. Match is case-insensitive — the recipe pattern is lowercase
-# `qwen3.6:35b` and the resolved model is lowercase `qwen3.6:35b-a3b`
-# (mock); they match by substring. (Coverage for the uppercase-on-uppercase
-# case would require a different mock model name; the case-fold path is
-# exercised by the lowercase-on-lowercase match in F1 because the code
-# always tr's both to lowercase before comparing.)
+# F5. The match is case-insensitive: an uppercase pattern matches the
+# lowercase resolved model.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"; : > "$sniff"
 invocations="$tmp/invocations.log"; : > "$invocations"
@@ -4071,10 +3672,9 @@ assert_eq 4 "$EC" "flaky-gate case-insensitive: uppercase pattern matches lowerc
 assert_contains "QWEN3.6:35B" "$(cat "$stderr_file")" "flaky-gate case-insensitive: stderr preserves the original-case pattern"
 rm -rf "$tmp" "$metrics"
 
-# 30. DELEGATE_STRIP_THINK strips a leading <think>...</think> reasoning trace
-# so trace-emitting reasoning models produce clean, parseable output.
+# 30. DELEGATE_STRIP_THINK strips a leading <think>...</think> trace.
 
-# 30a. Strip ON: <think>reason</think>\n\nANSWER -> only the answer reaches stdout.
+# 30a. Strip on: only the answer reaches stdout.
 tmp=$(mktemp -d)
 make_mock_curl_think "$tmp" '<think>\nLet me work through this carefully.\n</think>\n\nCLEAN_ANSWER_123'
 metrics=$(mktemp)
@@ -4105,8 +3705,8 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_contains "mock-model-output: ok" "$out" "strip-think on, no </think>: no-op passthrough"
 rm -rf "$tmp" "$metrics"
 
-# 30d. Strip ON, template-prefilled trace (closing </think> only, no opening
-# tag — the real qwen3-next-thinking shape): answer after </think> survives.
+# 30d. A closing </think> with no opening tag (the template-prefilled shape)
+# still strips to the answer.
 tmp=$(mktemp -d)
 make_mock_curl_think "$tmp" 'Reasoning emitted with no opening tag.\n</think>\n\nPREFILLED_ANSWER_456'
 metrics=$(mktemp)
@@ -4116,9 +3716,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq "PREFILLED_ANSWER_456" "$out" "strip-think on: prefilled-open-tag trace stripped to answer"
 rm -rf "$tmp" "$metrics"
 
-# 30e. Reasoning tier strips the trace BY DEFAULT (no DELEGATE_STRIP_THINK set)
-# — reasoning models emit traces and the tier exists to route them. Needs an
-# ollama mock listing a reasoning model so pick-model resolves the tier.
+# 30e. The reasoning tier strips by default.
 tmp=$(mktemp -d)
 MOCK_MODELS='deepseek-r1:32b'
 make_mock_curl_think "$tmp" '<think>\nreasoning here\n</think>\n\nREASONING_ANSWER_789'
@@ -4130,8 +3728,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq "REASONING_ANSWER_789" "$out" "strip-think: reasoning tier strips by default (no env set)"
 rm -rf "$tmp" "$metrics"
 
-# 30f. Reasoning tier with DELEGATE_STRIP_THINK=0 force-disables the strip
-# (escape hatch for a reasoning recipe whose own output may contain </think>).
+# 30f. DELEGATE_STRIP_THINK=0 disables the strip on the reasoning tier.
 tmp=$(mktemp -d)
 MOCK_MODELS='deepseek-r1:32b'
 make_mock_curl_think "$tmp" '<think>\nreasoning here\n</think>\n\nREASONING_ANSWER_789'
@@ -4143,9 +3740,8 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_contains "<think>" "$out" "strip-think: reasoning tier + STRIP_THINK=0 preserves trace"
 rm -rf "$tmp" "$metrics"
 
-# 31. Flavor profile (ADR 0013): a recipe's {{flavor_*}} placeholders are
-# filled from scripts/flavor-defaults.sh when no profile.sh is installed
-# (back-compat), and overridden by a per-user profile.sh.
+# 31. Flavor profile (ADR 0013): {{flavor_*}} placeholders come from
+# scripts/flavor-defaults.sh unless a per-user profile.sh overrides them.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
@@ -4192,9 +3788,8 @@ assert_contains 'SUBJECT MAX: 50' "$payload" "flavor: profile override subject m
 assert_contains 'TYPES: feat, fix, docs' "$payload" "flavor: profile override type vocabulary injected"
 rm -rf "$tmp" "$metrics"
 
-# 32. Deterministic output checks (ADR 0014): a recipe's frontmatter `checks:`
-# block runs on the finalised output (warn-only) and reports failures on stderr
-# plus a checks_failed=N field on the delegate-meta line.
+# 32. Output checks (ADR 0014): a recipe's `checks:` block runs on the final
+# output, warns on stderr and puts checks_failed=N on the meta line.
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -4218,9 +3813,8 @@ GO
 ## Calibration notes
 n/a
 EOF
-# 32a. Output that violates both checks -> two FAILED warnings + checks_failed=2.
-# The padding here is the "This-X" restating shape, which is NOT auto-stripped
-# (only the safe participial-comma shape is), so it stays a genuine failure.
+# 32a. Both checks fail. The "This-X" padding shape is never auto-stripped,
+# so it stays a failure.
 make_mock_curl_think "$tmp" 'This first line is far longer than ten chars\n\nthe body works fine. This approach ensures simplicity'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -4228,11 +3822,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_contains "check 'subject_max' FAILED" "$out" "checks: subject_max failure reported on stderr"
 assert_contains "check 'no_padding_tail' FAILED" "$out" "checks: no_padding_tail failure reported on stderr"
 assert_contains "checks_failed=2" "$out" "checks: failure count rides the delegate-meta line"
-# 32a-i. The metrics row names WHICH checks failed, not just how many. The
-# count alone left the corpus's one objective quality signal undiagnosable:
-# 57 of 63 archived check failures were commit-message, with no way to tell a
-# style nit (no_padding_tail, warn-only and often auto-stripped) from a
-# capability failure. Order follows the order the checks run in.
+# 32a-i. The row names which checks failed, in run order.
 row=$(tail -1 "$metrics")
 assert_contains '"checks_failed_names":["subject_max","no_padding_tail"]' "$row" \
   "checks: metrics row names both failed checks in run order"
@@ -4246,8 +3836,8 @@ if [[ "$out" == *"FAILED"* || "$out" == *"checks_failed="* ]]; then
 else
   echo "  PASS  checks: clean output triggers no check warnings"; pass=$((pass+1))
 fi
-# 32c. A participial-comma padding tail is AUTO-FIXED: stripped from the output,
-# reported as AUTO-FIXED (not FAILED), counted as checks_autofixed, persisted.
+# 32c. A participial-comma tail is auto-fixed: stripped, reported as
+# AUTO-FIXED, counted as checks_autofixed on the row.
 make_mock_curl_think "$tmp" 'short\n\nthe body drops the per-call cost, ensuring nothing regresses'
 errf=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4284,9 +3874,8 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
-# 33. Structural no_padding_tail + subject_type checks (2026-06-07 accuracy work):
-# the participial arm matches any gerund tail rather than an enumerated verb
-# list, and subject_type catches an ignored caller-supplied conventional type.
+# 33. no_padding_tail's participial arm matches any gerund tail, not an
+# enumerated verb list; only allowlisted filler verbs are auto-stripped.
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -4309,8 +3898,7 @@ GO
 ## Calibration notes
 n/a
 EOF
-# 33a. Structural matcher catches an UNENUMERATED gerund tail ('confirming')
-# the old per-verb list did not name.
+# 33a. A gerund the old per-verb list never named is caught.
 make_mock_curl_think "$tmp" 'short subject\n\nthe body drops the per-call cost, confirming the need for a matcher'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -4326,9 +3914,8 @@ if [[ "$out" == *"no_padding_tail' FAILED"* ]]; then
 else
   echo "  PASS  checks: clean finite-verb tail not flagged"; pass=$((pass+1))
 fi
-# 33c. Safety: an allowlisted filler verb but with a comma INSIDE the clause
-# (the gerund is not the trailing filler) is detected as padding but must NOT be
-# auto-stripped — it stays a FAILED warning so no real content is removed.
+# 33c. An allowlisted verb with a further comma after it is detected but not
+# auto-stripped, so no real content is removed.
 make_mock_curl_think "$tmp" 'short subject\n\nthe list is built, ensuring order, then returned to the caller'
 errf=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4341,9 +3928,7 @@ if [[ "$out" == *"then returned to the caller"* ]]; then
 else
   echo "  FAIL  checks: ambiguous tail was wrongly stripped"; fail=$((fail+1))
 fi
-# 33d. Precision: a gerund tail whose verb is NOT in the filler allowlist is
-# DETECTED (broad matcher) but NOT auto-stripped — a meaningful participial is
-# left for the reviewer rather than silently deleted.
+# 33d. A gerund outside the allowlist is detected but not auto-stripped.
 make_mock_curl_think "$tmp" 'short subject\n\nthe cache is rebuilt, surfacing the new latency numbers'
 errf=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4356,12 +3941,8 @@ if [[ "$out" == *"surfacing the new latency numbers"* ]]; then
 else
   echo "  FAIL  checks: non-allowlisted participial wrongly stripped"; fail=$((fail+1))
 fi
-# 33e. Precision: a participial that is NOT the tail. The check is named for a
-# tail, but the arm was unanchored and matched anywhere in the last line, so a
-# load-bearing mid-sentence clause failed the check on output that was then used
-# verbatim (observed 2026-08-18 on a real github-issue-body delegation, recorded
-# HIT). The clause here is followed by a further sentence, so the line does not
-# end on padding.
+# 33e. A participial followed by a further sentence is not a tail: the arm
+# is anchored to the end of the line.
 make_mock_curl_think "$tmp" 'short subject\n\nthe block is deleted, leaving the actions block unchanged. the fix is verified by the next run'
 errf=$(mktemp)
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4373,8 +3954,7 @@ if [[ "$err" == *"no_padding_tail"* ]]; then
 else
   echo "  PASS  checks: mid-line participial followed by a sentence not flagged"; pass=$((pass+1))
 fi
-# 33f. Precision: the same shape with a semicolon-joined continuation, taken from
-# the hand-written body of commit 8010551 which the unanchored arm flagged.
+# 33f. The same shape with a semicolon-joined continuation.
 make_mock_curl_think "$tmp" 'short subject\n\nauto-strip the padding clause on a filler-verb allowlist, adopting the strip only when it clears the padding; persist the counters to metrics so quality is observable. default-on with an opt-out'
 errf=$(mktemp)
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4386,9 +3966,8 @@ if [[ "$err" == *"no_padding_tail"* ]]; then
 else
   echo "  PASS  checks: hand-written mid-line participial not flagged"; pass=$((pass+1))
 fi
-# 33g. Recall guard for the anchor: a genuine padding tail that itself contains a
-# comma must still be detected. The clause may contain commas; what it may not do
-# is cross a sentence boundary. This is why the class is [^.!?]* and not [^,.!?]*.
+# 33g. A tail may contain commas but not cross a sentence boundary, which is
+# why the class is [^.!?]* and not [^,.!?]*.
 make_mock_curl_think "$tmp" 'short subject\n\nthe change lands, ensuring the cache, the limiter and the queue stay in sync'
 errf=$(mktemp)
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4396,9 +3975,7 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --recipe pad prose "go" </dev/null >/dev/null 2>"$errf"
 err=$(cat "$errf"); rm -f "$errf"
 assert_contains "check 'no_padding_tail' FAILED" "$err" "checks: padding tail with an internal comma still detected"
-# 33h. Precision: `ing` must remain a WORD ending. Without the trailing
-# whitespace group the arm degrades to a prefix match and every `-ings` plural
-# (settings, warnings, findings, strings, mappings) becomes a false positive.
+# 33h. `ing` must be a word ending, or every `-ings` plural is a false positive.
 make_mock_curl_think "$tmp" 'short subject\n\nreads the flag from the repo config, settings are merged per section'
 errf=$(mktemp)
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4410,11 +3987,8 @@ if [[ "$err" == *"no_padding_tail"* ]]; then
 else
   echo "  PASS  checks: -ings plural not treated as a gerund tail"; pass=$((pass+1))
 fi
-# 33i. ADR 0017's adoption rule is unchanged by the detection anchor. A trailing
-# padding clause whose line ALSO carries a mid-line participial is detected and
-# stripped, but the strip must still be rejected because the result is not clean
-# under the broad adoption gate. Anchoring that second gate would silently mutate
-# output that ADR 0017 deliberately leaves alone with a warning.
+# 33i. The adoption gate (ADR 0017) stays broad: a strip whose result still
+# carries a mid-line participial is rejected, not silently adopted.
 make_mock_curl_think "$tmp" 'short subject\n\nadds a cache, improving latency. also fixes the lock, ensuring parity'
 errf=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4518,8 +4092,6 @@ fi
 rm -rf "$tmp" "$metrics"
 
 # --- #277 dir 5: --recipe auto inference -----------------------------------
-# A diff_sample heredoc is the canonical "context that looks like a unified
-# diff" used across the auto tests.
 read -r -d '' DIFF_SAMPLE <<'DIFF' || true
 diff --git a/foo.txt b/foo.txt
 index e69de29..4b825dc 100644
@@ -4529,10 +4101,8 @@ index e69de29..4b825dc 100644
 +hello
 DIFF
 
-# A1. --recipe auto + piped diff -> resolves to commit-message. recent_commits
-# and diff_stat are passed explicitly here so the backfill is skipped (A4
-# covers the git-backfill path); this isolates the diff->commit-message NAME
-# mapping plus the metrics recipe field.
+# A1. --recipe auto + piped diff resolves to commit-message. recent_commits
+# and diff_stat are passed so the git backfill (A4) is skipped.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
@@ -4625,11 +4195,8 @@ n/a
 EOF
 }
 
-# A4. --recipe auto: diff_stat is derived from the PIPED diff (not git state),
-# recent_commits is backfilled from git log. The repo stages a DIFFERENT file
-# (a.txt) than the piped diff (foo.txt); the payload must mention foo.txt (from
-# the piped diff) and NOT a.txt — proving diff_stat tracks what was piped and
-# cannot diverge to the index. Passing only --var why must exit 0.
+# A4. diff_stat comes from the piped diff, not the index (the repo stages
+# a.txt, the diff names foo.txt); recent_commits is backfilled from git log.
 if command -v git >/dev/null 2>&1; then
   tmp=$(mktemp -d)
   sniff="$tmp/payload.json"
@@ -4660,9 +4227,7 @@ if command -v git >/dev/null 2>&1; then
   fi
   rm -rf "$tmp" "$metrics"
 
-  # A5. Clean working tree (nothing staged, diff piped from elsewhere e.g.
-  # `git show`): diff_stat still fills from the piped diff, so the call must NOT
-  # hard-fail on a missing diff_stat. This is the Bug-1 regression guard.
+  # A5. A clean tree with the diff piped from elsewhere still fills diff_stat.
   tmp=$(mktemp -d)
   sniff="$tmp/payload.json"
   make_mock_curl_ok "$tmp" "$sniff"
@@ -4721,12 +4286,8 @@ assert_eq 0 "$EC" "--recipe auto (>64 KiB diff): exits 0, not 'could not infer' 
 assert_contains '"recipe":"commit-message"' "$(cat "$metrics")" "--recipe auto (>64 KiB diff): metrics recipe=commit-message"
 rm -rf "$tmp" "$metrics"
 
-# N. Tier-resolution failures must be distinguishable. pick-model.sh exits 2
-# for "that tier does not exist" and 1 for "the tier is real but nothing
-# installed matches it"; those need opposite remedies. delegate.sh used to
-# discard pick-model's stderr and report both as the latter, telling callers to
-# install a model for a tier that cannot exist — 23 such calls across four
-# projects, several concluding the skill was broken. Pin both paths.
+# N. An unknown tier (pick-model exit 2) and a real tier with no model (exit
+# 1) need opposite remedies, so delegate.sh must keep them apart.
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 EC=0
@@ -4742,13 +4303,10 @@ case "$out" in
     echo "  FAIL  unknown tier: still emits the misleading no-installed-model advice"; fail=$((fail+1));;
   *) echo "  PASS  unknown tier: suppresses the misleading no-installed-model advice"; pass=$((pass+1));;
 esac
-# The metrics row must record exit_status 2 so a bad tier is separable from a
-# genuinely unresolvable one in the rollup.
 assert_contains '"exit_status":2' "$(cat "$metrics")" "unknown tier: metrics row tagged exit_status 2"
 rm -rf "$tmp" "$metrics"
 
-# A tier that IS valid but resolves to nothing keeps the original exit 1 and
-# the install-a-model advice, which is correct for that case.
+# A valid tier that resolves to nothing keeps exit 1 and the install advice.
 tmp=$(mktemp -d)
 MOCK_MODELS=''
 make_mock_curl_models_only "$tmp"
@@ -4763,11 +4321,8 @@ assert_contains "no installed model matches this tier" "$out" "unresolvable tier
 assert_contains '"exit_status":1' "$(cat "$metrics")" "unresolvable tier: metrics row tagged exit_status 1"
 rm -rf "$tmp" "$metrics"
 
-# --- #342 defect 1: the caller can state the project the delegation is FOR ---
-# The cwd derivation is only right when delegate.sh runs inside the repo the
-# work is for. Delegating on behalf of repo X from inside the skill checkout
-# recorded project=delegate-local, which never matched the boundary hook's own
-# (correct, hook-cwd) derivation — so the nudge fired despite compliance.
+# --- #342: the caller can state the project the delegation is for, since the
+# cwd derivation is wrong when delegate.sh runs from another checkout ---
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp)
@@ -4797,9 +4352,8 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq teams-for-linux "$(jq -r .project < "$metrics")" "--project=NAME form accepted"
 : > "$metrics"
 
-# Neither set, and the cwd is outside any git repository: no project at all.
-# The basename of a throwaway directory is not a project name, and recording it
-# as one produced `project:"tmp"` in the live corpus on 2026-08-27.
+# Neither set and the cwd outside any git repository: no project at all, since
+# a throwaway directory's basename is not a project name.
 (cd "$tmp" && env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1)
@@ -4814,8 +4368,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 2 "$EC" "--project without a value -> exit 2"
 assert_contains "--project requires a value" "$out" "--project without a value: informative stderr"
 
-# A following flag is the next option, not the value: accepting it would set
-# the project to "--recipe" and silently swallow the recipe.
+# A following flag is the next option, not the value.
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
@@ -4824,8 +4377,7 @@ assert_eq 2 "$EC" "--project followed by a flag -> exit 2"
 assert_contains "--project requires a value" "$out" "--project followed by a flag: informative stderr"
 rm -rf "$tmp" "$metrics"
 
-# 34. --max-time / --connect-timeout are passed on the Ollama dispatch curl,
-# defaulting to 600 s (see the DELEGATE_REQUEST_TIMEOUT header entry).
+# 34. The dispatch curl carries --max-time (default 600 s) and --connect-timeout.
 tmp=$(mktemp -d)
 argv_sniff="$tmp/argv.txt"
 make_mock_curl_argv "$tmp" "$argv_sniff"
@@ -4849,8 +4401,7 @@ argv=$(cat "$argv_sniff" 2>/dev/null)
 assert_contains "--max-time 42" "$argv" "DELEGATE_REQUEST_TIMEOUT overrides the default"
 rm -rf "$tmp"
 
-# 36. The MLX dispatch curl gets the same bounds. Reuses make_mock_curl_mlx_ok,
-# which already sniffs argv and answers the /v1/models probe.
+# 36. The MLX dispatch curl gets the same bounds.
 tmp=$(mktemp -d)
 argv_sniff="$tmp/argv.txt"
 make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json" "$argv_sniff"
@@ -4862,8 +4413,7 @@ assert_contains "--max-time 600" "$argv" "mlx dispatch defaults to 600s"
 assert_contains "--connect-timeout 5" "$argv" "mlx dispatch passes --connect-timeout"
 rm -rf "$tmp"
 
-# 37. A timeout (curl exit 28) names the knob to raise, rather than sending
-# the caller to the generic daemon-check text.
+# 37. A timeout (curl exit 28) names the knob to raise.
 tmp=$(mktemp -d)
 cat > "$tmp/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -4885,11 +4435,8 @@ assert_contains "DELEGATE_REQUEST_TIMEOUT" "$out" "timeout guidance names the kn
 rm -rf "$tmp"
 
 make_mock_curl_provider() {
-  # Mock curl for the DELEGATE_BASE_URL path: answers {base}/models with a
-  # POPULATED list so tier resolution succeeds, records dispatch argv to $3,
-  # and returns a chat-completions body. Unlike make_mock_curl_mlx_ok the
-  # models response is non-empty, because under a provider list /models is
-  # discovery rather than a liveness probe.
+  # For the DELEGATE_BASE_URL path: answers {base}/models with a populated
+  # list, records dispatch argv to $3, returns a chat-completions body.
   local dir="$1" payload_sniff="${2:-/dev/null}" argv_sniff="${3:-/dev/null}"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
@@ -4926,8 +4473,7 @@ EOF
   chmod +x "$dir/curl"
 }
 
-# 38. DELEGATE_BASE_URL dispatches to {base}/chat/completions on the resolved
-# provider, with no MLX_HOST or OLLAMA_HOST involvement.
+# 38. DELEGATE_BASE_URL dispatches to {base}/chat/completions on the resolved provider.
 tmp=$(mktemp -d)
 argv_sniff="$tmp/argv.txt"
 make_mock_curl_provider "$tmp" "$tmp/payload.json" "$argv_sniff"
@@ -4944,7 +4490,7 @@ assert_contains "http://localhost:12434/engines/v1/chat/completions" "$argv" "pr
 assert_contains '"backend":"docker"' "$(cat "$metrics")" "provider dispatch labels metrics by provider, not a flat 'provider'"
 rm -rf "$tmp" "$metrics"
 
-# 39. The provider dispatch keeps the PR 1 timeout bound.
+# 39. The provider dispatch keeps the timeout bound.
 tmp=$(mktemp -d)
 argv_sniff="$tmp/argv.txt"
 make_mock_curl_provider "$tmp" "$tmp/payload.json" "$argv_sniff"
@@ -4968,8 +4514,7 @@ argv=$(cat "$argv_sniff")
 assert_contains "engines/v1/chat/completions" "$argv" "trailing slash is stripped once"
 rm -rf "$tmp"
 
-# 41. An unknown host still gets a real label rather than a flat "provider", so
-# two unknown endpoints stay distinguishable in sum by (backend).
+# 41. An unknown host is labelled host:port so two stay distinguishable.
 tmp=$(mktemp -d)
 make_mock_curl_provider "$tmp" "$tmp/payload.json" "$tmp/argv.txt"
 metrics=$(mktemp)
@@ -4980,10 +4525,8 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_contains '"backend":"localhost:9999"' "$(cat "$metrics")" "unknown provider is labelled host:port"
 rm -rf "$tmp" "$metrics"
 
-# 42. A provider on Ollama's port is still dispatched through the OpenAI arm.
-# The metrics label and the dispatch mode are separate concerns: labelling the
-# row "ollama" must not route the request to the native /api/generate branch,
-# which ignores the resolved base entirely.
+# 42. A provider on Ollama's port is labelled ollama but still dispatched
+# through the OpenAI arm, never the native /api/generate branch.
 tmp=$(mktemp -d)
 argv_sniff="$tmp/argv.txt"
 make_mock_curl_provider "$tmp" "$tmp/payload.json" "$argv_sniff"
@@ -5001,10 +4544,8 @@ esac
 assert_contains '"backend":"ollama"' "$(cat "$metrics")" "ollama-port provider is still labelled ollama in metrics"
 rm -rf "$tmp" "$metrics"
 
-# 43. A --var value that is nothing but an unreplaced angle-bracket stand-in is
-# rejected before dispatch, and the message names the offending key (#356).
-# Callers copy these verbatim from a recipe's ## Invocation block; the model
-# then summarises the placeholder itself and the metrics row records a success.
+# 43. A --var value that is only an angle-bracket stand-in copied from a
+# recipe's Invocation block is rejected before dispatch, naming the key (#356).
 for placeholder in \
   '<why this changed>' \
   '<the git diff --cached --stat output>' \
@@ -5013,19 +4554,15 @@ for placeholder in \
   '<type>'; do
   out=$(env -i PATH="$SAFE_PATH" HOME="$HOME" \
     bash "$SCRIPT" --recipe commit-message --var why="$placeholder" prose </dev/null 2>&1); rc=$?
-  # Assert the placeholder message specifically. Exit 2 alone is not enough:
-  # this recipe also exits 2 for missing required inputs, so a bare rc check
-  # would pass even with the guard absent.
+  # Exit 2 alone is not enough: the recipe also exits 2 for missing inputs.
   assert_eq "2" "$rc" "placeholder '$placeholder' exits 2"
   assert_contains "unreplaced placeholder" "$out" "placeholder '$placeholder' is reported as such"
   assert_contains "why" "$out" "placeholder '$placeholder' names the offending key"
 done
 
-# 44. Values that merely *contain* angle brackets are the common case and must
-# pass the check. --var diff= carries real diff hunks, so a matcher that tripped
-# on HTML, C++ generics, `a < b`, or shell redirection would break the primary
-# path. These may fail later for unrelated reasons (missing required vars, no
-# backend); the assertion is only that they are not rejected as placeholders.
+# 44. Values that merely contain angle brackets (HTML, generics, redirects)
+# pass; they may fail later for other reasons, the assertion is only that
+# they are not rejected as placeholders.
 for legit in \
   'if (a < b) { x } else if (c > d) { y }' \
   'std::vector<int> v; if (a < b) return;' \
@@ -5044,10 +4581,8 @@ for legit in \
 done
 
 make_mock_curl_empty() {
-  # Mock curl returning a well-formed response whose answer is empty because
-  # the token budget was spent before any content was emitted. Serves
-  # /v1/models as well, so provider resolution reaches dispatch rather than
-  # failing earlier and passing this test for the wrong reason.
+  # A well-formed response whose answer is empty with finish_reason "length".
+  # Serves /v1/models too, so the test cannot pass on a resolution failure.
   local dir="$1"
   cat > "$dir/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -5071,11 +4606,8 @@ EOF
   chmod +x "$dir/curl"
 }
 
-# 45. An empty answer is reported, not returned as silence. Ollama's OpenAI
-# endpoint ignores enable_thinking:false, so reasoning consumes the token
-# budget and the answer comes back "" with finish_reason "length" — measured
-# on 2026-08-18. Returning that as success makes the miss invisible, and the
-# metrics row records an ordinary delegation.
+# 45. An empty answer (reasoning ate the token budget, finish_reason
+# "length") is reported with exit 100, not returned as a silent success.
 tmp=$(mktemp -d)
 make_mock_curl_empty "$tmp"
 metrics=$(mktemp)
@@ -5087,9 +4619,7 @@ assert_eq "100" "$rc" "empty answer exits with the empty-response sentinel"
 assert_contains "empty response" "$out" "empty answer is reported as such"
 assert_contains "finish_reason=length" "$out" "empty answer names the finish reason"
 assert_contains "DELEGATE_MAX_TOKENS" "$out" "empty answer points at the token budget"
-# The sentinel must not be mistaken for a transport failure: an earlier draft
-# set status=1 and the generic block then printed "curl exit 1" and advised
-# restarting the daemon, which is the wrong diagnosis.
+# The sentinel must not be diagnosed as a transport failure.
 case "$out" in
   *"dispatch failed (curl exit"*)
     assert_eq "no curl advice" "curl advice printed" "empty answer does not print transport advice" ;;
@@ -5099,11 +4629,8 @@ esac
 assert_contains '"exit_status":100' "$(cat "$metrics")" "empty answer is visible in the metrics row"
 rm -rf "$tmp" "$metrics"
 
-# 46. `--tier NAME` (#411). The flaky-gate refusal at delegate.sh:1037 and
-# ADR 0012 both advise "--tier code", but the argument catch-all swallowed it as
-# the positional tier — one live metrics row is literally tier="--tier". The
-# flag now exists, wins over the positional, and moves the prompt to the first
-# positional. The historical `<tier> ["<prompt>"]` order is untouched.
+# 46. `--tier NAME` (#411) wins over the positional tier and moves the prompt
+# to the first positional; the historical `<tier> ["<prompt>"]` order is untouched.
 tmp=$(mktemp -d); metrics=$(mktemp)
 make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
@@ -5112,9 +4639,8 @@ assert_contains '"tier":"prose"' "$(cat "$metrics")" "--tier sets the tier"
 assert_contains "Summarise this" "$(cat "$tmp/payload.json")" "--tier moves the prompt to the first positional"
 rm -rf "$tmp" "$metrics"
 
-# --tier wins over a positional tier. `code` is deliberately unresolvable with
-# this mock's single prose model, so a pass proves the flag won rather than
-# merely agreeing with the positional.
+# `code` is unresolvable with this mock's single prose model, so a pass
+# proves the flag won rather than agreeing with the positional.
 tmp=$(mktemp -d); metrics=$(mktemp)
 make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
 EC=0
@@ -5124,7 +4650,7 @@ assert_eq 0 "$EC" "--tier overrides the positional tier"
 assert_contains '"tier":"prose"' "$(cat "$metrics")" "--tier overrides the positional tier in metrics"
 rm -rf "$tmp" "$metrics"
 
-# --tier=NAME is accepted alongside the two-token form, as --recipe/--project are.
+# --tier=NAME is accepted too.
 tmp=$(mktemp -d); metrics=$(mktemp)
 make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
@@ -5132,8 +4658,7 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
 assert_contains '"tier":"prose"' "$(cat "$metrics")" "--tier=NAME sets the tier"
 rm -rf "$tmp" "$metrics"
 
-# A following flag is the next option, not the value — same guard as --recipe,
-# --var and --project.
+# A following flag is the next option, not the value.
 tmp=$(mktemp -d)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOCAL_NO_METRICS=1 \
@@ -5146,9 +4671,8 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOCAL_NO_METRICS=1 \
 assert_eq 2 "$EC" "--tier without a value -> exit 2"
 rm -rf "$tmp"
 
-# An unrecognised flag still lands in the tier slot, but is now diagnosed as a
-# mistyped flag rather than reported as an invented tier name. The metrics row
-# is deliberately unchanged: it is the only telemetry that surfaced this bug.
+# An unrecognised flag in the tier slot is diagnosed as a flag, not an
+# invented tier; the metrics row still records it, which is what surfaced the bug.
 tmp=$(mktemp -d); metrics=$(mktemp)
 make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
 EC=0
@@ -5160,10 +4684,8 @@ assert_contains "--tier --file" "$out" "unknown flag names --tier as the alterna
 assert_contains '"tier":"--file"' "$(cat "$metrics")" "unknown flag still writes its metrics row"
 rm -rf "$tmp" "$metrics"
 
-# Regression guard: a prompt that begins with a dash works today WITHOUT `--`,
-# because it is the second positional and never reaches the option parser. An
-# earlier draft of #411 rejected every unknown dash token and would have broken
-# this silently.
+# A dash-leading prompt works without `--`: it is the second positional and
+# never reaches the option parser.
 tmp=$(mktemp -d); metrics=$(mktemp)
 make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
 EC=0
@@ -5182,13 +4704,10 @@ assert_contains '"tier":"prose"' "$(cat "$metrics")" "positional tier still work
 assert_contains "Summarise this" "$(cat "$tmp/payload.json")" "positional prompt still works"
 rm -rf "$tmp" "$metrics"
 
-# usage() advertises the flag, so a caller reading the error learns it exists.
 out=$(bash "$SCRIPT" </dev/null 2>&1) || true
 assert_contains "tier NAME is equivalent" "$out" "usage advertises --tier"
 
-# 47. Recipe-declared tier (#411). 39 of the 44 recorded bad-tier calls supplied
-# a --recipe, and every recipe routes to one dominant tier in production, so the
-# caller was being asked for a value the recipe already implies.
+# 47. A recipe's frontmatter `tier:` supplies the tier when no positional does (#411).
 mk_recipe() {  # mk_recipe <dir> <name> [tier]
   local dir="$1" name="$2" tier="${3:-}"
   { printf -- '---\n'
@@ -5210,10 +4729,8 @@ for pair in "prose r_prose" "reasoning r_reason" "code r_code"; do
   rm -rf "$tmp" "$pdir" "$metrics"
 done
 
-# The blocker that killed the first design: 17 of 20 recipes pass a trailing
-# reinforcement prompt. A lone positional that is a sentence must be the PROMPT,
-# not the tier, or every documented recipe call fails with "unknown tier: Match
-# the example messages...".
+# A lone positional that is a sentence is the prompt, not the tier: most
+# recipes pass a trailing reinforcement prompt.
 tmp=$(mktemp -d); pdir=$(mktemp -d); metrics=$(mktemp)
 make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
 mk_recipe "$pdir" "r_prose" "prose"
@@ -5226,8 +4743,7 @@ assert_contains '"tier":"prose"' "$(cat "$metrics")" "lone sentence positional k
 assert_contains "Match the example messages" "$(cat "$tmp/payload.json")" "lone sentence positional reaches the model as the prompt"
 rm -rf "$tmp" "$pdir" "$metrics"
 
-# ...but a lone positional that IS a tier name still means the tier, so the
-# historical single-positional recipe form is unchanged.
+# A lone positional that is a tier name is still the tier.
 tmp=$(mktemp -d); pdir=$(mktemp -d); metrics=$(mktemp)
 make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
 mk_recipe "$pdir" "r_reason" "reasoning"
@@ -5237,8 +4753,7 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_PROMPTS_DIR="$pdir" \
 assert_contains '"tier":"prose"' "$(cat "$metrics")" "a lone positional matching a tier name is still the tier"
 rm -rf "$tmp" "$pdir" "$metrics"
 
-# An explicit tier wins over the declared one — this is what keeps the
-# deliberate commit-message-on-code runs (9 rows, latest 2026-08-14) working.
+# An explicit tier wins over the declared one.
 tmp=$(mktemp -d); pdir=$(mktemp -d); metrics=$(mktemp)
 make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
 mk_recipe "$pdir" "r_prose" "prose"
@@ -5248,9 +4763,7 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_PROMPTS_DIR="$pdir" \
 assert_contains '"tier":"code"' "$(cat "$metrics")" "--tier overrides the recipe's declared tier"
 rm -rf "$tmp" "$pdir" "$metrics"
 
-# A recipe with no declared tier and no positional names both remedies rather
-# than failing opaquely. External recipes via DELEGATE_PROMPTS_DIR are exactly
-# this case.
+# A recipe with no declared tier and no positional names both remedies.
 tmp=$(mktemp -d); pdir=$(mktemp -d)
 mk_recipe "$pdir" "r_none"
 EC=0
@@ -5276,13 +4789,8 @@ assert_eq 2 "$EC" "no recipe and no prompt still exits 2"
 rm -rf "$tmp"
 
 
-# ---------------------------------------------------------------------------
-# 40. no_example_echo (ADR 0029) — on by default for every recipe call, and
-# the one check that guards against the model returning the prompt's own
-# example instead of an answer. Reproduces the 2026-08-26 maintainer-reply
-# leak: two calls carrying 7.7k / 7.3k chars of context each returned exactly
-# the recipe's `Correct:` line, byte for byte.
-# ---------------------------------------------------------------------------
+# --- 40. no_example_echo (ADR 0029): on by default for every recipe call,
+# fails when the output reproduces a line of the recipe's own prompt ---
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -5319,26 +4827,21 @@ assert_contains "check 'no_example_echo' FAILED" "$out" "echo-check: verbatim ex
 assert_contains "REJECT this draft" "$out" "echo-check: stderr tells the caller not to ship it"
 row=$(tail -1 "$metrics")
 assert_contains '"checks_failed_names":["no_example_echo"]' "$row" "echo-check: named on the metrics row"
-# 40b. The label prefix is stripped before comparing, so the Wrong: arm is
-# caught too — an echoed Wrong: line is the #283 instruction-echo failure.
+# 40b. The label prefix is stripped before comparing, so the Wrong: arm is caught too.
 make_mock_curl_think "$tmp" 'The regression is in the date parser, and ask the reporter to confirm it.'
 out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
 assert_contains "check 'no_example_echo' FAILED" "$out" "echo-check: echoed Wrong: arm caught after label strip"
-# 40b-i. The label is stripped from the OUTPUT side too, so the most literal
-# echo of all — the whole line including its `Correct:` label — is caught.
-# Stripping only the template side left exactly that case undetected.
+# 40b-i. The label is stripped from the output side too, so an echo that
+# keeps its `Correct:` label is caught.
 make_mock_curl_think "$tmp" 'Correct: The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
 out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
 assert_contains "check 'no_example_echo' FAILED" "$out" "echo-check: echo that keeps the Correct: label is caught"
-# 40b-ii. A template example that itself begins with a conventional-commit
-# prefix must still match when echoed. The exemplar work added a type-prefix
-# strip to the output side; leaving the template side unstripped meant an
-# echoed `fix: ...` example no longer matched the pattern it came from. One
-# normalisation, applied to both sides, is the invariant this pins.
+# 40b-ii. One normalisation on both sides: a template example that begins
+# with a conventional-commit prefix still matches when echoed.
 cat > "$prompts/cc.md" <<'EOF'
 ---
 tier: prose
@@ -5368,8 +4871,7 @@ out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --recipe cc prose "go" 2>&1)
 assert_contains "check 'no_example_echo' FAILED" "$out" \
   "echo-check: echoed template example beginning with a type prefix is caught"
-# 40c. A genuine answer must not trip it. This is the guard that matters —
-# a false positive here would flag every good delegation.
+# 40c. A genuine answer must not trip it.
 make_mock_curl_think "$tmp" 'The override in src/config/loader.js:88 silently wins. Could you make it defer?'
 out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -5379,11 +4881,9 @@ if [[ "$out" == *"no_example_echo"* ]]; then
 else
   echo "  PASS  echo-check: genuine answer does not trip the check"; pass=$((pass+1))
 fi
-# 40c-ii. The failure names exemplar boilerplate as a cause. The check cannot
-# tell a repo's generated-by footer from an exemplar's own content when only
-# one exemplar is supplied — measured 2026-08-27, a 62-character footer failed
-# a draft and then its retry — and the fix belongs in the exemplar, never in
-# the answer. A rejection that does not say so reads as "the model hallucinated".
+# 40c-ii. The failure names exemplar boilerplate as a cause: with one
+# exemplar the check cannot tell a footer from content, and the fix belongs
+# in the exemplar.
 make_mock_curl_think "$tmp" 'The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
 out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 DELEGATE_METRICS_FILE="$metrics" \
@@ -5404,9 +4904,8 @@ if [[ "$out" == *"no_example_echo"* ]]; then
 else
   echo "  PASS  echo-check: short shared line stays below the length floor"; pass=$((pass+1))
 fi
-# 40e. Caller-supplied context is NOT a pattern: the comparison runs against
-# the PRE-substitution template, so reproducing a supplied fact is correct
-# behaviour and must never flag.
+# 40e. The comparison runs against the pre-substitution template, so
+# reproducing a piped fact never flags.
 make_mock_curl_think "$tmp" 'The token drop is on the Teams side, inside its own MSAL cache layer.'
 out=$(echo "The token drop is on the Teams side, inside its own MSAL cache layer." \
   | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -5427,8 +4926,7 @@ if [[ "$out" == *"no_example_echo"* ]]; then
 else
   echo "  PASS  echo-check: DELEGATE_NO_ECHO_CHECK=1 silences it"; pass=$((pass+1))
 fi
-# 40g. Frontmatter opt-out, for a recipe whose output legitimately reproduces
-# a long line of its own template. Must not warn "unknown check" either.
+# 40g. Frontmatter opt-out is silent and not reported as an unknown check.
 cat > "$prompts/optout.md" <<'EOF'
 ---
 tier: prose
@@ -5464,13 +4962,8 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
-# ---------------------------------------------------------------------------
-# 40h. echo_guard_vars — the exemplar half of no_example_echo (issue #428).
-# A recipe may declare which --var values are SHAPE anchors; their lines then
-# join the forbidden-output set. Reproduces the verified 2026-08-26 case: a
-# commit-message call was handed three real recent commits and returned one of
-# them as its subject, naming the version the change was bumping AWAY from.
-# ---------------------------------------------------------------------------
+# --- 40h. echo_guard_vars (#428): a recipe declares which --var values are
+# shape anchors, and their lines join the forbidden-output set ---
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -5510,9 +5003,8 @@ run_cm() {
     DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
     bash "$SCRIPT" --recipe cm --var recent_commits="$ANCHORS" --var why="w" 2>&1 >/dev/null
 }
-# 40h-i. The real failure: the anchor came back as the subject under a
-# different type prefix and without the PR suffix, so a naive whole-line
-# compare misses it. Both are stripped from both sides.
+# 40h-i. Type prefix and PR suffix are stripped from both sides, so an
+# anchor echoed under a different prefix is caught.
 make_mock_curl_think "$tmp" 'ci: bump codeql-action init and analyze together to v4.37.6\n\nCombines the Dependabot PRs.'
 out=$(run_cm)
 assert_contains "check 'no_example_echo' FAILED" "$out" \
@@ -5523,9 +5015,7 @@ assert_contains '"checks_failed_names":["no_example_echo"]' "$(tail -1 "$metrics
 make_mock_curl_think "$tmp" 'chore(deps): bump codeql-action init and analyze together to v4.37.6 (#253)\n\nbody here.'
 assert_contains "check 'no_example_echo' FAILED" "$(run_cm)" \
   "echo-guard: verbatim anchor including its PR suffix is caught"
-# 40h-iii. The message that actually shipped for that change must NOT flag.
-# This is the guard that matters: a false positive here would reject correct
-# work on every call that shares vocabulary with its anchors.
+# 40h-iii. A correct subject that shares vocabulary with the anchors must not flag.
 make_mock_curl_think "$tmp" 'chore(deps): bump codeql-action to v4.37.8 and osv-scanner-action to v2.5.1\n\nCombines four Dependabot PRs that each touch one workflow file.'
 out=$(run_cm)
 if [[ "$out" == *"no_example_echo"* ]]; then
@@ -5533,9 +5023,8 @@ if [[ "$out" == *"no_example_echo"* ]]; then
 else
   echo "  PASS  echo-guard: the correct subject for the same change does not flag"; pass=$((pass+1))
 fi
-# 40h-iv. A line repeated across several anchors is convention, not content:
-# a shared trailer or generated-by line is exactly what the output SHOULD
-# reproduce, so multi-occurrence lines are dropped from the pattern set.
+# 40h-iv. A line repeated across anchors is convention the output should
+# reproduce, so it is dropped from the pattern set.
 BOILER='chore(deps): bump one thing to v1 (#1)
 
 Generated with the standard project tooling and reviewed by a maintainer.
@@ -5552,8 +5041,7 @@ if [[ "$out" == *"no_example_echo"* ]]; then
 else
   echo "  PASS  echo-guard: a line repeated across anchors is convention, not flagged"; pass=$((pass+1))
 fi
-# 40h-v. Without the frontmatter declaration the anchors are ordinary content
-# and echoing one is not this check's business — the blast radius stays opt-in.
+# 40h-v. Without the declaration the vars are ordinary content: the guard is opt-in.
 sed '/^echo_guard_vars:/d' "$prompts/cm.md" > "$prompts/cm2.md"
 make_mock_curl_think "$tmp" 'ci: bump codeql-action init and analyze together to v4.37.6\n\nCombines the Dependabot PRs.'
 out=$(echo x | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
@@ -5564,11 +5052,8 @@ if [[ "$out" == *"no_example_echo"* ]]; then
 else
   echo "  PASS  echo-guard: undeclared vars are not guarded (opt-in)"; pass=$((pass+1))
 fi
-# 40h-vi. `echo_guard_vars: a, b` — the list is comma-separated and callers
-# will write it with spaces. The `tr ',' ' '` plus unquoted word splitting
-# already handles that; this pins it, because the obvious refactor to
-# `IFS=, read` would silently leave the second name with a leading space and
-# stop guarding it.
+# 40h-vi. `echo_guard_vars: a, b` with a space after the comma: an `IFS=,
+# read` refactor would leave the second name with a leading space.
 cat > "$prompts/two.md" <<'EOF'
 ---
 tier: prose
@@ -5602,10 +5087,8 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
     </dev/null 2>&1 >/dev/null)
 assert_contains "check 'no_example_echo' FAILED" "$out" \
   "echo-guard: a var listed after 'comma space' is still guarded"
-# 40h-vii. Convention is judged on the NORMALISED form: two anchors whose
-# subjects differ only by type prefix and PR suffix are one line repeated,
-# so reproducing that subject is convention and must not flag. This is the
-# behaviour the single-normalisation fix below has to keep.
+# 40h-vii. Convention is judged on the normalised form: two anchors that
+# differ only by prefix and PR suffix are one repeated line.
 VARIANTS='chore(deps): bump the shared tooling image to the newest tag (#1)
 
 ci: bump the shared tooling image to the newest tag (#2)'
@@ -5618,11 +5101,9 @@ if [[ "$out" == *"no_example_echo"* ]]; then
 else
   echo "  PASS  echo-guard: prefix-variant lines shared across anchors are convention"; pass=$((pass+1))
 fi
-# 40h-viii. Every pattern source is normalised exactly ONCE, inside the shared
-# comparison. echo_normalise is not idempotent (the type-prefix strip takes
-# one prefix per pass), so an exemplar normalised before the convention
-# dedupe and again inside echo_matches loses two prefixes while the same line
-# echoed in the output loses one, and the most literal echo slips through.
+# 40h-viii. Each side is normalised exactly once: echo_normalise strips one
+# type prefix per pass, so a doubled-prefix anchor normalised twice would no
+# longer match its own echo.
 DOUBLED='chore: fix: update the dependency pin to the newest release (#9)
 
 perf(football): cut CI validate from 34 to 7 minutes (#287)'
@@ -5634,10 +5115,8 @@ assert_contains "check 'no_example_echo' FAILED" "$out" \
   "echo-guard: an anchor with a doubled type prefix echoed verbatim is caught"
 rm -rf "$tmp" "$metrics"
 
-# ---------------------------------------------------------------------------
-# 41. Draft capture — the generated output is persisted beside its metrics row
-# so a later MISS carries the artefact, not just a prose description of it.
-# ---------------------------------------------------------------------------
+# --- 41. Draft capture: the output is persisted beside its metrics row so a
+# later MISS carries the artefact ---
 tmp=$(mktemp -d)
 data="$tmp/data"; mkdir -p "$data"
 metrics="$data/metrics.jsonl"
@@ -5674,19 +5153,15 @@ else
 fi
 assert_eq "a draft worth keeping around" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
   "draft-capture: file holds the generated output verbatim"
-# The name leads with the row ts (so the directory sorts chronologically) and
-# carries a uniquifying suffix, because ts alone is second-precision and
-# parallel delegations share it.
+# The name leads with the row ts and carries a suffix, since ts alone is
+# second-precision and parallel delegations share it.
 row_ts=$(printf '%s' "$row" | jq -r '.ts')
 case "$draft_name" in
   "$(printf '%s' "$row_ts" | tr -d ':-')"-*.draft.txt)
     echo "  PASS  draft-capture: filename leads with the row ts and is suffixed"; pass=$((pass+1)) ;;
   *) echo "  FAIL  draft-capture: unexpected draft filename '$draft_name'"; fail=$((fail+1)) ;;
 esac
-# 41a-i. Two delegations landing in the same second must not clobber each
-# other. The archived corpus holds 14 such timestamps, one shared by eight
-# delegations, so this is the case that would have silently destroyed the
-# draft-to-verdict pairing the whole feature rests on.
+# 41a-i. Two delegations in the same second must not clobber each other.
 before_count=$(ls "$data/drafts" | grep -c '')
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -5700,16 +5175,14 @@ if (( after_count == before_count + 2 )); then
 else
   echo "  FAIL  draft-capture: same-second delegations collided ($before_count -> $after_count)"; fail=$((fail+1))
 fi
-# Every metrics row must still name a file that exists.
 missing=0
 while IFS= read -r df; do
   [[ -z "$df" ]] && continue
   [[ -f "$data/drafts/$df" ]] || missing=$((missing+1))
 done < <(jq -r '.draft_file // empty' "$metrics")
 assert_eq 0 "$missing" "draft-capture: every draft_file on a row exists on disk"
-# 41a-ii. Drafts hold whatever context was piped in, so neither the directory
-# nor the files may inherit a permissive umask. Asserted under a deliberately
-# wide-open umask, which is the only condition where the bug is visible.
+# 41a-ii. Drafts hold piped context, so directory and files must not inherit
+# a permissive umask; only a wide-open umask makes the bug visible.
 rm -rf "$data"; mkdir -p "$data"
 ( umask 000
   env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -5742,9 +5215,7 @@ if [[ -d "$data/drafts" ]]; then
 else
   echo "  PASS  draft-capture: NO_METRICS captures no draft"; pass=$((pass+1))
 fi
-# 41d. Oversized output is truncated with a marker rather than dropped, so a
-# runaway generation cannot fill the data dir and a truncated file cannot be
-# mistaken for a complete draft.
+# 41d. Oversized output is truncated with a marker rather than dropped.
 rm -rf "$data"; mkdir -p "$data"
 make_mock_curl_think "$tmp" 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_MAX_BYTES=20 \
@@ -5753,11 +5224,8 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_MAX_BYTES=20 \
 draft_name=$(tail -1 "$metrics" | jq -r '.draft_file // ""')
 assert_contains "[truncated at 20 bytes" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
   "draft-capture: oversized draft is truncated with a marker"
-# 41e. The cap is a BYTE cap, so multi-byte text must be measured in bytes.
-# Eight 3-byte characters are 8 characters and 24 bytes; a character-length
-# comparison would wave them past a 20-byte cap. LANG is set explicitly
-# because the rest of the suite runs under `env -i` (C locale), where bash
-# counts bytes anyway and the bug would be invisible.
+# 41e. The cap is in bytes: eight 3-byte characters are 24 bytes. LANG is
+# set because under `env -i` (C locale) bash counts bytes anyway.
 rm -rf "$data"; mkdir -p "$data"
 make_mock_curl_think "$tmp" '\u4e2d\u6587\u6d4b\u8bd5\u4e2d\u6587\u6d4b\u8bd5'
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" LANG=en_US.UTF-8 DELEGATE_DRAFT_MAX_BYTES=20 \
@@ -5766,8 +5234,7 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" LANG=en_US.UTF-8 DELEGATE_DRAFT_MAX_B
 draft_name=$(tail -1 "$metrics" | jq -r '.draft_file // ""')
 assert_contains "[truncated at 20 bytes" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
   "draft-capture: byte cap measured in bytes, not characters"
-# 41f. A malformed cap falls back to the default rather than silently
-# disabling the bound.
+# 41f. A malformed cap falls back to the default.
 rm -rf "$data"; mkdir -p "$data"
 make_mock_curl_think "$tmp" 'short'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_MAX_BYTES=abc \
@@ -5779,12 +5246,8 @@ assert_eq "short" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
   "draft-capture: malformed byte cap still captures under the default bound"
 rm -rf "$tmp" "$data"
 
-# ---------------------------------------------------------------------------
-# 42. body_max_words — the BODY length check (everything after the first blank
-# line), with the limit coming from the flavor profile. Added after three
-# captured draft/final pairs separated cleanly: shipped bodies 31/37/43 words,
-# the drafts they replaced 76/104/104.
-# ---------------------------------------------------------------------------
+# --- 42. body_max_words: the body is everything after the first blank line;
+# the limit can come from the flavor profile ---
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -5827,39 +5290,30 @@ if [[ "$(run_bw)" == *"body_max_words"* ]]; then
 else
   echo "  PASS  body_max_words: a body exactly at the limit passes"; pass=$((pass+1))
 fi
-# 42c. The SUBJECT is not part of the body. A long subject with a short body
-# must not fail; subject length is subject_max's job.
+# 42c. The subject is not part of the body.
 make_mock_curl_think "$tmp" 'a very long subject line with many many many many words indeed\n\ntwo words'
 if [[ "$(run_bw)" == *"body_max_words"* ]]; then
   echo "  FAIL  body_max_words: the subject line must not be counted"; fail=$((fail+1))
 else
   echo "  PASS  body_max_words: the subject line is not counted"; pass=$((pass+1))
 fi
-# 42d. A subject-only message has no body to measure, so this check stays
-# silent and leaves the complaint to body_required.
+# 42d. A subject-only message is body_required's business, not this check's.
 make_mock_curl_think "$tmp" 'subject here'
 if [[ "$(run_bw)" == *"body_max_words"* ]]; then
   echo "  FAIL  body_max_words: subject-only output is body_required's business"; fail=$((fail+1))
 else
   echo "  PASS  body_max_words: subject-only output is left to body_required"; pass=$((pass+1))
 fi
-# 42e. A multi-paragraph body is counted as a whole, not per paragraph.
-# Six words in each paragraph: neither exceeds the limit of 10 on its own,
-# so a per-paragraph implementation would let this through.
+# 42e. Paragraphs are summed: six words each, neither over the limit alone.
 make_mock_curl_think "$tmp" 'subject\n\none two three four five six\n\nseven eight nine ten eleven twelve'
 assert_contains "body is 12 words" "$(run_bw)" \
   "body_max_words: paragraphs after the first blank line are summed"
-# 42e-i. CRLF output must measure the same as LF. A lone \r is the whole
-# content of a CRLF blank separator, and an awk that does not count it as
-# [[:space:]] would never find the separator, measure the body as 0 words and
-# pass everything. Not reproducible on BWK awk (macOS), which does match it;
-# this runs on CI's mawk too.
+# 42e-i. CRLF measures the same as LF: an awk that does not treat a lone \r
+# as [[:space:]] (mawk on CI, not BWK awk on macOS) would never find the separator.
 make_mock_curl_think "$tmp" 'subject here\r\n\r\none two three four five six seven eight nine ten eleven twelve'
 assert_contains "body is 12 words (> 10)" "$(run_bw)" \
   "body_max_words: CRLF output measures the same as LF"
-# 42f. The limit arrives through the flavor profile, so a project can tighten
-# it without touching the recipe. A non-numeric value is ignored rather than
-# crashing the call.
+# 42f. The limit can come from the flavor profile.
 cat > "$prompts/bwf.md" <<'EOF'
 ---
 tier: prose
@@ -5892,13 +5346,8 @@ assert_contains "body is 5 words (> 3)" "$out" \
   "body_max_words: the limit comes from the flavor profile"
 rm -rf "$tmp" "$metrics"
 
-# ---------------------------------------------------------------------------
-# 43. no_single_item_list — a numbered list holding exactly one item. Wrong on
-# both reply recipes whichever branch the caller is on: MULTI-ASK-SPLIT rule 2
-# gives two-or-more asks an item each, rule 4 gives a single ask a sentence.
-# The check therefore needs no knowledge of how many asks were passed in.
-# Added 2026-08-26 after the defect survived two prompt-text fixes.
-# ---------------------------------------------------------------------------
+# --- 43. no_single_item_list: a numbered list holding exactly one item is
+# wrong on every branch of the reply recipes (one ask is a sentence) ---
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -5930,16 +5379,14 @@ run_sil() {
     bash "$SCRIPT" --recipe sil prose "go" </dev/null 2>&1 >/dev/null
 }
 mk_sil_recipe true
-# 43a. The live regression, verbatim from the 2026-08-26T19:29:41Z pr-agent
-# draft: one sentence of verdict, then a single numbered ask.
+# 43a. One sentence of verdict, then a single numbered ask.
 make_mock_curl_think "$tmp" '@swayamg20, the fix in sanitize_diagram() handles unquoted labels.\n1. Would you like to apply the two inline suggestions, or leave the pipe-label case for a follow-up?'
 out=$(run_sil)
 assert_contains "check 'no_single_item_list' FAILED" "$out" \
   "no_single_item_list: a one-item numbered list fails"
 assert_contains '"checks_failed_names":["no_single_item_list"]' "$(tail -1 "$metrics")" \
   "no_single_item_list: named on the metrics row"
-# 43b. Two items is the legitimate MULTI-ASK-SPLIT shape and must pass. This is
-# the assertion that keeps the fix from simply inverting the defect.
+# 43b. Two items is the legitimate multi-ask shape.
 make_mock_curl_think "$tmp" 'The cause is the flag flip.\n1. Does it reproduce on 2.9?\n2. Could you paste the launch flags?'
 if [[ "$(run_sil)" == *"no_single_item_list"* ]]; then
   echo "  FAIL  no_single_item_list: a genuine two-ask list must pass"; fail=$((fail+1))
@@ -5957,23 +5404,19 @@ fi
 make_mock_curl_think "$tmp" 'The cause is the flag flip.\n1) Could you paste the launch flags?'
 assert_contains "check 'no_single_item_list' FAILED" "$(run_sil)" \
   "no_single_item_list: the 1) enumerator form counts"
-# 43e. An enumerator needs its trailing space. A decimal opening a wrapped
-# prose line is not a list item and must not be read as one.
+# 43e. An enumerator needs its trailing space: a decimal opening a wrapped
+# line is not a list item.
 make_mock_curl_think "$tmp" 'The regression landed in\n2.9.1 and not before it.'
 if [[ "$(run_sil)" == *"no_single_item_list"* ]]; then
   echo "  FAIL  no_single_item_list: a bare decimal is not a list item"; fail=$((fail+1))
 else
   echo "  PASS  no_single_item_list: a bare decimal is not a list item"; pass=$((pass+1))
 fi
-# 43f. CRLF output must behave the same as LF, for the reason body_required
-# and body_max_words carry the same guard: a lone \r is non-whitespace to some
-# awks, so the marker would sit behind it and never match.
+# 43f. CRLF behaves the same as LF (a lone \r is non-whitespace to some awks).
 make_mock_curl_think "$tmp" 'The cause is the flag flip.\r\n1. Could you paste the launch flags?'
 assert_contains "check 'no_single_item_list' FAILED" "$(run_sil)" \
   "no_single_item_list: CRLF output behaves the same as LF"
-# 43g. The boolean gate. A `false` value skips the check WITHOUT tripping the
-# unknown-check warning, so a recipe can opt out by value rather than by
-# deleting the key.
+# 43g. A `false` value skips the check without an unknown-check warning.
 mk_sil_recipe false
 make_mock_curl_think "$tmp" 'The cause is the flag flip.\n1. Could you paste the launch flags?'
 out=$(run_sil)
@@ -5984,14 +5427,9 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
-# ---------------------------------------------------------------------------
-# 44. no_invented_task_list — a markdown task list the model produced without
-# having been shown one. Deliberately NOT a blanket ban: the 2026-08-21
-# pr-description finding is that a `- [x] Bug fix` category box is correct
-# output for a repo whose PR template asks for one. The frontmatter value names
-# the --var carrying the shape authority, and the check fires only when the
-# output has a task list and those examples have none.
-# ---------------------------------------------------------------------------
+# --- 44. no_invented_task_list: fires only when the output has a task list
+# and the --var named in the frontmatter (the shape authority) has none, since
+# a category box is correct output for a repo whose PR template asks for one ---
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -6024,8 +5462,7 @@ run_tl() {
     bash "$SCRIPT" --recipe tl --var examples="$1" prose "go" </dev/null 2>&1 >/dev/null
 }
 mk_tl_recipe examples
-# 44a. The live regression: a `## Test plan` of unchecked items appended to a
-# body whose own prose had already named the suites and their passing counts.
+# 44a. An unchecked `## Test plan` appended to a body the examples never showed one for.
 make_mock_curl_think "$tmp" 'Suites: 366 passed, 94/94.\n\n## Test plan\n- [ ] Run the prompts suite (not run yet)\n- [ ] Run the unit suite (not run yet)'
 out=$(run_tl $'TITLE: a merged PR\nBODY:\nTwo sentences of prose. No checklist.')
 assert_contains "check 'no_invented_task_list' FAILED" "$out" \
@@ -6034,9 +5471,7 @@ assert_contains "carries 2 markdown task-list item(s)" "$out" \
   "no_invented_task_list: the count is named"
 assert_contains '"checks_failed_names":["no_invented_task_list"]' "$(tail -1 "$metrics")" \
   "no_invented_task_list: named on the metrics row"
-# 44b. The category-box case from the 2026-08-21 calibration entry. When the
-# examples themselves carry a checklist the output is matching the shape it was
-# shown, which is the whole contract of this recipe. Must stay silent.
+# 44b. When the examples carry a checklist the output is matching its shape.
 if [[ "$(run_tl $'TITLE: a merged PR\nBODY:\n## Type of change\n- [x] Bug fix\n- [ ] New feature')" == *"no_invented_task_list"* ]]; then
   echo "  FAIL  no_invented_task_list: a task list the examples also carry must pass"; fail=$((fail+1))
 else
@@ -6049,8 +5484,7 @@ if [[ "$(run_tl $'TITLE: a merged PR\nBODY:\nprose')" == *"no_invented_task_list
 else
   echo "  PASS  no_invented_task_list: output with no task list passes"; pass=$((pass+1))
 fi
-# 44d. A ticked box is an assertion about work done and counts the same as an
-# unchecked one when the examples show neither.
+# 44d. A ticked box counts the same as an unchecked one.
 make_mock_curl_think "$tmp" 'Body.\n\n- [x] Tests pass'
 assert_contains "check 'no_invented_task_list' FAILED" "$(run_tl $'TITLE: x\nBODY:\nprose')" \
   "no_invented_task_list: a ticked box counts too"
@@ -6058,16 +5492,14 @@ assert_contains "check 'no_invented_task_list' FAILED" "$(run_tl $'TITLE: x\nBOD
 make_mock_curl_think "$tmp" 'Body.\n\n  * [ ] one\n  + [ ] two'
 assert_contains "carries 2 markdown task-list item(s)" "$(run_tl $'TITLE: x\nBODY:\nprose')" \
   "no_invented_task_list: * and + markers and indentation count"
-# 44f. A bracketed word is not a checkbox. `- [draft] note` is an ordinary
-# bullet and must not be read as a task item.
+# 44f. A bracketed word is not a checkbox.
 make_mock_curl_think "$tmp" 'Body.\n\n- [draft] not a checkbox\n- [WIP] also not'
 if [[ "$(run_tl $'TITLE: x\nBODY:\nprose')" == *"no_invented_task_list"* ]]; then
   echo "  FAIL  no_invented_task_list: a bracketed word is not a checkbox"; fail=$((fail+1))
 else
   echo "  PASS  no_invented_task_list: a bracketed word is not a checkbox"; pass=$((pass+1))
 fi
-# 44g. An empty value skips the check WITHOUT tripping the unknown-check
-# warning, so the key can be present and inert.
+# 44g. An empty value skips the check without an unknown-check warning.
 mk_tl_recipe ""
 make_mock_curl_think "$tmp" 'Body.\n\n- [ ] one'
 out=$(run_tl $'TITLE: x\nBODY:\nprose')
@@ -6078,14 +5510,9 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
-# ---------------------------------------------------------------------------
-# 45. no_invented_refs — a trailer identifier grounded in nothing the caller
-# supplied. pr-description's 2026-08-21 entry records four reverted prompt-side
-# attempts, one of which made things worse because its Wrong example carried a
-# literal identifier that the model then emitted. So the grounding set is the
-# caller's --var values and piped context ONLY; the recipe template is excluded
-# on purpose, and 45d is the assertion that pins that.
-# ---------------------------------------------------------------------------
+# --- 45. no_invented_refs: a trailer identifier must appear in the caller's
+# --var values or piped context; the recipe template is excluded on purpose,
+# because a Wrong example carrying a literal identifier gets copied (45d) ---
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -6116,8 +5543,7 @@ run_rf() {
     DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
     bash "$SCRIPT" --recipe rf --var examples="$1" prose "go" </dev/null 2>&1 >/dev/null
 }
-# 45a. The documented shape: examples end in AI-812 / AI-806, the caller names
-# no ticket, and the model continues the sequence.
+# 45a. The examples end in AI-812 / AI-806 and the model continues the sequence.
 make_mock_curl_think "$tmp" 'A short body describing the change.\n\nRefs: AI-813'
 out=$(run_rf $'TITLE: one\nBODY:\nprose\nRefs: AI-812\n\nTITLE: two\nBODY:\nprose\nRefs: AI-806')
 assert_contains "check 'no_invented_refs' FAILED" "$out" \
@@ -6136,21 +5562,16 @@ fi
 make_mock_curl_think "$tmp" 'A short body.\n\nCloses: #4271'
 assert_contains "trailer names #4271" "$(run_rf $'TITLE: one\nBODY:\nprose\nCloses: #12')" \
   "no_invented_refs: an ungrounded issue number fails"
-# 45d. The load-bearing one. The identifier here appears in the recipe's own
-# Wrong example and nowhere in the caller's inputs, which is exactly the 2026-08-21
-# failure where the model copied a value out of the prohibition. Grounding
-# against the template would have licensed that copy, so this must still fail.
+# 45d. An identifier that appears only in the recipe's own Wrong example is
+# not grounded.
 make_mock_curl_think "$tmp" 'A short body.\n\nRefs: ZZ-9915'
 assert_contains "trailer names ZZ-9915" "$(run_rf $'TITLE: one\nBODY:\nprose\nRefs: AI-812')" \
   "no_invented_refs: an identifier taken from the recipe's own text is not grounded"
-# 45d-i. Grounding is token-for-token, not substring. An input mentioning
-# `#4271` must not ground an output that says `#427` — one digit short of a real
-# reference is exactly the shape that reads as legitimate to a reviewer.
+# 45d-i. Grounding is token-for-token, not substring: `#4271` does not ground `#427`.
 make_mock_curl_think "$tmp" 'A short body.\n\nCloses: #427'
 assert_contains "trailer names #427" "$(run_rf $'TITLE: one\nBODY:\nfixes #4271 in the parser')" \
   "no_invented_refs: a prefix of a grounded identifier is not itself grounded"
-# 45e. Prose is not scanned, only trailer-shaped lines. A hyphenated token in a
-# sentence is not an identifier claim.
+# 45e. Only trailer-shaped lines are scanned, not prose.
 make_mock_curl_think "$tmp" 'The parser now reads UTF-8 and rejects ISO-8859 input, per RFC-3629.'
 if [[ "$(run_rf $'TITLE: one\nBODY:\nprose')" == *"no_invented_refs"* ]]; then
   echo "  FAIL  no_invented_refs: hyphenated tokens in prose must not be scanned"; fail=$((fail+1))
@@ -6166,15 +5587,8 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
-# ---------------------------------------------------------------------------
-# 46. Zero-padded numeric limits are decimal, not octal. Bash reads a leading
-# zero as octal, so `subject_max: 08` aborted the comparison with "value too
-# great for base" on the caller's stderr and took the wrong branch — a check
-# that silently fails open, which is the worst failure mode a check has.
-# Verified before the fix: a 62-character subject passed a limit of 8.
-# `subject_max` is flavor-substituted, so a profile carrying a padded value
-# would have disabled the subject check for every commit message.
-# ---------------------------------------------------------------------------
+# --- 46. Zero-padded numeric limits are decimal: bash reads a leading zero
+# as octal, so `subject_max: 08` would abort the comparison and fail open ---
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -6229,8 +5643,7 @@ if [[ "$out" == *"value too great for base"* ]]; then
 else
   echo "  PASS  base-10: body_max_words leaks no arithmetic error"; pass=$((pass+1))
 fi
-# 46c. A padded value under the limit must still pass — 10# must not turn the
-# comparison into a permanent failure.
+# 46c. A padded limit above the measured value still passes.
 mk_oct_recipe 0500 0500
 make_mock_curl_think "$tmp" 'short subject\n\ntwo words'
 out=$(run_oct)
@@ -6241,15 +5654,8 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
-# ---------------------------------------------------------------------------
-# 47. Retry-on-check-failure (#384). A declared check that fails used to report
-# and stop, leaving the caller to rewrite or discard by hand — ten such
-# failures in the 7-day window to 2026-08-27, ten hand-edits. The wrapper holds
-# both the prompt that produced the bad output and the name of the constraint
-# it broke, so it spends one more generation naming the failure. Exactly one:
-# a second failure means the model cannot satisfy the constraint on this input
-# and a third call buys nothing but latency.
-# ---------------------------------------------------------------------------
+# --- 47. Retry on check failure (#384): exactly one more generation naming
+# the failed check, never a loop ---
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -6275,14 +5681,10 @@ n/a
 EOF
 
 make_mock_curl_seq() {
-  # Mock curl that answers dispatch calls from a queue of canned contents, one
-  # per call, and appends a line to a counter file for every DISPATCH (the
-  # GET /v1/models probe is answered before the counter, so discovery never
-  # inflates the count). Each dispatch payload is written to
-  # "$dir/payload.<n>.json" so a test can assert on what the retry actually
-  # sent. The last content is reused if the script dispatches more times than
-  # there are entries, which is what makes an unbounded-retry regression show
-  # up as a count assertion rather than as a hang.
+  # Answers dispatches from a queue of canned contents, counting each in $2
+  # (discovery is answered first and not counted) and saving the payload as
+  # "$dir/payload.<n>.json". The last content repeats once the queue is
+  # spent, so an unbounded retry shows as a count, not a hang.
   local dir="$1" counter="$2"; shift 2
   local q="$dir/queue"; : > "$q"
   local c
@@ -6328,8 +5730,7 @@ run_rt() {
     bash "$SCRIPT" --recipe rt prose "go" </dev/null
 }
 
-# 47a. A first output that fails the check is re-generated once, and the
-# SECOND output is what the caller receives.
+# 47a. A failed check re-generates once and the second output is delivered.
 : > "$metrics"
 make_mock_curl_seq "$tmp" "$counter" \
   'this subject line is far too long\n\nbody' \
@@ -6347,8 +5748,7 @@ out=$(run_rt 2>/dev/null)
 assert_eq 1 "$(wc -l < "$counter" | tr -d ' ')" \
   "retry: a passing check costs exactly one dispatch"
 
-# 47c. The retry names the failed check, so the model is told what to fix
-# rather than merely asked again.
+# 47c. The retry names the failed check.
 : > "$metrics"
 make_mock_curl_seq "$tmp" "$counter" \
   'this subject line is far too long\n\nbody' \
@@ -6362,8 +5762,7 @@ else
   echo "  PASS  retry: the first request carries no rejection notice"; pass=$((pass+1))
 fi
 
-# 47d. One retry, never a loop. Every response fails, so an unbounded
-# implementation would dispatch until the queue or the patience ran out.
+# 47d. One retry, never a loop: every response fails.
 : > "$metrics"
 make_mock_curl_seq "$tmp" "$counter" 'this subject line is far too long\n\nbody'
 EC=0
@@ -6386,11 +5785,8 @@ else
   echo "  PASS  retry: a call that was not retried carries no retried field"; pass=$((pass+1))
 fi
 
-# 47e-i. The rejected generation and the appended notice are real local work.
-# tokens_local is defined as total chars in + out over 4, so a retried row that
-# counted only the surviving call would under-report it. They ride their own
-# field rather than inflating prompt_chars / output_chars, which keep meaning
-# "the request that produced the answer you got"; the row still reproduces its
+# 47e-i. The rejected generation and the notice ride retry_chars rather than
+# inflating prompt_chars / output_chars, and the row still reproduces its
 # own token count.
 : > "$metrics"
 make_mock_curl_seq "$tmp" "$counter" \
@@ -6408,12 +5804,8 @@ assert_eq "$(printf '%s' "$row" | jq -r '((.prompt_chars + .context_chars + .out
   "$(printf '%s' "$row" | jq -r '.estimated_tokens_avoided')" \
   "retry: the row still reproduces its own token count"
 
-# 46-ii. A delegation issued from outside any git repository writes no project
-# field, rather than one named after the scratch directory it happened to run
-# in. Observed 2026-08-27: a delegation about `delegate-local` run from a job
-# temp dir was filed under `project:"tmp"`, which fragments the per-project
-# rollup and matches no boundary lookup, so the hook nudged a session that had
-# in fact delegated.
+# 46-ii. A delegation from outside any git repository writes no project
+# field rather than the scratch directory's name.
 : > "$metrics"
 outside="$tmp/not-a-repo"; mkdir -p "$outside"
 make_mock_curl_ok "$tmp"
@@ -6429,17 +5821,10 @@ fi
 assert_eq "delegate-local" "$(tail -1 "$metrics" | jq -r '.project')" \
   "project: --project still names it from outside a repo"
 
-# 47e-i-b. The rejected generation is measured BEFORE the checks run, because
-# the ADR 0017 auto-strip mutates $output in place. A recipe declaring both
-# no_padding_tail and another check can have its padding clause stripped and
-# then be retried for the other failure; reading the length afterwards would
-# charge the retry for the post-strip text.
-#
-# Differential, because the row cannot show it directly: checks_run/failed/
-# autofixed are all reset by the second pass, so a retried row always reports
-# the post-retry state. Two first-outputs identical but for a trailing padding
-# clause must therefore differ in retry_chars by that clause. Measuring after
-# the strip makes them equal.
+# 47e-i-b. The rejected generation is measured before the checks run, since
+# the auto-strip mutates $output in place. Differential, because a retried
+# row reports only the post-retry check state: two first outputs that differ
+# by a trailing padding clause must differ in retry_chars by that clause.
 prompts2="$tmp/prompts2"; mkdir -p "$prompts2"
 cat > "$prompts2/rp.md" <<'EOF'
 ---
@@ -6470,8 +5855,7 @@ run_rp() {
 }
 plain_body='this subject line is far too long\n\nthe body says a thing'
 padded_body="${plain_body}, ensuring the change is covered"
-# Precondition: the padded tail really is one the auto-strip takes. Without
-# this the differential below would pass for the wrong reason.
+# Precondition: the padded tail is one the auto-strip takes.
 : > "$metrics"
 make_mock_curl_seq "$tmp" "$counter" "$padded_body"
 run_rp off >/dev/null 2>&1
@@ -6491,10 +5875,8 @@ else
   echo "  FAIL  retry: the rejected generation is measured before the auto-strip (plain=$rc_plain padded=$rc_padded)"; fail=$((fail+1))
 fi
 
-# 47e-ii. queue_wait_ms means invoke-to-first-byte, and duration_ms covers both
-# dispatches, so a retried call has to carry both waits. Banking only the
-# second would drop the whole of the rejected call's wait into generation_ms.
-# The mock reports 1 ms per dispatch, so a retried call reads 2.
+# 47e-ii. duration_ms covers both dispatches, so queue_wait_ms carries both
+# waits; the mock reports 1 ms per dispatch.
 : > "$metrics"
 make_mock_curl_seq "$tmp" "$counter" \
   'this subject line is far too long\n\nbody' \
@@ -6508,9 +5890,7 @@ run_rt >/dev/null 2>&1
 assert_eq 1 "$(tail -1 "$metrics" | jq -r '.queue_wait_ms')" \
   "retry: a single dispatch still reads one wait"
 
-# 47e-iii. The OTel span carries the same retry accounting as the row, so a
-# dashboard reading delegate.estimated_tokens_avoided can still reconcile it
-# against the char counts beside it (docs/otel-schema.md).
+# 47e-iii. The OTel span carries the same retry_chars as the row.
 : > "$metrics"
 otel_body="$tmp/otel.json"
 cat > "$tmp/curl.otel" <<'OEOF'
@@ -6519,7 +5899,7 @@ OEOF
 make_mock_curl_seq "$tmp" "$counter" \
   'this subject line is far too long\n\nbody' \
   'short one\n\nbody'
-# Re-wrap the mock so an OTLP POST is captured instead of answered as a chat.
+# Wrap the mock so the OTLP POST is captured rather than answered as a chat.
 mv "$tmp/curl" "$tmp/curl.chat"
 cat > "$tmp/curl" <<EOF
 #!/usr/bin/env bash
@@ -6536,9 +5916,7 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
 assert_eq "$(tail -1 "$metrics" | jq -r '.retry_chars')" \
   "$(jq -r '[.. | objects | select(.key? == "delegate.retry_chars") | .value.intValue] | .[0]' "$otel_body" 2>/dev/null)" \
   "retry: the span carries the same retry_chars as the row"
-# OTLP/JSON encodes int64 as a JSON STRING (proto3 JSON mapping), and every
-# other intValue on this span already does. A number here would be the one
-# inconsistent attribute in the payload.
+# int64 is a JSON string in OTLP/JSON, like every other intValue on the span.
 assert_eq "string" \
   "$(jq -r '[.. | objects | select(.key? == "delegate.retry_chars") | .value.intValue | type] | .[0]' "$otel_body" 2>/dev/null)" \
   "retry: delegate.retry_chars intValue is a JSON string"
@@ -6553,8 +5931,7 @@ assert_eq 1 "$(wc -l < "$counter" | tr -d ' ')" \
 assert_contains "check 'subject_max' FAILED" "$out" \
   "retry: DELEGATE_NO_RETRY=1 still reports the failure"
 
-# 47g. A bare (recipe-free) call declares no checks, so nothing can fail and
-# nothing is ever retried.
+# 47g. A bare call declares no checks, so it is never retried.
 : > "$metrics"
 make_mock_curl_seq "$tmp" "$counter" 'this subject line is far too long\n\nbody'
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
@@ -6564,16 +5941,8 @@ assert_eq 1 "$(wc -l < "$counter" | tr -d ' ')" \
   "retry: a bare call is never retried"
 rm -rf "$tmp" "$metrics"
 
-# ---------------------------------------------------------------------------
-# no_invented_headings — a markdown heading the model produced without having
-# been shown one. Measured 2026-08-27 with DELEGATE_NO_RETRY=1 so the first
-# pass is visible: given two heading-free merged-PR exemplars and the facts of
-# a change as terse notes, `pr-description` returned `### Implementation
-# Details` and `### Testing` with bullets under each. Same contract as
-# no_invented_task_list — the value names the --var holding the shape
-# authority, and the check fires only when the output has a heading and those
-# examples have none.
-# ---------------------------------------------------------------------------
+# --- no_invented_headings: same contract as no_invented_task_list, for
+# markdown headings ---
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -6604,8 +5973,7 @@ run_hd() {
     bash "$SCRIPT" --recipe hd --var examples="$1" prose "go" </dev/null 2>&1 >/dev/null
 }
 
-# The live regression: headings with bullets under them, against exemplars
-# that are heading-free prose.
+# Headings with bullets under them, against heading-free exemplars.
 make_mock_curl_think "$tmp" 'A paragraph of prose.\n\n### Implementation Details\n- Capture: pre-post.\n\n### Testing\n- 18 new assertions.'
 out=$(run_hd $'TITLE: a merged PR\nBODY:\nTwo sentences of prose. No headings at all.')
 assert_contains "check 'no_invented_headings' FAILED" "$out" \
@@ -6615,8 +5983,7 @@ assert_contains "carries 2 markdown heading(s)" "$out" \
 assert_contains '"checks_failed_names":["no_invented_headings"]' "$(tail -1 "$metrics")" \
   "no_invented_headings: named on the metrics row"
 
-# When the examples carry headings the output is matching the shape it was
-# shown, which is the whole contract of the recipe. Must stay silent.
+# When the examples carry headings the output is matching its shape.
 if [[ "$(run_hd $'TITLE: a merged PR\nBODY:\n## Summary\nWhat it does.')" == *"no_invented_headings"* ]]; then
   echo "  FAIL  no_invented_headings: a heading the examples also carry must pass"; fail=$((fail+1))
 else
@@ -6631,8 +5998,7 @@ else
   echo "  PASS  no_invented_headings: output with no heading passes"; pass=$((pass+1))
 fi
 
-# A shell comment inside a fenced block is not a heading. A PR body that pastes
-# a snippet would otherwise fire on output that matched its examples exactly.
+# A shell comment inside a fenced block is not a heading.
 make_mock_curl_think "$tmp" 'Prose about the fix.\n\n```bash\n# run the suite\nbash tests/run-tests.sh\n```\n\nMore prose.'
 if [[ "$(run_hd $'TITLE: a merged PR\nBODY:\nprose')" == *"no_invented_headings"* ]]; then
   echo "  FAIL  no_invented_headings: a comment inside a fenced block is not a heading"; fail=$((fail+1))
@@ -6648,26 +6014,16 @@ else
   echo "  PASS  no_invented_headings: a shebang is not a heading"; pass=$((pass+1))
 fi
 
-# Fences in the EXAMPLES are skipped too, so a snippet comment in an exemplar
-# cannot be mistaken for the exemplar carrying headings — which would silence
-# the check on the very output it exists to catch.
+# Fences in the examples are skipped too, or a snippet comment would read as
+# the exemplar carrying headings and silence the check.
 make_mock_curl_think "$tmp" 'Prose.\n\n## Summary\nInvented.'
 assert_contains "check 'no_invented_headings' FAILED" \
   "$(run_hd $'TITLE: a merged PR\nBODY:\nprose\n```bash\n# not a heading\nls\n```')" \
   "no_invented_headings: a fenced comment in the examples is not a heading either"
 rm -rf "$tmp" "$metrics"
 
-# ---------------------------------------------------------------------------
-# 48. no_context_echo (#475) — the caller-supplied half of the echo problem.
-# no_example_echo compares against the recipe's own prompt and deliberately
-# never against the piped context, so a draft that hands the facts straight
-# back passes every declared check and never takes the #384 retry. Measured
-# 2026-09-11: 63 of 97 reply-recipe rejections said the draft restated the
-# context, and rejected maintainer-review-reply output ran p50 1637 chars
-# against a context p50 of 1627. Opt-in per recipe. The threshold is TWO
-# lines: quoting one supplied fact back is legitimate evidence-carrying, and
-# the recipes tell the model to spell every anchor exactly as the facts do.
-# ---------------------------------------------------------------------------
+# --- 48. no_context_echo (#475): opt-in per recipe, fails when two or more
+# distinct piped sentences come back verbatim; one is legitimate anchor-carrying ---
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -6700,8 +6056,7 @@ EOF
 ce_facts=$'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.\nThe regression predates the refactor by two releases.'
 ce_verdict='The rework is right and the blank window is not a regression from it at all.'
 run_ce() {
-  # $1 selects the recipe; $ce_facts is always the piped context and
-  # $ce_verdict the one --var, so a test can show which of the two is a pattern.
+  # $1 selects the recipe; $ce_facts is piped and $ce_verdict is the --var.
   printf '%s\n' "$ce_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
     DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
     DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -6722,23 +6077,15 @@ assert_contains '"checks_failed_names":["no_context_echo"]' "$row" \
 assert_contains '"checks_run":2' "$row" \
   "context-echo: counted in checks_run beside the default echo check"
 
-# 48a-ii. The regression anchor. The rejected drafts this check was measured
-# against are ONE paragraph line each: row 2026-09-10T20:00:01Z has
-# context_chars 1687 and a stored body of one 1687-char line, and 21 of the
-# 45 stored maintainer-review-reply drafts in the window have exactly three
-# lines (verdict, body, ask). Facts are piped one per line and come back
-# joined into a paragraph, so a whole-line compare finds nothing on the very
-# failure it exists for. The unit has to be the sentence.
+# 48a-ii. Facts are piped one per line and come back joined into a paragraph,
+# so the unit is the sentence, not the line.
 make_mock_curl_think "$tmp" 'Not a regression. The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412. All 531 tests pass on the branch with the flag forced back on, see PR #2632. Could you add a test?'
 out=$(run_ce)
 assert_contains "check 'no_context_echo' FAILED" "$out" \
   "context-echo: two facts joined into one paragraph line are still caught"
 
-# 48a-iv. Facts arrive without terminators. A facts file states each fact as
-# a bare line, and the model turns it into a sentence by adding the full stop,
-# so the unit on the context side is `<fact>` and on the output side
-# `<fact>.` — a compare that keeps the terminator on the unit never matches
-# the common case. Same two facts as 48a, minus their full stops.
+# 48a-iv. Facts often arrive without full stops and come back with them, so
+# the terminator is not part of the unit.
 ce_facts_bare=$(printf "%s\n" "$ce_facts" | sed "s/\.$//")
 : > "$metrics"
 make_mock_curl_think "$tmp" "Not a regression. The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412. All 531 tests pass on the branch with the flag forced back on, see PR #2632. Could you add a test?"
@@ -6749,10 +6096,8 @@ out=$(printf "%s\n" "$ce_facts_bare" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME
 assert_contains "check 'no_context_echo' FAILED" "$out" \
   "context-echo: facts piped without full stops are caught when echoed as sentences"
 
-# 48a-iii. A --var value is not a pattern. The verdict is text the recipe
-# tells the model to place, so reproducing it is correct; only the piped
-# context counts. Verdict verbatim as its own sentence plus ONE fact is one
-# echoed sentence; were --var values patterns it would be two.
+# 48a-iii. A --var value is not a pattern: the verdict plus one fact is one
+# echoed sentence, not two.
 : > "$metrics"
 make_mock_curl_think "$tmp" "${ce_verdict} The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412. Could you add a test?"
 out=$(run_ce)
@@ -6764,9 +6109,7 @@ fi
 assert_contains '"checks_run":2' "$(tail -1 "$metrics")" \
   "context-echo: the --var case still ran the check"
 
-# 48b. The anchors carried inside NEW sentences is exactly what the recipes
-# ask for, and must never flag. This is the guard that matters: a false
-# positive here would reject every good evidence-led reply.
+# 48b. Anchors carried inside new sentences never flag.
 make_mock_curl_think "$tmp" 'Not a regression.\nThe flip is in the Electron 39 upgrade, specifically the sandbox flag at src/main.js:412, two releases before the refactor.\nI re-ran the suite with the flag forced back on and all 531 tests pass, so PR #2632 is not the cause.\nCould you add a test?'
 : > "$metrics"
 out=$(run_ce)
@@ -6775,14 +6118,11 @@ if [[ "$out" == *"no_context_echo"* ]]; then
 else
   echo "  PASS  context-echo: anchors carried in new sentences do not flag"; pass=$((pass+1))
 fi
-# Silence must mean "ran and passed", not "never ran": on the unfixed tree the
-# unknown-check warning carried the name and every silent case failed for
-# that reason alone.
+# Silence must mean "ran and passed", not "never ran".
 assert_contains '"checks_run":2' "$(tail -1 "$metrics")" \
   "context-echo: the silent case still ran the check"
 
-# 48c. ONE echoed line is quoting a fact, which the recipes permit. Below the
-# threshold, so silent.
+# 48c. One echoed line is quoting a fact: below the threshold.
 make_mock_curl_think "$tmp" 'Not a regression.\nThe GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nThe refactor is two releases newer, so the failure is the flag.\nCould you add a test?'
 out=$(run_ce)
 if [[ "$out" == *"no_context_echo"* ]]; then
@@ -6800,8 +6140,7 @@ else
   echo "  PASS  context-echo: one line repeated is one line, not two"; pass=$((pass+1))
 fi
 
-# 48d. Short lines sit below the same 40-char floor as no_example_echo, so a
-# reply may share a sign-off or a heading with the facts without colliding.
+# 48d. Short lines sit below the same 40-char floor as no_example_echo.
 ce_facts_saved="$ce_facts"
 ce_facts=$'Thanks again!\n=== FACTS ===\nA third short line.'
 make_mock_curl_think "$tmp" 'Thanks again!\n=== FACTS ===\nA third short line.'
@@ -6820,8 +6159,7 @@ out=$(run_ce)
 assert_contains "check 'no_context_echo' FAILED" "$out" \
   "context-echo: whitespace and a label prefix are normalised away before comparing"
 
-# 48f. Opt-in: a recipe that does not declare it never runs it, so the
-# default-on echo check is the only one on the row.
+# 48f. Opt-in: an undeclared recipe never runs it.
 cat > "$prompts/ce_off.md" <<'EOF'
 ---
 tier: prose
@@ -6854,10 +6192,7 @@ fi
 assert_contains '"checks_run":1' "$(tail -1 "$metrics")" \
   "context-echo: undeclared, only the default echo check is counted"
 
-# 48f-ii. DELEGATE_NO_ECHO_CHECK=1 is documented as the echo opt-out and this
-# check is the mirror of the one it was written for, so it silences both.
-# Left uncovered, an opted-out call still fired this check and paid for the
-# retry it triggers.
+# 48f-ii. DELEGATE_NO_ECHO_CHECK=1 silences both echo checks.
 : > "$metrics"
 make_mock_curl_think "$tmp" 'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.'
 out=$(printf '%s\n' "$ce_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -6875,11 +6210,8 @@ else
   echo "  PASS  context-echo: an opted-out call counts neither echo check"; pass=$((pass+1))
 fi
 
-# 48g. The retry path fires with the constraint named, so the second request
-# tells the model to carry the anchors rather than the lines. The sentence is
-# about sentences only: this check measures echo, not length, so its notice
-# must not claim a length rule was broken. Length is max_context_ratio's job
-# (49 below, #487) and it carries its own constraint.
+# 48g. The retry names the constraint, which is about echo only; length is
+# max_context_ratio's job (49).
 counter="$tmp/calls"
 make_mock_curl_seq "$tmp" "$counter" \
   'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.' \
@@ -6903,19 +6235,9 @@ else
 fi
 rm -rf "$tmp" "$metrics"
 
-# ---------------------------------------------------------------------------
-# 49. max_context_ratio (#487) — a length ceiling relative to the piped
-# context, as a declared check. no_context_echo measures echo, not length, so
-# its retry notice cannot claim a length rule was broken; and a prose rule
-# ("the reply is shorter than the FACTS block") contradicted the recipe's own
-# LENGTH paragraph, could not be met on a three-line fact list once opener,
-# verdict, anchors, ask and sign-off are all mandatory, and did not
-# discriminate (3 of the 16 rejected rows, 557/560, 547/578, 318/329, were
-# already shorter and still echoing). Fails when output_chars / context_chars
-# >= the declared ratio AND the context is at least min_context_chars
-# (default 400), so a short fact list is exempt. Opt-in per recipe,
-# warn-only, retry-able with its own constraint sentence.
-# ---------------------------------------------------------------------------
+# --- 49. max_context_ratio (#487): fails when output_chars / context_chars
+# >= the declared ratio and the context is at least min_context_chars
+# (default 400); opt-in, warn-only, retried with its own constraint ---
 tmp=$(mktemp -d)
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
@@ -6939,8 +6261,7 @@ mcr_short_facts=$'The sandbox flag flip is at src/main.js:412.\nAll 531 tests pa
 mcr_long='The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear now. The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear now. The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear now. The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear now. The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear now. The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear now. The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear.'
 mcr_short='The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear.'
 run_mcr() {
-  # $1 = recipe, $2 = the piped facts. DELEGATE_NO_RETRY so the first pass's
-  # verdict lands on the row unrepaired.
+  # $1 = recipe, $2 = the piped facts; no retry so the first pass lands on the row.
   printf '%s\n' "$2" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
     DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
     DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -6979,8 +6300,7 @@ else
   echo "  PASS  context-ratio: a passing check leaves no failed name on the row"; pass=$((pass+1))
 fi
 
-# 49c. A short context is exempt whatever the ratio: a two-line fact list
-# comes back as those facts plus an ask, and that is the recipe working.
+# 49c. A context under the floor is exempt whatever the ratio.
 : > "$metrics"
 make_mock_curl_think "$tmp" "$mcr_long"
 out=$(run_mcr mcr "$mcr_short_facts")
@@ -6990,8 +6310,7 @@ else
   echo "  PASS  context-ratio: a context under the default 400-char floor is exempt"; pass=$((pass+1))
 fi
 
-# 49c-ii. The floor is the recipe's to raise: min_context_chars above the
-# context length exempts it even though the ratio would fail.
+# 49c-ii. A declared min_context_chars above the context length exempts it.
 : > "$metrics"
 make_mock_curl_think "$tmp" "$mcr_long"
 out=$(run_mcr mcr_floor "$mcr_facts")
@@ -7021,7 +6340,7 @@ else
   echo "  PASS  context-ratio: an undeclared recipe leaves it off the row"; pass=$((pass+1))
 fi
 
-# 49e. The retry fires with its own constraint sentence, and a curated second
+# 49e. The retry carries its own constraint sentence and a clean second
 # generation clears the row.
 counter="$tmp/calls"
 make_mock_curl_seq "$tmp" "$counter" "$mcr_long" "$mcr_short"

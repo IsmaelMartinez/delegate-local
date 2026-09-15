@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for delegate_project_name (scripts/lib/otel.sh): the value used
-# for delegate.project. The behaviour under test is that a delegation run from
-# a linked git worktree attributes to the MAIN repository, not the worktree
-# directory name — so all of a repo's worktree sessions share one project value.
+# Unit tests for delegate_project_name (scripts/lib/otel.sh): a linked
+# worktree attributes to the main repository, not the worktree directory.
 
 set -u
 
@@ -42,13 +40,8 @@ assert_eq "myrepo" "$(cd "$wt" && delegate_project_name)" "T2: linked worktree r
 # T3: from a nested subdirectory of the main repo → repo basename.
 assert_eq "myrepo" "$(cd "$repo/sub/dir" && delegate_project_name)" "T3: subdirectory resolves to repo name"
 
-# T4: outside any git repo → NOTHING. The cwd's basename is not a project, and
-# saying it is produced a real-looking name that names nothing: a delegation
-# about `delegate-local` issued from a scratch directory was filed under
-# `project:"tmp"` on 2026-08-27. That fragments the per-project rollup and can
-# never match a boundary lookup, so the hook nudges a session that did in fact
-# delegate. delegate-boundary-hook.sh already refuses this exact string for its
-# own derivation (#385); this is the wrapper agreeing.
+# T4: outside any git repo, nothing: a scratch directory's basename is not a
+# project, and a real-looking name matches no boundary lookup (#385).
 outside="$tmp/not-a-repo"
 mkdir -p "$outside"
 assert_eq "" "$(cd "$outside" && delegate_project_name)" "T4: outside a repo yields no project"
@@ -57,17 +50,9 @@ scratch="$tmp/tmp"
 mkdir -p "$scratch"
 assert_eq "" "$(cd "$scratch" && delegate_project_name)" "T4b: a scratch dir is not filed under its basename"
 
-# T4c: a git too old to answer --git-common-dir (pre-2.5) still resolves a
-# project via --show-toplevel. Removing that fallback while adding the
-# outside-a-repo case would have returned nothing INSIDE a repository on those
-# hosts.
-#
-# The shim answers both subcommands itself and never execs the real git. An
-# earlier version did exec it, and hung CI: `VAR=x func` sets a shell variable
-# rather than an exported one when func is a FUNCTION, so the shim never saw
-# the path it was told to delegate to. Self-contained is also simply the right
-# shape here — the point is to simulate a git that does not have the
-# subcommand, not to run the host's.
+# T4c: a git too old for --git-common-dir (pre-2.5) still resolves via
+# --show-toplevel. The shim answers both subcommands itself and never execs
+# the real git: `VAR=x func` does not export to a function's children.
 shim="$tmp/shim"
 mkdir -p "$shim"
 cat > "$shim/git" <<'SHIMEOF'
@@ -90,17 +75,12 @@ assert_eq "" \
   "$(cd "$outside" && export PATH="$shim:$PATH" && unset SHIM_TOPLEVEL && delegate_project_name)" \
   "T4d: the fallback still yields nothing outside a repo"
 
-# T4e: no project is a normal outcome, not an error. Falling off the end of the
-# function would carry out the failed `[[ -n "$toplevel" ]]` as status 1, and
-# delegate.sh runs under `set -e`.
+# T4e: no project is status 0, not the failed test's status 1: delegate.sh
+# runs under `set -e`.
 ( cd "$outside" && delegate_project_name >/dev/null )
 assert_eq 0 "$?" "T4e: returning no project is exit status 0"
 
-# T5: an explicit DELEGATE_PROJECT wins over every derivation. The cwd answer
-# is only right when the script runs inside the repo the delegation is FOR, so
-# delegating on behalf of repo X from the skill checkout has to be statable
-# (#342). The verdict row does not go through this: delegate-feedback.sh
-# copies the project off the delegate row it references (#474).
+# T5: an explicit DELEGATE_PROJECT wins over every derivation (#342).
 assert_eq "teams-for-linux" "$(cd "$repo" && DELEGATE_PROJECT=teams-for-linux delegate_project_name)" \
   "T5: DELEGATE_PROJECT overrides the repo derivation"
 assert_eq "teams-for-linux" "$(cd "$outside" && DELEGATE_PROJECT=teams-for-linux delegate_project_name)" \

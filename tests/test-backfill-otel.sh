@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/backfill-otel.sh.
-# Builds synthetic metrics JSONL fixtures in $tmp, mocks curl on a restricted
-# PATH so OTel POSTs are captured to a sniff file rather than actually
-# escaping the host, and asserts the per-row progress lines, final summary,
-# idempotency, and JSONL mutation semantics.
+# Unit tests for scripts/backfill-otel.sh, with curl mocked so OTel POSTs
+# are captured rather than sent.
 
 set -u
 
@@ -30,13 +27,8 @@ assert_not_contains() {
   else echo "  FAIL  $name (unexpectedly found '$needle')"; fail=$((fail+1)); fi
 }
 
-# Mock curl that captures every POST body to "$bodies_dir/N.json" (one file
-# per call so two POSTs in the same run can both be inspected) and writes
-# the argv to $invocations_log. Per-call exit code controlled by $behaviour:
-# "ok" → 0, "fail" → 22, "timeout" → 28.
-#
-# The mock is OTel-only: backfill never calls Ollama or MLX, so we don't
-# need the auto-probe dance the delegate.sh mock has.
+# Mock curl: each POST body to "$bodies_dir/N.json", argv to
+# $invocations_log, exit per $behaviour (ok=0, fail=22, timeout=28).
 make_mock_curl() {
   local dir="$1" bodies_dir="$2" invocations_log="$3" behaviour="${4:-ok}"
   mkdir -p "$bodies_dir"
@@ -197,17 +189,13 @@ fb_project=$(echo "$fb_body" | jq -r '
   | map(select(.key == "delegate.project"))
   | .[0].value.stringValue // ""')
 assert_eq "acme-repo" "$fb_project" "T5: delegate.project emitted on backfilled feedback span"
-# The row carries no verdict_source. One tier (ADR 0030): an untagged row is
-# the agent's verdict like every other, and the span says so rather than
-# labelling it with the retired human tier.
+# An untagged row is the agent's verdict like every other (ADR 0030).
 fb_source=$(echo "$fb_body" | jq -r '
   .resourceSpans[0].scopeSpans[0].spans[0].attributes
   | map(select(.key == "delegate.feedback.source"))
   | .[0].value.stringValue // ""')
 assert_eq "agent" "$fb_source" "T5: an untagged feedback row backfills as delegate.feedback.source=agent"
-# Track F (#158) default: feedback reason is content and redacted unless
-# DELEGATE_OTEL_INCLUDE_CONTENT=1. Assert the redaction holds end-to-end
-# through the backfill path.
+# The reason is redacted unless DELEGATE_OTEL_INCLUDE_CONTENT=1 (#158).
 assert_not_contains '"delegate.feedback.reason"' "$fb_body" "T5: feedback reason redacted by default (Track F invariant)"
 # Parent IDs are the deterministic ones the delegate POST also used.
 links_trace=$(echo "$fb_body" | jq -r '.resourceSpans[0].scopeSpans[0].spans[0].links[0].traceId')
@@ -222,10 +210,7 @@ parent_trace_attr=$(echo "$fb_body" | jq -r '
 assert_eq "$expected_parent_trace" "$parent_trace_attr" "T5: parent_trace_id attribute matches links"
 rm -rf "$tmp"
 
-# T5b. DELEGATE_OTEL_INCLUDE_CONTENT=1 → feedback reason IS emitted.
-# Confirms the backfill path honours the Track F opt-in alongside the
-# default redaction; operators who already opted in for the live exporter
-# get the same wire shape from the backfill.
+# T5b. DELEGATE_OTEL_INCLUDE_CONTENT=1 emits the reason.
 tmp=$(mktemp -d)
 bodies="$tmp/bodies"
 invocations="$tmp/invocations"; : > "$invocations"
@@ -249,9 +234,7 @@ assert_eq "had to rewrite" "$fb_reason" "T5b: feedback reason emitted when DELEG
 rm -rf "$tmp"
 
 # ---------------------------------------------------------------------------
-# 6. Idempotency: running the backfill twice in a row produces identical
-#    span IDs (sha1-derived) because the deterministic ID derivation is
-#    a pure function of (ts, source).
+# 6. Idempotency: ids are a pure function of (ts, source), so two runs agree.
 # ---------------------------------------------------------------------------
 tmp=$(mktemp -d)
 bodies1="$tmp/bodies-run1"
@@ -408,10 +391,7 @@ assert_eq 2 "$EC" "T10: unknown flag → exit 2"
 assert_contains "usage:" "$out" "T10: usage line printed on bad flag"
 
 # ---------------------------------------------------------------------------
-# T11. A row carrying retry_chars (#384) exports it, so a re-exported span
-# matches what the live exporter would have sent. Without the pass-through the
-# attribute is simply absent and the span's token total cannot be reconciled
-# against its char counts.
+# T11. retry_chars (#384) is exported, so the span's token total reconciles.
 # ---------------------------------------------------------------------------
 tmp=$(mktemp -d)
 bodies="$tmp/bodies"
