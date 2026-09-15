@@ -11,6 +11,7 @@ checks:
   no_padding_tail: true
   no_single_item_list: true
   no_context_echo: true
+  max_context_ratio: 0.8
 ---
 # maintainer-review-reply
 
@@ -55,9 +56,10 @@ An anchor is any of these appearing in the FACTS block: a path or filename, a `b
 You may NOT introduce an anchor that is absent from the FACTS block. No invented file names, line numbers, versions, counts, or issue references. If you need one and it is not there, write around it.
 
 LENGTH — read this before deciding how long the reply is:
-The FACTS block is the content of the reply, not a hint about it. Do not compress it to a sentence or two. Match the reply to the evidence: a handful of facts is a short paragraph, a dozen is three or four. Brevity that drops an anchor is one failure; a reply the length of the FACTS block, built from its lines, is the other. Curate: order the facts by what supports the verdict, join the ones that belong together, and drop framing that was written for you rather than for the reader.
+The FACTS block is the content of the reply, not a hint about it. Do not compress it to a sentence or two. Match the reply to the evidence: a handful of facts is a short paragraph, a dozen is two or three, and either way the reply runs well under the FACTS block's own length, because a sentence of yours that joins two facts and drops their framing is shorter than the two facts were. Brevity that drops an anchor is one failure; a reply the length of the FACTS block, built from its lines, is the other. Curate: order the facts by what supports the verdict, join the ones that belong together, and drop framing that was written for you rather than for the reader.
 
 Rules:
+- CURATION: the reply carries the anchors (paths, line references, numbers, hashes, issue and PR numbers) and states the judgement; it does not carry the facts' sentences. On a fact list of more than a few lines it runs well under the facts' length: a reply as long as its facts has curated nothing, however its sentences are worded.
 - Prose sentences and paragraphs. No bullet list, no numbered list, no headings, no markdown sections. The one exception: if the ask topic carries TWO OR MORE distinct asks (answering one does not answer the other), write those asks as a short numbered list at the end, one question per item, and keep everything above them as prose. A single ask is never a list.
 - If the trailing instruction asks for a different format, obey it; an explicit format instruction from the caller outranks the previous rule.
 - The recipient handle and the opener go where item 1 of the order puts them; nothing else precedes the verdict.
@@ -117,6 +119,7 @@ bash scripts/delegate.sh --recipe maintainer-review-reply \
 - "ANCHOR-PRESERVATION" — the dominant 2026-08-26 failure, measured across nine rejected `maintainer-reply` drafts on `pr-agent` and `teams-for-linux`: "dropped all verified specifics (file:line anchors, the 4-step pin-removal experiment and its exact outputs)", "dropped every measured fact from the context", "dropped the null-element finding and the thanks entirely". Inputs of 7-9 KB came back as 96 to 470 characters. Naming the anchor classes explicitly is what the generic "do not drop facts" phrasing failed to convey. Reworded 2026-09-11 so that preservation means the anchors inside new sentences and never the supplied sentences themselves: the original "the reply IS the evidence" line was read as licence to return the FACTS block wholesale (see the calibration note of that date), and `no_context_echo` now rejects a draft that copies two or more of its lines.
 - "You may NOT introduce an anchor that is absent from the FACTS block" — the symmetric failure: "invented a mechanic: claimed the corridor change stops bashers colliding with each other", and "misread the 531-test suite total as tests added by this PR". Preservation without an invention ceiling just moves the error.
 - "LENGTH — the FACTS block is the content, not a hint" — the prose tier treats a long input as something to summarise. Every adjacent recipe caps length; this one has to say the opposite out loud, or the model applies the cap it has seen everywhere else. The "built from its lines" clause and the "Curate" sentence were added 2026-09-11 because, said alone, "do not compress" had produced the mirror failure: a reply the same length as its input, made of the input.
+- "CURATION" plus the declared `max_context_ratio: 0.8` — the 2026-09-14 reading of the same failure after that rewording: the 16 rejected drafts in the window were still the size of their input (1172 characters out for 981 in, 557 for 560, 940 for 899), and the #384 retry, carrying "do not copy sentences of the supplied facts", came back the same size, because `no_context_echo` measures echo and its notice says nothing about length. The ceiling is a check rather than a prose rule: an unconditional "shorter than the FACTS block" was tried first and withdrawn in review, since it contradicted LENGTH, cannot be met on a three-line fact list once opener, verdict, anchors, ask and sign-off are all mandatory, and did not discriminate (three of the sixteen were already shorter and still echoing). The check fails when the output is at least 0.8 of the context by characters and the context is at least 400 characters (`min_context_chars`), so a short fact list is exempt, and it carries its own retry constraint in `scripts/delegate.sh`.
 - "If an opener is given below, begin with it verbatim, then the verdict" plus "Never write thanks of your own" — the 2026-08-26 reasons were "opened by thanking and restating, gave no verdict" and "dropped the verdict and the thanks entirely", so the recipe forbade an opening thanks outright. By 2026-09-11, 39 of 97 rejections wanted exactly that thanks ("no thanks opener", "opened with the verdict instead of thanks"). The two are reconciled the way `signoff` already works: the caller supplies the opener verbatim, so the model never invents gratitude and never restates, and with no opener the verdict still comes first.
 - "Prose sentences and paragraphs. No bullet list, no numbered list" with the two-or-more exception — "emitted a numbered list despite an explicit no-list instruction", "rendered a single request as a numbered list" (twice the same day). The exception is scoped tightly so the fix does not simply invert the defect.
 - "Do NOT hedge a verdict the facts state plainly" — a verdict softened into a maybe reads as no verdict at all, and the reader then has to ask again.
@@ -134,7 +137,7 @@ Could you add a regression test that covers the sandbox flag path before we merg
 Thanks again!
 ```
 
-Verify before recording verdict: the opener (if any) and the sign-off (if any) are present verbatim and are the only gratitude in the reply; the verdict is the first sentence after them; every anchor from the facts appears, spelled as supplied, inside sentences the model wrote; no line of the facts is reproduced as written (that is what `no_context_echo` rejects); no anchor appears that the facts did not supply.
+Verify before recording verdict: the opener (if any) and the sign-off (if any) are present verbatim and are the only gratitude in the reply; the verdict is the first sentence after them; every anchor from the facts appears, spelled as supplied, inside sentences the model wrote; no line of the facts is reproduced as written (that is what `no_context_echo` rejects); on a fact list of more than a few lines the reply runs well under the facts' length (`max_context_ratio` says so when it does not); no anchor appears that the facts did not supply.
 
 ## Calibration notes
 
@@ -245,3 +248,50 @@ output to context characters on rejected rows, which should drop well below
 1.0, and whether `no_context_echo` appears in `checks_failed_names` at all: if
 the retry clears it, the row shows `retried:true` with no failed check; if it
 does not, the model cannot curate this input and the reply is hand-written.
+
+### 2026-09-14 — the ceiling had to be stated relative to the input
+
+Measured on agent verdicts over 13-14 September, the first window after #475
+(PR #478, merged 2026-09-11) declared `no_context_echo` here: n=16, kept 0,
+scaffold 0, rewrote 16, usable 0%. Every rejected draft was still the fact
+sheet handed back, and the size pairs say so without any reading: 1172
+characters out for 981 in, 557 for 560, 940 for 899. `no_context_echo` fired
+on 7 of the 38 reply calls across this recipe and `maintainer-reply.md`, and
+the #384 retry ran on 9 of them, so the check catches the failure; the second
+generation came back the same size as the first every time, so the retry
+notice ("do not copy sentences of the supplied facts into the answer") does
+not change the output. The recipe set no length target: LENGTH named a reply the
+length of the FACTS block as a failure but never said how long the reply
+should be, and the rules said only that it carries the anchors and stops
+after the ask.
+
+The ceiling is a declared check, not a prose rule. A first cut said in the
+Rules block that the reply is SHORTER than the FACTS block and put the same
+sentence into the `no_context_echo` retry constraint; review of PR #488
+withdrew both. The rule contradicted LENGTH ("a dozen facts is three or four
+paragraphs"), cannot be met on a three-line fact list once the opener,
+verdict, anchors, ask and sign-off are all mandatory, and does not
+discriminate: 3 of the 16 rejected rows (557/560, 547/578, 318/329) were
+already shorter than their input and still echoing. And `no_context_echo`
+measures echo, so its notice cannot claim a length rule was broken. So
+`max_context_ratio: 0.8` is declared in the frontmatter (ADR 0014 machinery:
+counted in `checks_run`, named in `checks_failed_names`, retried once with
+its own constraint), failing when the output is at least 0.8 of the context
+by characters and the context is at least 400 characters
+(`min_context_chars`, so a short fact list is exempt); the Rules block
+carries a CURATION rule consistent with LENGTH instead, carry the anchors and
+state the judgement, never the facts' sentences, and on a fact list of more
+than a few lines run well under its length; and LENGTH itself now says the
+reply runs well under the FACTS block whatever the paragraph count, since a
+sentence that joins two facts and drops their framing is shorter than the
+two facts were. The 16 rows carry one identical reason pasted 16 times at
+11:00 on 2026-09-13, which is why `delegate-feedback.sh` now warns on a
+reason repeated across delegations inside ten minutes; the figures above are
+the size pairs, which do not depend on the reason text.
+
+Re-measure after roughly ten calls. The number to watch is unchanged from
+2026-09-11, the ratio of output to context characters on rejected rows, plus
+two more: whether `max_context_ratio` appears in `checks_failed_names` after
+the retry, and the second generation's size on rows with `retried:true`. If
+the retry still returns the input's length, the model cannot curate this
+input and the constraint sentence is not the lever.

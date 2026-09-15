@@ -6841,7 +6841,10 @@ else
 fi
 
 # 48g. The retry path fires with the constraint named, so the second request
-# tells the model to carry the anchors rather than the lines.
+# tells the model to carry the anchors rather than the lines. The sentence is
+# about sentences only: this check measures echo, not length, so its notice
+# must not claim a length rule was broken. Length is max_context_ratio's job
+# (49 below, #487) and it carries its own constraint.
 counter="$tmp/calls"
 make_mock_curl_seq "$tmp" "$counter" \
   'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.' \
@@ -6854,7 +6857,7 @@ assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
   "context-echo: a failed check costs exactly two dispatches"
 assert_contains "so PR #2632 is clear" "$out" \
   "context-echo: the caller receives the retried output"
-assert_contains "no_context_echo: do not copy sentences of the supplied facts" "$(cat "$tmp/payload.2.json")" \
+assert_contains "no_context_echo: reproduce none of the supplied sentences as written; carry their paths, numbers and references inside sentences of your own." "$(cat "$tmp/payload.2.json")" \
   "context-echo: the second request carries the constraint sentence"
 assert_contains '"retried":true' "$(tail -1 "$metrics")" \
   "context-echo: the retry is marked on the metrics row"
@@ -6862,6 +6865,150 @@ if [[ "$(tail -1 "$metrics")" == *'"checks_failed_names"'* ]]; then
   echo "  FAIL  context-echo: a clean retry must leave no failed check on the row"; fail=$((fail+1))
 else
   echo "  PASS  context-echo: a clean retry leaves no failed check on the row"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$metrics"
+
+# ---------------------------------------------------------------------------
+# 49. max_context_ratio (#487) — a length ceiling relative to the piped
+# context, as a declared check. no_context_echo measures echo, not length, so
+# its retry notice cannot claim a length rule was broken; and a prose rule
+# ("the reply is shorter than the FACTS block") contradicted the recipe's own
+# LENGTH paragraph, could not be met on a three-line fact list once opener,
+# verdict, anchors, ask and sign-off are all mandatory, and did not
+# discriminate (3 of the 16 rejected rows, 557/560, 547/578, 318/329, were
+# already shorter and still echoing). Fails when output_chars / context_chars
+# >= the declared ratio AND the context is at least min_context_chars
+# (default 400), so a short fact list is exempt. Opt-in per recipe,
+# warn-only, retry-able with its own constraint sentence.
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+mcr_recipe() {
+  # $1 = recipe basename, $2.. = the checks block lines, verbatim.
+  local name="$1"; shift
+  { printf -- '---\ntier: prose\nchecks:\n'; printf '  %s\n' "$@"; printf -- '---\n'
+    printf '# %s\n\n## When to use\nn/a\n\n## Prompt template\n\n```\nReply using only the facts below.\n\n=== FACTS ===\n{{stdin}}\n```\n\n## Calibration notes\nn/a\n' "$name"; } > "$prompts/$name.md"
+}
+mcr_recipe mcr 'max_context_ratio: 0.8'
+mcr_recipe mcr_floor 'max_context_ratio: 0.8' 'min_context_chars: 2000'
+mcr_recipe mcr_none 'no_padding_tail: true'
+# Eight facts of ~90 chars: well over the 400-char default floor.
+mcr_facts=""
+for i in 1 2 3 4 5 6 7 8; do
+  mcr_facts="${mcr_facts}Fact $i: the sandbox flag flip landed at src/main.js:412 and all 531 tests pass on PR #2632 now.
+"
+done
+mcr_short_facts=$'The sandbox flag flip is at src/main.js:412.\nAll 531 tests pass on PR #2632.'
+# A long answer (~7 sentences of ~100 chars, ratio near 1.0) and a short one.
+mcr_long='The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear now. The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear now. The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear now. The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear now. The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear now. The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear now. The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear.'
+mcr_short='The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear.'
+run_mcr() {
+  # $1 = recipe, $2 = the piped facts. DELEGATE_NO_RETRY so the first pass's
+  # verdict lands on the row unrepaired.
+  printf '%s\n' "$2" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe "$1" prose "go" 2>&1 >/dev/null
+}
+
+# 49a. Long answer against a long context -> FAILED, named, counted.
+: > "$metrics"
+make_mock_curl_think "$tmp" "$mcr_long"
+out=$(run_mcr mcr "$mcr_facts")
+assert_contains "check 'max_context_ratio' FAILED" "$out" \
+  "context-ratio: an answer as long as its facts is caught"
+assert_contains ">= 0.8" "$out" \
+  "context-ratio: the failure names the declared ratio"
+row=$(tail -1 "$metrics")
+assert_contains '"checks_failed_names":["max_context_ratio"]' "$row" \
+  "context-ratio: named on the metrics row"
+assert_contains '"checks_run":2' "$row" \
+  "context-ratio: counted in checks_run beside the default echo check"
+
+# 49b. A curated answer well under the ratio passes, and still counts as run.
+: > "$metrics"
+make_mock_curl_think "$tmp" "$mcr_short"
+out=$(run_mcr mcr "$mcr_facts")
+if [[ "$out" == *"max_context_ratio"* ]]; then
+  echo "  FAIL  context-ratio: an answer well under the ratio must pass ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  context-ratio: an answer well under the ratio passes"; pass=$((pass+1))
+fi
+row=$(tail -1 "$metrics")
+assert_contains '"checks_run":2' "$row" \
+  "context-ratio: a passing check is still counted as run"
+if [[ "$row" == *'"checks_failed_names"'* ]]; then
+  echo "  FAIL  context-ratio: a passing check must leave no failed name on the row"; fail=$((fail+1))
+else
+  echo "  PASS  context-ratio: a passing check leaves no failed name on the row"; pass=$((pass+1))
+fi
+
+# 49c. A short context is exempt whatever the ratio: a two-line fact list
+# comes back as those facts plus an ask, and that is the recipe working.
+: > "$metrics"
+make_mock_curl_think "$tmp" "$mcr_long"
+out=$(run_mcr mcr "$mcr_short_facts")
+if [[ "$out" == *"max_context_ratio"* ]]; then
+  echo "  FAIL  context-ratio: a context under the floor must be exempt ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  context-ratio: a context under the default 400-char floor is exempt"; pass=$((pass+1))
+fi
+
+# 49c-ii. The floor is the recipe's to raise: min_context_chars above the
+# context length exempts it even though the ratio would fail.
+: > "$metrics"
+make_mock_curl_think "$tmp" "$mcr_long"
+out=$(run_mcr mcr_floor "$mcr_facts")
+if [[ "$out" == *"max_context_ratio"* ]]; then
+  echo "  FAIL  context-ratio: a declared min_context_chars above the context must exempt it ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  context-ratio: a declared min_context_chars above the context exempts it"; pass=$((pass+1))
+fi
+if [[ "$out" == *"unknown check 'min_context_chars'"* ]]; then
+  echo "  FAIL  context-ratio: min_context_chars must be accepted as the floor, not reported unknown"; fail=$((fail+1))
+else
+  echo "  PASS  context-ratio: min_context_chars is accepted beside the ratio"; pass=$((pass+1))
+fi
+
+# 49d. Undeclared recipes never run it, however long the answer.
+: > "$metrics"
+make_mock_curl_think "$tmp" "$mcr_long"
+out=$(run_mcr mcr_none "$mcr_facts")
+if [[ "$out" == *"max_context_ratio"* ]]; then
+  echo "  FAIL  context-ratio: an undeclared recipe must not run it ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  context-ratio: an undeclared recipe never runs it"; pass=$((pass+1))
+fi
+if [[ "$(tail -1 "$metrics")" == *'max_context_ratio'* ]]; then
+  echo "  FAIL  context-ratio: an undeclared recipe must not name it on the row"; fail=$((fail+1))
+else
+  echo "  PASS  context-ratio: an undeclared recipe leaves it off the row"; pass=$((pass+1))
+fi
+
+# 49e. The retry fires with its own constraint sentence, and a curated second
+# generation clears the row.
+counter="$tmp/calls"
+make_mock_curl_seq "$tmp" "$counter" "$mcr_long" "$mcr_short"
+: > "$metrics"
+out=$(printf '%s\n' "$mcr_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe mcr prose "go" 2>/dev/null)
+assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
+  "context-ratio: a failed check costs exactly two dispatches"
+assert_contains "max_context_ratio: the answer runs about as long as the supplied facts; curate it to well under the facts' length, carrying every path, number and reference inside new sentences." "$(cat "$tmp/payload.2.json")" \
+  "context-ratio: the second request carries the length constraint sentence"
+if [[ "$(cat "$tmp/payload.2.json")" == *"no_context_echo:"* ]]; then
+  echo "  FAIL  context-ratio: the retry must not name a check that did not fail"; fail=$((fail+1))
+else
+  echo "  PASS  context-ratio: the retry names only the check that failed"; pass=$((pass+1))
+fi
+assert_contains '"retried":true' "$(tail -1 "$metrics")" \
+  "context-ratio: the retry is marked on the metrics row"
+if [[ "$(tail -1 "$metrics")" == *'"checks_failed_names"'* ]]; then
+  echo "  FAIL  context-ratio: a clean retry must leave no failed check on the row"; fail=$((fail+1))
+else
+  echo "  PASS  context-ratio: a clean retry leaves no failed check on the row"; pass=$((pass+1))
 fi
 rm -rf "$tmp" "$metrics"
 

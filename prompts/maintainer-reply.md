@@ -10,6 +10,7 @@ checks:
   no_padding_tail: true
   no_single_item_list: true
   no_context_echo: true
+  max_context_ratio: 0.8
 ---
 # maintainer-reply
 
@@ -63,6 +64,16 @@ Correct: <the cause>.
 
 NO-FACT-DROP — non-negotiable:
 Every fact supplied on stdin that bears on the diagnosis must survive into the reply. Survive means its anchors (the path, the number, the reference, the name) appear inside the sentence you write, spelled as supplied; it never means a line of the facts copied into the reply as written. The sentence cap is a ceiling on padding, never a licence to discard a supplied fact. If the facts do not fit the shape, add an item — do not delete a fact. If a fact is supplied that you cannot place, keep it in the cause sentence rather than dropping it.
+
+STATED-NOT-ASKED — non-negotiable:
+Every fact in the Facts block goes into the reply as a statement, never as a question. Every question in the reply is one of the caller's asks, and nothing else is a question: one question for one ask, and under MULTI-ASK-SPLIT a numbered list of the caller's asks, one question each, is correct. Outside the supplied opener, sign-off and anchors, no other question mark appears. A supplied fact rephrased as a question to the reader is that fact dropped and an ask invented.
+Wrong: <a supplied fact, as a question to the reader>? <the ask>?
+Correct: <the same fact, as a statement>. <the ask>?
+
+NO-CLAIMED-ACTION — non-negotiable:
+The reply says what the maintainer did or will do only as the Facts block states it. Never claim a fix, a merge, a change, a test run or an assignment the facts do not state; a fix the facts only suggest is offered as a suggestion, never reported as done.
+Wrong: <an action the facts only suggest, reported as done>.
+Correct: <the same action, offered as the suggestion the facts make>.
 
 Rules:
 - Two body sentences maximum: the praise-or-cause sentence, then the question. No third sentence, no preamble sentence. (Superseded by MULTI-ASK-SPLIT rule 2 when the ask topic carries more than one distinct ask; the opener and the sign-off sit outside the cap.)
@@ -122,6 +133,8 @@ echo "The token drop is on Teams' side, in its MSAL cache, not in teams-for-linu
 - "Two body sentences maximum … No third sentence" — prose tier loves a closing-paraphrase sentence (see SKILL.md's anti-padding directive). The closed two-sentence shape (cause/praise, then the question) is the whole point of the recipe for the single-ask case.
 - "MULTI-ASK-SPLIT" — measured 2026-08-03: keep-rate on `teams-for-linux` was 0 of 13 over the preceding 30 days against 92% on single-ask work, with the same model, backend and an unedited template. The rewrite reasons were one pattern: "merged two mutually exclusive asks into one sentence", "compressed four items into one run-on ask", "dropped all substance from the three asks", "fixed wrong conditional chaining of asks". The old scope note told callers to invoke once per ask; they did not, so the cap silently ate the asks. The rule makes multi-ask a first-class shape instead of an unenforced instruction.
 - "NO-FACT-DROP" — same measurement window: "two-sentence cap squeezed out the PR #2424 cross-run dedup fact from stdin; kept only the commitable_code_suggestions fact, losing the strategic link". The cap was being read as licence to discard supplied facts rather than to suppress padding; this states which of the two it is. The "Survive means its anchors" sentence and the "Do NOT copy the facts back" rule were added 2026-09-11 after 26 of 51 rejections in the window said the draft restated the stdin facts as written ("echoed all eleven stdin fact lines verbatim"); `no_context_echo` backstops both.
+- "STATED-NOT-ASKED" — measured 2026-09-14, the first window after `no_context_echo` went live: 15 of 38 rejection reasons across this recipe and `maintainer-review-reply.md` said the model turned an established fact into a question back at the contributor (<turned the key count 258 into a question>, <asked whether they had assigned themselves>, <asked the contributor to apply and verify the inline fix as a question>). "Exactly one question or ask" plus "do not copy the facts back" was being resolved by rephrasing the facts as questions, which satisfies both rules and drops the fact. The block says which sentences carry a question mark: the caller's asks, so a numbered list of them under MULTI-ASK-SPLIT stays correct, and the verbatim slots (opener, sign-off, an anchor such as a URL) are exempt because they are not the model's sentences.
+- "NO-CLAIMED-ACTION" — same window, once: <claimed I fixed the bug inline (I only suggest)>. A reply that reports an action the maintainer did not take is worse than a dropped fact, because the contributor acts on it; the block confines the maintainer's own actions to what the facts state.
 - "If an opener is given below, begin with it verbatim" plus "Never write thanks of your own" — the same window had rejections asking for a thanks first, and the flattery rule was being read as a ban on any opener. Mirrors `signoff`: the caller supplies the gratitude verbatim, the model never invents it, and with no opener the cause-or-praise sentence still comes first.
 - "No filler flattery … Specific praise that names the actual contribution is allowed" — generic praise ("Great work!") doubles the reply length for no information and reads as boilerplate; the praise that earns its place names the specific thing the contributor did.
 - "If the ask topic is written as an imperative, rephrase it as a question" — the topic var is the most likely place a caller accidentally hands the model a copyable imperative; the guard makes the model transform it rather than echo it.
@@ -152,7 +165,7 @@ Multi-ask shape (MULTI-ASK-SPLIT), when the ask topic carries more than one dist
 Thanks again!
 ```
 
-Verify before recording verdict: the opener (if any) is preserved verbatim and is followed by the specific praise or the confirmed cause (not generic filler, and not a stdin line copied as written), the ask is a question addressed to the reader (no echoed imperative), the sign-off (if any) is preserved verbatim, no em dashes, no closing-paraphrase sentence, no preamble or markdown fence. On length: a single-ask reply is at most two sentences; a multi-ask reply is one cause sentence plus one numbered question per ask, and every ask supplied must appear — do NOT record a MISS on a multi-ask reply merely for exceeding two sentences, that is the MULTI-ASK-SPLIT shape working. Do record a MISS if distinct asks were merged into one question, or if a fact supplied on stdin is missing.
+Verify before recording verdict: the opener (if any) is preserved verbatim and is followed by the specific praise or the confirmed cause (not generic filler, and not a stdin line copied as written), the ask is a question addressed to the reader (no echoed imperative) and the only question in the reply (no supplied fact turned into one), the reply claims no fix, merge or change the facts did not state, the sign-off (if any) is preserved verbatim, no em dashes, no closing-paraphrase sentence, no preamble or markdown fence. On length: a single-ask reply is at most two sentences; a multi-ask reply is one cause sentence plus one numbered question per ask, and every ask supplied must appear — do NOT record a MISS on a multi-ask reply merely for exceeding two sentences, that is the MULTI-ASK-SPLIT shape working. Do record a MISS if distinct asks were merged into one question, or if a fact supplied on stdin is missing.
 
 ## Calibration notes
 
@@ -315,3 +328,43 @@ as `signoff` takes the closer, and sits outside the two-sentence cap. The
 model still writes no gratitude of its own. Re-measure after roughly ten
 calls; the reason phrases to watch for disappearing are "restated" and "no
 thanks opener".
+
+### 2026-09-14 — the facts came back as questions
+
+Measured on agent verdicts over 13-14 September, the first window after #475
+(PR #478, merged 2026-09-11) declared `no_context_echo` here: n=21 (19 on
+`pr-agent`), kept 0, scaffold 10, rewrote 11, usable 47%, against 88% on
+`commit-message` (n=18) and 100% on `github-issue-body` (n=3) in the same
+window. The restating reasons have thinned. What replaced them is a new tic
+in 15 of the 38 rejection reasons across this recipe and
+`maintainer-review-reply.md`: the model turns an established fact into a
+question back at the contributor. The reasons, as skeletons rather than as
+written so a later run does not mistake them for output: <turned an
+established fact (key count 258) into a question to the contributor>, <asked
+whether they had assigned themselves, asked to be told when ready>, <asked
+the contributor to apply and verify the inline fix as a question>, <rendered
+the asks as a numbered questionnaire>, and once <claimed I fixed the bug
+inline (I only suggest)>. The reading: the recipe asks for exactly one
+question or ask and, since #475, forbids restating the facts, and the model
+resolves the two by rephrasing the facts as questions, which satisfies both
+rules and drops the fact. The opener now arrives (today's drafts open with
+the supplied thanks), so the 26 "no thanks opener" mentions in the window are
+rows recorded before the callers passed `--var opener`; that fix is working
+and is left alone.
+
+Two named blocks, both pinned in `tests/test-prompts-library.sh`.
+STATED-NOT-ASKED: every fact is a statement, every question is one of the
+caller's asks and nothing else is a question, outside the supplied opener,
+sign-off and anchors. Its first wording called "the asks written out as a
+questionnaire" a defect, which contradicted MULTI-ASK-SPLIT rule 2 (two or
+more asks ARE a numbered list of questions) and was corrected in review of
+PR #488: a numbered list of the caller's asks is correct, and the recorded
+"<rendered the asks as a numbered questionnaire>" reason is read as facts
+rendered as questions, not as the list shape itself. NO-CLAIMED-ACTION: the
+reply reports what the maintainer did or will do only as the facts state it,
+and a fix the facts only suggest is not reported as done. The frontmatter
+also declares `max_context_ratio: 0.8` alongside `maintainer-review-reply.md`
+(same review): rejected output here ran p50 372 characters against a context
+p50 of 1337, so it is expected to fire rarely, and a context under 400
+characters is exempt. Re-measure after roughly ten calls; the reason phrases
+to watch for disappearing are "as a question" and "claimed".
