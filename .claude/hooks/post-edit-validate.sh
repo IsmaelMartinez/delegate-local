@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
-# PostToolUse hook for Edit / Write — runs the same validators CI runs,
-# scoped to the file just edited. Exit 2 surfaces a failure to Claude so
-# it can react before the next action; the file is already written by the
-# time this runs.
-#
-# Wired up in .claude/settings.json. The validators themselves are the
-# canonical gate; this hook just shortens the local feedback loop.
+# PostToolUse hook for Edit / Write: the CI validators, scoped to the file
+# just edited. Exit 2 surfaces a failure to Claude; the file is already
+# written by then. Wired up in .claude/settings.json.
 
 set -uo pipefail
 

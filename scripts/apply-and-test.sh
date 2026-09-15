@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
 # Apply SEARCH/REPLACE blocks from a model patch file to a source directory,
 # run pytest against the patched copy, and emit a machine-readable verdict.
-#
-# Operationalises the apply-and-test loop that scripts/SKILL.md teaches and
-# that adversarial-probe scorers under experiments/sessions/2026-05-04-* all
-# open-coded (parse SEARCH/REPLACE → apply → pytest → verdict). Unifies the
-# edge cases those scorers each had to reify: empty SEARCH, SEARCH not in
-# source, ambiguous SEARCH (>1 match), no blocks at all, REFUSE-line output,
-# pytest timeout, and pytest python resolution via environment override.
+# Handles empty SEARCH, SEARCH not in source, ambiguous SEARCH, no blocks at
+# all, a REFUSE line, pytest timeout and interpreter override.
 #
 # Usage:
 #   apply-and-test.sh [--test-script NAME] [--timeout SECS] [--out DIR] <source-dir> <patch-file>
@@ -37,18 +32,13 @@
 #   6  USAGE    bad invocation
 #
 # Output:
-#   Prints `VERDICT: <PASS|FAIL|PARSE|APPLY|TIMEOUT|REFUSE>` on stdout for every
-#   exit except USAGE (6) — a bad invocation or an unusable interpreter writes to
-#   stderr and emits no verdict, because there was no run to report a verdict on.
-#   On non-PASS: prints `DETAIL: <one-line context>` on stdout.
-#   On FAIL/TIMEOUT: pytest's last line is included in DETAIL.
+#   `VERDICT: <PASS|FAIL|PARSE|APPLY|TIMEOUT|REFUSE>` on stdout for every exit
+#   except USAGE (6), which had no run to report on; non-PASS adds
+#   `DETAIL: <one-line context>` (pytest's last line on FAIL/TIMEOUT).
 #
-# Security note: this script executes model-generated Python via pytest on the
-# host with no sandboxing. That is fine for author-written fixtures and locally
-# chosen Ollama models (the constraint that already governs the v8 scorer it
-# replaces). For untrusted model output or third-party fixtures, run inside a
-# container, firejail, or with seccomp/resource caps before trusting the
-# result.
+# Security note: this executes model-generated Python via pytest on the host
+# with no sandboxing. For untrusted model output or third-party fixtures, run
+# inside a container or with seccomp/resource caps.
 
 set -uo pipefail
 
@@ -90,8 +80,6 @@ done
 [[ -f "$source_dir/$test_script" ]] || { echo "missing $test_script in $source_dir" >&2; exit 6; }
 command -v perl >/dev/null || { echo "perl not on PATH" >&2; exit 6; }
 
-# Default python: prefer APPLY_AND_TEST_PYTHON, else python3 on PATH. Caller
-# can pin to a venv interpreter via the env var.
 py="${APPLY_AND_TEST_PYTHON:-$(command -v python3 2>/dev/null)}"
 [[ -n "$py" && -x "$py" ]] || { echo "python3 not on PATH (set APPLY_AND_TEST_PYTHON to override)" >&2; exit 6; }
 
@@ -109,25 +97,18 @@ emit() {
   [[ -n "$detail" ]] && printf 'DETAIL: %s\n' "$detail"
 }
 
-# Detect a REFUSE line. The discipline pattern from the v8 + adversarial chain
-# allows the model to opt out of patching by emitting `REFUSE: <reason>`.
+# The model may opt out of patching by emitting `REFUSE: <reason>`.
 has_refuse=$(printf '%s' "$patch_text" | awk '
   toupper($0) ~ /^[[:space:]]*REFUSE[: ]/ { print "1"; exit }
 ')
 
-# Extract SEARCH/REPLACE blocks via perl. Output format: each block emitted as
-# two NUL-terminated records (search, replace) on stdout. Using NUL avoids
-# collisions with newlines and equals signs inside the block content.
-# `-CSD` is the project-standard switch for unicode-aware regex (see
-# CLAUDE.md "Conventions"); model-emitted patches can contain non-ASCII
-# identifiers or comments and must round-trip verbatim.
+# Each block is emitted as two NUL-terminated records (search, replace): NUL
+# cannot collide with newlines or equals signs inside block content. `-CSD`
+# so non-ASCII identifiers in model patches round-trip verbatim.
 blocks_file=$(mktemp)
 patched_file=$(mktemp)
-# Single EXIT trap for every tempfile this script creates. Later phases used
-# to overwrite this trap (dropping $patched_file from the cleanup list and
-# leaking it); a cleanup function with all paths — including the not-yet-
-# created $log_file and the in-flight $next_file rotation — fixes that.
-# Variables not yet assigned are empty and skipped.
+# One EXIT trap for every tempfile, including the not-yet-created ones; a
+# later phase re-setting the trap leaked $patched_file. Unset vars are skipped.
 log_file=""
 next_file=""
 cleanup() {
@@ -154,19 +135,13 @@ if [[ "$block_bytes" == "0" ]]; then
   exit 2
 fi
 
-# Apply blocks sequentially. Each step asserts: SEARCH non-empty, found in
-# current text, found exactly once. Ambiguous matches return APPLY rather than
-# silently patching the first occurrence — the SEARCH/REPLACE format requires
-# unique surrounding context (output rules in build-prompt.sh), so >1 matches
-# is a prompt-compliance failure, not a thing this script papers over.
-#
-# Source content lives in $patched_file across iterations rather than a
-# string variable; command substitution and here-strings both mangle trailing
-# newlines, which would lose the final newline of the source file every
-# iteration and could break SEARCH blocks whose context relies on it.
+# An ambiguous SEARCH (>1 match) returns APPLY rather than patching the first
+# occurrence: the format requires unique context, so it is a prompt-compliance
+# failure. Source content lives in $patched_file, not a string variable:
+# command substitution and here-strings both mangle trailing newlines.
 cp "$source_dir/$source_name" "$patched_file"
 
-# Read NUL-delimited search/replace pairs. Bash's `read -d ''` reads up to NUL.
+# `read -d ''` reads up to NUL.
 exec 3< "$blocks_file"
 block_idx=0
 while IFS= read -r -d '' search <&3 && IFS= read -r -d '' replace <&3; do
@@ -175,10 +150,8 @@ while IFS= read -r -d '' search <&3 && IFS= read -r -d '' replace <&3; do
     emit APPLY "block $block_idx: empty SEARCH"
     exit 3
   fi
-  # Count matches via perl's index() — substring (literal, not regex) match
-  # that handles multi-line SEARCH content cleanly. BSD awk rejects literal
-  # newlines in -v variable values, so awk is unsuitable here. Reads the
-  # patched file directly to preserve trailing newlines verbatim.
+  # Literal index() match in perl: BSD awk rejects literal newlines in -v
+  # values. Reads the file directly to preserve trailing newlines.
   count=$(SEARCH="$search" perl -CSD -0777 -e '
     my $text = do { local $/; <STDIN> };
     my $s = $ENV{SEARCH};
@@ -201,13 +174,10 @@ while IFS= read -r -d '' search <&3 && IFS= read -r -d '' replace <&3; do
     emit APPLY "block $block_idx: SEARCH ambiguous ($count matches) ($snippet)"
     exit 3
   fi
-  # Replace the single match. awk's gsub regex-escapes are too painful for
-  # multi-line literal text; use perl with a literal-quoted substitution so
-  # regex metacharacters in the SEARCH content are not interpreted. Write
-  # to a sibling temp file and rotate to preserve byte-exactness across
-  # iterations (no command substitution, no here-string).
-  # No `set -e` here, so guard the substitution and the rotation explicitly:
-  # a failed perl leaves a truncated $next_file that mv would silently promote.
+  # A literal-quoted perl substitution so regex metacharacters in SEARCH are
+  # not interpreted, written to a sibling file and rotated for byte-exactness.
+  # No `set -e` here, so the rotation is guarded: a failed perl leaves a
+  # truncated $next_file that mv would silently promote.
   next_file=$(mktemp)
   if ! SEARCH="$search" REPLACE="$replace" perl -CSD -0777 -e '
     my $text = do { local $/; <STDIN> };
@@ -227,12 +197,8 @@ while IFS= read -r -d '' search <&3 && IFS= read -r -d '' replace <&3; do
 done
 exec 3<&-
 
-# Materialise the patched copy. If --out wasn't given, use a tempdir that the
-# caller can recover the patched files from later via stderr.
-#
-# Copies the entire source-dir so tests with sibling files (conftest.py,
-# data fixtures, helper modules, additional tests) keep their dependencies;
-# then overwrites <source_name> with the patched bytes from $patched_file.
+# The whole source-dir is copied so sibling files (conftest.py, fixtures,
+# helper modules) keep their dependencies; then <source_name> is overwritten.
 if [[ -z "$out_dir" ]]; then
   out_dir=$(mktemp -d)
   echo "patched-out: $out_dir" >&2
@@ -241,20 +207,15 @@ mkdir -p "$out_dir"
 cp -R "$source_dir/." "$out_dir/"
 cp "$patched_file" "$out_dir/$source_name"
 
-# Run pytest with a timeout. `timeout` is on coreutils on Linux and on macOS
-# when installed via brew; not part of the BSD baseline. We invoke pytest as
-# a python module so the shebang of pytest doesn't matter — only the chosen
-# interpreter does.
+# `timeout` is coreutils, not part of the BSD baseline. pytest is invoked as
+# a python module so only the chosen interpreter matters.
 log_file=$(mktemp)
 
 run_pytest() {
   if command -v timeout >/dev/null 2>&1; then
     timeout --kill-after=5 "$timeout_secs" "$py" -m pytest -q --no-header "$test_script" >"$log_file" 2>&1
   else
-    # Fallback: run without timeout. Tests with infinite loops will hang the
-    # caller. macOS BSD baseline doesn't ship `timeout`; users can install
-    # coreutils (brew install coreutils → gtimeout) and symlink, or accept
-    # the risk for trusted fixtures.
+    # No timeout on the BSD baseline: an infinite loop hangs the caller.
     "$py" -m pytest -q --no-header "$test_script" >"$log_file" 2>&1
   fi
 }

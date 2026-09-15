@@ -1,27 +1,16 @@
 #!/usr/bin/env bash
-# Rank files by cosine similarity to a query embedding. Useful primitive
-# for "find the runbook that mentions X" / "which doc covers Y" — the
-# pattern the agent today solves by reading every file. Per-call saving
-# is high: every file the agent doesn't have to read is 1–20 KB of
-# Sonnet input avoided.
+# Rank files by cosine similarity to a query embedding, so the agent need not
+# read every file to find the one that covers X. bash + jq only: embeddings
+# come from embed.sh, cosine is a jq dot product after L2 normalisation.
 #
 # Usage:
 #   semantic-search.sh [--top K] <query> <file> [<file>...]
 #
-# Output: one line per file, `<score> <path>`, sorted descending by score.
-#         --top K limits to K rows (default 5).
+# Output: one line per file, `<score> <path>`, sorted descending; --top K
+#         limits to K rows (default 5). Missing or empty files warn on stderr
+#         and are dropped rather than killing the search.
 #
-# Implementation: bash + jq. Each input embedding (query + each file) is
-# fetched via scripts/embed.sh; cosine similarity is computed by jq as a
-# dot product after defensive L2 normalisation. Keeps the "two bash
-# scripts" architecture invariant — no python/numpy dependency.
-#
-# Skipped files (missing or empty) emit a stderr warning and are dropped
-# from the output, so a glob that picks up a deleted or unreadable path
-# doesn't kill the whole search.
-#
-# Env: inherits everything embed.sh honours (DELEGATE_BASE_URL,
-#      DELEGATE_LOCAL_NO_METRICS, DELEGATE_METRICS_FILE).
+# Env: inherits everything embed.sh honours.
 
 set -uo pipefail
 
@@ -44,8 +33,7 @@ while (($# > 0)); do
   esac
 done
 
-# Validate --top before anything else so a non-numeric value fails fast
-# rather than after the embedding cost is sunk.
+# Validated first, before the embedding cost is sunk.
 if ! [[ "$top_k" =~ ^[0-9]+$ ]] || (( top_k == 0 )); then
   echo "semantic-search: --top must be a positive integer (got '$top_k')" >&2
   exit 2
@@ -62,22 +50,15 @@ files=("${positional[@]:1}")
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 embed="$script_dir/embed.sh"
 
-# Embed the query once. Failure here is fatal — without the query vector
-# the whole script is meaningless.
+# Embed the query once; failure is fatal.
 query_vec=$(printf '%s' "$query" | bash "$embed")
 if [[ -z "$query_vec" ]]; then
   echo "semantic-search: failed to embed query" >&2
   exit 1
 fi
 
-# Cosine similarity over two equal-length JSON arrays of floats. Computed
-# as dot(a,b) / (||a|| * ||b||) — defensive even though nomic-embed-text
-# already returns L2-normalised vectors per Ollama docs, in case a future
-# model swap (bge-large) does not. jq has no fma so the sum-of-products
-# is a one-liner; the norm is sqrt(sum of squares).
-#
-# `--argjson` parses both arrays as JSON values, so the jq program sees
-# real arrays (not strings) and the arithmetic is direct.
+# dot(a,b) / (||a|| * ||b||): normalised defensively in case a future model
+# swap does not return unit vectors. `--argjson` hands jq real arrays.
 cosine_sim() {
   local a="$1" b="$2"
   jq -nr --argjson a "$a" --argjson b "$b" '
@@ -87,10 +68,7 @@ cosine_sim() {
   '
 }
 
-# Score each file. Missing or empty files get a stderr warning and are
-# skipped rather than killing the whole search. Use a bash array so the
-# accumulator is O(N) rather than the O(N^2) cost of repeated string
-# concatenation on large file sets.
+# A bash array keeps the accumulator O(N) on large file sets.
 results=()
 for f in "${files[@]}"; do
   if [[ ! -f "$f" ]]; then
@@ -107,8 +85,7 @@ for f in "${files[@]}"; do
     continue
   fi
   score=$(cosine_sim "$query_vec" "$doc_vec")
-  # printf with %.6f keeps the output stable across systems (jq's default
-  # is ~17 sig figs which is overkill and varies with locale).
+  # %.6f keeps the output stable across systems and locales.
   printf -v score_fmt '%.6f' "$score"
   results+=("${score_fmt} ${f}")
 done
@@ -118,6 +95,5 @@ if (( ${#results[@]} == 0 )); then
   exit 1
 fi
 
-# Sort descending by score (LC_ALL=C keeps the locale-stable behaviour the
-# test suite expects across macOS and Linux) and take the top K.
+# LC_ALL=C keeps the sort locale-stable across macOS and Linux.
 printf '%s\n' "${results[@]}" | LC_ALL=C sort -k1,1 -gr | head -n "$top_k"

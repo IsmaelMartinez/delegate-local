@@ -1,61 +1,29 @@
 #!/usr/bin/env bash
-# Shared OTel export helpers — sourced by scripts/delegate.sh,
-# scripts/delegate-feedback.sh, and scripts/backfill-otel.sh.
-#
-# The "two bash scripts" rule (CLAUDE.md) expanded to three scripts plus this
-# one shared lib. The lib exists so the backfill script (Track E, #157) can
-# emit the exact same OTLP/HTTP wire payload as the live exporter without
-# duplicating the jq pipelines, header parsing, and curl invocation logic.
-#
-# This file is NOT executable on its own — it only defines functions. Sourcing
-# it has no side effects (no `set -*`, no top-level code beyond function
-# definitions). Callers keep their own `set -uo pipefail` semantics; the
-# functions here are tolerant of `set -u` (every variable is locally bound or
-# defaulted via `${name:-}`).
-#
-# Exit-status invariant: the OTel functions in this lib NEVER change the
-# caller's exit status. Every curl invocation is guarded with `|| true`
-# (default) or a verbose-mode echo-on-failure that still returns 0. This
-# matches the existing telemetry-non-fatal contract from delegate.sh and
-# delegate-feedback.sh.
-#
-# Bash 3.2 compatible: no associative arrays, no `${var^^}`, no `mapfile`,
-# no `readarray`. Verified against macOS-shipped /bin/bash 3.2.57.
+# Shared OTel export helpers, sourced by delegate.sh, delegate-feedback.sh and
+# backfill-otel.sh so the backfill emits the same OTLP/HTTP wire payload as
+# the live exporter. Sourcing has no side effects (no `set -*`, functions
+# only); every function tolerates `set -u`, and the export helpers NEVER
+# change the caller's exit status, since telemetry is non-fatal (the ID
+# helpers return perl's status, so a caller under `set -e` sees a failure).
+# bash 3.2 compatible.
 
-# Guard against double-sourcing — functions are idempotent so a re-source
-# is benign, but the guard keeps any future top-level code from running
-# twice in the rare case a caller sources delegate.sh which sources this.
+# Guard against double-sourcing.
 if [[ -n "${_DELEGATE_OTEL_LIB_LOADED:-}" ]]; then
   return 0 2>/dev/null || true
 fi
 _DELEGATE_OTEL_LIB_LOADED=1
 
 # delegate_project_name
-#   Resolve the value for delegate.project: the basename of the MAIN repository,
-#   even when delegate.sh runs inside a linked git worktree. `git rev-parse
-#   --show-toplevel` returns the worktree directory (e.g.
-#   `.claude/worktrees/<branch>`), which would make every worktree session show
-#   up as its own "project" and scatter a single repo across many names.
-#   `--git-common-dir` (git 2.5+) points at the main repo's `.git` regardless of
-#   which worktree is checked out, so its parent directory is the real repo root.
-#   The path it prints may be relative, so `cd` + `pwd` makes it absolute — this
-#   avoids `--path-format=absolute`, which needs git 2.31+ and would otherwise
-#   fail silently on older git and fall back to the (wrong) worktree name.
-#   Falls back to the worktree toplevel when git cannot answer
-#   `--git-common-dir` at all (pre-2.5), which names the working tree rather
-#   than the main repo but is still a project. Outside a git repository it
-#   emits NOTHING and returns 0: the cwd's basename is not a project name, and
-#   recording it as one filed a delegation about this repo, issued from a
-#   scratch directory, under `project:"tmp"`. `--project NAME` and
-#   DELEGATE_PROJECT are checked first and both still win. bash 3.2-safe.
+#   The basename of the MAIN repository, even inside a linked git worktree:
+#   `--show-toplevel` names the worktree directory and would scatter one repo
+#   across many "projects", so `--git-common-dir` (git 2.5+) is used, made
+#   absolute with `cd` + `pwd` because `--path-format=absolute` needs git
+#   2.31+. Outside a git repository it emits NOTHING and returns 0: the cwd
+#   basename is not a project name. `--project` / DELEGATE_PROJECT win.
 delegate_project_name() {
   local common common_dir toplevel
-  # An explicit DELEGATE_PROJECT wins over any derivation: the cwd is only the
-  # right answer when the script runs inside the repo the delegation is FOR
-  # (#342). delegate-feedback.sh does not call this at all: the verdict
-  # copies its project off the delegate row it references (#474), which is
-  # what makes the docs/otel-schema.md invariant — verdict and row on the
-  # same project — hold from whatever directory the verdict is recorded in.
+  # DELEGATE_PROJECT wins over any derivation: the cwd is only the right
+  # answer when the script runs inside the repo the delegation is FOR (#342).
   if [[ -n "${DELEGATE_PROJECT:-}" ]]; then
     printf '%s\n' "${DELEGATE_PROJECT}"
     return 0
@@ -66,44 +34,23 @@ delegate_project_name() {
     basename "$(dirname "$common_dir")"
     return 0
   fi
-  # --show-toplevel is the fallback for a repository whose git cannot answer
-  # --git-common-dir (pre-2.5). It names the working tree rather than the main
-  # repo, so a linked worktree resolves to its own directory name there — worse
-  # than the primary path, and still a project. It fails outside a repository,
-  # which is what keeps the case below reachable.
+  # Fallback for a git that cannot answer --git-common-dir (pre-2.5); names
+  # the working tree, still a project. Fails outside a repository.
   toplevel=$(git rev-parse --show-toplevel 2>/dev/null)
   if [[ -n "$toplevel" ]]; then
     basename "$toplevel"
     return 0
   fi
-  # Outside a git repository there is no project, and the cwd's basename is not
-  # one. The old fallback said otherwise and filed a delegation issued from a
-  # scratch directory under `project:"tmp"` — a real-looking name that names
-  # nothing, fragments the per-project rollup, and can never match a boundary
-  # lookup, so the hook nudges a session that did delegate (#342's loop, from
-  # the other end). delegate-boundary-hook.sh refused this exact string for
-  # its `cd <path> &&` target first ("a `cd /tmp` must not file the boundary
-  # under `tmp` and fragment the denominator", #385) but kept a `|| pwd`
-  # fallback for the session cwd until #476; since then it and the Stop hook
-  # call this function instead of mirroring it, so all three agree.
-  #
-  # Emitting nothing is not a silent degradation: `--project NAME` and
-  # DELEGATE_PROJECT are checked above and both still win, and a projectless
-  # delegation is exactly what the boundary hook credits from that same cwd.
-  #
-  # Explicit `return 0`: no project is a normal outcome, not an error, and
-  # falling off the end would carry out the failed `[[ -n "$toplevel" ]]` as a
-  # status 1. This lib's contract is that sourcing and calling it never change
-  # the caller's exit status, and delegate.sh runs under `set -e`.
+  # Outside a git repository there is no project: the cwd basename filed a
+  # delegation under `project:"tmp"`, a name that matches no boundary lookup
+  # (#476). Explicit `return 0`: no project is a normal outcome, and falling
+  # off the end would carry out the failed test as status 1.
   return 0
 }
 
 # otel_gen_id <nhex>
-#   Generate a random hex string of $1 hex chars (so $1*4 bits of entropy).
-#   Used for OTel trace IDs (32 hex = 128 bits) and span IDs (16 hex = 64
-#   bits). Perl rather than openssl because openssl is not a hard dep on the
-#   project baseline (some CI images strip it); perl is already required by
-#   every other timing helper here. /dev/urandom + unpack is bash 3.2-safe.
+#   Random hex string of $1 chars. Perl rather than openssl, which is not a
+#   hard dep on the project baseline; /dev/urandom + unpack is bash 3.2-safe.
 otel_gen_id() {
   local nhex="$1"
   perl -e '
@@ -119,13 +66,9 @@ otel_gen_id() {
 }
 
 # otel_deterministic_ids <ts> <source>
-#   Print "<trace_id>\t<span_id>" derived from the JSONL row's ts and source
-#   fields via SHA-256 / SHA-1. Used by scripts/backfill-otel.sh so re-runs
-#   produce identical IDs and the OTel collector dedups via its own ID space.
-#   trace_id = first 32 hex chars of sha256("$ts|$source") (128 bits).
-#   span_id  = first 16 hex chars of sha1("$ts|$source")   (64 bits).
-#   The `|` separator avoids the (theoretical) collision where two rows with
-#   different `ts` and `source` concatenate to the same string.
+#   Print "<trace_id>\t<span_id>" derived from the row's ts and source via
+#   SHA-256 / SHA-1, so backfill re-runs produce identical IDs. The `|`
+#   separator keeps two different (ts, source) pairs from concatenating alike.
 otel_deterministic_ids() {
   local ts="$1" source="$2"
   perl -MDigest::SHA=sha256_hex,sha1_hex -e '
@@ -135,24 +78,12 @@ otel_deterministic_ids() {
 }
 
 # _otel_post <payload> <error_prefix>
-#   Internal helper: POST a JSON payload to $DELEGATE_OTEL_ENDPOINT with the
-#   parsed DELEGATE_OTEL_HEADERS. Honours DELEGATE_OTEL_TIMEOUT (default 5)
-#   for curl --max-time. Honours DELEGATE_OTEL_VERBOSE=1 to log failures to
-#   stderr with the named prefix; default is silent. Always returns 0 — the
-#   telemetry-non-fatal contract holds for every caller.
-#
-#   Header parsing: DELEGATE_OTEL_HEADERS is a comma-separated list of
-#   `Header: value` pairs matching the OpenTelemetry SDK convention. The
-#   split is on `,`, so a header value that legitimately contains a comma
-#   (e.g. `Cookie: a=1, b=2`) would otherwise fragment into two malformed
-#   `-H` flags. The OTel SDK convention is that callers url-encode reserved
-#   characters in values; we honour that by url-decoding each value (the
-#   part after the first `:`) before emitting the -H flag, so the on-wire
-#   header is the literal original. Header names are not decoded — RFC 7230
-#   forbids reserved characters in field names, so encoding there would be a
-#   caller bug we don't paper over. The trim of surrounding whitespace lets
-#   `Auth: x, Tenant: y` work without surprises. Decoding uses core perl
-#   only (no URI::Escape dep) so the change works on stripped CI images.
+#   POST to $DELEGATE_OTEL_ENDPOINT with the parsed DELEGATE_OTEL_HEADERS,
+#   honouring DELEGATE_OTEL_TIMEOUT and DELEGATE_OTEL_VERBOSE. Always returns 0.
+#   Headers split on `,` per the OTel SDK convention, so a value carrying a
+#   comma must be url-encoded; each value is decoded before the -H flag (core
+#   perl, no URI::Escape). Names are not decoded: RFC 7230 forbids reserved
+#   characters there.
 _otel_post() {
   local payload="$1" err_prefix="$2"
   local timeout="${DELEGATE_OTEL_TIMEOUT:-5}"
@@ -199,23 +130,12 @@ _otel_post() {
 # emit_otel_span <start_ms> <duration_ms> <status> <trace_id> <span_id>
 #   <model> <backend> <tier> <recipe_name> <pchars> <cchars> <ochars>
 #   <qwait_ms> <gen_ms> <tokens_avoided> [<prompt>] [<context>] [<output>]
+#   [<project>] [<retry_chars>]
 #
-# Translate a delegate row into an OTLP/HTTP JSON payload matching ADR 0007
-# (schema in docs/otel-schema.md) and POST it to $DELEGATE_OTEL_ENDPOINT.
-# Failures are intentionally swallowed — telemetry must never change the
-# caller's exit status or pollute its stdout. When DELEGATE_OTEL_VERBOSE=1
-# the failure reason goes to stderr; default is silent so a misconfigured
-# endpoint doesn't spam every delegation.
-#
-# Content fields (prompt / context / output) are only emitted when
-# DELEGATE_OTEL_INCLUDE_CONTENT=1. Track F (#158) made the default redact:
-# only metadata (tier, model, recipe, char counts, durations) leaves the
-# host unless the caller explicitly opts in. The backfill path (which only
-# has char-count metadata from the JSONL, never the original content) can
-# omit the three trailing args entirely — empty strings are skipped by the
-# `map(select(...))` filter below so nothing leaks even when an operator
-# opts in for the live exporter and then runs the backfill against rows
-# that pre-date the content capture.
+# One OTLP/HTTP span per delegate row (ADR 0007, docs/otel-schema.md).
+# Content fields travel only under DELEGATE_OTEL_INCLUDE_CONTENT=1; empty
+# strings are dropped by the `map(select(...))` filter, so the backfill,
+# which has no content, leaks nothing even when an operator opts in.
 emit_otel_span() {
   [[ -z "${DELEGATE_OTEL_ENDPOINT:-}" ]] && return 0
   local start_ms="$1" dur_ms="$2" status="$3" trace_id="$4" span_id="$5"
@@ -225,15 +145,9 @@ emit_otel_span() {
   local output_text="${18:-}" project="${19:-}" retry_chars="${20:-}"
   local include_content="${DELEGATE_OTEL_INCLUDE_CONTENT:-0}"
 
-  # Compute nanosecond timestamps. start_ms is the high-resolution
-  # millisecond epoch captured at script start (Time::HiRes), so ns = ms *
-  # 1e6 and end_ns = start_ns + dur_ms * 1e6. Bash arithmetic is signed
-  # long on every platform this script runs on (macOS bash 3.2 + Linux), so
-  # the values fit comfortably below 2^63 for any timestamp in this
-  # millennium. Strings (not numbers) are emitted to jq below because the
-  # OTLP/JSON spec encodes int64 fields as JSON strings (proto3 JSON
-  # mapping); doing the math here keeps it out of the perl process and
-  # avoids the second-precision truncation the ts_iso path used.
+  # OTLP/JSON encodes int64 as JSON strings (proto3 mapping), so the ns
+  # values are built as strings; bash arithmetic is signed 64-bit on every
+  # platform this runs on.
   local start_ns end_ns
   start_ns="${start_ms}000000"
   end_ns="$(( start_ms + dur_ms ))000000"
@@ -243,21 +157,10 @@ emit_otel_span() {
   local span_kind=3 status_code=1
   (( status != 0 )) && status_code=2
 
-  # Build attributes per the schema in docs/otel-schema.md. The OTLP/HTTP
-  # JSON encoding wraps each value in a typed envelope ({stringValue},
-  # {intValue}, {doubleValue}); jq handles the structure directly. Per the
-  # OTLP/JSON spec, AnyValue.int_value is an int64 field that MUST be
-  # encoded as a JSON string (proto3 JSON mapping) — so each int attribute
-  # is passed via --arg (string), not --argjson (raw number). The span
-  # kind and status code are int32 enums and stay JSON numbers (--argjson).
-  # delegate.recipe is only emitted when --recipe was used (the schema
-  # explicitly forbids the attribute with an empty string).
-  #
-  # Content fields (delegate.prompt / delegate.context / delegate.output)
-  # are only appended when DELEGATE_OTEL_INCLUDE_CONTENT=1. Default is to
-  # omit them entirely — Track F (#158) inverted the default so content
-  # never leaves the host unless the operator explicitly opts in. Char
-  # counts above are the unconditional metadata equivalents.
+  # Int attributes go via --arg (string) because AnyValue.int_value is int64
+  # and MUST be a JSON string; span kind and status are int32 enums and stay
+  # numbers. delegate.recipe is omitted rather than empty (the schema forbids
+  # an empty string).
   local payload
   payload=$(jq -nc \
     --arg trace_id "$trace_id" --arg span_id "$span_id" \
@@ -326,34 +229,17 @@ emit_otel_span() {
 #   <parent_span_id> <parent_model> [<parent_recipe>] [<project>]
 #   [<verdict_source>]
 #
-# verdict_source is the verdict tier tag: "agent", the one tier there is (ADR
-# 0030) and the default — the agent that used or rewrote the draft records
-# the verdict. It is metadata, not content, so it always travels — unaffected
-# by DELEGATE_OTEL_INCLUDE_CONTENT — and it is the label the dashboards filter
-# on, so a span carrying the retired "human" value would fall out of every
-# panel.
-#
-# Emit a feedback-as-linked-span per ADR 0007: NEW trace, NEW span, with
-# `links: [{traceId, spanId}]` pointing at the parent delegation when the
-# parent IDs are known. Belt-and-braces, the parent IDs are duplicated as
-# plain string attributes (delegate.feedback.parent_trace_id /
-# delegate.feedback.parent_span_id) for backends that don't render `links`
-# well. The span is short by design — 1 ms end-time bump per the schema
-# doc — because it is a marker event, not a unit of work.
-#
-# Failures are intentionally swallowed: OTLP-export errors NEVER change
-# delegate-feedback.sh's exit status. The JSONL feedback row has already
-# been written by the time this function runs, so the user's verdict is
-# always durable on disk.
+# A feedback-as-linked-span (ADR 0007): NEW trace, NEW span, `links` pointing
+# at the parent delegation when its IDs are known, and the parent IDs
+# duplicated as plain attributes for backends that do not render links.
+# verdict_source is metadata and always travels; the dashboards filter on it.
 emit_otel_feedback_span() {
   [[ -z "${DELEGATE_OTEL_ENDPOINT:-}" ]] && return 0
   local fb_ts="$1" verdict="$2" reason="$3" parent_trace_id="$4"
   local parent_span_id="$5" parent_model="$6" parent_recipe="${7:-}"
   local project="${8:-}" verdict_source="${9:-agent}"
 
-  # Generate this span's own identifiers. Per ADR 0007, the feedback is in a
-  # new trace because the parent trace has already been flushed by the time
-  # the feedback arrives (often minutes or hours later).
+  # A new trace: the parent trace has been flushed by the time feedback arrives.
   local trace_id span_id
   trace_id=$(otel_gen_id 32) || return 0
   span_id=$(otel_gen_id 16) || return 0
@@ -367,16 +253,9 @@ emit_otel_feedback_span() {
 #   <reason> <parent_trace_id> <parent_span_id> <parent_model>
 #   [<parent_recipe>] [<project>] [<verdict_source>]
 #
-# The same as emit_otel_feedback_span but with this span's trace_id /
-# span_id supplied by the caller rather than generated fresh. Used by
-# scripts/backfill-otel.sh so re-runs produce identical IDs (the collector
-# dedups via OTel ID space). The live exporter path uses the random-ID
-# wrapper above because a feedback event has no replay invariant — the
-# verdict-recording moment is the only time it ever occurs.
-#
-# The `delegate.feedback.reason` content attribute is only emitted when
-# DELEGATE_OTEL_INCLUDE_CONTENT=1 (Track F #158 default). Verdict + parent
-# IDs are metadata and always travel; only the free-text reason is gated.
+# As emit_otel_feedback_span with the IDs supplied by the caller, so
+# backfill-otel.sh re-runs produce identical IDs. Only the free-text reason
+# is gated on DELEGATE_OTEL_INCLUDE_CONTENT=1.
 emit_otel_feedback_span_with_ids() {
   [[ -z "${DELEGATE_OTEL_ENDPOINT:-}" ]] && return 0
   local trace_id="$1" span_id="$2" fb_ts="$3" verdict="$4" reason="$5"
@@ -386,15 +265,8 @@ emit_otel_feedback_span_with_ids() {
   local verdict_source="${11:-agent}"
   local include_content="${DELEGATE_OTEL_INCLUDE_CONTENT:-0}"
 
-  # Convert the feedback row's ISO ts to nanoseconds and derive end_ns
-  # (start + 1 ms) in the same perl invocation so the OTLP export costs
-  # one process instead of two. The 1 ms bump is intentional — zero-
-  # duration spans are rejected by some collectors. The arithmetic
-  # assumes 64-bit perl integers (every modern macOS and Linux build is
-  # 64-bit; on a 32-bit perl build, $Config{ivsize}=4, perl would
-  # silently switch to floating-point for values above 2^31 and lose the
-  # last few digits of ns precision — accepted edge case, the in-
-  # practice impact is negligible).
+  # start and end (start + 1 ms) in one perl invocation; zero-duration spans
+  # are rejected by some collectors. Assumes 64-bit perl integers.
   local start_ns end_ns
   read -r start_ns end_ns <<< "$(perl -MTime::Local=timegm -e '
     my $ts = shift @ARGV;
@@ -405,21 +277,12 @@ emit_otel_feedback_span_with_ids() {
   ' "$fb_ts" 2>/dev/null)"
   [[ -z "$start_ns" || -z "$end_ns" ]] && return 0
 
-  # SPAN_KIND_INTERNAL = 1 per OTLP proto. Span status OK (code 1) always —
-  # the feedback span carries the verdict in an attribute, the span's own
-  # status reflects whether the marker event happened, which it did.
+  # SPAN_KIND_INTERNAL = 1. Status is always OK: the verdict is an attribute,
+  # and the marker event itself happened.
   local span_kind=1 status_code=1
 
-  # Build the span. The `links` array is populated only when the parent IDs
-  # are known; for rows that pre-date the exporter (no otel_trace_id in the
-  # JSONL), the span is emitted without a link but with the parent_trace_id
-  # attribute left empty — Track E #157 backfills these later.
-  #
-  # `delegate.feedback.reason` is content (user-authored free text) and so
-  # is gated on DELEGATE_OTEL_INCLUDE_CONTENT=1. Default is to omit it
-  # entirely — the verdict, parent IDs, and span itself still go through
-  # so dashboards keep counting hits and misses; only the reason text is
-  # held back unless the operator opts in.
+  # `links` only when the parent IDs are known; the reason is content and is
+  # gated on DELEGATE_OTEL_INCLUDE_CONTENT=1, the rest always goes through.
   local payload
   payload=$(jq -nc \
     --arg trace_id "$trace_id" --arg span_id "$span_id" \

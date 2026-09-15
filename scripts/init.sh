@@ -1,25 +1,19 @@
 #!/usr/bin/env bash
-# Print a per-user override config for delegate-local based on what the
-# running providers serve right now. Read-only — prints to stdout and
-# never writes. Redirect to your override path if you like the result:
+# Print a per-user override config for delegate-local from what the running
+# providers serve right now. Read-only; redirect to install:
 #
 #   mkdir -p ~/.local/share/delegate-local
 #   bash scripts/init.sh > ~/.local/share/delegate-local/config.sh
 #
-# After that, pick-model.sh sources the override after the shipped defaults
-# and uses the adjusted preference order. The shipped defaults remain the
-# fallback when no override is installed, and any tier the override doesn't
-# touch falls through to its shipped list unchanged.
-#
-# Re-run after pulling new models to refresh the override.
+# pick-model.sh sources it after the shipped defaults; untouched tiers fall
+# through unchanged. Re-run after pulling new models.
 
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 
-# Asks pick-model.sh rather than a single daemon: the override it writes is
-# consumed by pick-model.sh, so the two must agree on what "installed" means.
+# Asks pick-model.sh, which consumes the override, so the two agree on "installed".
 installed=$(bash "$pick" --print-installed 2>/dev/null)
 if [[ -z "$installed" ]]; then
   echo "no models installed; nothing to personalise" >&2
@@ -30,9 +24,7 @@ fi
 tiers_line=$(grep -E '^TIERS="' "$pick" | head -1)
 tiers=$(echo "$tiers_line" | sed -E 's/^TIERS="([^"]+)".*/\1/' | tr '|' ' ')
 
-# Extract the shipped prefs list for a given tier via pick-model.sh's
-# --print-prefs surface. Sources the list from the single tier-definition
-# point in pick-model.sh rather than re-parsing its case statement.
+# Via --print-prefs, never by re-parsing the case statement.
 shipped_prefs() {
   local tier="$1"
   bash "$pick" --print-prefs 2>/dev/null | grep "^$tier:" | head -1 | sed 's/^[^:]*://' | tr ' ' '\n'
@@ -50,11 +42,8 @@ cat <<'EOF'
 case "$tier" in
 EOF
 
-# Escape double-quote, backslash, dollar, and backtick in a string before
-# emitting it inside double-quotes in the generated bash. Ollama's name
-# grammar restricts these characters in practice; this is defense in depth
-# against the F3 finding in
-# experiments/sessions/2026-05-03-security-review-delegation/RETROSPECTIVE.md.
+# Model names are emitted inside double quotes in generated bash, so the
+# characters bash would interpret there are escaped: defence in depth.
 escape_dq() {
   local s="$1"
   s="${s//\\/\\\\}"

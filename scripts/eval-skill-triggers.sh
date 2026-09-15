@@ -3,42 +3,20 @@
 #
 # Modes:
 #   default (shape):  validate JSON, assert balance and required fields.
-#   --api:            score every query in a single Anthropic API call (paid).
-#                     Requires ANTHROPIC_API_KEY.
-#   --local [model]:  score every query in a single local provider call (free).
-#                     Defaults to scripts/pick-model.sh code if no model is
-#                     given. Trigger eval is closed-form binary classification —
-#                     the same shape SKILL.md identifies as the code tier's
-#                     strength — so the code-tier resolution is more reliable
-#                     than the reasoning-tier resolution on this workload.
-#                     Override with an explicit model name when measuring a
-#                     different scorer; thresholds in the eval set are the
-#                     calibration target, not the chosen model. Requires one
-#                     provider from DELEGATE_BASE_URL to be running; the model
-#                     is resolved and dispatched through the same list every
-#                     delegation uses, so the gate works on any of them.
+#   --api:            one Anthropic API call (paid); needs ANTHROPIC_API_KEY.
+#   --local [model]:  one local provider call (free); defaults to
+#                     pick-model.sh code, since trigger eval is closed-form
+#                     binary classification. The thresholds in the eval set
+#                     are the calibration target, not the chosen model.
 #   --github-models [model]:
-#                     score every query in a single GitHub Models call (free up
-#                     to the per-model rate-limit tier). Defaults to
-#                     openai/gpt-4o-mini, which is on the "low" rate-limit
-#                     tier (150 RPD) and is sufficient for binary trigger
-#                     classification. Auth via the GITHUB_TOKEN env var, which
-#                     GitHub Actions workflows auto-provision when the job
-#                     declares `permissions: models: read`. Locally,
-#                     `GITHUB_TOKEN=$(gh auth token)` is the easiest way to run
-#                     this mode.
+#                     one GitHub Models call (free up to the rate-limit tier);
+#                     defaults to openai/gpt-4o-mini. Auth via GITHUB_TOKEN,
+#                     auto-provisioned in Actions under `permissions: models:
+#                     read`; locally `GITHUB_TOKEN=$(gh auth token)`.
 #
-# Batching: one API call per run, not one per query. The judge receives the
-# full eval set as a JSON array and replies with a JSON object of verdicts
-# keyed by query id. This collapses ~23 requests/run into 1 so a normal day
-# of CI iteration stays under the GitHub Models 150 RPD free-tier quota
-# (issue #62).
-#
-# All three scoring modes use the same SKILL.md-frontmatter-as-trigger-surface
-# prompt and the same recall / negative-precision thresholds from the eval set.
-# The local mode is the recommended pre-merge gate (dogfooded routing); GitHub
-# Models is the recommended CI gate (free, no secret to configure); Anthropic
-# remains for the rare case Claude-grade scoring is wanted.
+# One batched call per run, not one per query, so a day of CI iteration stays
+# under the GitHub Models 150 RPD free tier (#62). All modes use the SKILL.md
+# frontmatter description as the trigger surface and the same thresholds.
 #
 # Usage:  eval-skill-triggers.sh [--api | --local [model] | --github-models [model]] [--eval-set path] [--skill path]
 # Env:    ANTHROPIC_API_KEY (required for --api)
@@ -61,8 +39,7 @@ while [[ $# -gt 0 ]]; do
     --api) mode="api"; backend="anthropic"; shift ;;
     --local)
       mode="api"; backend="local"; shift
-      # Optional model name immediately after --local; if the next arg starts
-      # with -- treat it as the next flag instead.
+      # Optional model name; a following --flag is not one.
       if [[ $# -gt 0 && "$1" != --* ]]; then local_model="$1"; shift; fi
       ;;
     --github-models)
@@ -79,13 +56,9 @@ done
 [[ -f "$skill" ]]    || { echo "missing skill: $skill" >&2; exit 2; }
 command -v jq >/dev/null || { echo "jq not on PATH" >&2; exit 2; }
 
-# Shape checks (always run). positive/negative count only GATED rows (gate !=
-# false): the >=8 thresholds exist to guarantee enough cases in the population
-# the recall/precision gate actually scores, and diagnostic (gate:false) rows
-# are excluded from that gate, so counting them here would let a set pass shape
-# while having too few gated cases to score meaningfully. jq's `!= false` is
-# safe (unlike `// false`) — absent gate is null, null != false is true, so an
-# entry is gated unless it explicitly sets gate:false.
+# Shape checks count only GATED rows, so a set cannot pass shape with too few
+# gated cases to score. `!= false`, not `// false`: an absent gate is null,
+# and null != false is true, so an entry is gated unless explicitly gate:false.
 total=$(jq '.queries | length' "$eval_set")
 pos=$(jq '[.queries[] | select(.expect == "trigger" and (.gate != false))] | length' "$eval_set")
 neg=$(jq '[.queries[] | select(.expect == "no-trigger" and (.gate != false))] | length' "$eval_set")
@@ -107,9 +80,8 @@ fi
 # Scoring mode (Anthropic, a local provider, or GitHub Models).
 command -v curl >/dev/null || { echo "curl not on PATH" >&2; exit 2; }
 
-# Extract the frontmatter description from SKILL.md (used as the trigger surface).
-# Capture indented continuation lines so YAML block scalars / folded multi-line
-# descriptions are preserved in full — truncation here would skew recall.
+# The frontmatter description is the trigger surface; indented continuation
+# lines are kept so a folded multi-line description is not truncated.
 description=$(awk 'BEGIN{c=0} /^---[[:space:]]*$/{c++; next} c==1' "$skill" \
   | awk '/^description:/{sub(/^description: */,""); print; while(getline && /^[[:space:]]+/) print}')
 if [[ -z "$description" ]]; then echo "could not parse description from $skill" >&2; exit 2; fi
@@ -128,10 +100,8 @@ case "$backend" in
     pick="$(dirname "$0")/pick-model.sh"
     [[ -x "$pick" ]] || { echo "pick-model.sh not found at $pick" >&2; exit 2; }
     if [[ -n "$local_model" ]]; then
-      # A hand-named scorer can live on a provider the code tier did not pick,
-      # so ask each provider in turn rather than assuming the tier's winner
-      # serves it. Dispatching to the wrong base is a 404 at best and a
-      # silently different model at worst.
+      # A hand-named scorer can live on a provider the code tier did not pick;
+      # dispatching to the wrong base is a silently different model at worst.
       scoring_model="$local_model"
       while IFS= read -r _b; do
         _b="${_b%/}"
@@ -198,10 +168,8 @@ score_batch() {
       ;;
     local)
       local payload resp
-      # Same envelope as the github_models arm below: one chat-completions
-      # shape covers every OpenAI-compatible provider, so the local gate is no
-      # longer wired to one daemon's native API. JSON mode verified 2026-08-18
-      # against both mlx_lm.server 0.31.3 and Ollama.
+      # Same chat-completions envelope as the github_models arm, so the local
+      # gate is not wired to one daemon's native API.
       payload=$(jq -nc --arg model "$scoring_model" --arg sys "$system_prompt" --arg user "$user_payload" --argjson max "$out_budget" '{
         model: $model,
         messages: [{role:"system", content:$sys}, {role:"user", content:$user}],
@@ -225,11 +193,8 @@ score_batch() {
         max_tokens: $max,
         response_format: {type: "json_object"}
       }')
-      # Free-tier limit is 15 RPM on low rate-limit-tier models. We only make
-      # one request per run so RPM is not the concern; the retry loop exists
-      # to recover from transient 429s when the daily window is near reset.
-      # --max-time bounds each attempt so a long Retry-After never silently
-      # stalls CI (issue #62).
+      # The retry loop recovers from a transient 429; --max-time bounds each
+      # attempt so a long Retry-After never silently stalls CI (#62).
       while (( attempt < 3 )); do
         local headers_file body_file
         headers_file=$(mktemp); body_file=$(mktemp)
@@ -242,9 +207,7 @@ score_batch() {
           retry_after=$(awk 'tolower($1) == "retry-after:" { gsub(/[^0-9]/, "", $2); print $2; exit }' "$headers_file")
           rm -f "$headers_file" "$body_file"
           [[ -z "$retry_after" || "$retry_after" -eq 0 ]] && retry_after=20
-          # Cap the retry-after wait at 60s so a multi-hour Retry-After (the
-          # daily-bucket-reset case from issue #62) doesn't stall CI. The
-          # caller surfaces the resulting transport error as a fast failure.
+          # Capped so a multi-hour Retry-After (daily bucket reset) cannot stall CI.
           (( retry_after > 60 )) && retry_after=60
           sleep "$retry_after"
           attempt=$((attempt + 1))
@@ -272,9 +235,7 @@ raw=$(score_batch) || { echo "$backend transport error" >&2; exit 2; }
 raw=${raw//\`\`\`json/}
 raw=${raw//\`\`\`/}
 
-# Validate JSON shape. If the model emitted prose around the JSON, try to
-# extract the first {...} block. jq's `try fromjson` returns empty on bad
-# input which we surface as a parse error.
+# If the model emitted prose around the JSON, fall back to the first {...} block.
 verdicts_json=$(jq -c '.verdicts // empty' <<<"$raw" 2>/dev/null || true)
 if [[ -z "$verdicts_json" || "$verdicts_json" == "null" ]]; then
   # Fallback: extract the first balanced JSON object substring and re-parse.
@@ -287,8 +248,7 @@ if [[ -z "$verdicts_json" || "$verdicts_json" == "null" ]]; then
   exit 2
 fi
 
-# Build a TSV-backed verdict lookup (bash 3 has no associative arrays). One
-# row per verdict: <id>\t<verdict>. Normalise verdict to uppercase, alpha-only.
+# TSV-backed lookup (bash 3 has no associative arrays): <id>\t<VERDICT>.
 verdict_map=$(mktemp)
 trap 'rm -f "$verdict_map"' EXIT
 jq -r '.[] | "\(.id)\t\(.verdict)"' <<<"$verdicts_json" \
@@ -296,23 +256,16 @@ jq -r '.[] | "\(.id)\t\(.verdict)"' <<<"$verdicts_json" \
   > "$verdict_map"
 
 tp=0; fn=0; tn=0; fp=0
-# Diagnostic counters (#277 dir 3): queries flagged `"gate": false` are scored
-# and reported but NOT folded into the pass/fail recall/precision gate. The
-# embedded-sub-step cases ("implement X, then commit and open a PR") live here:
-# they probe whether the trigger surface flags a delegatable commit/PR sub-step
-# buried inside a multi-step build instruction — the production miss the binary
-# gate's standalone paraphrases never exercised. They are expected to lag until
-# the control-flow fix (the boundary hook, #282) closes the gap, so gating on
-# them would just wedge an advisory eval; tracking them separately is the point.
+# Diagnostic counters (#277): `"gate": false` queries (the embedded-sub-step
+# cases) are scored and reported but never fold into the pass/fail gate,
+# since gating on them would wedge an advisory eval.
 dtp=0; dfn=0; dtn=0; dfp=0; diag=0
 missing_verdicts=0
 while read -r row; do
   id=$(jq -r '.id'     <<<"$row")
   expect=$(jq -r '.expect' <<<"$row")
   query=$(jq -r '.query'   <<<"$row")
-  # Explicit compare, NOT `.gate // true`: jq's `//` treats false as absent, so
-  # `.gate // true` would wrongly return true for a `"gate": false` entry. Only
-  # an explicit false marks a query diagnostic; absent or true means gating.
+  # Explicit compare, NOT `.gate // true`: jq treats false as absent there.
   gate=$(jq -r 'if .gate == false then "false" else "true" end' <<<"$row")
   verdict=$(awk -F'\t' -v id="$id" '$1 == id { print $2; exit }' "$verdict_map")
   if [[ -z "$verdict" ]]; then
@@ -321,12 +274,8 @@ while read -r row; do
   fi
   jq -nc --arg id "$id" --arg expect "$expect" --arg verdict "$verdict" --arg query "$query" --argjson gate "$gate" \
     '{id:$id, expect:$expect, verdict:$verdict, query:$query, gate:$gate}' >> "$results_file"
-  # Classify the verdict. Order matters: NOTRIGGER must be checked before
-  # TRIGGER because the latter is a prefix of the former. Glob match tolerates
-  # stray punctuation that survived the alpha-only normalisation (it cannot,
-  # in practice, but the check costs nothing). Garbage / missing verdicts
-  # count as a miss against the expected outcome — strict scoring discourages
-  # eval-set ambiguity.
+  # NOTRIGGER must be checked before TRIGGER, which is a prefix of it. A
+  # garbage or missing verdict counts as a miss against the expected outcome.
   is_trigger=0; is_notrigger=0
   if   [[ "$verdict" == NOTRIGGER* ]]; then is_notrigger=1
   elif [[ "$verdict" == TRIGGER* ]];   then is_trigger=1
@@ -355,10 +304,7 @@ fi
 
 echo "results: tp=$tp fn=$fn tn=$tn fp=$fp recall=$recall negative-precision=$neg_prec"
 if (( diag > 0 )); then
-  # Diagnostic embedded-sub-step recall (#277 dir 3): informational only, never
-  # gates. This is the number the boundary hook (#282) should move over time —
-  # a low value here next to a high gating recall above is the blind spot the
-  # binary eval's standalone paraphrases hid, made visible.
+  # Informational only, never gates.
   drecall=$(awk -v tp="$dtp" -v fn="$dfn" 'BEGIN{ if(tp+fn==0) print "n/a"; else printf "%.3f", tp/(tp+fn) }')
   echo "diagnostic (non-gating, embedded sub-step): dtp=$dtp dfn=$dfn embedded-recall=$drecall"
 fi

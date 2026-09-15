@@ -1,24 +1,17 @@
 #!/usr/bin/env bash
 # Audit the models the running providers serve against llmfit recommendations
-# for this hardware. Shows tier routing, flags uninstalled models that outscore
-# installed ones, and prints pull suggestions. Does not install or remove
-# anything.
-#
-# The provider list comes from pick-model.sh rather than being restated here,
-# so the audit can never report an inventory that routing does not consult.
-#
-# llmfit's own `installed` flag tracks HuggingFace GGUF cache, not Ollama's
-# model store, so we cross-check each candidate against `ollama list` using
-# a normalized stem match.
+# for this hardware: tier routing, uninstalled models that outscore installed
+# ones, pull suggestions. Installs nothing. The provider list comes from
+# pick-model.sh so the audit cannot report an inventory routing does not
+# consult; llmfit tracks the HuggingFace cache, not the Ollama store, so each
+# candidate is cross-checked against `ollama list` by normalised stem.
 
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pick="$script_dir/pick-model.sh"
 
-# Pin the list for the whole audit so the tier table below and the inventory
-# above it are answered against the same providers, even if a daemon stops
-# mid-run.
+# Pinned for the whole audit so every section answers against the same providers.
 DELEGATE_BASE_URL=$(bash "$pick" --print-providers | tr '\n' ' ')
 DELEGATE_BASE_URL="${DELEGATE_BASE_URL% }"
 export DELEGATE_BASE_URL
@@ -39,10 +32,8 @@ echo "=== Installed models (union of the reachable providers) ==="
 bash "$pick" --print-installed
 echo
 
-# Every tier, not just the four active ones: the scaffolded tiers resolving to
-# (none) is exactly the state that needs surfacing when a recipe routed to one
-# of them silently produced nothing. Tier names come from --print-prefs so the
-# list stays single-sourced in pick-model.sh.
+# Every tier, including the scaffolded ones resolving to (none): that is the
+# state to surface. Names come from --print-prefs, single-sourced.
 echo "=== Tier routing (which model wins per tier) ==="
 while IFS= read -r tier; do
   [[ -n "$tier" ]] || continue
@@ -88,9 +79,8 @@ tier_to_usecase() {
 # Ollama model blob, normalized: lowercase, : and _ to -.
 ollama_blob=$(ollama list 2>/dev/null | awk 'NR>1 {print $1}' | tr '[:upper:]' '[:lower:]' | tr ':_' '--')
 
-# Given an HF name ("Provider/Model-Variant"), produce a stem suitable for
-# substring matching against $ollama_blob. Strips provider prefix and common
-# variant/quant suffixes.
+# HF name ("Provider/Model-Variant") to a stem for substring matching against
+# $ollama_blob: provider prefix and variant/quant suffixes stripped.
 hf_stem() {
   local name="$1"
   echo "$name" \
@@ -107,13 +97,11 @@ is_in_ollama() {
   [[ "$ollama_blob" == *"$stem"* ]]
 }
 
-# First-party providers whose names tend to map to Ollama library tags.
-# Fine-tunes and merges from third parties rarely appear on Ollama under the
-# same name, so filter them out of pull suggestions.
+# First-party providers only: third-party fine-tunes rarely appear on the
+# Ollama library under the same name.
 FIRST_PARTY_FILTER='["alibaba","qwen","google","meta","microsoft","deepseek","mistralai","mistral","zhipu","openai"]'
 
-# Cache the per-tier llmfit JSON once so the top-5 and pull-suggestion loops
-# below don't both call llmfit for the same tier (4 subprocesses instead of 8).
+# Per-tier llmfit JSON cached once, shared by the top-5 and pull-suggestion loops.
 cache_dir=$(mktemp -d)
 trap 'rm -rf "$cache_dir"' EXIT
 for tier in code prose reasoning long-context; do

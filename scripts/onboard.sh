@@ -1,26 +1,18 @@
 #!/usr/bin/env bash
-# Onboarding wizard (ADR 0013): probe the environment and the user's own git
-# history, present each derived value for confirm-or-edit, and write the two
-# per-user override files on explicit confirmation. Wraps the existing probes —
-# init.sh (installed models -> config.sh routing override) and derive-flavor.sh
-# (git history -> profile.sh flavor values) — rather than reimplementing them.
+# Onboarding wizard (ADR 0013): wraps init.sh (installed models -> config.sh)
+# and derive-flavor.sh (git history -> profile.sh), presents each derived value
+# for confirm-or-edit, and writes only on explicit confirmation, backing up an
+# existing target as .bak.<ts> first. Writes are chmod 600 so the profile
+# passes load-flavor.sh's owner/mode check. Without a terminal it degrades to
+# print-only and writes nothing.
 #
 # Interactive use (a terminal):
 #   bash scripts/onboard.sh
 #
-# Without a terminal it degrades to print-only: both candidate files go to
-# stdout with the manual redirect commands, and nothing is written — the same
-# read-only contract init.sh and derive-flavor.sh already keep. Nothing is
-# written without explicit confirmation: the profile after its values are
-# individually confirmed, the routing override after its own [y/N], and an
-# existing target additionally gets an overwrite confirm with a timestamped
-# .bak.<ts> backup first. Writes are chmod 600 so the profile passes
-# load-flavor.sh's owner/mode trust check immediately.
-#
 # Migration:
 #   bash scripts/onboard.sh --migrate-data
-# copies the per-user files from the legacy location inside the skill directory
-# to the data directory. It COPIES, never moves, so it cannot destroy anything.
+# COPIES the per-user files from the legacy skill directory to the data
+# directory; never moves, so it cannot destroy anything.
 #
 # Env:
 #   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
@@ -44,28 +36,19 @@ while (($# > 0)); do
 done
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Same target resolution (including the legacy env name) as pick-model.sh's
-# config hook — writing where the consumer doesn't read would be a silent no-op.
+# The same resolution (legacy env name included) as the consumer, pick-model.sh.
 config_target="${DELEGATE_LOCAL_CONFIG:-${DELEGATE_TO_OLLAMA_CONFIG:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/config.sh}}"
 profile_target="${DELEGATE_LOCAL_PROFILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/profile.sh}"
 
 # --- --migrate-data: legacy skill directory -> data directory (#360) -------
-# The per-user files used to default to $HOME/.claude/skills/delegate-local/,
-# which is the directory the skill installer owns, so `skills update` could
-# delete four months of calibration history. They now default to the data
-# directory. This moves an existing install across.
-#
-# COPY, never move: the operation must not be able to destroy anything. The
-# leftover legacy files are harmless because resolution no longer looks at
-# them at all, which is exactly why the read-only fallback design was rejected
-# (it could resurrect a stale snapshot months later).
+# The installer owns the legacy directory, so `skills update` could delete the
+# calibration history. COPY, never move; resolution no longer looks at the
+# legacy files, which is why a read-only fallback was rejected (it could
+# resurrect a stale snapshot months later).
 if (( migrate_data )); then
   legacy_dir="$HOME/.claude/skills/delegate-local"
   data_dir="${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}"
-  # metrics.loki-sync rides along: sync-metrics-to-loki.sh derives it as
-  # ${metrics_file%.jsonl}.loki-sync, so leaving it behind resets the watermark
-  # and re-pushes every row. Harmless (Loki de-duplicates identical
-  # timestamp/line pairs) but it strands a file that still looks authoritative.
+  # metrics.loki-sync rides along, else the watermark resets and re-pushes every row.
   migrate_names="metrics.jsonl config.sh profile.sh metrics.loki-sync"
 
   if [[ ! -d "$legacy_dir" ]]; then
@@ -75,11 +58,8 @@ if (( migrate_data )); then
   found=0
   for n in $migrate_names; do [[ -f "$legacy_dir/$n" ]] && found=1; done
   if (( ! found )); then
-    # The directory is there but empty of user data. On a machine that ever ran
-    # delegate.sh that means the skill symlink has already been repointed and
-    # the real history is sitting somewhere else, unreachable. Failing loudly
-    # here is the whole point: the silent version reports success having copied
-    # nothing.
+    # A legacy directory with no user data means the real history sits
+    # elsewhere; fail loudly rather than report success having copied nothing.
     {
       echo "onboard: $legacy_dir exists but holds none of: $migrate_names"
       echo "         if this machine has run delegate.sh before, the skill symlink"
@@ -123,10 +103,7 @@ err_tmp=$(mktemp)
 trap 'rm -f "$err_tmp"' EXIT
 
 # --- Probe 1: environment (facts, no questions) ------------------------------
-# init.sh prints a routing override built from what the running providers
-# serve; a host with no provider reachable just skips this section — flavor-only
-# onboarding still works. Relay init.sh's own stderr reason rather than guessing
-# one.
+# No reachable provider skips this section; flavor-only onboarding still works.
 config_candidate=""
 if ! config_candidate=$(bash "$script_dir/init.sh" 2>"$err_tmp"); then
   config_candidate=""
@@ -135,8 +112,7 @@ if ! config_candidate=$(bash "$script_dir/init.sh" 2>"$err_tmp"); then
 fi
 
 # --- Probe 2: flavor from the user's own git history -------------------------
-# derive-flavor.sh reads the cwd's repo; outside a repo (or with no commits)
-# the shipped defaults become the prefill instead.
+# Outside a repo (or with no commits) the shipped defaults become the prefill.
 derived=""
 if ! derived=$(bash "$script_dir/derive-flavor.sh" 2>"$err_tmp"); then
   derived=""
@@ -147,8 +123,7 @@ derived_subject_max=$(printf '%s\n' "$derived" | sed -n 's/^FLAVOR_COMMIT_SUBJEC
 derived_types=$(printf '%s\n' "$derived" | sed -n 's/^FLAVOR_COMMIT_TYPES="\(.*\)"$/\1/p')
 corpus_line=$(printf '%s\n' "$derived" | sed -n 's/^# Source corpus: \([^.]*\)\..*$/\1/p')
 
-# Surface (not silently drop) any derived FLAVOR_* key this wizard doesn't
-# handle yet — a future derive-flavor key lands here before the wizard learns it.
+# Surface, never silently drop, a derived FLAVOR_* key this wizard does not handle yet.
 extra_keys=$(printf '%s\n' "$derived" \
   | sed -n 's/^\(FLAVOR_[A-Z_]*\)=.*/\1/p' \
   | grep -v -e '^FLAVOR_COMMIT_SUBJECT_MAX$' -e '^FLAVOR_COMMIT_TYPES$' || true)
@@ -180,9 +155,8 @@ if (( ! interactive )); then
     printf '%s\n\n' "$config_candidate"
   fi
   printf '# ---- flavor profile candidate — write to: %s ----\n' "$profile_target"
-  # Only suggest the redirect when the probe actually succeeded: a shell
-  # redirect truncates the target BEFORE the command runs, so suggesting it
-  # for a failing derive-flavor would destroy an existing profile.
+  # A shell redirect truncates the target BEFORE the command runs, so it is
+  # only suggested when the probe succeeded.
   if [[ -n "$derived" ]]; then
     printf '#   bash %s/derive-flavor.sh > %s\n' "$script_dir" "$profile_target"
   else
@@ -202,9 +176,8 @@ read_answer() {
   fi
 }
 
-# Ask one flavor value: Enter=accept prefill, typed value=validated override,
-# s=skip the key (falls through to shipped defaults at load time), q=quit the
-# wizard with nothing written. Result lands in $confirmed; $quit=1 on q.
+# Enter=accept prefill, value=validated override, s=skip (shipped default at
+# load time), q=quit with nothing written. Result in $confirmed; $quit=1 on q.
 quit=0
 ask_value() { # $1=label $2=prefill $3=default $4=validation-regex $5=validation-hint
   local label="$1" prefill="$2" default="$3" regex="$4" hint="$5"
@@ -214,7 +187,7 @@ ask_value() { # $1=label $2=prefill $3=default $4=validation-regex $5=validation
     printf '  [Enter]=accept %s, or type a value, s=skip this key, q=quit without writing: ' "$prefill" >&2
     _ans=""
     # On EOF read returns non-zero but still fills $_ans with an unterminated
-    # final line — only treat a truly empty read as quit/decline.
+    # final line; only a truly empty read is quit/decline.
     read_answer || [[ -n "$_ans" ]] || _ans="q"
     case "$_ans" in
       "") confirmed="$prefill"; return 0;;
@@ -229,9 +202,8 @@ ask_value() { # $1=label $2=prefill $3=default $4=validation-regex $5=validation
   done
 }
 
-# Write $2 (content) to $1 (target) after an overwrite confirmation when the
-# target exists, backing the old file up as <target>.bak.<ts> first. chmod 600
-# keeps load-flavor.sh's owner/mode trust check green from the first call.
+# Overwrite confirmation and a <target>.bak.<ts> backup when the target
+# exists; chmod 600 keeps load-flavor.sh's owner/mode check green.
 write_confirmed() { # $1=target $2=content $3=what
   local target="$1" content="$2" what="$3"
   if [[ -f "$target" ]]; then

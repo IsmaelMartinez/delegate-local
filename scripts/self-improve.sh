@@ -1,46 +1,24 @@
 #!/usr/bin/env bash
 # self-improve.sh — the gate and the evidence bundle for the recurring
-# calibration session.
-#
-# Why this exists: the corpus already records WHY a delegation was rejected
-# (the free-text `reason` on every feedback row), but nothing read it on a
-# schedule, so the loop closed only when a human happened to ask "how are we
-# doing". On 2026-08-26 that gap cost a full day: twenty delegations, zero
-# kept, and the dominant defect (a recipe reproducing its own example) had
-# been visible in the reasons since the first one.
-#
-# This script does the two mechanical halves of that loop so the session can
-# spend its judgement on the third. It GATES (has anything happened since the
-# last run? if not, exit 10 and say nothing) and it BUNDLES (here are the new
-# verdicts, the reasons, the per-recipe keep rates, the deterministic check
-# failures, and — where both were captured — an objective diff between the
-# draft the model produced and the text that actually shipped).
-#
-# The draft/final diff is the part that is new information rather than a
-# re-reading of old rows. `reason` is the agent's prose account of the gap;
-# the diff is the gap itself, and in particular the DROPPED list names the
-# specific salient tokens (file paths, identifiers, numbers, issue refs) the
-# human had to put back. A recipe edit aimed at those is calibrated; one aimed
-# at "dropped every load-bearing fact" is a guess.
+# calibration session (docs/self-improvement-loop.md). It GATES (nothing new
+# since the watermark: exit 10 and say nothing) and it BUNDLES the new
+# verdicts, reasons, per-recipe keep rates, deterministic check failures and,
+# where both were captured, a diff between the draft and the shipped text.
+# The diff is the one objective part of a MISS: DROPPED names the tokens the
+# human had to put back, which is what a calibrated recipe edit aims at.
 #
 # Usage:
 #   self-improve.sh [--file PATH] [--peek] [--min-delegations N] [--days N]
 #
-#   --peek             report without advancing the watermark, so a dry run
-#                      does not consume the window the next real run needs.
-#   --min-delegations  how many NEW delegations must exist before there is
-#                      anything worth a session (default 1).
-#   --days N           rolling window for the per-recipe context section
-#                      (default 7). The new-since-watermark sections are not
-#                      affected — those are always "everything since last run".
+#   --peek             report without advancing the watermark
+#   --min-delegations  new delegations needed before there is anything to
+#                      report (default 1)
+#   --days N           rolling window for the per-recipe section (default 7);
+#                      the since-watermark sections are unaffected
 # Env:
-#   DELEGATE_METRICS_FILE     metrics JSONL (default
-#                             ~/.local/share/delegate-local/metrics.jsonl).
-#   DELEGATE_LOCAL_DATA_DIR   where per-user data lives
-#                             (default ~/.local/share/delegate-local).
-#   DELEGATE_SELF_IMPROVE_STATE  watermark file (default <data dir>/
-#                             self-improve.state). Holds the ts of the newest
-#                             delegate row the last run saw.
+#   DELEGATE_METRICS_FILE        metrics JSONL (default <data dir>/metrics.jsonl)
+#   DELEGATE_LOCAL_DATA_DIR      per-user data (default ~/.local/share/delegate-local)
+#   DELEGATE_SELF_IMPROVE_STATE  watermark file (default <data dir>/self-improve.state)
 # Exit: 0 evidence emitted, 10 nothing new (quiet, the normal cron outcome),
 #       2 usage or dependency error.
 set -uo pipefail
@@ -75,10 +53,7 @@ case "$window_days" in ''|*[!0-9]*) echo "self-improve: --days must be a number"
 
 drafts_dir="$(dirname "$metrics_file")/drafts"
 
-# The watermark is the ts of the newest delegate row the previous run saw.
-# Absent (first run, or a reset corpus) means "treat everything as new" — the
-# first session then gets the whole backlog once, which is the right shape for
-# a loop that has just been switched on.
+# An absent watermark (first run, or a reset corpus) means everything is new.
 prev_ts=""
 [[ -f "$state_file" ]] && prev_ts=$(head -n 1 "$state_file" 2>/dev/null | tr -d '[:space:]')
 
@@ -94,8 +69,7 @@ new_count=$(jq -r --arg prev "$prev_ts" \
 new_count=${new_count:-0}
 
 if (( new_count < min_delegations )); then
-  # The quiet path, and the one that runs most of the time. Nothing on stdout
-  # so a cron session can stop without producing noise.
+  # The quiet path: nothing on stdout, so a cron session stops without noise.
   echo "self-improve: $new_count new delegation(s) since ${prev_ts:-the beginning} (< $min_delegations) — nothing to do" >&2
   exit 10
 fi
@@ -109,25 +83,14 @@ echo "Watermark:  ${prev_ts:-(none — first run, reporting the whole corpus)}"
 echo "Newest row: $newest_ts"
 echo "New delegations since watermark: $new_count"
 
-# The join from a feedback row to the delegation it scored, defined once and
-# interpolated into every jq program below. `parent` is evaluated with a
-# feedback row as `.` and returns the delegate row, or null for an orphan.
-# The key is the delegate row's otel_span_id first and its ts second (#481):
-# ts is second-precision and parallel delegations share it, so INDEX(.ts)
-# kept one row per second and a verdict on the other sibling was filed under
-# the wrong recipe and project, with its draft fallback pointing at the
-# sibling's file. A feedback row written since #479 carries ref_id and joins
-# by it; one written before carries ref_ts only and joins by ts, reaching
-# whichever row of that second INDEX kept — the best a legacy row can do.
-# `pkey` is the delegation's identity as seen from a feedback row, so that
-# several verdicts on one delegation collapse to the latest; a row whose
-# delegation is missing from the file keys on its own reference and is kept.
-# A feedback row with neither ref_id nor ref_ts references nothing at all and
-# is skipped everywhere (`referenced`), as metrics-summary.sh skips it: it
-# cannot be attributed, paired or counted against a delegation, and keyed on
-# the empty reference every such row would share one pkey, so INDEX would
-# have kept one of them and the tally would have counted a verdict nobody
-# recorded on anything.
+# The feedback-to-delegation join, defined once and interpolated into every
+# jq program below. Keyed on otel_span_id first and ts second (#481): ts is
+# second-precision and INDEX(.ts) kept one row per second, so a verdict on
+# the other sibling was filed under the wrong recipe. `pkey` collapses
+# several verdicts on one delegation to the latest. A feedback row with
+# neither ref_id nor ref_ts is skipped everywhere (`referenced`), as
+# metrics-summary.sh skips it: keyed on the empty reference, every such row
+# would share one pkey.
 parent_join='
   def referenced: .source == "feedback" and (.ref_id != null or .ref_ts != null);
   (map(select((.source // "delegate") == "delegate" and .ts != null))) as $dl
@@ -140,11 +103,9 @@ parent_join='
   def latest_verdicts: [.[] | select(referenced)] | sort_by(.ts) | INDEX(pkey) | [.[]];
 '
 
-# A ref_ts-only verdict on a second that more than one delegation shares
-# cannot say which one it scored, and the recipe/project shown below is
-# whichever row INDEX kept. Say so rather than reporting an attribution that
-# might be wrong; a ref_id verdict on the same second is exact, and the
-# draft/final pair is always exact because it is named after the draft.
+# A ref_ts-only verdict on a second shared by several delegations cannot say
+# which it scored; say so rather than report a guess. Captured pairs are
+# always exact because they are named after the draft.
 ambiguous=$(jq -rs '
   (map(select((.source // "delegate") == "delegate")) | group_by(.ts) | map(select(length > 1) | .[0].ts)) as $shared
   | [.[] | select(.source == "feedback" and (.ref_id // "") == "" and (.ref_ts as $t | $shared | index($t) != null))] | length
@@ -155,17 +116,10 @@ if [[ -n "$ambiguous" && "$ambiguous" != "0" ]]; then
 fi
 echo
 
-# One verdict tier (ADR 0030): every feedback row is the agent's record of
-# what it did with its own draft, and the keep rate is quoted from all of
-# them. ADR 0015 split this tally into a human "quality" line and an agent
-# "usage" line, and with no human verdicts the quality line said there was no
-# keep rate to quote — true under that ADR, and useless, because the agent's
-# rows were the only signal there was going to be. Untagged rows (written
-# before the tier tag existed) count the same as tagged ones. A delegation
-# counts once, under its latest verdict, as metrics-summary.sh counts it —
-# counting rows read a revised verdict as two. `usable` is kept plus scaffold
-# over n, the same ranking key the per-recipe section uses, and is omitted
-# rather than printed as 0% when there are no verdicts at all.
+# One verdict tier (ADR 0030): the keep rate is quoted from every feedback
+# row. A delegation counts once, under its latest verdict, as
+# metrics-summary.sh counts it. `usable` is kept plus scaffold over n, the
+# same ranking key the per-recipe section uses.
 jq -rs --arg prev "$prev_ts" '
   '"$parent_join"'
   latest_verdicts
@@ -182,9 +136,8 @@ jq -rs --arg prev "$prev_ts" '
 echo
 
 # ---------------------------------------------------------------------------
-# Section 2 — per-recipe keep rate over the rolling window. Context for
-# "is this a new defect or a standing one", and the ranking that says which
-# recipe is worth the session's time. Worst first, ties broken by volume.
+# Section 2 — per-recipe keep rate over the rolling window: the ranking that
+# says which recipe is worth the session's time. Worst first, ties by volume.
 # ---------------------------------------------------------------------------
 echo "--- per-recipe outcomes, last ${window_days}d (worst usable-rate first) ---"
 jq -rs --argjson days "$window_days" '
@@ -200,10 +153,8 @@ jq -rs --argjson days "$window_days" '
          kept: (map(select(.u == "kept")) | length),
          scaffold: (map(select(.u == "scaffold")) | length),
          rewrote: (map(select(.u == "rewrote")) | length)})
-  # Ranked on kept+scaffold rather than kept alone. A draft the agent edited and
-  # shipped did most of its job; a recipe whose drafts are all thrown away is a
-  # different and worse problem, and ranking on kept alone cannot tell them
-  # apart.
+  # Ranked on kept+scaffold: a recipe whose drafts are all thrown away is a
+  # worse problem than one whose drafts get edited, and kept alone cannot tell.
   | map(. + {rate: (if .n > 0 then ((.kept + .scaffold) * 100 / .n | floor) else 0 end)})
   | sort_by(.rate, -.n)
   | .[]
@@ -234,14 +185,9 @@ echo
 
 # ---------------------------------------------------------------------------
 # Section 4 — the new rejections, with the draft/final pair where it exists.
-#
-# The DROPPED / INVENTED lists are computed here rather than described,
-# because they are the one part of a MISS that is objective. A salient token
-# is a backticked span, a dotted identifier or path, a filename, an issue ref,
-# or a number — the things a maintainer reply or a commit message is judged on
-# and the things the reasons keep saying went missing. All extraction is
-# literal or a flat alternation (no nested quantifiers), so it is linear in
-# the size of the text.
+# DROPPED / INVENTED are computed, not described: a salient token is a
+# backticked span, a dotted identifier or path, an issue ref, or a number.
+# Extraction is literal or a flat alternation, so it is linear.
 # ---------------------------------------------------------------------------
 echo "--- rejected drafts since watermark ---"
 
@@ -257,21 +203,17 @@ salient() {
 }
 
 list_markers() {
-  # grep -c already prints 0 when it matches nothing; it just exits 1 doing so,
-  # so a `|| echo 0` fallback appends a SECOND zero and the caller's arithmetic
-  # then chokes on "0\n0".
+  # grep -c prints 0 and exits 1 on no match, so a `|| echo 0` fallback
+  # would append a second zero.
   local n
   [[ -f "$1" ]] || { echo 0; return 0; }
   n=$(grep -cE '^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]' "$1" 2>/dev/null)
   echo "${n:-0}"
 }
 
-# Stream one record per rejected delegation: ts, project, recipe, draft file,
-# final file, verdict, reason. Rejections only — a kept draft has nothing to
-# teach the recipe. The separator is US (\u001f), not a tab: tab is IFS
-# WHITESPACE to bash, so `read` collapses a run of them into one delimiter and
-# the two frequently-empty fields (draft_file, final_file) silently shift every
-# later field left.
+# One record per rejected delegation. The separator is US (\u001f), not a tab: tab is IFS
+# whitespace, so `read` would collapse the frequently-empty draft_file /
+# final_file fields and shift every later field left.
 jq -rs --arg prev "$prev_ts" '
   '"$parent_join"'
   map(select(referenced and (.kept | not)))
@@ -282,12 +224,9 @@ jq -rs --arg prev "$prev_ts" '
   | [ .ref_ts,
       ($p.project // "-"),
       ($p.recipe // "(bare)"),
-      # Prefer the draft the FEEDBACK row names: final_file is derived from
-      # draft_file, so the two halves are provably the same delegation even
-      # when several share a second-precision ts. A numbered final
-      # (`<stem>.final.2.txt`, written when the stem already had one — #474)
-      # belongs to the same draft as the bare name. The parent lookup is the
-      # fallback for rejections recorded without --final.
+      # The draft the FEEDBACK row names is provably the same delegation; a
+      # numbered final belongs to the same draft as the bare name (#474). The
+      # parent lookup is the fallback for rejections recorded without --final.
       (if $fin != "" and ($fin | test("\\.final(\\.[0-9]+)?\\.txt$"))
        then ($fin | sub("\\.final(\\.[0-9]+)?\\.txt$"; ".draft.txt"))
        else ($p.draft_file // "") end),
@@ -307,10 +246,8 @@ jq -rs --arg prev "$prev_ts" '
     if [[ -n "$final" && -f "$drafts_dir/$final" ]]; then
       fpath="$drafts_dir/$final"
       fbytes=$(wc -c < "$fpath" | tr -d ' ')
-      # A final the boundary hook inferred from the post is worth reading with
-      # slightly more suspicion than one the caller handed over: the hook runs
-      # BEFORE the post, so it stores what was about to go out rather than what
-      # demonstrably did.
+      # A final the hook inferred was captured BEFORE the post, so it is what
+      # was about to go out rather than what demonstrably did.
       if [[ "$fsrc" == "posted" ]]; then
         echo "    final:  $fpath ($fbytes bytes, captured from the post)"
       else
@@ -319,21 +256,11 @@ jq -rs --arg prev "$prev_ts" '
       dropped=$(comm -13 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
       draft_only=$(comm -23 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
       [[ -n "${dropped// /}"  ]] && echo "    DROPPED  (in the shipped text, absent from the draft): $dropped"
-      # A token in the draft and not in the shipped text has two very different
-      # causes, and calling both of them INVENTED made this instrument report a
-      # hallucination on the most common rejection shape there is: the facts
-      # are right, the body is too long, the human cuts clauses, and every
-      # clause cut lands in the list. Measured against the captured pairs on
-      # 2026-08-27, most of them were that rather than invention.
-      #
-      # The discriminator is DROPPED, and only DROPPED. Invention is a claim
-      # that something in the draft was WRONG and had to be replaced, and the
-      # only evidence for it is the shipped text carrying a token the draft
-      # lacked. Where the human put nothing back, material was removed and
-      # nothing substituted — whether the result is shorter (a length edit) or
-      # longer (prose added that happens to carry no salient token). Reading
-      # the byte delta instead would call that second case invention on no
-      # evidence at all.
+      # A draft token absent from the shipped text has two causes, and calling
+      # both INVENTED reported hallucination on the commonest rejection (a body
+      # the human cut for length). The discriminator is DROPPED alone: invention
+      # is a claim something was replaced, and the only evidence is the shipped
+      # text carrying a token the draft lacked.
       if [[ -n "${draft_only// /}" ]]; then
         if [[ -z "${dropped// /}" ]]; then
           echo "    CUT      (in the draft, removed; the shipped text put nothing in their place): $draft_only"
