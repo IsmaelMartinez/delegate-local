@@ -602,6 +602,18 @@ for base in maintainer-reply maintainer-review-reply; do
       "$base.md prompt template carries the CURATION rule"
     assert_contains "On a fact list of more than a few lines it runs well under the facts' length" "$rf_template" \
       "$base.md CURATION states the ceiling relative to the facts, scoped to a long list"
+    # A clean approval has no ask (#471): `ask` is optional, the template stops
+    # after the evidence when it is empty, and it never asks the contributor to
+    # confirm a merge, which is the maintainer's own action.
+    if printf '%s\n' "$rf_fm" | grep -qE '^[[:space:]]+ask:[[:space:]]*string\?'; then
+      echo "  PASS  $base.md declares ask as an optional input (#471)"; pass=$((pass+1))
+    else
+      echo "  FAIL  $base.md does not declare ask: string? (#471)"; fail=$((fail+1))
+    fi
+    assert_contains "If the ask block below is empty, there is no item 3" "$rf_template" \
+      "$base.md prompt template has a no-ask branch (#471)"
+    assert_contains "Never ask the contributor to confirm, approve or authorise a merge" "$rf_template" \
+      "$base.md prompt template forbids asking the contributor to confirm a merge (#471)"
   fi
 done
 
