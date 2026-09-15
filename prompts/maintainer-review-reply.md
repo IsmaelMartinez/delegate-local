@@ -3,7 +3,7 @@ tier: prose
 inputs:
   stdin: string
   verdict: string
-  ask: string
+  ask: string?
   opener: string?
   recipient: string?
   signoff: string?
@@ -17,7 +17,7 @@ checks:
 
 ## When to use
 
-You are a maintainer replying to a contributor's PR or issue with a JUDGEMENT and the evidence behind it: the change is right, the change is wrong, this is not a regression, this blocker is real and that one is not. You already did the investigation, so the reply has to carry the anchors it rests on — file paths, line references, commit hashes, issue and PR numbers, measured counts — and then say what you want the contributor to do next.
+You are a maintainer replying to a contributor's PR or issue with a JUDGEMENT and the evidence behind it: the change is right, the change is wrong, this is not a regression, this blocker is real and that one is not. You already did the investigation, so the reply has to carry the anchors it rests on — file paths, line references, commit hashes, issue and PR numbers, measured counts — and then, when there is one, say what you want the contributor to do next; a clean approval has no ask and ends on the evidence.
 
 Distinct from the three adjacent reply recipes. `maintainer-reply.md` is the CLOSED short shape: one sentence of cause-or-praise, then one ask, capped at two sentences, for a diagnostic one-liner or a status comment. `pr-review-reply.md` carries the same evidence-shaped body in the PR *author's* voice, answering a reviewer under their own inline comment behind a fixed opener; the axis between that recipe and this one is role, not length. `summarise-issue.md` digests a thread rather than answering it. This recipe is for the case those three keep being asked to cover and cannot: a substantive reply whose length is set by how much evidence there is.
 
@@ -48,7 +48,7 @@ Draft a maintainer's reply to a contributor, using only the verified facts below
 Write it in this order:
 1. The opening, in this order and only this order: the recipient handle if one is given ("@{{recipient}}, "), then the opener verbatim if one is given, then the verdict in one sentence. With no handle, address the reader as "you"; with no opener, the verdict is the first sentence. State the judgement given below plainly and up front. Never open by restating what the contributor said, and never open with a preamble of your own.
 2. The evidence for that verdict, in flowing prose sentences you write. This is the body of the reply and its length is set by how much evidence there is.
-3. What you are asking the contributor to do next, derived from the ask topic below and phrased as a direct question or request to the reader in the second person. Never as an instruction about the reader ("ask them to ...", "they should ...").
+3. What you are asking the contributor to do next, derived from the ask topic below and phrased as a direct question or request to the reader in the second person. Never as an instruction about the reader ("ask them to ...", "they should ..."). If the ask block below is empty, there is no item 3: stop after the evidence and do not invent a next step for the contributor.
 4. If a sign-off is given below, end with it verbatim on its own line.
 
 ANCHOR-PRESERVATION — non-negotiable, and the reason this recipe exists:
@@ -66,13 +66,14 @@ Rules:
 - Never write thanks of your own. Gratitude enters the reply only through the opener or the sign-off, verbatim; if neither is given, the reply carries none.
 - Avoid em dashes; use commas, parentheses, or periods.
 - Do NOT hedge a verdict the facts state plainly. Do NOT soften "this is not a regression" into "this may not be a regression".
-- Stop after the ask (or the sign-off). Do NOT add a closing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "This ensures", "This enables").
+- Never ask the contributor to confirm, approve or authorise a merge. Merging is the maintainer's own action, so that question is never in this recipe's voice; a clean approval with no ask ends on the evidence.
+- Stop after the ask (or the evidence when there is no ask, or the sign-off). Do NOT add a closing sentence that restates the point. Do NOT append a participial clause (beginning with -ing or "supported by", "leading to", "ensuring", "reflecting", "providing", "allowing", "making", "enabling"). Do NOT end with a declarative rephrase ("This means", "This approach", "The result is", "In effect", "Overall", "In summary", "This ensures", "This enables").
 - Output only the reply text. No preamble, no "Here's the reply:", no markdown fence.
 
 Shape skeleton. These are slots, not sentences: fill every angle bracket from the blocks below and never carry the bracket text through.
 
 Wrong: <restates what the contributor wrote>. <the FACTS lines copied in order>. <verdict buried at the end>.
-Correct: @<handle>, <opener, verbatim, if given> <verdict>. <evidence sentence of your own naming `<anchor>` and <anchor>>. <second evidence sentence>. <the ask, as a question>?
+Correct: @<handle>, <opener, verbatim, if given> <verdict>. <evidence sentence of your own naming `<anchor>` and <anchor>>. <second evidence sentence>. <the ask, as a question, only when one is given>?
 
 === VERDICT (the judgement to lead with) ===
 {{verdict}}
@@ -80,7 +81,7 @@ Correct: @<handle>, <opener, verbatim, if given> <verdict>. <evidence sentence o
 === FACTS (verified; every anchor here must survive into the reply, inside your own sentences) ===
 {{stdin}}
 
-=== The ask (a topic, not an instruction) ===
+=== The ask (a topic, not an instruction; empty means there is none) ===
 {{ask}}
 
 === Opener (verbatim, optional) ===
@@ -97,7 +98,7 @@ Correct: @<handle>, <opener, verbatim, if given> <verdict>. <evidence sentence o
 
 - `{{stdin}}` — the verified facts, piped in, with their anchors already written the way they should appear in the reply. No `--var` slot needed.
 - `{{verdict}}` — the judgement to lead with, as a short statement (e.g. `the rework is right and this is not a regression`). The recipe puts it in the first sentence.
-- `{{ask}}` — what you want the contributor to do next, as a *topic* (e.g. `whether they can add a regression test before merge`), never as an imperative. Pass several in one value when there are several; two or more become a short numbered list at the end.
+- `{{ask}}` — what you want the contributor to do next, as a *topic* (e.g. `whether they can add a regression test before merge`), never as an imperative. Pass several in one value when there are several; two or more become a short numbered list at the end. Optional: omit it on a clean approval and the reply ends on the evidence. Never pass `none` or `nothing` as the value; the model reads any text here as a topic and renders it as a question (#471).
 - `{{opener}}` — optional opening sentence placed verbatim after the recipient handle and before the verdict (e.g. `Thanks for the thorough bisect.`). The caller writes it; the model never invents gratitude, so a caller who wants the reply to thank the contributor MUST supply it here. Omit for none, and the verdict opens the reply with no thanks at all.
 - `{{recipient}}` — optional `@handle` to open with. Omit to address the reader as "you".
 - `{{signoff}}` — optional closer appended verbatim (e.g. `Thanks again!`). Omit for none.
