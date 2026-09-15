@@ -1971,6 +1971,41 @@ assert_eq "the reply posted from the job dir" "$(cat "$capdir/$capfinal" 2>/dev/
   "env path: a credited body=@\"\$VAR/file\" post stores the file as the final"
 rm -rf "$capdir" "$capcwd" "$envdir"
 
+# 80 (#469). A boundary inside a wrapper script under a scratch directory is
+# classified from the script's text (read, never run) and the row names the
+# wrapper; a script elsewhere, `bash -c`, and a script with no boundary leave
+# no row, as before.
+wrdir=$(mktemp -d)
+printf 'set -e\ngit commit -m "%s"\n' "$body300" > "$wrdir/do-commit.sh"
+: > "$METRICS"
+out=$(payload "bash $wrdir/do-commit.sh" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "wrapper: git commit inside bash <scratch script> is classified and enforced"
+assert_eq "git-commit" "$(jq -r '.boundary // "absent"' <<<"$(last_row)")" "wrapper: the row carries the script's boundary"
+assert_eq "$wrdir/do-commit.sh" "$(jq -r '.wrapper // "absent"' <<<"$(last_row)")" "wrapper: the row names the wrapper script"
+assert_eq "${#body300}" "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "wrapper: the commit body is measured from the script text"
+: > "$METRICS"
+payload "cd $tmpcwd && zsh -e \"$wrdir/do-commit.sh\" && echo done" "$tmpcwd" | dflt bash "$HOOK" >/dev/null
+assert_eq "git-commit" "$(jq -r '.boundary // "absent"' <<<"$(last_row)")" "wrapper: cd &&, an interpreter option, a quoted path and a trailing && still classify"
+: > "$METRICS"
+payload 'bash "$T469_DIR/do-commit.sh"' "$tmpcwd" | T469_DIR="$wrdir" dflt bash "$HOOK" >/dev/null
+assert_eq "git-commit" "$(jq -r '.boundary // "absent"' <<<"$(last_row)")" "wrapper: an env-prefixed script path resolves by lookup"
+: > "$METRICS"
+payload "bash $wrdir/do-commit.sh" "$tmpcwd" | DELEGATE_BOUNDARY_WRAPPER_DIRS=/nonexistent dflt bash "$HOOK" >/dev/null
+assert_eq "" "$(cat "$METRICS")" "wrapper: a script outside the scratch directories is not read (no row)"
+: > "$METRICS"
+payload 'bash -c "git commit -m x"' "$tmpcwd" | dflt bash "$HOOK" >/dev/null
+assert_eq "" "$(cat "$METRICS")" "wrapper: bash -c is a string, not a script, and is left alone"
+printf 'set -e\nls -la\n' > "$wrdir/no-boundary.sh"
+: > "$METRICS"
+payload "bash $wrdir/no-boundary.sh" "$tmpcwd" | dflt bash "$HOOK" >/dev/null
+assert_eq "" "$(cat "$METRICS")" "wrapper: a script with no boundary command writes no row"
+# A credited wrapper commit stores its message as the final, like an inline one.
+cap_setup_recipe commit-message
+payload "bash $wrdir/do-commit.sh" "$capcwd" | DELEGATE_METRICS_FILE="$capm" DELEGATE_BOUNDARY_MIN_CHARS= bash "$HOOK" >/dev/null 2>&1
+assert_eq true "$(jq -r '.delegated' <<<"$(tail -1 "$capm")")" "wrapper: a delegated commit inside a wrapper is credited"
+assert_eq "$body300" "$(cat "$capdir/$capfinal" 2>/dev/null)" "wrapper: ...and stores the message as its final"
+rm -rf "$capdir" "$capcwd" "$wrdir"
+
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
