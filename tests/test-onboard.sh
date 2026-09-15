@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/onboard.sh. Drives the confirm-or-edit loop through the
-# DELEGATE_ONBOARD_ASSUME_TTY=1 seam (a real pty can't run in CI) against a
-# throwaway git repo with a known commit corpus and a mocked `curl` on a
-# restricted PATH, pinning the print-only no-write contract, the write/backup/
-# decline branches, input validation, and the round-trip through load-flavor.sh.
+# Unit tests for scripts/onboard.sh, driving the confirm-or-edit loop through
+# the DELEGATE_ONBOARD_ASSUME_TTY=1 seam (a real pty cannot run in CI).
 
 set -u
 
@@ -20,9 +17,7 @@ assert_absent() { case "$2" in *"$1"*) echo "  FAIL  $3 (unexpected '$1')"; fail
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# Mock the provider discovery endpoint so init.sh's environment probe succeeds
-# deterministically: init.sh asks pick-model.sh what is installed, and that is
-# an HTTP probe against every provider in the list.
+# Mock provider discovery so init.sh's environment probe is deterministic.
 mock="$tmp/bin"; mkdir -p "$mock"
 cat > "$mock/curl" <<'EOF'
 #!/bin/bash
@@ -35,10 +30,9 @@ exit 7
 EOF
 chmod +x "$mock/curl"
 
-# Throwaway corpus repo: subject lengths 7,7,9,10,14,17 -> P90 index 5 -> max 14;
-# types feat x3 + fix x2 (docs appears once and is dropped by the >=2 rule).
-# feat outnumbers fix so the frequency ordering is deterministic — a 2/2 tie
-# falls into sort(1)'s unstable last-resort comparison.
+# Corpus repo: subject lengths 7,7,9,10,14,17 (P90 max 14); types feat x3 +
+# fix x2 (docs once, dropped by the >=2 rule). No tie, since sort(1)'s
+# last-resort comparison is unstable.
 corpus="$tmp/corpus"; mkdir -p "$corpus"
 # Neutralise the developer's global/system git config (gpg signing, hooks)
 # so the corpus commits are deterministic on any machine, not just CI.
@@ -128,9 +122,7 @@ assert_contains "fall back to shipped defaults" "$out" "T8: explains the fallbac
 assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=72" "$out" "T8: shipped default becomes the prefill"
 
 # --- T9: no provider reachable -> env section skipped, flavor still offered --
-# The host variables point at closed ports rather than relying on nothing being
-# installed: discovery is an HTTP probe now, so a developer machine with a live
-# daemon would otherwise answer it and resolve a real model.
+# Host variables point at closed ports, or a live daemon would answer.
 out=$( cd "$corpus" && env PATH="$SAFE_PATH" \
   MLX_HOST=http://localhost:1 DOCKER_MODEL_HOST=http://localhost:2 \
   OLLAMA_HOST=http://localhost:3 \
@@ -162,10 +154,7 @@ assert_contains "unknown arg" "$out" "T12: names the bad flag"
 out=$(run_onboard '\n\ny' "$tmp/t13p.sh" "$tmp/t13c.sh")
 assert_contains 'case "$tier" in' "$(cat "$tmp/t13c.sh")" "T13: config written from an unterminated trailing y"
 
-# --- M0: the data directory may not exist yet (#360) ------------------------
-# The old default lived inside the installed skill directory, which always
-# existed. The data directory does not, so writing has to create it. Nothing
-# exercised a missing parent before.
+# --- M0: the data directory may not exist yet, so writing creates it (#360) --
 deep="$tmp/fresh/.local/share/delegate-local"
 out=$(run_onboard '\n\ny' "$deep/profile.sh" "$deep/config.sh")
 if [[ -f "$deep/profile.sh" ]]; then
@@ -174,9 +163,8 @@ else
   echo "  FAIL  M0: did not create the missing data directory"; fail=$((fail+1))
 fi
 
-# --- --migrate-data (#360) --------------------------------------------------
-# User data used to default inside the installer-owned skill directory, where
-# `skills update` could delete it. These pin the move across.
+# --- --migrate-data (#360): user data moves out of the installer-owned skill
+# directory, where `skills update` could delete it ---------------------------
 migrate() { # home
   env -i PATH="$SAFE_PATH" HOME="$1" bash "$SCRIPT" --migrate-data 2>&1
 }
@@ -193,10 +181,8 @@ out=$(migrate "$h"); ec=$?
 assert_eq 0 "$ec" "M1: no legacy dir exits 0"
 assert_contains "nothing to migrate" "$out" "M1: says nothing to migrate"
 
-# M2. The repoint-first trap. A legacy directory holding none of the data files
-# means, on a machine that has run delegate.sh, that the skill symlink already
-# moved and the history is elsewhere. Failing loudly is the point: the silent
-# version reports success having copied nothing.
+# M2. A legacy directory holding none of the data files means the history is
+# elsewhere; fail loudly rather than report success having copied nothing.
 h="$tmp/m2"; mkdir -p "$h/.claude/skills/delegate-local"
 out=$(migrate "$h"); ec=$?
 assert_eq 1 "$ec" "M2: legacy dir with no data exits non-zero"
@@ -238,15 +224,8 @@ if [[ -f "$h/custom/metrics.jsonl" ]]; then
   echo "  PASS  M7: honours DELEGATE_LOCAL_DATA_DIR"; pass=$((pass+1))
 else echo "  FAIL  M7: ignored DELEGATE_LOCAL_DATA_DIR"; fail=$((fail+1)); fi
 
-# --- T12: commit body SHAPE is derived from the word cap ---------------------
-# A recipe that states both a structural shape and a word cap can be handed two
-# instructions that contradict each other. "1-2 short flowing-prose paragraphs"
-# fits the shipped 120-word cap and is unwritable under a profile that tightens
-# it to 50. Measured 2026-08-26 against a real merged diff at temperature 0: the
-# previous wording produced a 92-word body on four of four reps, the derived
-# shape 45 on four of four. 92 is the number the production rejection reason
-# named. The derivation runs AFTER the profile is sourced so an override feeds
-# into it.
+# --- T12: the commit body shape is derived from the word cap, after the
+# profile is sourced, so a tightened cap cannot contradict the shape ---------
 t12=$(mktemp -d)
 out=$(env DELEGATE_LOCAL_PROFILE="$t12/absent.sh" bash "$REPO/scripts/load-flavor.sh")
 assert_contains "flavor_commit_body_shape=1-2 short flowing-prose paragraphs" "$out" \
@@ -276,9 +255,7 @@ FLAVOR_COMMIT_BODY_SHAPE="three terse bullet-free sentences"'
 assert_contains "flavor_commit_body_shape=three terse bullet-free sentences" "$(lf)" \
   "T12: an explicit shape in the profile beats the derivation"
 
-# A zero-padded value is still base 10. Without `10#` bash reads `08` as octal,
-# aborts the arithmetic with "value too great for base", and leaks that to the
-# caller's stderr mid-recipe while silently taking the wrong branch.
+# A zero-padded value is base 10: without `10#` bash reads `08` as octal.
 mkprof 'FLAVOR_COMMIT_BODY_MAX_WORDS=08'
 out=$(env DELEGATE_LOCAL_PROFILE="$t12/p.sh" bash "$REPO/scripts/load-flavor.sh" 2>&1)
 assert_contains "flavor_commit_body_shape=one short flowing-prose paragraph" "$out" \
