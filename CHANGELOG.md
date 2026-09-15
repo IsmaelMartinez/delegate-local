@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.35.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.35.0...v0.35.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* cross-check llmfit candidates against what the providers serve, not ollama list ([#507](https://github.com/IsmaelMartinez/delegate-local/issues/507)) ([870cd27](https://github.com/IsmaelMartinez/delegate-local/commit/870cd27710bc774cf29e635119f25e30e7c7f292))
+* let maintainer-reply end on the cause sentence when there is no ask ([#505](https://github.com/IsmaelMartinez/delegate-local/issues/505)) ([dace0ef](https://github.com/IsmaelMartinez/delegate-local/commit/dace0ef6906c5a5f1c67cd81348409103518100e))
+* pair each credited post with the delegation it spent at the post's own time ([#504](https://github.com/IsmaelMartinez/delegate-local/issues/504)) ([0eac7ec](https://github.com/IsmaelMartinez/delegate-local/commit/0eac7ecafaee974cc0a3b4698910982e6f42806c))
+* strip Refs and trailer lines from the exemplars both recipes pass ([#506](https://github.com/IsmaelMartinez/delegate-local/issues/506)) ([fc1392c](https://github.com/IsmaelMartinez/delegate-local/commit/fc1392c6dc07c55542bd39efd2b7840c6d624955))
+
 ## [0.35.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.34.0...v0.35.0) (2026-09-15)
 
 
