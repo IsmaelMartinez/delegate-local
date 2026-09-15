@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.35.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.34.0...v0.35.0) (2026-09-15)
+
+
+### Features
+
+* classify the boundary command inside a wrapper script run from a scratch directory ([#502](https://github.com/IsmaelMartinez/delegate-local/issues/502)) ([48adce1](https://github.com/IsmaelMartinez/delegate-local/commit/48adce16c14acf89266a2e889b48bbffa6ee86a1)), closes [#469](https://github.com/IsmaelMartinez/delegate-local/issues/469)
+
+
+### Bug Fixes
+
+* cap reply length to the facts, state facts, warn on pasted reasons ([#488](https://github.com/IsmaelMartinez/delegate-local/issues/488)) ([68521bb](https://github.com/IsmaelMartinez/delegate-local/commit/68521bb418837bc649b7285c7b316f88846d9f4d))
+* let maintainer-review-reply end on the evidence when there is no ask ([#494](https://github.com/IsmaelMartinez/delegate-local/issues/494)) ([ab0fd2c](https://github.com/IsmaelMartinez/delegate-local/commit/ab0fd2c43f13ef0ada9f404fa3a998e71540cd67))
+* resolve env-var prefixes in body-file paths so the ADR 0029 capture fires ([#495](https://github.com/IsmaelMartinez/delegate-local/issues/495)) ([cd83079](https://github.com/IsmaelMartinez/delegate-local/commit/cd830796004a8570053760fd3c410ecf225afafa))
+* sniff --recipe auto diffs with a here-string so grep -q cannot SIGPIPE the writer ([#493](https://github.com/IsmaelMartinez/delegate-local/issues/493)) ([5c43aff](https://github.com/IsmaelMartinez/delegate-local/commit/5c43aff8974f6fc5f93368c895cca15b8e958a84)), closes [#480](https://github.com/IsmaelMartinez/delegate-local/issues/480)
+
+
+### Maintenance
+
+* cut script comments to the constraints they state ([#500](https://github.com/IsmaelMartinez/delegate-local/issues/500)) ([47205ce](https://github.com/IsmaelMartinez/delegate-local/commit/47205cefceb102e244e74481c1496962c0ec8ff4))
+* cut test comments to what each assertion proves ([#499](https://github.com/IsmaelMartinez/delegate-local/issues/499)) ([773c32d](https://github.com/IsmaelMartinez/delegate-local/commit/773c32da0870c6d34128a7d7d02bebab8b58f9b3))
+
 ## [0.34.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.33.0...v0.34.0) (2026-09-14)
 
 
