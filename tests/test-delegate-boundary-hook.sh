@@ -37,7 +37,9 @@ mk_repo() { # dir
 tmpcwd=$(mktemp -d)
 mk_repo "$tmpcwd" >/dev/null 2>&1
 proj=$(basename "$tmpcwd")
-METRICS=$(mktemp)
+# In its own directory: the hook's lock lives beside the metrics file, so a
+# bare mktemp in $TMPDIR made every suite run on the machine share one lock.
+METRICS_DIR=$(mktemp -d); METRICS="$METRICS_DIR/metrics.jsonl"; : > "$METRICS"
 # The #385 and #476 blocks below create $gitroot and $norepo; initialised
 # here so the trap owns their cleanup too, and a failing assertion or an
 # early exit cannot leave them behind (`set -u` would otherwise fault on the
@@ -75,7 +77,7 @@ export DELEGATE_LOCAL_CONFIG=/dev/null
 # of them. The floor is pinned off here and tested at its default in the #483
 # block below.
 export DELEGATE_BOUNDARY_MIN_CHARS=0
-trap 'rm -rf "$tmpcwd" "$METRICS" "$gitroot" "$norepo" "$MOCKDIR"' EXIT
+trap 'rm -rf "$tmpcwd" "$METRICS_DIR" "$gitroot" "$norepo" "$MOCKDIR"' EXIT
 nowts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # The harness hands every hook the session id (the transcript UUID); the same
@@ -1953,6 +1955,13 @@ assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "env path: a value 
 : > "$METRICS"
 out=$(payload 'gh pr comment 1 --body-file "$T489_DIR/rr.txt"' "$tmpcwd" | T489_DIR='relative/dir' dflt bash "$HOOK")
 assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "env path: a non-absolute value stays unmeasurable"
+# The `@` inside the quotes, and the whole pair quoted, name the same file.
+: > "$METRICS"
+payload "gh api repos/o/r/pulls/1/comments -X POST --field body=\"@$envdir/rr.txt\" -F in_reply_to=9" "$tmpcwd" | dflt bash "$HOOK" >/dev/null
+assert_eq "${#body300}" "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "field file: body=\"@file\" (at inside the quotes) is still read as a file"
+: > "$METRICS"
+payload "gh api repos/o/r/pulls/1/comments -X POST -F 'body=@$envdir/rr.txt' -F in_reply_to=9" "$tmpcwd" | dflt bash "$HOOK" >/dev/null
+assert_eq "${#body300}" "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "field file: 'body=@file' (the whole pair quoted) is read as a file"
 # The capture fires once the path resolves: a credited post under $VAR stores
 # its final beside the draft.
 cap_setup_recipe pr-review-reply

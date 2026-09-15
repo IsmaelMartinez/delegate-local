@@ -413,6 +413,10 @@ _posted_body_scan() {
           # `-f event=COMMENT` and `-F in_reply_to=99` are not text anyone
           # posted, and reading them as one is the whole of #461.
           asfile = 0; asbody = 0;
+          # The `@` may also sit inside the quotes (`body="@file"`), or the
+          # whole pair may (`'body=@file'`); the shell hands gh the same bytes.
+          if (isfield && key == "" && substr(v, 1, 5) == "body=") { key = "body"; v = substr(v, 6) }
+          if (isfield && key == "body" && !atfile && substr(v, 1, 1) == "@") { atfile = 1; v = substr(v, 2) }
           if (isfield && key != "") {
             if (key == "body") { if (atfile) asfile = 1; else asbody = 1 }
           }
