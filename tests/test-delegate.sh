@@ -4225,6 +4225,23 @@ if command -v git >/dev/null 2>&1; then
   else
     echo "  PASS  --recipe auto (backfill): diff_stat does NOT leak the staged index file"; pass=$((pass+1))
   fi
+  # The backfilled exemplar keeps bodies but drops trailer lines (#501): a
+  # Refs or Co-Authored-By line copied from a prior commit names the wrong
+  # issue every time, and no_example_echo only catches it after the fact.
+  ( cd "$repo" && git commit -q --allow-empty -m "feat: second commit" -m "A body line that stays." -m "Refs: #999" -m "Co-Authored-By: Someone <s@x.y>" )
+  : > "$sniff"
+  EC=0
+  out=$(cd "$repo" && printf '%s' "$DIFF_SAMPLE" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_METRICS_FILE="$metrics" \
+    DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe auto --var why=because prose "go") || EC=$?
+  payload=$(cat "$sniff")
+  assert_contains 'A body line that stays.' "$payload" "--recipe auto (backfill): commit bodies are kept as shape anchors"
+  if [[ "$payload" == *"Refs: #999"* || "$payload" == *"Co-Authored-By"* ]]; then
+    echo "  FAIL  --recipe auto (backfill): trailer lines leaked into recent_commits (#501)"; fail=$((fail+1))
+  else
+    echo "  PASS  --recipe auto (backfill): Refs and Co-Authored-By trailers are stripped from recent_commits (#501)"; pass=$((pass+1))
+  fi
   rm -rf "$tmp" "$metrics"
 
   # A5. A clean tree with the diff piped from elsewhere still fills diff_stat.
