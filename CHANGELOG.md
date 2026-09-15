@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.35.2](https://github.com/IsmaelMartinez/delegate-local/compare/v0.35.1...v0.35.2) (2026-09-15)
+
+
+### Maintenance
+
+* restore the executable bit on three files a line splice rewrote ([#509](https://github.com/IsmaelMartinez/delegate-local/issues/509)) ([cda28f3](https://github.com/IsmaelMartinez/delegate-local/commit/cda28f37be3215fb1f2ff654b6b03d40c07f76b5))
+
 ## [0.35.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.35.0...v0.35.1) (2026-09-15)
 
 
