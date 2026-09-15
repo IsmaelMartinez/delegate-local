@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Walk the delegate metrics JSONL and emit one OTLP/HTTP span per row to
-# ${DELEGATE_OTEL_ENDPOINT} (ADR 0007). Row-level idempotent: rows already
-# exported live (otel_trace_id present) are skipped, and pre-exporter rows
-# get IDs derived from sha256/sha1(ts|source) so re-runs collide in the
-# collector's ID space. A feedback row links to its parent by the same
-# derivation, or by the parent's live IDs when it has them.
+# ${DELEGATE_OTEL_ENDPOINT} (ADR 0007). Re-runs are idempotent per (ts, source):
+# rows already exported live (otel_trace_id present) are skipped, and
+# pre-exporter rows get IDs derived from sha256/sha1(ts|source) so re-runs
+# collide in the collector's ID space. ts is second precision, so two delegate
+# rows in one second share IDs and a feedback row links to the first of them.
 #
 # Usage:
 #   backfill-otel.sh [--since <iso8601>] [--dry-run] [--metrics-file PATH]
@@ -95,8 +95,8 @@ if [[ -n "$since_iso" ]]; then
 fi
 
 # Two passes (parent lookup, then emit) so feedback rows can link to their
-# parent without a stateful streaming parser. Keyed by ts alone: two
-# delegate rows in one second would alias, an accepted edge case.
+# parent without a stateful streaming parser. Keyed by ts alone, not the
+# row's span id, so two delegate rows in one second alias to the first.
 parent_lookup=$(jq -rc '
   select((.source // "delegate") == "delegate") |
   [.ts, (.model // ""), (.otel_trace_id // ""), (.otel_span_id // "")] |
@@ -369,7 +369,8 @@ if (( update_jsonl == 1 && sent_count > 0 )); then
     my $updates_path = shift @ARGV;
     my $metrics_path = shift @ARGV;
     my $out_path = shift @ARGV;
-    # ts -> "trace\tspan" hash from the updates file.
+    # ts -> "trace\tspan" hash from the updates file (ts alone: same-second
+    # rows take the same pair).
     my %updates;
     open(my $uh, "<", $updates_path) or die "open updates: $!";
     while (my $line = <$uh>) {

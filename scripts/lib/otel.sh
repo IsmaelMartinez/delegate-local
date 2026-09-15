@@ -2,8 +2,10 @@
 # Shared OTel export helpers, sourced by delegate.sh, delegate-feedback.sh and
 # backfill-otel.sh so the backfill emits the same OTLP/HTTP wire payload as
 # the live exporter. Sourcing has no side effects (no `set -*`, functions
-# only); every function tolerates `set -u` and NEVER changes the caller's
-# exit status, since telemetry is non-fatal. bash 3.2 compatible.
+# only); every function tolerates `set -u`, and the export helpers NEVER
+# change the caller's exit status, since telemetry is non-fatal (the ID
+# helpers return perl's status, so a caller under `set -e` sees a failure).
+# bash 3.2 compatible.
 
 # Guard against double-sourcing.
 if [[ -n "${_DELEGATE_OTEL_LIB_LOADED:-}" ]]; then

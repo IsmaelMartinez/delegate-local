@@ -80,7 +80,8 @@ new_count=$((total_lines - watermark))
 # file position dedups instead of duplicating (a line-number scheme doubled
 # the feedback rows once). Feedback rows are enriched with the parent's
 # recipe/tier from a map over the WHOLE file, since the parent may pre-date
-# the watermark; the source JSONL is left untouched.
+# the watermark. The map is keyed by ts, not ref_id, so two parents in one
+# second enrich from the same row; the source JSONL is left untouched.
 parent_map=$(jq -sc '
   reduce (.[] | select((.source // "delegate") == "delegate" and .ts != null)) as $r
     ({}; .[$r.ts] = {recipe: ($r.recipe // ""), tier: ($r.tier // "")} )

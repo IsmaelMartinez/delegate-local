@@ -35,7 +35,7 @@ while (($# > 0)); do
     --days=*) days="${1#--days=}"; shift ;;
     --classify) classify=1; shift ;;
     --by-recipe) by_recipe=1; shift ;;
-    # One tier at a time, always named, so tiers are never pooled.
+    # One named tier by default; `--tier all` opts into pooling and says so.
     --tier)
       if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
         echo 'quality-report: --tier requires human|agent|all' >&2; exit 2
