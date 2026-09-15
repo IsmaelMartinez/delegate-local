@@ -25,7 +25,7 @@ Run all three before invoking the recipe:
 
 ```bash
 git log <main-branch> --pretty=fuller -3 \
-  | grep -vE '^[[:space:]]*(Refs|Co-Authored-By|Claude-Session|Signed-off-by):'   # 3 recent commits as shape anchors, trailers dropped
+  | grep -viE '^[[:space:]]*(Refs|Co-Authored-By|Claude-Session|Signed-off-by):'   # 3 recent commits as shape anchors, trailers dropped (GitHub writes Co-authored-by, so -i)
 git diff --cached --stat                    # what changed
 git diff --cached                           # full diff if the change is small enough
 ```

@@ -25,7 +25,7 @@ The user has a branch with one or more commits and wants a GitHub PR description
 # out of each. Both halves matter: see the 2026-08-27 calibration note.
 gh pr list --repo <owner>/<repo> --state merged --limit 2 \
   --json title,body,number \
-  --jq '.[] | "<<<EXAMPLE_BEGIN PR #\(.number)>>>\nTITLE: \(.title)\nBODY:\n\(.body | split("\n") | map(select(test("^[[:space:]]*🤖 Generated with|^https://claude\\.ai/code/|^[[:space:]]*(Refs|Co-Authored-By|Claude-Session):") | not)) | join("\n"))\n<<<EXAMPLE_END>>>\n"'
+  --jq '.[] | "<<<EXAMPLE_BEGIN PR #\(.number)>>>\nTITLE: \(.title)\nBODY:\n\(.body | split("\n") | map(select(test("^[[:space:]]*🤖 Generated with|^https://claude\\.ai/code/|^[[:space:]]*(Refs|Co-Authored-By|Claude-Session):"; "i") | not)) | join("\n"))\n<<<EXAMPLE_END>>>\n"'
 git diff <base-branch> --stat                    # what changed
 git log <base-branch>..HEAD --pretty=oneline    # commit-by-commit shape
 ```

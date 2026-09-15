@@ -386,8 +386,9 @@ if [[ "$recipe" == "auto" ]]; then
       # Bodies stay (bodyless anchors produced subject-only messages); the
       # trailer lines go, because a `Refs:` or Co-Authored-By line copied
       # from a previous commit names the wrong issue every time (#501).
+      # Case-insensitive: GitHub's squash trailer is Co-authored-by.
       _auto_rc=$(git log -3 --pretty=fuller 2>/dev/null \
-        | grep -vE '^[[:space:]]*(Refs|Co-Authored-By|Claude-Session|Signed-off-by):' || true)
+        | grep -viE '^[[:space:]]*(Refs|Co-Authored-By|Claude-Session|Signed-off-by):' || true)
       [[ -n "$_auto_rc" ]] && recipe_vars+=("recent_commits=$_auto_rc")
     fi
     echo "delegate: --recipe auto inferred commit-message from the piped diff" >&2
