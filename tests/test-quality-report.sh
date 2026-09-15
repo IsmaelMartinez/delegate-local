@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/quality-report.sh using fixture JSONL. The keyword and
-# arg-validation paths are deterministic (no model). The --classify path is
-# exercised against a stub delegate.sh via DELEGATE_QUALITY_DELEGATE_SH so the
-# test stays offline.
+# Unit tests for scripts/quality-report.sh; --classify runs against a stub
+# delegate.sh via DELEGATE_QUALITY_DELEGATE_SH so the test stays offline.
 
 set -u
 
@@ -98,10 +96,8 @@ assert_contains "Failure modes in the" "$out" "classify: failure-mode section pr
 assert_contains "faithfulness     1" "$out" "classify: one faithfulness problem"
 rm -f "$stub"
 
-# --- --classify with a parse gap (model returns no label for some rows) ------
-# Rows missing a classification must be indeterminate, NOT counted as fixed/miss
-# problem cases, and the breakdown percentages must use the classified count as
-# the denominator (Copilot findings on PR #315).
+# --- --classify with a parse gap: unlabelled rows are indeterminate, and
+# percentages use the classified count as the denominator -------------------
 stub2=$(mktemp); chmod +x "$stub2"
 cat > "$stub2" <<'STUB'
 #!/usr/bin/env bash
@@ -121,10 +117,8 @@ assert_contains "2 reasoned rows were not classified" "$out" "parse-gap: indeter
 rm -f "$fx" "$stub2"
 
 echo ""
-# Verdict-tier partition (ADR 0015). The tool used to pool 974 agent-observed
-# usage rows with 20 human quality verdicts into one "hit-rate" — the same
-# conflation #408 removed from the dashboards. The restored fixture above has no
-# verdict_source at all, so it could not have caught this; this one does.
+# Verdict-tier partition (ADR 0015): this fixture carries verdict_source,
+# which the one above does not.
 tierfx=$(mktemp)
 cat > "$tierfx" <<'EOF'
 {"ts":"2026-06-01T10:00:00Z","source":"feedback","kept":true,"reason":"used verbatim, no edits"}
@@ -143,9 +137,7 @@ assert_contains "(4 verdict(s) in the other tier" "$out" "tier: human names the 
 out=$(bash "$SCRIPT" --file "$tierfx" --tier agent 2>/dev/null)
 assert_contains "Tier:                     agent-observed" "$out" "tier: agent is labelled as usage"
 assert_contains "(2 verdict(s) in the other tier" "$out" "tier: agent names the human count it excluded"
-# 4 agent rows: 3 hits + 1 scaffold. Scaffold is NOT a miss —
-# delegate-feedback.sh:372 says so and writes kept:false, so an unfiltered
-# count files it under misses.
+# 4 agent rows: 3 hits + 1 scaffold, which carries kept:false but is not a miss.
 assert_contains "Verdicts:                 4  (3 hits, 0 misses, 1 scaffold)" "$out" "tier: scaffold is its own outcome, not a miss"
 
 # agent is the default, because that is where the volume is. A pooled figure is
@@ -161,9 +153,8 @@ assert_eq 2 "$EC" "tier: an unknown tier exits 2"
 EC=0; bash "$SCRIPT" --file "$tierfx" --tier >/dev/null 2>&1 || EC=$?
 assert_eq 2 "$EC" "tier: --tier without a value exits 2"
 
-# --by-recipe reads the same filtered set, so it cannot be a second unpartitioned
-# surface. The agent rows reference no delegate row here, so the human tier's
-# single reasoned recipe row is the only one that can appear.
+# --by-recipe reads the same filtered set; only the human tier's reasoned
+# recipe row can appear here.
 recipefx=$(mktemp)
 cat > "$recipefx" <<'EOF'
 {"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","exit_status":0}
@@ -179,10 +170,8 @@ case "$out" in
 esac
 rm -f "$tierfx" "$recipefx"
 
-# Clean-as-is denominates on CLASSIFIED rows. Numerator comes only from reasoned
-# rows, so dividing by every verdict made the metric fall as reason coverage
-# fell — and coverage differs 100% vs 66% between the tiers on live data, which
-# is exactly where a cross-tier read would mislead.
+# Clean-as-is denominates on classified rows: the numerator comes only from
+# reasoned rows, so dividing by every verdict tracks reason coverage instead.
 denfx=$(mktemp)
 cat > "$denfx" <<'EOF'
 {"ts":"2026-06-01T10:00:00Z","source":"feedback","kept":true,"reason":"used verbatim, no edits"}
@@ -194,11 +183,8 @@ out=$(bash "$SCRIPT" --file "$denfx" --tier human 2>/dev/null)
 assert_contains "Clean-as-is rate:         100%   (1/1 classified)" "$out" "clean-as-is: denominated on classified, not total"
 rm -f "$denfx"
 
-# The failure-mode denominator counts CLASSIFIED problem cases only. The
-# category tallies come from classified reasoned rows, so mixing them with the
-# raw miss count — which includes misses that carry no reason and were never
-# categorised — understated every percentage. Fixture: 3 reasoned rows plus one
-# UNREASONED miss, so miss(2) > miss_classified(1).
+# The failure-mode denominator counts classified problem cases only; the
+# fixture has one unreasoned miss so miss(2) > miss_classified(1).
 dfx=$(mktemp)
 cat > "$dfx" <<'EOF'
 {"ts":"2026-06-01T10:00:00Z","source":"feedback","kept":true,"reason":"note one"}
