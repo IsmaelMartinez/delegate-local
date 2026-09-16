@@ -15,9 +15,12 @@ retries, structured output, evals) or with docker agent (YAML-defined
 multi-agent teams), would lift them, and whether either would make the skill
 easier to distribute.
 
-ADR 0001 keeps the runtime at two bash scripts and one request per
-delegation. ADR 0018 (fan-out ensemble) and ADR 0019/0020 (verify and
-escalate) had already recorded the property of this backend that matters:
+ADR 0001 set the runtime at two bash scripts and one request per
+delegation; the wrapper has since added two bounded extras, a 1-token
+preflight canary on recipe calls (#110) and exactly one regeneration after a
+failed check (#384), and nothing that cycles. ADR 0018 (fan-out ensemble) and
+ADR 0019/0020 (verify and escalate) had already recorded the property of this
+backend that matters:
 greedy decoding is deterministic and the failures are systematic, so asking
 the same model again reproduces the defect. Those were bash experiments; this
 one used the frameworks themselves, on real cases, so the finding could not
@@ -64,9 +67,10 @@ check, schema or same-model critic supplied.
 
 ## Decision
 
-The runtime stays two bash scripts and one request per delegation. No agent
-framework, structured-output mode, critic stage, ensemble or multi-round loop
-is added for the reply recipes. The lift is sought where the evidence points:
+The runtime stays two bash scripts and a bounded number of requests per
+delegation: the preflight canary, one generation, and at most one retry. No
+agent framework, structured-output mode, critic stage, ensemble or multi-round
+loop is added for the reply recipes. The lift is sought where the evidence points:
 making the judgment failures visible to the calibration loop, cutting the
 retry where it is measured not to work, moving the recipe's judgment sentence
 to the caller, and measuring a bigger active-parameter model on the existing
