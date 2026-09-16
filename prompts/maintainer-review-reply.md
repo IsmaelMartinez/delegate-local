@@ -12,6 +12,7 @@ checks:
   no_single_item_list: true
   no_context_echo: true
   max_context_ratio: 0.8
+  min_context_chars: 900
 ---
 # maintainer-review-reply
 
@@ -120,7 +121,7 @@ bash scripts/delegate.sh --recipe maintainer-review-reply \
 - "ANCHOR-PRESERVATION" — the dominant 2026-08-26 failure, measured across nine rejected `maintainer-reply` drafts on `pr-agent` and `teams-for-linux`: "dropped all verified specifics (file:line anchors, the 4-step pin-removal experiment and its exact outputs)", "dropped every measured fact from the context", "dropped the null-element finding and the thanks entirely". Inputs of 7-9 KB came back as 96 to 470 characters. Naming the anchor classes explicitly is what the generic "do not drop facts" phrasing failed to convey. Reworded 2026-09-11 so that preservation means the anchors inside new sentences and never the supplied sentences themselves: the original "the reply IS the evidence" line was read as licence to return the FACTS block wholesale (see the calibration note of that date), and `no_context_echo` now rejects a draft that copies two or more of its lines.
 - "You may NOT introduce an anchor that is absent from the FACTS block" — the symmetric failure: "invented a mechanic: claimed the corridor change stops bashers colliding with each other", and "misread the 531-test suite total as tests added by this PR". Preservation without an invention ceiling just moves the error.
 - "LENGTH — the FACTS block is the content, not a hint" — the prose tier treats a long input as something to summarise. Every adjacent recipe caps length; this one has to say the opposite out loud, or the model applies the cap it has seen everywhere else. The "built from its lines" clause and the "Curate" sentence were added 2026-09-11 because, said alone, "do not compress" had produced the mirror failure: a reply the same length as its input, made of the input.
-- "CURATION" plus the declared `max_context_ratio: 0.8` — the 2026-09-14 reading of the same failure after that rewording: the 16 rejected drafts in the window were still the size of their input (1172 characters out for 981 in, 557 for 560, 940 for 899), and the #384 retry, carrying "do not copy sentences of the supplied facts", came back the same size, because `no_context_echo` measures echo and its notice says nothing about length. The ceiling is a check rather than a prose rule: an unconditional "shorter than the FACTS block" was tried first and withdrawn in review, since it contradicted LENGTH, cannot be met on a three-line fact list once opener, verdict, anchors, ask and sign-off are all mandatory, and did not discriminate (three of the sixteen were already shorter and still echoing). The check fails when the output is at least 0.8 of the context by characters and the context is at least 400 characters (`min_context_chars`), so a short fact list is exempt, and it carries its own retry constraint in `scripts/delegate.sh`.
+- "CURATION" plus the declared `max_context_ratio: 0.8` — the 2026-09-14 reading of the same failure after that rewording: the 16 rejected drafts in the window were still the size of their input (1172 characters out for 981 in, 557 for 560, 940 for 899), and the #384 retry, carrying "do not copy sentences of the supplied facts", came back the same size, because `no_context_echo` measures echo and its notice says nothing about length. The ceiling is a check rather than a prose rule: an unconditional "shorter than the FACTS block" was tried first and withdrawn in review, since it contradicted LENGTH, cannot be met on a three-line fact list once opener, verdict, anchors, ask and sign-off are all mandatory, and did not discriminate (three of the sixteen were already shorter and still echoing). The check fails when the output is at least 0.8 of the context by characters and the context is at least 900 characters (`min_context_chars`, raised from the 400 default on 2026-09-16 because 2 of the 5 shipped replies in the spike set, 789 characters on 832 of facts and 813 on 693, failed it), so a short fact list is exempt, and it carries its own retry constraint in `scripts/delegate.sh`.
 - "If an opener is given below, begin with it verbatim, then the verdict" plus "Never write thanks of your own" — the 2026-08-26 reasons were "opened by thanking and restating, gave no verdict" and "dropped the verdict and the thanks entirely", so the recipe forbade an opening thanks outright. By 2026-09-11, 39 of 97 rejections wanted exactly that thanks ("no thanks opener", "opened with the verdict instead of thanks"). The two are reconciled the way `signoff` already works: the caller supplies the opener verbatim, so the model never invents gratitude and never restates, and with no opener the verdict still comes first.
 - "Prose sentences and paragraphs. No bullet list, no numbered list" with the two-or-more exception — "emitted a numbered list despite an explicit no-list instruction", "rendered a single request as a numbered list" (twice the same day). The exception is scoped tightly so the fix does not simply invert the defect.
 - "Do NOT hedge a verdict the facts state plainly" — a verdict softened into a maybe reads as no verdict at all, and the reader then has to ask again.
@@ -296,3 +297,36 @@ two more: whether `max_context_ratio` appears in `checks_failed_names` after
 the retry, and the second generation's size on rows with `retried:true`. If
 the retry still returns the input's length, the model cannot curate this
 input and the constraint sentence is not the lever.
+
+### 2026-09-16 — the retry does not clear the echo, and the floor rejected shipped replies
+
+The re-measure asked for above came back on both counts (#514). Over the
+live corpus the #384 retry clears the failed check on `commit-message` 23
+of 33 times and on `maintainer-reply` 10 of 13; here it retried 12 times
+and 8 still failed afterwards, all 8 on `no_context_echo`, the second
+generation the same size and the same echo as the first. The agent-framework
+spike gave the model a stronger repair signal (the full conversation, the
+exact echoed sentences, two retries) and left the echo in place on every
+case of this recipe, so the notice is not the lever and each retry was a
+second generation of roughly the context length for nothing. `delegate.sh`
+now skips the retry when `no_context_echo` is the only failed check: the
+check still fails, prints its reject and is named on the row, and the row
+carries no `retried` or `retry_chars`. Beside any other failed check
+(`max_context_ratio`, `no_single_item_list`) the retry still runs.
+
+The other count is the floor. Of the 5 shipped replies in the spike set, 2
+failed `max_context_ratio` as declared: 789 characters on 832 of facts
+(0.95) and 813 on 693 (1.17). Those are replies the maintainer posted, so
+on a fact list that size the rule was measuring the wrong thing, and no
+shipped reply in that set over 900 characters of facts exceeds the ratio.
+`min_context_chars: 900` is declared in the frontmatter. Measured over all
+43 stored finals of this recipe rather than the spike's 5, the floor takes
+the failures from 14 to 3: two genuine posts at 0.84 (816 on 966, 791 on
+940) and one scratch document stored as a final (2802 on 1687), so the
+number to watch is whether `max_context_ratio` still fires on a reply the
+agent then keeps.
+
+Re-measure after roughly ten calls. A row whose only failed check is
+`no_context_echo` should carry neither `retried` nor `retry_chars`, rows
+with `retried:true` should name another check beside it or none, and no
+stored `.final.txt` under 900 characters of facts should fail the ratio.

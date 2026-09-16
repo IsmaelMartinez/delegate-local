@@ -1470,6 +1470,11 @@ fi
 # model cannot satisfy the constraint on this input. no_padding_tail reaches
 # here only when the auto-strip declined. The first pass's stderr is captured
 # and released unchanged only when no retry follows.
+# no_context_echo on its own is not retried (#514): the notice does not
+# repair it — on maintainer-review-reply the second generation came back the
+# same size and the same echo on 8 of 12 retries over 2026-09-13/14 — so the
+# check fails, prints and is named on the row, and the second generation is
+# not spent. Beside any other failed check the retry still runs.
 checks_stderr=$(mktemp)
 trap 'rm -f "$body_file" "$checks_stderr"' EXIT
 # Banked before the checks run, because run_output_checks can MUTATE $output
@@ -1479,6 +1484,7 @@ run_output_checks 2>"$checks_stderr"
 
 retried=""
 if (( status == 0 )) && (( checks_failed > 0 )) \
+   && [[ "$checks_failed_names" != "no_context_echo" ]] \
    && [[ -n "$recipe" ]] \
    && [[ "${DELEGATE_NO_RETRY:-}" != "1" ]]; then
   retried="true"
