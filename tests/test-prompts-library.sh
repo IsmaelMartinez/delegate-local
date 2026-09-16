@@ -316,6 +316,9 @@ if printf '%s' "$maintainer_reply_variables" | grep -qF 'the model reads any tex
 else
   echo "  PASS  maintainer-reply.md Variables agrees with ASK-OR-NONE on a nothing-to-ask value (#517)"; pass=$((pass+1))
 fi
+# The other half of that contract stays explicit: a real topic is a question.
+assert_contains "a real topic is still rendered as a question" "$maintainer_reply_variables" \
+  "maintainer-reply.md Variables keeps a real ask topic rendered as a question (#517)"
 
 # pr-description.md: EVIDENCE outranks SHAPE explicitly, and the ban is on
 # boxes that assert a verification, not on every `- [x]`.
