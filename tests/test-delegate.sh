@@ -6738,6 +6738,20 @@ else
   echo "  PASS  fact-question: a caller-supplied opener that is a question is the caller's"; pass=$((pass+1))
 fi
 
+# 51c-v. The recipe puts the recipient handle in front of the opener, so the
+# emitted unit is "@handle, <opener>"; the caller's question inside it is
+# still the caller's.
+make_mock_curl_think "$tmp" '@nneul, Did all 531 tests pass on PR #2632 for you too? The flip is the sandbox flag at src/main.js:412. Could you check whether the token survives a cold start of the app?'
+out=$(printf '%s\n' "$fq_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe fq --var ask="$fq_ask" --var recipient="nneul" --var opener="Did all 531 tests pass on PR #2632 for you too?" prose "go" 2>&1 >/dev/null)
+if [[ "$out" == *"no_fact_as_question"* ]]; then
+  echo "  FAIL  fact-question: a caller-supplied opener behind the recipient handle must not flag ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  fact-question: a caller-supplied opener behind the recipient handle is the caller's"; pass=$((pass+1))
+fi
+
 # 51d. Never retried on its own: one dispatch, the failure stays on the row
 # and its stderr reaches the caller.
 counter="$tmp/calls"

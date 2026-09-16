@@ -1140,20 +1140,27 @@ content_words() {
 # context is the model's own, one in the ask is the caller's). With no anchor
 # the unit is the content word, two or more from the context and none from
 # the ask: one shared word is any question at all ("could you make that
-# change?"). A question found verbatim in the caller's own text ($4, every
-# --var value) is skipped first: an opener or sign-off is emitted as written
-# and STATED-NOT-ASKED exempts it whatever it asks. Measured on the 18 spike
-# cases: anchors alone flag 6 of the 11 confirm/question rejections, the
-# fallback lifts it to 8, both at 0 of the 16 shipped finals. comm wants
-# both sides sorted, which the extractors are.
+# change?"). A question the caller wrote ($4, every --var value) is skipped
+# first: an opener or sign-off is emitted as written and STATED-NOT-ASKED
+# exempts it whatever it asks. The caller's questions are looked for INSIDE
+# the emitted unit, not the other way round, because the recipe prefixes the
+# opener with "@handle, " and the unit then carries more than the caller
+# wrote. Measured on the 18 spike cases: anchors alone flag 6 of the 11
+# confirm/question rejections, the fallback lifts it to 8, both at 0 of the
+# 16 shipped finals. comm wants both sides sorted, which the extractors are.
 fact_as_question_matches() {
-  local q units ctx_anchors ask_anchors ctx_words ask_words n_ctx n_out n_ask
+  local q cq callers units ctx_anchors ask_anchors ctx_words ask_words caller_questions n_ctx n_out n_ask
   ctx_anchors=$(printf '%s\n' "$2" | fact_anchors)
   ask_anchors=$(printf '%s\n' "$3" | fact_anchors)
   ctx_words=$(printf '%s\n' "$2" | content_words)
   ask_words=$(printf '%s\n' "$3" | content_words)
+  caller_questions=$(printf '%s\n' "${4:-}" | question_units)
   while IFS= read -r q; do
-    [[ -n "${4:-}" && "${4:-}" == *"$q"* ]] && continue
+    callers=0
+    while IFS= read -r cq; do
+      [[ -n "$cq" && "$q" == *"$cq"* ]] && callers=1
+    done <<<"$caller_questions"
+    (( callers )) && continue
     units=$(printf '%s\n' "$q" | fact_anchors)
     if [[ -n "$units" ]]; then
       n_out=$(comm -23 <(printf '%s\n' "$units") <(printf '%s\n' "$ctx_anchors") | grep -c '')
