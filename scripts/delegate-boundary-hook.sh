@@ -465,6 +465,15 @@ done <<<"$scan"
 [[ -z "$boundary" ]] && exit 0
 # Every other boundary reads its body here, once, from its own segment.
 [[ "$body_read" == "true" ]] || read_posted_body "$matched_raw"
+# PostToolUse reports the whole call, and its status is the boundary's own
+# only when the boundary is the last segment: `cd x && git commit` and a
+# wrapper script ending in the commit both are, `git commit … && gh pr
+# create` and `git commit … || true` are not, and a marker for those would
+# be left unconfirmed by a later failure the commit had nothing to do with,
+# or confirmed by a success it did not have (#497). The last non-blank line
+# of the scan is compared by the index the loop stopped at.
+boundary_last=false
+[[ "$seg_idx" == "$(awk 'NF { n = NR } END { print n + 0 }' <<<"$scan")" ]] && boundary_last=true
 
 # --- derive the project name (shared with delegate.sh via lib/otel.sh) -----
 # The SAME function delegate.sh and delegate-feedback.sh call, so the row this
@@ -537,7 +546,7 @@ now_epoch=$(date -u +%s)
 # corpus, and the confirmation is what spends a credit for good.
 pending_dir="$(dirname "$metrics_file")/.boundary-pending"
 reuse_window=300
-reused=false pending="" pending_epoch="" pending_draft=""
+reused=false pending="" pending_epoch="" pending_project="" pending_draft=""
 
 # --- is this enough text to be drafting? (#483) ----------------------------
 # `body_chars` is a count, never the text, recorded only when the body is
@@ -726,12 +735,15 @@ if [[ -f "$metrics_file" ]]; then
   # refused post was retried after its next delegation would spend that one
   # and be denied on the post it was for. Honoured only once the confirm hook
   # has been seen in this session: a PreToolUse-only install never confirms,
-  # and an unconfirmed marker would credit every post after the first.
+  # and an unconfirmed marker would credit every post after the first. And
+  # only for the project the refused post recorded, since the credit it
+  # holds and the draft its final would be filed under are that project's.
   [[ -n "$session_id" ]] && pending="$pending_dir/$session_id.$boundary"
   if [[ -n "$pending" && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" \
         && -f "$pending_dir/$session_id.seen" && -f "$pending" ]]; then
-    IFS=$'\x1f' read -r pending_epoch pending_draft < <(jq -r '[(.epoch // 0 | tostring), (.draft // "")] | join("\u001f")' "$pending" 2>/dev/null) || pending_epoch=""
-    if [[ "${pending_epoch:-}" =~ ^[0-9]+$ ]] && (( now_epoch - pending_epoch <= reuse_window )); then
+    IFS=$'\x1f' read -r pending_epoch pending_project pending_draft < <(jq -r '[(.epoch // 0 | tostring), (.project // ""), (.draft // "")] | join("\u001f")' "$pending" 2>/dev/null) || pending_epoch=""
+    if [[ "${pending_epoch:-}" =~ ^[0-9]+$ && "${pending_project:-}" == "$project" ]] \
+       && (( now_epoch - pending_epoch <= reuse_window )); then
       reused=true; credit_draft="${pending_draft:-}"
     fi
   fi
@@ -773,17 +785,24 @@ append_row() {
 }
 
 # The marker the confirm hook removes when this call succeeds (#497): the
-# call's id, the draft stem the credit pairs with, and the FIRST attempt's
-# epoch, so a chain of refusals cannot extend the window. Without an id there
-# is nothing a confirmation could match, so none is written.
+# call's id, the project and draft stem the credit pairs with, and the FIRST
+# attempt's epoch, so a chain of refusals cannot extend the window. Without
+# an id there is nothing a confirmation could match, and when the boundary
+# is not the call's last segment its outcome is not the call's, so none is
+# written and the credit is spent for good as before.
 write_pending() {
-  [[ -n "$tool_use_id" && -n "$pending" && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] || return 0
+  [[ -n "$pending" && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] || return 0
+  if [[ -z "$tool_use_id" || "$boundary_last" != "true" ]]; then
+    # A credited call that can leave no marker leaves none: a reused one
+    # would otherwise stay for a further post to reuse.
+    rm -f "$pending" 2>/dev/null; return 0
+  fi
   local epoch="$now_epoch"
   [[ "$reused" == "true" ]] && epoch="$pending_epoch"
   mkdir -p "$pending_dir" 2>/dev/null || return 0
   chmod 700 "$pending_dir" 2>/dev/null || true
-  jq -nc --arg id "$tool_use_id" --argjson epoch "$epoch" --arg draft "$credit_draft" \
-    '{id:$id, epoch:$epoch, draft:$draft}' > "$pending" 2>/dev/null || true
+  jq -nc --arg id "$tool_use_id" --argjson epoch "$epoch" --arg project "$project" --arg draft "$credit_draft" \
+    '{id:$id, epoch:$epoch, project:$project, draft:$draft}' > "$pending" 2>/dev/null || true
   # Opportunistic prune; -mtime/-delete work on BSD and GNU find.
   find "$pending_dir" -type f -mtime +1 -delete 2>/dev/null || true
 }

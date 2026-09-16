@@ -35,21 +35,29 @@ call's `tool_use_id`; and non-read-only Bash calls run one at a time (two
 
 A spend is provisional until confirmed. On a credited post the boundary hook
 writes a marker, `<data dir>/.boundary-pending/<session>.<boundary>`, holding
-the call's `tool_use_id`, the credited draft's stem and the attempt's epoch.
-`scripts/delegate-boundary-confirm-hook.sh`, a new `PostToolUse` hook on
-Bash, removes the marker whose id matches the call that just succeeded; an
-interrupted call does not confirm. Nothing else fires for a refused or failed
-call, so its marker stays.
+the call's `tool_use_id`, the recorded project, the credited draft's stem and
+the attempt's epoch. `scripts/delegate-boundary-confirm-hook.sh`, a new
+`PostToolUse` hook on Bash, removes the marker whose id matches the call that
+just succeeded; an interrupted call does not confirm. Nothing else fires for
+a refused or failed call, so its marker stays.
 
-When the same session reaches the same boundary while its marker is still
-there and less than 300 seconds old, the new call is the post that did not
-happen: it is credited on the same delegation, writes no second opportunity
-row, stores the draft's final if the first attempt could not measure the
-body, and re-arms the marker under its own id, keeping the first attempt's
-epoch so a chain of refusals cannot extend the window. The marker outranks a
-fresh credit, because a sweep that delegates again before retrying its
-refused post would otherwise spend the new delegation on the retry and be
-denied on the post it was for.
+When the same session reaches the same boundary for the same project while
+its marker is still there and less than 300 seconds old, the new call is the
+post that did not happen: it is credited on the same delegation, writes no
+second opportunity row, stores the draft's final if the first attempt could
+not measure the body, and re-arms the marker under its own id, keeping the
+first attempt's epoch so a chain of refusals cannot extend the window. The
+marker outranks a fresh credit, because a sweep that delegates again before
+retrying its refused post would otherwise spend the new delegation on the
+retry and be denied on the post it was for.
+
+`PostToolUse` reports the whole call, and its status is the boundary's own
+only when the boundary is the call's last segment: `cd x && git commit` and
+a wrapper script ending in the commit are, `git commit … && gh pr create`
+and `git commit … || true` are not. A marker is written only then. A
+boundary followed by anything else spends its credit for good, as before,
+and a retry arriving in that shape consumes the marker rather than leaving
+it for a further post.
 
 The marker is honoured only once the confirm hook has been seen in the
 session: it creates `<session>.seen` on its first call. A `PreToolUse`-only

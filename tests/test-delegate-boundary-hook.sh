@@ -1967,6 +1967,35 @@ assert_eq toolu-1 "$(marker_id sess-A.git-commit)" "scope: ...and neither touche
 # An interrupted call may or may not have posted: not confirmed.
 confirm "$commit" "$tmpcwd" sess-A toolu-1 PostToolUse true
 assert_eq toolu-1 "$(marker_id sess-A.git-commit)" "confirm: an interrupted call does not confirm"
+# The marker is bound to the project the refused post recorded: a same-
+# boundary post from another repository in the same session is not its
+# retry, and must not file its final under the first repository's draft.
+out=$(payload_id "$commit" "$gitroot/repo-a" sess-A toolu-5 | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "scope: a post from another repository does not reuse the marker"
+assert_eq toolu-1 "$(marker_id sess-A.git-commit)" "scope: ...and leaves it in place"
+# PostToolUse reports the whole call, whose status is the boundary's only
+# when the boundary is the last segment: no marker otherwise, so the credit
+# is spent for good as before, and a reused marker is consumed rather than
+# left for a further post.
+reset497; seed_draft commit-message d497.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "$commit && echo done" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "compound: a commit followed by another command is still credited"
+assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit" ]] && echo present || echo absent)" "compound: ...but leaves no marker, since a later failure would not be the commit's"
+reset497; seed_draft commit-message d497.draft.txt
+payload_id "$commit || true" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit" ]] && echo present || echo absent)" "compound: || true leaves no marker, since success would not be the commit's"
+reset497; seed_draft commit-message d497.draft.txt
+payload_id "git add f && $commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+assert_eq toolu-1 "$(marker_id sess-A.git-commit)" "compound: a commit that is the last segment leaves a marker"
+reset497; seed_draft commit-message d497.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+out=$(payload_id "$commit && echo done" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK")
+assert_eq "" "$out" "compound: a compound retry still reuses the refused post's credit"
+assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit" ]] && echo present || echo absent)" "compound: ...and consumes the marker"
+out=$(payload_id "$commit" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "compound: ...so a third post is denied"
 # No marker without an id to confirm by, none with metrics off.
 reset497; seed_draft commit-message d497.draft.txt
 payload "$commit" "$tmpcwd" | dflt bash "$HOOK" >/dev/null
