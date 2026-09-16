@@ -107,9 +107,10 @@ closed as not planned: on the post-#517 template `Qwen3.5-122B-A10B-4bit`
 graded 6% and 0% at ≥ 4 against 38% and 20% for the 35B, generated at p50
 6.8 s and 5.7 s, and its 65 GB residency put the 125 GB machine into memory
 pressure; the lift came from the template, not the model, and the tier stays
-`prose`. The first rows after the release (n=8 and n=2, read with
-`metrics-summary.sh --since 2026-09-16`) already show the visibility goals
-holding: every recipe row carries `input_file`, 4 of the 5 maintainer-reply
+`prose`. The first rows after the release (n=8 and n=2, the delegate rows with
+`ts >= 2026-09-16T13:10:54Z` joined to their feedback rows; `metrics-summary.sh
+--since 2026-09-16` takes a date and reads the whole day, so it is the
+next-day read) already show the visibility goals holding: every recipe row carries `input_file`, 4 of the 5 maintainer-reply
 rejections carry a failed check (was 3 of 132), and the one echo failure on
 the review recipe spent no retry. The kept and usable goals need 30 tracked
 rows per recipe and are the next self-improvement session's read.
