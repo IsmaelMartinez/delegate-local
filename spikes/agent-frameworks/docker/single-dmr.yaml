@@ -1,0 +1,19 @@
+# Spike arm A4c: one docker agent on Docker Model Runner (llama.cpp), reasoning
+# disabled through the runtime flag, which is the only thinking switch the
+# docker agent YAML can reach on a local model.
+agents:
+  root:
+    model: dmr_prose
+    description: Single-shot local drafter on DMR
+    instruction: |
+      Follow the user's message exactly. Output only the requested text.
+
+models:
+  dmr_prose:
+    provider: dmr
+    model: qwen3.6:35b-a3b-q8_0
+    temperature: 0
+    max_tokens: 4096
+    provider_opts:
+      context_size: 16384
+      runtime_flags: ["--reasoning-budget", "0"]

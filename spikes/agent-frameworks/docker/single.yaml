@@ -1,0 +1,19 @@
+# Spike arm A4a: one docker agent on the MLX endpoint, no tools, temperature 0.
+# The instruction is empty on purpose: the rendered recipe prompt is passed as
+# the user message so the model sees exactly what the bash wrapper sends.
+agents:
+  root:
+    model: mlx_prose
+    description: Single-shot local drafter
+    instruction: |
+      Follow the user's message exactly. Output only the requested text.
+
+models:
+  mlx_prose:
+    provider: openai
+    model: mlx-community/Qwen3.6-35B-A3B-8bit
+    base_url: http://localhost:8080/v1
+    temperature: 0
+    # thinking cannot be switched off from here and counts against max_tokens:
+    # 2048 was spent entirely on reasoning with no answer on a real prompt
+    max_tokens: 16384

@@ -1,0 +1,46 @@
+# Spike arm A4b: drafter -> critic -> reviser as a forced one-pass pipeline.
+# force_handoff routes deterministically, no LLM decides the order. The user
+# message is the rendered recipe prompt (rules + facts + ask), so the drafter
+# sees exactly what the bash wrapper sends; the critic and reviser see the
+# whole conversation so far.
+agents:
+  root:
+    model: mlx_prose
+    description: Drafts the reply
+    instruction: |
+      Follow the user's message exactly. Output only the requested reply text.
+    force_handoff: critic
+
+  critic:
+    model: mlx_prose
+    description: Checks the draft against the rules in the user's message
+    instruction: |
+      You are reviewing the previous assistant's draft against the rules and
+      facts in the user's original message. Do not rewrite the draft. List each
+      concrete violation on its own line, quoting the offending words, using
+      these labels: ECHO (a fact line copied as written), ASKED-NOT-STATED (a
+      supplied fact turned into a question), INVENTED (a value or action not in
+      the facts), DROPPED (an anchor from the facts missing), MERGED (distinct
+      asks joined), LIST (numbered list where prose was asked, or vice versa),
+      LENGTH (over the word limit in the ask), OPENER (the opener or handle not
+      first, or thanks invented), TAIL (a closing restatement or participial
+      clause). If there is no violation, output exactly: NO VIOLATIONS.
+    force_handoff: reviser
+
+  reviser:
+    model: mlx_prose
+    description: Produces the final reply
+    instruction: |
+      Rewrite the draft so that every violation the critic listed is fixed and
+      every rule in the user's original message holds, using only the facts
+      given there. If the critic said NO VIOLATIONS, output the draft unchanged.
+      Output only the final reply text, nothing else.
+
+models:
+  mlx_prose:
+    provider: openai
+    model: mlx-community/Qwen3.6-35B-A3B-8bit
+    base_url: http://localhost:8080/v1
+    temperature: 0
+    # thinking cannot be switched off from here and counts against max_tokens
+    max_tokens: 16384
