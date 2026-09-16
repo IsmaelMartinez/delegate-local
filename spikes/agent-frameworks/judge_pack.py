@@ -47,5 +47,7 @@ if __name__ == "__main__":
             "candidates": {l: t for l, (_, t) in zip(letters, cands)},
         }
         (out_dir / f"{case['id']}.json").write_text(json.dumps(pack, indent=1))
-    (out_dir / "_key.json").write_text(json.dumps(key, indent=1))
-    print(f"{len(key)} packs in {out_dir}; grades go to {out_dir}/_grades.json as {{id: {{letter: grade}}}}")
+    # the key lives beside, not inside, the pack directory: the grader reads the directory blind
+    key_path = out_dir.parent / f"{out_dir.name}-key.json"
+    key_path.write_text(json.dumps(key, indent=1))
+    print(f"{len(key)} packs in {out_dir}; key at {key_path}; grades go to {out_dir}/_grades.json as {{id: {{letter: grade}}}}")

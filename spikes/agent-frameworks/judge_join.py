@@ -12,7 +12,7 @@ from common import load_cases
 
 if __name__ == "__main__":
     d = Path(sys.argv[1])
-    key = json.loads((d / "_key.json").read_text())
+    key = json.loads((d.parent / f"{d.name}-key.json").read_text())
     grades = json.loads((d / "_grades.json").read_text())
     recipe_of = {c["id"]: c["recipe"] for c in load_cases()}
     per = defaultdict(lambda: defaultdict(list))
