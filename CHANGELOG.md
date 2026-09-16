@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.35.2](https://github.com/IsmaelMartinez/delegate-local/compare/v0.35.1...v0.35.2) (2026-09-16)
+
+
+### Bug Fixes
+
+* open the retry cap only when the session delegated since the streak began ([#512](https://github.com/IsmaelMartinez/delegate-local/issues/512)) ([c6baaa4](https://github.com/IsmaelMartinez/delegate-local/commit/c6baaa48a18215068ff7d40d2868b23c343fb3a4))
+
+
+### Maintenance
+
+* restore the executable bit on three files a line splice rewrote ([#509](https://github.com/IsmaelMartinez/delegate-local/issues/509)) ([cda28f3](https://github.com/IsmaelMartinez/delegate-local/commit/cda28f37be3215fb1f2ff654b6b03d40c07f76b5))
+
 ## [0.35.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.35.0...v0.35.1) (2026-09-15)
 
 
