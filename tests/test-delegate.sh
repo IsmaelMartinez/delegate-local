@@ -6823,6 +6823,62 @@ assert_contains '"checks_run":2' "$(tail -1 "$metrics")" \
   "fact-question: undeclared, only the declared and default checks are counted"
 rm -rf "$tmp" "$metrics"
 
+# --- 52. maintainer-reply takes the lead from the caller (#517): the judgment
+# sentence is a required input, so a call without it exits 2 naming it before
+# any dispatch, and the rendered input the model saw (#516) carries the lead
+# text between the opener and the facts. Run against the REAL recipe so the
+# contract is proved through the wrapper, not read off the file ---
+tmp=$(mktemp -d)
+data="$tmp/data"; mkdir -p "$data"
+metrics="$data/metrics.jsonl"
+mr_facts='The token drop is on the Teams side, in its MSAL cache, not in teams-for-linux.'
+mr_lead='Your trace was right, and this one is not ours to fix.'
+mr_opener='Thanks for the clear report.'
+# 52a. Without --var lead= the wrapper refuses, names the key, and dispatches
+# nothing: the mock only serves discovery, so a dispatch would be visible as
+# a metrics row or a non-2 exit.
+make_mock_curl_models_only "$tmp"
+out=$(printf '%s\n' "$mr_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$REPO/prompts" \
+  bash "$SCRIPT" --recipe maintainer-reply --var ask="whether the token survives a cold start" \
+    --var opener="$mr_opener" prose "go" 2>&1 >/dev/null)
+rc=$?
+assert_eq 2 "$rc" "lead: a maintainer-reply call without --var lead= exits 2"
+assert_contains "missing required inputs: lead" "$out" "lead: the refusal names lead as the missing input"
+if [[ ! -s "$metrics" ]]; then
+  echo "  PASS  lead: the refusal writes no metrics row"; pass=$((pass+1))
+else
+  echo "  FAIL  lead: the refusal wrote a metrics row ($(tail -1 "$metrics"))"; fail=$((fail+1))
+fi
+# 52b. With it, the stored input holds the lead verbatim, after the opener
+# and before the piped facts, so the model was shown it in that position.
+make_mock_curl_think "$tmp" 'Your trace was right, and this one is not ours to fix. The drop is in the MSAL cache on the Teams side. Could you check whether the token survives a cold start?'
+printf '%s\n' "$mr_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$REPO/prompts" \
+  bash "$SCRIPT" --recipe maintainer-reply --var lead="$mr_lead" --var ask="whether the token survives a cold start" \
+    --var opener="$mr_opener" prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+input_name=$(printf '%s' "$row" | jq -r '.input_file // ""')
+if [[ -n "$input_name" && -f "$data/drafts/$input_name" ]]; then
+  echo "  PASS  lead: the recipe call stores its rendered input"; pass=$((pass+1))
+else
+  echo "  FAIL  lead: no input file on the row (got '$input_name')"; fail=$((fail+1))
+fi
+input_body=$(cat "$data/drafts/$input_name" 2>/dev/null)
+assert_contains "$mr_lead" "$input_body" "lead: the stored input carries the lead text verbatim"
+lead_pos=$(printf '%s' "$input_body" | grep -n -F "$mr_lead" | head -1 | cut -d: -f1)
+opener_pos=$(printf '%s' "$input_body" | grep -n -F "$mr_opener" | head -1 | cut -d: -f1)
+facts_pos=$(printf '%s' "$input_body" | grep -n -F "$mr_facts" | head -1 | cut -d: -f1)
+if [[ -n "$lead_pos" && -n "$opener_pos" && -n "$facts_pos" ]] \
+   && (( opener_pos < lead_pos && lead_pos < facts_pos )); then
+  echo "  PASS  lead: the stored input places the lead after the opener and before the facts"; pass=$((pass+1))
+else
+  echo "  FAIL  lead: expected opener < lead < facts in the stored input (opener=$opener_pos lead=$lead_pos facts=$facts_pos)"; fail=$((fail+1))
+fi
+assert_eq 1 "$(printf '%s' "$input_body" | grep -c -F "$mr_lead")" \
+  "lead: the lead appears exactly once in the stored input"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

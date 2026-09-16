@@ -518,12 +518,14 @@ else
 fi
 
 # 16. A recipe declaring `stdin` gets an input redirection, not a --var, and
-# its optional inputs stay out. maintainer-reply has no required var since
-# #471 (ask is optional), so the nudge names the recipe and the redirection
-# only; the review recipe still names its required verdict.
+# its optional inputs stay out. maintainer-reply's one required var is the
+# lead (#517; ask has been optional since #471), so the nudge names the
+# recipe, the lead and the redirection; the review recipe still names its
+# required verdict.
 : > "$METRICS"
 out=$(payload 'gh pr comment 42 --body "thanks"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
-assert_contains '--recipe maintainer-reply < context.txt' "$out" "stdin recipe: no required var, so the recipe runs straight into the redirection"
+# The hook's output is JSON, so the hint's quotes arrive escaped.
+assert_contains '--recipe maintainer-reply --var lead=\"...\" < context.txt' "$out" "stdin recipe: the required lead is the only var named, ahead of the redirection (#517)"
 if [[ "$out" != *'--var ask='* ]]; then
   echo "  PASS  stdin recipe: the optional ask is not named (#471)"; pass=$((pass+1))
 else
