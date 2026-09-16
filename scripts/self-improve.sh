@@ -6,9 +6,10 @@
 # where both were captured, a diff between the draft and the shipped text.
 # The diff is the one objective part of a MISS: DROPPED names the tokens the
 # human had to put back, which is what a calibrated recipe edit aims at. Where
-# the rendered input was stored too (#516), the pair is also scored against
-# what the caller supplied: UNUSED names the supplied anchors the shipped text
-# left out, ECHOED the supplied sentences the draft handed back.
+# the rendered input was stored too (#516), the pair is scored against what
+# the caller supplied: DROPPED narrows to supplied anchors and ADDED takes
+# the ones nobody supplied, UNUSED names the supplied anchors the shipped
+# text left out, ECHOED the supplied sentences the draft handed back.
 #
 # Usage:
 #   self-improve.sh [--file PATH] [--peek] [--min-delegations N] [--days N]
@@ -243,13 +244,20 @@ supplied() {
   fi
 }
 
-# sentences — one per line, terminator dropped, trimmed, under the 40-char
-# floor discarded: the unit and floor no_context_echo applies in delegate.sh
-# (split_sentences / echo_matches), so the sentence the bundle names is the
-# one the wrapper would have flagged.
+# sentences — one per line, terminator dropped, normalised, under the 40-char
+# floor discarded: the unit, normalisation and floor no_context_echo applies
+# in delegate.sh (split_sentences, echo_normalise, echo_matches), so the
+# sentence the bundle names is the one the wrapper would have flagged. The
+# sed is echo_normalise's, rule for rule and in its order: trim, the
+# Wrong:/Correct: label, the commit type prefix, a trailing (#NNN). Not
+# shared because the helpers sit inside delegate.sh's checks region.
 sentences() {
   awk '{ gsub(/[.?!]+[[:space:]]+/, "\n"); sub(/[.?!]+[[:space:]]*$/, "") } 1' \
-    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | awk 'length($0) >= 40'
+    | sed -E -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+             -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
+             -e 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' \
+             -e 's/[[:space:]]*\(#[0-9]+\)$//' \
+    | awk 'length($0) >= 40'
 }
 
 # The supplied half of the input, extracted once per rejection: salient reads
@@ -309,16 +317,31 @@ jq -rs --arg prev "$prev_ts" '
       else
         echo "    final:  $fpath ($fbytes bytes)"
       fi
-      dropped=$(comm -13 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
+      # The tokens the shipped text carries and the draft did not, sorted, as
+      # comm emits them.
+      new_tokens=$(comm -13 <(salient "$dpath") <(salient "$fpath"))
       draft_only=$(comm -23 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
-      [[ -n "${dropped// /}"  ]] && echo "    DROPPED  (in the shipped text, absent from the draft): $dropped"
+      # With the input, DROPPED is what the caller supplied and the model
+      # dropped; a token the shipped text carries that neither the input nor
+      # the draft had is context the human added, not a fact the model lost,
+      # and goes under ADDED. Without one, DROPPED is the whole set, as ever.
+      if [[ -n "$ipath" ]]; then
+        dropped=$(printf '%s\n' "$new_tokens" | comm -12 - <(salient "$supplied_tmp") | head -n 12 | tr '\n' ' ')
+        added=$(printf '%s\n' "$new_tokens" | comm -23 - <(salient "$supplied_tmp") | head -n 12 | tr '\n' ' ')
+        [[ -n "${dropped// /}" ]] && echo "    DROPPED  (in the input and the shipped text, absent from the draft): $dropped"
+        [[ -n "${added// /}"   ]] && echo "    ADDED    (in the shipped text, absent from the input and the draft): $added"
+      else
+        dropped=$(printf '%s\n' "$new_tokens" | head -n 12 | tr '\n' ' ')
+        [[ -n "${dropped// /}" ]] && echo "    DROPPED  (in the shipped text, absent from the draft): $dropped"
+      fi
       # A draft token absent from the shipped text has two causes, and calling
       # both INVENTED reported hallucination on the commonest rejection (a body
-      # the human cut for length). The discriminator is DROPPED alone: invention
-      # is a claim something was replaced, and the only evidence is the shipped
-      # text carrying a token the draft lacked.
+      # the human cut for length). The discriminator is the new-token set
+      # alone, DROPPED and ADDED together: invention is a claim something was
+      # replaced, and the only evidence is the shipped text carrying a token
+      # the draft lacked, whoever supplied it.
       if [[ -n "${draft_only// /}" ]]; then
-        if [[ -z "${dropped// /}" ]]; then
+        if [[ -z "$new_tokens" ]]; then
           echo "    CUT      (in the draft, removed; the shipped text put nothing in their place): $draft_only"
         else
           echo "    INVENTED (in the draft, replaced in the shipped text): $draft_only"

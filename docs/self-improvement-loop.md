@@ -71,18 +71,23 @@ produced and the text that actually shipped, plus three objective signals:
 
 Where the delegation was a recipe call made after #516, the rendered input the
 model saw sits beside the draft as `<stem>.input.txt`, the bundle names it, and
-two more signals are scored against what the caller actually supplied rather
-than against the draft:
+the signals are scored against what the caller actually supplied rather than
+against the draft alone:
 
+- `DROPPED` narrows to anchors the input supplied: present in the input and
+  the shipped text, absent from the draft. That is the model losing a fact it
+  was given, which is what a recipe guard can be aimed at.
+- `ADDED` — anchors in the shipped text that neither the input nor the draft
+  had. The human brought them from outside the delegation, so they say
+  nothing about the recipe; without the input they would have counted as
+  `DROPPED`.
 - `UNUSED` — salient tokens present in the input and absent from the shipped
-  text: the anchors the caller handed over that ended up nowhere. Read it
-  beside `DROPPED`: a fact in both was supplied, dropped by the model and put
-  back by hand; a fact only here was supplied and never needed, which for the
-  reply recipes is the "handed the input back" family measured directly.
+  text: the anchors the caller handed over that ended up nowhere, which for
+  the reply recipes is the "handed the input back" family measured directly.
 - `ECHOED` — input sentences the draft reproduced as written, with the count.
-  It is `no_context_echo`'s comparison (sentence unit, 40-character floor)
-  run after the fact, so a rejection that says "restated the facts" carries
-  the sentences it means.
+  It is `no_context_echo`'s comparison (sentence unit, `echo_normalise`
+  rules, 40-character floor) run after the fact, so a rejection that says
+  "restated the facts" carries the sentences it means.
 
 The recipe's own template lines are subtracted from the input before either
 is computed, so an example path or issue number the recipe carries is never
