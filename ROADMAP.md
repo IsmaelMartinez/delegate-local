@@ -48,6 +48,56 @@ exporters, the Grafana `dashboards/`, `observability/`, and the
 `docs/observability/` guides are the maintainer's live visibility into
 delegation traffic and stay in the core.
 
+## Reply recipes: visible failures, then a lift (milestone, 2026-09-16)
+
+The two reply recipes are the library's weak end, and the 2026-09-16 spike
+(ADR 0031) showed that no agent framework, critic stage or loop moves them: the
+failures are judgment (a missing verdict, facts echoed back, the reader asked to
+confirm what the facts state), and the calibration loop cannot even see them,
+because almost no rejection carries a failed check. The milestone works in that
+order: make the failures visible and stop paying for retries that do not
+repair, then move the judgment to the caller and measure a bigger model. Each
+issue carries a goal the self-improvement session can read off
+`metrics.jsonl`; the baseline is the thirty days to 2026-09-16, computed by
+joining feedback rows to their delegate rows.
+
+| | maintainer-reply | maintainer-review-reply |
+|---|---|---|
+| tracked delegations | 133 | 75 |
+| kept as-is | 1% | 0% |
+| usable (kept + scaffold) | 47% | 48% |
+| rejections carrying a failed check | 3 of 132 | 8 of 75 |
+| rejections mentioning confirm/question that carry one | 1 of 65 | 0 of 16 |
+| retries that still failed afterwards | 3 of 13 | 8 of 12, all `no_context_echo` |
+| blind grade ≥ 4 on the 26-case spike set | 12% | 20 to 40% (n=5) |
+
+1. #513, check `no_fact_as_question` on `maintainer-reply`. Goal: rejections
+   whose reason mentions confirm or question and that carry `checks_failed > 0`
+   from 1 of 65 to at least 80% over the next 30 tracked delegations, with 0
+   flags on replies later kept and 0 on stored finals.
+2. #514, no retry on `no_context_echo` and `min_context_chars: 900` on
+   `maintainer-review-reply`. Goal: retried rows still failing echo from 8 of 12
+   to 0; `retry_chars` for echo on that recipe to 0; stored `.final.txt` files
+   failing `max_context_ratio` from 2 of 5 to 0.
+3. #516, store the rendered input beside the draft. Goal: rows with
+   `draft_file` that also carry `input_file` from 0% to 100%; `self-improve.sh`
+   names dropped anchors per rejection from the stored input.
+4. #517, `maintainer-reply` takes the lead sentence from the caller. Goal on the
+   18-case set: question-count mismatches from 13 to at most 6 and blind grade
+   ≥ 4 from 12% to at least 25%; then kept from 1% to at least 10% and usable
+   from 47% to at least 65% over the next 30 tracked delegations.
+5. #515, measure the reply recipes on `premium-general`
+   (`Qwen3.5-122B-A10B-4bit`, untested) and route them there if grade ≥ 4
+   reaches 20% at a median under 10 s. Goal after the switch: usable to at least
+   65% and 60%, kept to at least 10%, p50 `duration_ms` at or under 10000.
+6. #518, this section and ADR 0031. Goal: every self-improvement bundle for the
+   two recipes quotes these goals beside the current numbers.
+
+The milestone is done when both recipes read usable ≥ 65% and 60% and kept
+≥ 10% on `metrics-summary.sh --days 30`, or when the remaining gap is shown to
+be the task definition rather than the draft, in which case the recipes are
+narrowed further or retired.
+
 ## Where we're going (next, priority-ordered)
 
 1. Decide on a deeper recipe prune. The reset kept every recipe with real usage
@@ -67,3 +117,4 @@ asking for it, not by default.
 - Code edits, refactors, or feature implementation. Local models are weak agents and the skill description explicitly rejects these. The local-brain finding stands: "they didn't need Smolagents, they needed `git status | ollama run model`".
 - Auto-pulling models without confirmation. Multi-GB downloads stay user-decided; the audit script suggests, never installs.
 - A general-purpose router that competes with Claude on routing decisions. This skill picks a model within Ollama; it does not decide whether to call Claude vs Ollama. That decision belongs in the skill description, evaluated by Claude itself.
+- A critic, judge or multi-round loop on the same local model, and agent frameworks around the wrapper. Measured on real cases in ADR 0031: the loop oscillates and never converges, structured output enforces shape only, and docker agent cannot cycle without the local model's cooperation, which it does not give. Revisit only on a new lever (a different model, a narrower task, or docker agent as a zero-install runner once it can send `chat_template_kwargs`).
