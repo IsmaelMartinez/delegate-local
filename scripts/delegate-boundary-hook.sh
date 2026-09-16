@@ -615,7 +615,7 @@ fi
 
 delegated=false
 credit_draft=""
-denied_streak=0
+denied_streak=0 streak_attempted=no
 if [[ -f "$metrics_file" ]]; then
   # Only the recent tail can fall inside the window. 2000 lines, not 500:
   # truncation drops the OLDEST rows, the earning delegate rows, so a too-small
@@ -670,25 +670,37 @@ if [[ -f "$metrics_file" ]]; then
          | if $i == null then . else del(.[$i]) end)) as $unspent
     | ([ $unspent[] | select(.epoch > ($now - $win)) ]) as $d
     # The denial streak: denied:true rows for this session+boundary, newest
-    # first, before the first that is not. Two in a row and the next attempt
-    # is warned, because a delegation that never credits would otherwise make
-    # a deny a permanent block; any non-denied row resets it.
-    | ([ .[]
-       | select((.source // "") == "opportunity")
-       | select((.boundary // "") == $boundary)
-       | select((.session // "") == $sid)
-       | select(in_window) ] | sort_by(.ts) | reverse
-       | reduce .[] as $r ({n: 0, stop: false};
-           if .stop then . elif $r.denied == true then .n += 1 else .stop = true end)
-       | .n) as $streak
-    # Credit count, the draft this post spends, and the streak. The draft is
-    # oldest-unspent-first, because that is the order a sweep posts in.
-    | "\($d | length)\u001f\($d[0].draft_file // "")\u001f\($streak)"' 2>/dev/null) || recent_out=""
+    # first, before the first that is not. Two in a row open the cap only when
+    # the session recorded a delegation for the recipe of this boundary AFTER the
+    # streak began, whatever its exit status: that is a delegation that failed
+    # to credit, which must not block for good. A plain retry of the same
+    # command records nothing and stays denied, because two retries were all
+    # it took to walk an undrafted post through the cap (#511). ts is second
+    # precision, so the file index breaks ties, as the spend replay does.
+    | ([ to_entries[] | {i: .key, r: .value}
+       | select(.r | (.source // "") == "opportunity")
+       | select(.r | (.boundary // "") == $boundary)
+       | select(.r | (.session // "") == $sid)
+       | select(.r | in_window)
+       | {epoch: ((.r.ts | fromdateiso8601?) // 0), idx: .i, denied: .r.denied} ] | sort_by(.epoch, .idx) | reverse
+       | reduce .[] as $r ({n: 0, stop: false, since: 0, since_idx: -1};
+           if .stop then . elif $r.denied == true then .n += 1 | .since = $r.epoch | .since_idx = $r.idx else .stop = true end)) as $sk
+    | ([ to_entries[] | {i: .key, r: .value}
+       | select(.r | (.source // "delegate") == "delegate")
+       | select(.r | (.session // "") == $sid)
+       | select(.r | (.recipe // "") as $x | $recipes | index($x) != null)
+       | ((.r.ts | fromdateiso8601?) // 0) as $e
+       | select($e > $sk.since or ($e == $sk.since and .i > $sk.since_idx)) ] | length > 0) as $attempted
+    # Credit count, the draft this post spends, the streak, and whether the
+    # session delegated since it began. The draft is oldest-unspent-first,
+    # because that is the order a sweep posts in.
+    | "\($d | length)\u001f\($d[0].draft_file // "")\u001f\($sk.n)\u001f\(if $sk.n > 0 and $attempted then "yes" else "no" end)"' 2>/dev/null) || recent_out=""
   # Unit separator, not tab: tab is IFS whitespace, so an empty middle field
   # would collapse and shift the streak into credit_draft.
-  IFS=$'\x1f' read -r recent credit_draft denied_streak <<<"$recent_out"
+  IFS=$'\x1f' read -r recent credit_draft denied_streak streak_attempted <<<"$recent_out"
   [[ "${recent:-0}" =~ ^-?[0-9]+$ ]] || recent=0
   [[ "${denied_streak:-0}" =~ ^[0-9]+$ ]] || denied_streak=0
+  [[ "${streak_attempted:-no}" == "yes" ]] || streak_attempted=no
   # `credit_draft` comes from the JSONL file and becomes part of a path this
   # hook WRITES to, so it is untrusted: a bare *.draft.txt filename only.
   case "$credit_draft" in
@@ -756,7 +768,8 @@ else
   release_lock
   # Every reason here fails OPEN to warn, so a hook bug never blocks a commit:
   #   metrics-unwritable  no credit could ever be written where this hook reads
-  #   retry-cap           two consecutive denials for this session+boundary
+  #   retry-cap           two consecutive denials for this session+boundary AND a
+  #                       delegation recorded since the first (a plain retry stays denied)
   #   lock-timeout        the lookup lock could not be taken in 2 s
   #   no-provider         pick-model.sh: nothing reachable
   #   no-model            a provider is up but serves no model for the tier
@@ -771,7 +784,7 @@ else
       enforce_skipped="metrics-unwritable"
     elif [[ "$lock_failed" == "true" ]]; then
       enforce_skipped="lock-timeout"
-    elif (( denied_streak >= retry_cap )); then
+    elif (( denied_streak >= retry_cap )) && [[ "$streak_attempted" == "yes" ]]; then
       enforce_skipped="retry-cap"
     else
       # The same expression delegate.sh uses, so `tier: prose ` resolves in both.
@@ -865,7 +878,7 @@ else
     no-provider)        tail="No local provider answered, so this call proceeds undrafted; start MLX or Ollama to draft the next one." ;;
     no-model)           tail="A local provider is up but serves no model for the ${tier_decl:-prose} tier, so this call proceeds undrafted; pull one or edit the prefs in pick-model.sh." ;;
     bad-tier)           tail="The recipe declares tier '${tier_decl}', which pick-model.sh does not know, so this call proceeds undrafted; fix the recipe's frontmatter." ;;
-    retry-cap)          tail="This session was already denied twice for this boundary, so this call proceeds undrafted rather than blocking for good; if the delegation keeps failing, check its stderr." ;;
+    retry-cap)          tail="This session was denied twice for this boundary and has delegated since without the credit landing, so this call proceeds undrafted rather than blocking for good; check the delegation's stderr and its --project." ;;
     metrics-unwritable) tail="The metrics file cannot be written from the hook's environment, so no delegation could ever be credited here and this call proceeds undrafted; check DELEGATE_METRICS_FILE / DELEGATE_LOCAL_DATA_DIR match between settings.json and the shell, or unset DELEGATE_LOCAL_NO_METRICS." ;;
     lock-timeout)       tail="Another boundary hook held the metrics lock for over two seconds, so this call proceeds undrafted." ;;
     *)                  tail="Set DELEGATE_BOUNDARY_MODE=off to silence." ;;
