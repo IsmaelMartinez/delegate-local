@@ -6233,24 +6233,89 @@ else
   echo "  PASS  context-echo: an opted-out call counts neither echo check"; pass=$((pass+1))
 fi
 
-# 48g. The retry names the constraint, which is about echo only; length is
-# max_context_ratio's job (49).
+# 48g. Echo alone is NOT retried (#514): the second generation came back the
+# same size and the same echo on 8 of the 12 maintainer-review-reply retries
+# measured over 2026-09-13/14, so the notice does not repair it and the
+# retry is a wasted generation. The check still fails, prints its reject and
+# is named on the row; the row carries no retried / retry_chars.
 counter="$tmp/calls"
 make_mock_curl_seq "$tmp" "$counter" \
   'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.' \
   'The flip is the sandbox flag at src/main.js:412 and all 531 tests pass with it forced on, so PR #2632 is clear.'
 : > "$metrics"
+err=$(mktemp)
 out=$(printf '%s\n' "$ce_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
-  bash "$SCRIPT" --recipe ce --var verdict="$ce_verdict" prose "go" 2>/dev/null)
+  bash "$SCRIPT" --recipe ce --var verdict="$ce_verdict" prose "go" 2>"$err")
+assert_eq 1 "$(wc -l < "$counter" | tr -d ' ')" \
+  "context-echo: echo alone costs exactly one dispatch (no retry, #514)"
+assert_contains "All 531 tests pass on the branch" "$out" \
+  "context-echo: the caller receives the flagged first generation"
+assert_contains "check 'no_context_echo' FAILED" "$(cat "$err")" \
+  "context-echo: the reject is still printed when no retry follows"
+if [[ "$(cat "$err")" == *"regenerating once"* ]]; then
+  echo "  FAIL  context-echo: echo alone must not announce a regeneration"; fail=$((fail+1))
+else
+  echo "  PASS  context-echo: echo alone announces no regeneration"; pass=$((pass+1))
+fi
+row=$(tail -1 "$metrics")
+assert_contains '"checks_failed_names":["no_context_echo"]' "$row" \
+  "context-echo: the skipped retry still names the failure on the row"
+if [[ "$row" == *'"retried"'* ]] || [[ "$row" == *'"retry_chars"'* ]]; then
+  echo "  FAIL  context-echo: echo alone must leave retried and retry_chars off the row"; fail=$((fail+1))
+else
+  echo "  PASS  context-echo: echo alone leaves retried and retry_chars off the row"; pass=$((pass+1))
+fi
+rm -f "$err"
+
+# 48h. Echo beside another failed check still takes the retry: the gate is
+# "only echo failed", not "echo failed". max_context_ratio is the realistic
+# partner (both reply recipes declare the pair), so the context has to clear
+# the ratio floor.
+cat > "$prompts/cer.md" <<'EOF'
+---
+tier: prose
+checks:
+  no_context_echo: true
+  max_context_ratio: 0.8
+---
+# cer
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+Reply using only the facts below.
+
+=== FACTS ===
+{{stdin}}
+```
+
+## Calibration notes
+n/a
+EOF
+cer_facts=""
+for i in 1 2 3 4 5 6; do
+  cer_facts="${cer_facts}Fact $i: the sandbox flag flip landed at src/main.js:412 and all 531 tests pass on PR #2632 now.
+"
+done
+make_mock_curl_seq "$tmp" "$counter" \
+  "$(printf '%s' "$cer_facts" | tr '\n' ' ')" \
+  'The flip is the sandbox flag at src/main.js:412 and the 531 tests pass on PR #2632, so the branch is clear.'
+: > "$metrics"
+out=$(printf '%s\n' "$cer_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe cer prose "go" 2>/dev/null)
 assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
-  "context-echo: a failed check costs exactly two dispatches"
-assert_contains "so PR #2632 is clear" "$out" \
-  "context-echo: the caller receives the retried output"
-assert_contains "no_context_echo: reproduce none of the supplied sentences as written; carry their paths, numbers and references inside sentences of your own." "$(cat "$tmp/payload.2.json")" \
-  "context-echo: the second request carries the constraint sentence"
+  "context-echo: echo beside max_context_ratio still costs two dispatches"
+assert_contains "so the branch is clear" "$out" \
+  "context-echo: the caller receives the retried output when another check drove the retry"
+assert_contains "max_context_ratio: the answer runs about as long as the supplied facts" "$(cat "$tmp/payload.2.json")" \
+  "context-echo: the second request names the check that drove the retry"
 assert_contains '"retried":true' "$(tail -1 "$metrics")" \
-  "context-echo: the retry is marked on the metrics row"
+  "context-echo: a retry driven by another check is marked on the row"
 if [[ "$(tail -1 "$metrics")" == *'"checks_failed_names"'* ]]; then
   echo "  FAIL  context-echo: a clean retry must leave no failed check on the row"; fail=$((fail+1))
 else
@@ -6387,6 +6452,83 @@ if [[ "$(tail -1 "$metrics")" == *'"checks_failed_names"'* ]]; then
 else
   echo "  PASS  context-ratio: a clean retry leaves no failed check on the row"; pass=$((pass+1))
 fi
+rm -rf "$tmp" "$metrics"
+
+# --- 50. maintainer-review-reply sets min_context_chars: 900 (#514): 2 of
+# the 5 shipped replies in the spike set, 789 chars on 832 of facts and 813
+# on 693, failed the ratio under the default 400 floor although the
+# maintainer shipped them, and no shipped reply in that set over 900 chars
+# of facts exceeds it. Run against the REAL recipe so the value is proved
+# through the wrapper, not just read off the file ---
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+mrr="$REPO/prompts/maintainer-review-reply.md"
+mrr_fm=$(awk '/^---[[:space:]]*$/{d++; if (d==2) exit; next} d==1' "$mrr")
+if printf '%s\n' "$mrr_fm" | grep -qE '^[[:space:]]+min_context_chars:[[:space:]]*900[[:space:]]*$'; then
+  echo "  PASS  review-reply floor: maintainer-review-reply.md declares min_context_chars: 900"; pass=$((pass+1))
+else
+  echo "  FAIL  review-reply floor: maintainer-review-reply.md does not declare min_context_chars: 900"; fail=$((fail+1))
+fi
+# Facts long enough to cut at any length; the cut lands mid-line so the
+# trailing character is never a newline (which $(cat) would strip).
+mrr_facts=""
+for i in 1 2 3 4 5 6 7 8 9; do
+  mrr_facts="${mrr_facts}Fact $i: the sandbox flag flip landed at src/main.js:412 and all 531 tests pass on PR #2632 with it forced back on.
+"
+done
+mrr_ctx_at() { printf '%s' "$mrr_facts" | head -c "$1"; }
+# One paragraph of the model's own sentences: no echoed fact, no list, no
+# padding tail, so only the ratio can fail. Longer than either shipped size
+# so head -c reproduces them exactly; whole, it is 0.97 of 900.
+mrr_reply='The change is right and the flag path is not a regression. The flip lives at src/main.js:412 and predates this branch, and with it forced back on the suite is green at 531 tests on PR #2632, which is the same count main reports. The three call sites you collapsed now share one assignment, so the sandbox flag is read in one place and the blank-window report cannot come back through a second path. I re-ran the suite twice on your branch to rule out an ordering effect and both runs passed at 531. The remaining question is coverage rather than correctness: nothing in the suite exercises the forced-on path directly, so a later refactor could drop it without a test going red. The CI failure you saw is the flag and not the refactor, and the log on that run says so in its first line. Could you add a regression test that covers the sandbox flag path before we merge this?'
+run_mrr() {
+  # $1 = the context length to cut the facts at; DELEGATE_NO_RETRY so the
+  # first pass lands on the row.
+  mrr_ctx_at "$1" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$REPO/prompts" \
+    bash "$SCRIPT" --recipe maintainer-review-reply --var verdict="the change is right" prose "go" 2>&1 >/dev/null
+}
+# Measured the way delegate.sh measures it: $(cat) strips trailing newlines.
+mrr_ctx_900=$(mrr_ctx_at 900)
+assert_eq 900 "${#mrr_ctx_900}" "review-reply floor: the fixture reads as exactly 900 chars"
+# 50a. The two shipped sizes from the spike set pass: 789 on 832 and 813 on 693.
+: > "$metrics"
+make_mock_curl_think "$tmp" "$(printf '%s' "$mrr_reply" | head -c 789)"
+out=$(run_mrr 832)
+if [[ "$out" == *"max_context_ratio"* ]]; then
+  echo "  FAIL  review-reply floor: a 789-char reply on 832 chars of facts must pass ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  review-reply floor: a 789-char reply on 832 chars of facts passes"; pass=$((pass+1))
+fi
+if [[ "$(tail -1 "$metrics")" == *'"checks_failed_names"'* ]]; then
+  echo "  FAIL  review-reply floor: the 832-char case must leave no failed check on the row ($(tail -1 "$metrics"))"; fail=$((fail+1))
+else
+  echo "  PASS  review-reply floor: the 832-char case leaves no failed check on the row"; pass=$((pass+1))
+fi
+: > "$metrics"
+make_mock_curl_think "$tmp" "$(printf '%s' "$mrr_reply" | head -c 813)"
+out=$(run_mrr 693)
+if [[ "$out" == *"max_context_ratio"* ]]; then
+  echo "  FAIL  review-reply floor: an 813-char reply on 693 chars of facts must pass ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  review-reply floor: an 813-char reply on 693 chars of facts passes"; pass=$((pass+1))
+fi
+# 50b. The floor is exactly 900: 899 chars of facts are exempt, 900 are not.
+make_mock_curl_think "$tmp" "$mrr_reply"
+: > "$metrics"
+out=$(run_mrr 899)
+if [[ "$out" == *"max_context_ratio"* ]]; then
+  echo "  FAIL  review-reply floor: 899 chars of facts must be exempt ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  review-reply floor: 899 chars of facts are exempt"; pass=$((pass+1))
+fi
+: > "$metrics"
+out=$(run_mrr 900)
+assert_contains "check 'max_context_ratio' FAILED" "$out" \
+  "review-reply floor: 900 chars of facts are checked and a 0.97 ratio fails"
+assert_contains 'max_context_ratio' "$(tail -1 "$metrics")" \
+  "review-reply floor: the 900-char failure is named on the row"
 rm -rf "$tmp" "$metrics"
 
 echo
