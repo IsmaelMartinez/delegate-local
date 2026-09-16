@@ -11,6 +11,7 @@ checks:
   no_single_item_list: true
   no_context_echo: true
   max_context_ratio: 0.8
+  no_fact_as_question: ask
 ---
 # maintainer-reply
 

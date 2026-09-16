@@ -487,6 +487,15 @@ for base in maintainer-reply maintainer-review-reply; do
   else
     echo "  PASS  $base.md prompt template carries {{recipient}} only inside the Recipient block (#520)"; pass=$((pass+1))
   fi
+  # STATED-NOT-ASKED has a check behind it (#513): the value names the var
+  # holding the asks, so the check can tell the caller's ask from a fact.
+  if [[ "$base" == maintainer-reply ]]; then
+    if printf '%s\n' "$rf_fm" | grep -qE '^[[:space:]]+no_fact_as_question:[[:space:]]*ask[[:space:]]*$'; then
+      echo "  PASS  $base.md declares no_fact_as_question: ask (#513)"; pass=$((pass+1))
+    else
+      echo "  FAIL  $base.md does not declare no_fact_as_question: ask (#513)"; fail=$((fail+1))
+    fi
+  fi
 done
 echo
 echo "$pass passed, $fail failed"
