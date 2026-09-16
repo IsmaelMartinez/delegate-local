@@ -301,6 +301,21 @@ if printf '%s' "$maintainer_reply_template" | grep -qE 'either specific praise f
 else
   echo "  PASS  maintainer-reply.md prompt template no longer asks the model to derive the judgment (#517)"; pass=$((pass+1))
 fi
+# The template reads an ask block that says there is nothing to ask as no
+# question (ASK-OR-NONE rule 1), so the variable contract must not go on
+# telling callers the model renders such a value as a question (#471 wording).
+maintainer_reply_variables=$(awk '
+  /^## Variables/ { in_section=1; next }
+  /^## / && in_section { in_section=0 }
+  in_section { print }
+' "$PROMPTS_DIR/maintainer-reply.md")
+assert_contains "says there is nothing to ask: NO question" "$maintainer_reply_template" \
+  "maintainer-reply.md ASK-OR-NONE reads a nothing-to-ask block as no question (#517)"
+if printf '%s' "$maintainer_reply_variables" | grep -qF 'the model reads any text here as a topic and renders it as a question'; then
+  echo "  FAIL  maintainer-reply.md Variables still says a nothing-to-ask value is rendered as a question, contradicting ASK-OR-NONE (#517)"; fail=$((fail+1))
+else
+  echo "  PASS  maintainer-reply.md Variables agrees with ASK-OR-NONE on a nothing-to-ask value (#517)"; pass=$((pass+1))
+fi
 
 # pr-description.md: EVIDENCE outranks SHAPE explicitly, and the ban is on
 # boxes that assert a verification, not on every `- [x]`.
