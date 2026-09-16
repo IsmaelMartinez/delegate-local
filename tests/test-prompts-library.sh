@@ -472,6 +472,21 @@ for base in maintainer-reply maintainer-review-reply; do
     "$base.md prompt template has a no-ask branch (#471)"
   assert_contains "Never ask the contributor to confirm, approve or authorise a merge" "$rf_template" \
     "$base.md prompt template forbids asking the contributor to confirm a merge (#471)"
+  # #520: {{recipient}} may appear only inside the "=== Recipient handle
+  # (optional) ===" block. Elsewhere in the template it must be described as
+  # the angle-bracket skeleton "@<handle>, ", or an omitted (empty-string)
+  # recipient renders as a bare "@,".
+  rf_template_outside_recipient_block=$(printf '%s' "$rf_template" | awk '
+    /^=== Recipient handle \(optional\) ===$/ { skip=1; next }
+    skip && /^=== / { skip=0 }
+    skip { next }
+    { print }
+  ')
+  if printf '%s' "$rf_template_outside_recipient_block" | grep -qF '{{recipient}}'; then
+    echo "  FAIL  $base.md prompt template carries {{recipient}} outside the Recipient block (#520)"; fail=$((fail+1))
+  else
+    echo "  PASS  $base.md prompt template carries {{recipient}} only inside the Recipient block (#520)"; pass=$((pass+1))
+  fi
 done
 echo
 echo "$pass passed, $fail failed"
