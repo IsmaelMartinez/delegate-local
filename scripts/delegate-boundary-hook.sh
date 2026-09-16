@@ -675,23 +675,26 @@ if [[ -f "$metrics_file" ]]; then
     # streak began, whatever its exit status: that is a delegation that failed
     # to credit, which must not block for good. A plain retry of the same
     # command records nothing and stays denied, because two retries were all
-    # it took to walk an undrafted post through the cap (#511).
-    | ([ .[]
-       | select((.source // "") == "opportunity")
-       | select((.boundary // "") == $boundary)
-       | select((.session // "") == $sid)
-       | select(in_window) ] | sort_by(.ts) | reverse
-       | reduce .[] as $r ({n: 0, stop: false, since: 0};
-           if .stop then . elif $r.denied == true then .n += 1 | .since = (($r.ts | fromdateiso8601?) // 0) else .stop = true end)) as $sk
-    | ([ .[]
-       | select((.source // "delegate") == "delegate")
-       | select((.session // "") == $sid)
-       | select((.recipe // "") as $r | $recipes | index($r) != null)
-       | select(((.ts | fromdateiso8601?) // 0) >= $sk.since) ] | length > 0) as $attempted
+    # it took to walk an undrafted post through the cap (#511). ts is second
+    # precision, so the file index breaks ties, as the spend replay does.
+    | ([ to_entries[] | {i: .key, r: .value}
+       | select(.r | (.source // "") == "opportunity")
+       | select(.r | (.boundary // "") == $boundary)
+       | select(.r | (.session // "") == $sid)
+       | select(.r | in_window)
+       | {epoch: ((.r.ts | fromdateiso8601?) // 0), idx: .i, denied: .r.denied} ] | sort_by(.epoch, .idx) | reverse
+       | reduce .[] as $r ({n: 0, stop: false, since: 0, since_idx: -1};
+           if .stop then . elif $r.denied == true then .n += 1 | .since = $r.epoch | .since_idx = $r.idx else .stop = true end)) as $sk
+    | ([ to_entries[] | {i: .key, r: .value}
+       | select(.r | (.source // "delegate") == "delegate")
+       | select(.r | (.session // "") == $sid)
+       | select(.r | (.recipe // "") as $x | $recipes | index($x) != null)
+       | ((.r.ts | fromdateiso8601?) // 0) as $e
+       | select($e > $sk.since or ($e == $sk.since and .i > $sk.since_idx)) ] | length > 0) as $attempted
     # Credit count, the draft this post spends, the streak, and whether the
     # session delegated since it began. The draft is oldest-unspent-first,
     # because that is the order a sweep posts in.
-    | "\($d | length)\($d[0].draft_file // "")\($sk.n)\(if $sk.n > 0 and $attempted then "yes" else "no" end)"' 2>/dev/null) || recent_out=""
+    | "\($d | length)\u001f\($d[0].draft_file // "")\u001f\($sk.n)\u001f\(if $sk.n > 0 and $attempted then "yes" else "no" end)"' 2>/dev/null) || recent_out=""
   # Unit separator, not tab: tab is IFS whitespace, so an empty middle field
   # would collapse and shift the streak into credit_draft.
   IFS=$'\x1f' read -r recent credit_draft denied_streak streak_attempted <<<"$recent_out"

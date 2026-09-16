@@ -1555,6 +1555,13 @@ seed_attempt sess-A commit-message "$(jq -rn --argjson now "$(date -u +%s)" '($n
 seed_denied sess-A git-commit; seed_denied sess-A git-commit
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "retry cap: a delegation from before the streak does not open it"
+# Same second as the first denial: file order decides, as in the spend replay.
+: > "$METRICS"; seed_attempt sess-A commit-message; seed_denied sess-A git-commit; seed_denied sess-A git-commit
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "retry cap: a same-second delegation appended BEFORE the first denial does not open the cap"
+: > "$METRICS"; seed_denied sess-A git-commit; seed_attempt sess-A commit-message; seed_denied sess-A git-commit
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "retry cap: a same-second delegation appended AFTER the first denial opens it"
 # Another session's delegation does not count for this one.
 : > "$METRICS"; seed_denied sess-A git-commit; seed_denied sess-A git-commit; seed_attempt sess-B commit-message
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
