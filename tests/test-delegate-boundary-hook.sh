@@ -1288,9 +1288,9 @@ cap_post 'gh pr comment 12 --body "the fix landed in abc1234"'
 assert_eq "" "$(ls "$capdir/drafts" 2>/dev/null)" "capture: a draft_file without the .draft.txt suffix stores nothing"
 rm -rf "$capdir" "$capcwd"
 
-# --- #483: the four proven boundaries deny by default; pr-create and
-# pr-review-body stay on warn. These run at the default body floor with
-# bodies long enough to be real drafting ---
+# --- #483, #521: the five proven boundaries deny by default; pr-create
+# stays on warn. These run at the default body floor with bodies long enough
+# to be real drafting ---
 body300=$(python3 -c "print('The sandbox flag in src/main.js is the cause, not your distro. ' * 5)")
 dflt() { DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "$@"; }
 # Provider down: the mock is off PATH and the real curl hits a closed port.
@@ -1303,7 +1303,8 @@ for spec in \
   "git-commit|commit-message|git commit -m \"$body300\"" \
   "issue-create|github-issue-body|gh issue create --title t --body \"$body300\"" \
   "comment-reply|maintainer-reply|gh pr comment 12 --body \"$body300\"" \
-  "pr-review-comment|pr-review-reply|gh api repos/o/r/pulls/12/comments -X POST -f body=\"$body300\" -F in_reply_to=9"; do
+  "pr-review-comment|pr-review-reply|gh api repos/o/r/pulls/12/comments -X POST -f body=\"$body300\" -F in_reply_to=9" \
+  "pr-review-body|maintainer-review-reply|gh pr review 12 --comment --body \"$body300\""; do
   b="${spec%%|*}"; rest="${spec#*|}"; r="${rest%%|*}"; c="${rest#*|}"
   : > "$METRICS"
   out=$(payload "$c" "$tmpcwd" | dflt bash "$HOOK")
@@ -1321,10 +1322,19 @@ for spec in \
   assert_eq false "$(jq 'has("denied")' <<<"$(last_row)")" "enforce: $b credited row carries no denied field"
 done
 
-# 61. pr-create and pr-review-body stay on warn: their recipe is not proven.
+# 60a. #521: a pr-review-body post read from a --body-file is denied the same
+# as an inline body, with no delegation behind it.
+: > "$METRICS"
+mkdir -p "$tmpcwd/drafts"
+printf '%s' "$body300" > "$tmpcwd/drafts/review-body.md"
+out=$(payload "gh pr review 12 --comment --body-file $tmpcwd/drafts/review-body.md" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "enforce: pr-review-body --body-file is denied without a credit"
+assert_eq pr-review-body "$(jq -r .boundary <<<"$(last_row)")" "enforce: pr-review-body --body-file row recorded"
+assert_eq true "$(jq -r '.denied // false' <<<"$(last_row)")" "enforce: pr-review-body --body-file row carries denied:true"
+
+# 61. pr-create stays on warn: its recipe is not proven.
 for spec in \
-  "pr-create|gh pr create --title t --body \"$body300\"" \
-  "pr-review-body|gh pr review 12 --comment --body \"$body300\""; do
+  "pr-create|gh pr create --title t --body \"$body300\""; do
   b="${spec%%|*}"; c="${spec#*|}"
   : > "$METRICS"; rm -f "$MOCKDIR/probed"
   out=$(payload "$c" "$tmpcwd" | dflt bash "$HOOK")
@@ -1352,6 +1362,9 @@ assert_contains '"permissionDecision":"deny"' "$out" "override: ENFORCE=pr-creat
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_ENFORCE=pr-create dflt bash "$HOOK")
 assert_contains '"permissionDecision":"allow"' "$out" "override: ENFORCE=pr-create leaves git-commit on warn"
+: > "$METRICS"
+out=$(payload "gh pr review 12 --comment --body \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_ENFORCE=git-commit dflt bash "$HOOK")
+assert_contains '"permissionDecision":"allow"' "$out" "override: ENFORCE=git-commit restores warn for pr-review-body"
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_ENFORCE= dflt bash "$HOOK")
 assert_contains '"permissionDecision":"allow"' "$out" "override: ENFORCE= (empty) enforces nothing"

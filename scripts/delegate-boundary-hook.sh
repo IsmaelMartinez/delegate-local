@@ -21,7 +21,7 @@
 #                                 any other value is warn)
 #   DELEGATE_BOUNDARY_ENFORCE     comma-separated boundaries denied by default
 #                                 (default git-commit,issue-create,comment-reply,
-#                                 pr-review-comment; empty means none)
+#                                 pr-review-comment,pr-review-body; empty means none)
 #   DELEGATE_BOUNDARY_MIN_CHARS   body length under which a boundary is recorded
 #                                 but neither nudged nor denied (default 20 for
 #                                 git-commit, 120 for the rest)
@@ -567,14 +567,17 @@ if [[ "$body_measurable" == "true" ]] && (( body_chars < min_chars )); then
   below_floor=true
 fi
 
-# --- which mode applies to THIS boundary? (#483) ---------------------------
+# --- which mode applies to THIS boundary? (#483, #521) ---------------------
 # Unset enforces the set in DELEGATE_BOUNDARY_ENFORCE and warns elsewhere;
-# pr-create and pr-review-body stay on warn until pr-description is reliable,
-# since denying a post to hand the agent a recipe that fails would teach it to
-# route around the hook. `${VAR-default}` rather than `:-`, so an explicitly
-# empty set means "enforce nothing". The deny is issued only while a provider
-# serves the recipe's tier, probed only on the deny path.
-enforce_set="${DELEGATE_BOUNDARY_ENFORCE-git-commit,issue-create,comment-reply,pr-review-comment}"
+# pr-create stays on warn until pr-description is reliable, since denying a
+# post to hand the agent a recipe that fails would teach it to route around
+# the hook. pr-review-body moved from warn to enforce in #521: warn mode
+# measured 19% then 31% then 0 of 4 delegated, and the maintainer-review-reply
+# recipe's post-#488 rows are 7 of 7 usable (n=7). `${VAR-default}` rather
+# than `:-`, so an explicitly empty set means "enforce nothing". The deny is
+# issued only while a provider serves the recipe's tier, probed only on the
+# deny path.
+enforce_set="${DELEGATE_BOUNDARY_ENFORCE-git-commit,issue-create,comment-reply,pr-review-comment,pr-review-body}"
 enforce_set="${enforce_set// /}"
 # Case-insensitive, and an unknown value is warn, never enforce. nocasematch
 # is bash 3.2 (`${var,,}` is bash 4).
