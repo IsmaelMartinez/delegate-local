@@ -34,7 +34,7 @@ call's `tool_use_id`; and non-read-only Bash calls run one at a time (two
 ## Decision
 
 A spend is provisional until confirmed. On a credited post the boundary hook
-writes a marker, `<data dir>/.boundary-pending/<session>.<boundary>`, holding
+writes a marker, `<data dir>/.boundary-pending/<session>.<boundary>.<project>`, holding
 the call's `tool_use_id`, the recorded project, the credited draft's stem and
 the attempt's epoch. `scripts/delegate-boundary-confirm-hook.sh`, a new
 `PostToolUse` hook on Bash, removes the marker whose id matches the call that

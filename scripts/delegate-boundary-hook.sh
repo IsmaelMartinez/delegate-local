@@ -737,8 +737,13 @@ if [[ -f "$metrics_file" ]]; then
   # has been seen in this session: a PreToolUse-only install never confirms,
   # and an unconfirmed marker would credit every post after the first. And
   # only for the project the refused post recorded, since the credit it
-  # holds and the draft its final would be filed under are that project's.
-  [[ -n "$session_id" ]] && pending="$pending_dir/$session_id.$boundary"
+  # holds and the draft its final would be filed under are that project's:
+  # the file is keyed by it too, so a credited post in another repository
+  # does not overwrite it. The name is a basename or DELEGATE_PROJECT, so it
+  # is reduced to a safe charset for the filename; a collision only makes the
+  # stored project mismatch, which denies as before.
+  pending_key="${project//[^A-Za-z0-9._-]/_}"
+  [[ -n "$session_id" ]] && pending="$pending_dir/$session_id.$boundary.${pending_key:--}"
   if [[ -n "$pending" && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" \
         && -f "$pending_dir/$session_id.seen" && -f "$pending" ]]; then
     IFS=$'\x1f' read -r pending_epoch pending_project pending_draft < <(jq -r '[(.epoch // 0 | tostring), (.project // ""), (.draft // "")] | join("\u001f")' "$pending" 2>/dev/null) || pending_epoch=""

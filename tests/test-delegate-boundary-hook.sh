@@ -1882,16 +1882,16 @@ out=$(payload_id "$refused" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK")
 assert_eq "" "$out" "refused: the first attempt is credited"
 assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "refused: ...with a delegated:true row"
 assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "refused: ...whose body the hook could not measure"
-assert_eq toolu-1 "$(marker_id sess-A.pr-review-comment)" "refused: a pending marker names the call"
+assert_eq toolu-1 "$(marker_id sess-A.pr-review-comment.$proj)" "refused: a pending marker names the call"
 out=$(payload_id "$retried" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK")
 assert_eq "" "$out" "refused: the retry is allowed on the same credit"
 assert_eq 1 "$(grep -c '"delegated":true' "$METRICS")" "refused: exactly one delegated:true row"
 assert_eq 0 "$(grep -c '"denied":true' "$METRICS")" "refused: no denied row"
 assert_eq 1 "$(grep -c '"source":"opportunity"' "$METRICS")" "refused: the retry writes no second row"
-assert_eq toolu-2 "$(marker_id sess-A.pr-review-comment)" "refused: the marker is re-armed for the retry"
+assert_eq toolu-2 "$(marker_id sess-A.pr-review-comment.$proj)" "refused: the marker is re-armed for the retry"
 assert_eq "$body300" "$(cat "$METRICS_DIR/drafts/d497.final.txt" 2>/dev/null)" "refused: the retry stores the final the refused attempt could not"
 confirm "$retried" "$tmpcwd" sess-A toolu-2
-assert_eq "absent" "$([[ -e "$pending/sess-A.pr-review-comment" ]] && echo present || echo absent)" "refused: the confirmed retry spends the credit"
+assert_eq "absent" "$([[ -e "$pending/sess-A.pr-review-comment.$proj" ]] && echo present || echo absent)" "refused: the confirmed retry spends the credit"
 out=$(payload_id "$retried" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "refused: a further post finds the credit spent"
 # Shape 2 (the comment): a credited `git commit` exits 1 on an empty index.
@@ -1904,24 +1904,24 @@ confirm 'ls' "$tmpcwd" sess-A toolu-0
 payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
 assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "failed: the commit is credited"
 confirm "$commit" "$tmpcwd" sess-A toolu-1 PostToolUseFailure
-assert_eq toolu-1 "$(marker_id sess-A.git-commit)" "failed: a PostToolUseFailure payload does not confirm"
+assert_eq toolu-1 "$(marker_id sess-A.git-commit.$proj)" "failed: a PostToolUseFailure payload does not confirm"
 confirm 'git add f' "$tmpcwd" sess-A toolu-2
-assert_eq toolu-1 "$(marker_id sess-A.git-commit)" "failed: another call's success does not confirm it"
+assert_eq toolu-1 "$(marker_id sess-A.git-commit.$proj)" "failed: another call's success does not confirm it"
 out=$(payload_id "$commit" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK")
 assert_eq "" "$out" "failed: the retried commit is allowed on the same credit"
 assert_eq 1 "$(grep -c '"delegated":true' "$METRICS")" "failed: exactly one delegated:true row"
 assert_eq 0 "$(grep -c '"denied":true' "$METRICS")" "failed: no denied row"
 assert_eq 1 "$(grep -c '"source":"opportunity"' "$METRICS")" "failed: one opportunity row in all"
 confirm "$commit" "$tmpcwd" sess-A toolu-3
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit" ]] && echo present || echo absent)" "failed: the retry's success confirms the spend"
+assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "failed: the retry's success confirms the spend"
 # The normal shape: one delegation, a post that ran, then a second distinct
 # post. The confirmation is what keeps the second one denied.
 reset497; seed_draft commit-message d497.draft.txt
 confirm 'ls' "$tmpcwd" sess-A toolu-0
 payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
-assert_eq toolu-1 "$(marker_id sess-A.git-commit)" "normal: the credited post is pending"
+assert_eq toolu-1 "$(marker_id sess-A.git-commit.$proj)" "normal: the credited post is pending"
 confirm "$commit" "$tmpcwd" sess-A toolu-1
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit" ]] && echo present || echo absent)" "normal: the spend is confirmed when the call succeeds"
+assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "normal: the spend is confirmed when the call succeeds"
 out=$(payload_id 'git commit -m "fix: a second, different commit message that is long enough to clear the floor"' "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "normal: a second post after a confirmed spend is denied"
 assert_eq 1 "$(grep -c '"delegated":true' "$METRICS")" "normal: one credited row"
@@ -1953,7 +1953,7 @@ assert_contains '"permissionDecision":"deny"' "$out" "unseen: with no confirm ho
 reset497; seed_draft commit-message d497.draft.txt
 confirm 'ls' "$tmpcwd" sess-A toolu-0
 payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
-jq -c --argjson e "$(( $(date -u +%s) - 301 ))" '.epoch = $e' "$pending/sess-A.git-commit" > "$pending/old" && mv "$pending/old" "$pending/sess-A.git-commit"
+jq -c --argjson e "$(( $(date -u +%s) - 301 ))" '.epoch = $e' "$pending/sess-A.git-commit.$proj" > "$pending/old" && mv "$pending/old" "$pending/sess-A.git-commit.$proj"
 out=$(payload_id "$commit" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "window: a marker older than 300 s is not honoured"
 reset497; seed_draft commit-message d497.draft.txt
@@ -1963,16 +1963,25 @@ out=$(payload_id "$commit" "$tmpcwd" sess-B toolu-2 | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "scope: another session does not reuse this session's marker"
 out=$(payload_id "gh pr comment 12 --body \"$body300\"" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "scope: another boundary does not reuse it either"
-assert_eq toolu-1 "$(marker_id sess-A.git-commit)" "scope: ...and neither touched the marker"
+assert_eq toolu-1 "$(marker_id sess-A.git-commit.$proj)" "scope: ...and neither touched the marker"
 # An interrupted call may or may not have posted: not confirmed.
 confirm "$commit" "$tmpcwd" sess-A toolu-1 PostToolUse true
-assert_eq toolu-1 "$(marker_id sess-A.git-commit)" "confirm: an interrupted call does not confirm"
+assert_eq toolu-1 "$(marker_id sess-A.git-commit.$proj)" "confirm: an interrupted call does not confirm"
 # The marker is bound to the project the refused post recorded: a same-
 # boundary post from another repository in the same session is not its
 # retry, and must not file its final under the first repository's draft.
 out=$(payload_id "$commit" "$gitroot/repo-a" sess-A toolu-5 | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "scope: a post from another repository does not reuse the marker"
-assert_eq toolu-1 "$(marker_id sess-A.git-commit)" "scope: ...and leaves it in place"
+assert_eq toolu-1 "$(marker_id sess-A.git-commit.$proj)" "scope: ...and leaves it in place"
+# ...and a credited post from another repository has a marker of its own, so
+# the refused post's retry still finds its credit.
+seed_delegation repo-a commit-message
+payload_id "$commit" "$gitroot/repo-a" sess-A toolu-6 | dflt bash "$HOOK" >/dev/null
+assert_eq toolu-6 "$(marker_id sess-A.git-commit.repo-a)" "scope: the other repository's credited post leaves its own marker"
+assert_eq toolu-1 "$(marker_id sess-A.git-commit.$proj)" "scope: ...without touching the first repository's"
+confirm "$commit" "$gitroot/repo-a" sess-A toolu-6
+out=$(payload_id "$commit" "$tmpcwd" sess-A toolu-7 | dflt bash "$HOOK")
+assert_eq "" "$out" "scope: the first repository's retry still reuses its credit"
 # PostToolUse reports the whole call, whose status is the boundary's only
 # when the boundary is the last segment: no marker otherwise, so the credit
 # is spent for good as before, and a reused marker is consumed rather than
@@ -1981,28 +1990,28 @@ reset497; seed_draft commit-message d497.draft.txt
 confirm 'ls' "$tmpcwd" sess-A toolu-0
 payload_id "$commit && echo done" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
 assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "compound: a commit followed by another command is still credited"
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit" ]] && echo present || echo absent)" "compound: ...but leaves no marker, since a later failure would not be the commit's"
+assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "compound: ...but leaves no marker, since a later failure would not be the commit's"
 reset497; seed_draft commit-message d497.draft.txt
 payload_id "$commit || true" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit" ]] && echo present || echo absent)" "compound: || true leaves no marker, since success would not be the commit's"
+assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "compound: || true leaves no marker, since success would not be the commit's"
 reset497; seed_draft commit-message d497.draft.txt
 payload_id "git add f && $commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
-assert_eq toolu-1 "$(marker_id sess-A.git-commit)" "compound: a commit that is the last segment leaves a marker"
+assert_eq toolu-1 "$(marker_id sess-A.git-commit.$proj)" "compound: a commit that is the last segment leaves a marker"
 reset497; seed_draft commit-message d497.draft.txt
 confirm 'ls' "$tmpcwd" sess-A toolu-0
 payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
 out=$(payload_id "$commit && echo done" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK")
 assert_eq "" "$out" "compound: a compound retry still reuses the refused post's credit"
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit" ]] && echo present || echo absent)" "compound: ...and consumes the marker"
+assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "compound: ...and consumes the marker"
 out=$(payload_id "$commit" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "compound: ...so a third post is denied"
 # No marker without an id to confirm by, none with metrics off.
 reset497; seed_draft commit-message d497.draft.txt
 payload "$commit" "$tmpcwd" | dflt bash "$HOOK" >/dev/null
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit" ]] && echo present || echo absent)" "marker: a payload with no tool_use_id leaves none"
+assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "marker: a payload with no tool_use_id leaves none"
 reset497; seed_draft commit-message d497.draft.txt
 payload_id "$commit" "$tmpcwd" sess-A toolu-1 | DELEGATE_LOCAL_NO_METRICS=1 dflt bash "$HOOK" >/dev/null
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit" ]] && echo present || echo absent)" "marker: DELEGATE_LOCAL_NO_METRICS=1 leaves none"
+assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "marker: DELEGATE_LOCAL_NO_METRICS=1 leaves none"
 # The confirm hook fails open and is silent.
 ec=0; out=$(printf 'not json' | dflt bash "$CONFIRM" 2>/dev/null) || ec=$?
 assert_eq 0 "$ec" "confirm: malformed stdin exits 0"
