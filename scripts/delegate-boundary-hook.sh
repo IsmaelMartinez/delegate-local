@@ -6,7 +6,10 @@
 # shell segment (never the raw string, so text ABOUT a boundary cannot fire),
 # looks for a matching delegate.sh row in the window, logs one
 # source:"opportunity" row, and when none is found nudges with the exact
-# recipe, denying the proven boundaries until a delegation exists (#483).
+# recipe, denying the proven boundaries until a delegation exists (#483). A
+# credited post leaves a marker that delegate-boundary-confirm-hook.sh
+# (PostToolUse) clears once the call has run, so a refused or failed post can
+# be retried on the same credit (#497).
 # Fails OPEN: any error, missing jq, no reachable provider, two consecutive
 # denials, unwritable metrics or an untakeable lock all fall back to warn,
 # with the reason recorded as enforce_skipped. Install is opt-in — see
@@ -85,8 +88,10 @@ if [[ "$cmd" =~ $_cd_sq ]] || [[ "$cmd" =~ $_cd_dq ]] || [[ "$cmd" =~ $_cd_bare 
   [[ -n "$cd_path" && -d "$cd_path" ]] || cd_path=""
 fi
 # The transcript UUID delegate.sh writes on its row as `session` (#479); it
-# scopes the projectless lookup below.
+# scopes the projectless lookup below. The tool_use_id is what the PostToolUse
+# confirm hook matches a credited call by (#497).
 session_id=$(jq -r '.session_id // empty' <<<"$input" 2>/dev/null) || session_id=""
+tool_use_id=$(jq -r '.tool_use_id // empty' <<<"$input" 2>/dev/null) || tool_use_id=""
 
 # --- cheap pre-filter (the common path exits here) ------------------------
 # One linear-time grep over the raw string; it over-matches on purpose and the
@@ -460,6 +465,15 @@ done <<<"$scan"
 [[ -z "$boundary" ]] && exit 0
 # Every other boundary reads its body here, once, from its own segment.
 [[ "$body_read" == "true" ]] || read_posted_body "$matched_raw"
+# PostToolUse reports the whole call, and its status is the boundary's own
+# only when the boundary is the last segment: `cd x && git commit` and a
+# wrapper script ending in the commit both are, `git commit … && gh pr
+# create` and `git commit … || true` are not, and a marker for those would
+# be left unconfirmed by a later failure the commit had nothing to do with,
+# or confirmed by a success it did not have (#497). The last non-blank line
+# of the scan is compared by the index the loop stopped at.
+boundary_last=false
+[[ "$seg_idx" == "$(awk 'NF { n = NR } END { print n + 0 }' <<<"$scan")" ]] && boundary_last=true
 
 # --- derive the project name (shared with delegate.sh via lib/otel.sh) -----
 # The SAME function delegate.sh and delegate-feedback.sh call, so the row this
@@ -526,6 +540,13 @@ metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/s
 # delegated:true row.
 window_min="${DELEGATE_BOUNDARY_WINDOW_MIN:-480}"
 now_epoch=$(date -u +%s)
+# The confirm hook's markers live beside the metrics file, like the lock
+# (#497). One is honoured for 300 s: the "just now" delegate-feedback.sh uses
+# for an unpinned verdict, against retries 5-13 s after the refusal in the
+# corpus, and the confirmation is what spends a credit for good.
+pending_dir="$(dirname "$metrics_file")/.boundary-pending"
+reuse_window=300
+reused=false pending="" pending_epoch="" pending_project="" pending_draft="" pending_captured=false
 
 # --- is this enough text to be drafting? (#483) ----------------------------
 # `body_chars` is a count, never the text, recorded only when the body is
@@ -701,13 +722,44 @@ if [[ -f "$metrics_file" ]]; then
   [[ "${recent:-0}" =~ ^-?[0-9]+$ ]] || recent=0
   [[ "${denied_streak:-0}" =~ ^[0-9]+$ ]] || denied_streak=0
   [[ "${streak_attempted:-no}" == "yes" ]] || streak_attempted=no
-  # `credit_draft` comes from the JSONL file and becomes part of a path this
-  # hook WRITES to, so it is untrusted: a bare *.draft.txt filename only.
+  # --- an unconfirmed spend is not a spend (#497) ---------------------------
+  # The credit is spent here, before the harness has decided whether the call
+  # runs: the worktree guard refuses it after this hook, or git fails on an
+  # empty index, and the retry found the credit gone. A credited post leaves a
+  # marker that the PostToolUse confirm hook removes when the call ran and
+  # succeeded (a failure fires PostToolUseFailure, a denial fires nothing). A
+  # marker still there when this session reaches the same boundary again
+  # inside the window is a post that did not happen, and this call is it:
+  # credited on the same delegation, no second row, the final captured if the
+  # first attempt could not. It outranks a fresh credit, else a sweep whose
+  # refused post was retried after its next delegation would spend that one
+  # and be denied on the post it was for. Honoured only once the confirm hook
+  # has been seen in this session: a PreToolUse-only install never confirms,
+  # and an unconfirmed marker would credit every post after the first. And
+  # only for the project the refused post recorded, since the credit it
+  # holds and the draft its final would be filed under are that project's:
+  # the file is keyed by it too, so a credited post in another repository
+  # does not overwrite it. The name is a basename or DELEGATE_PROJECT, so it
+  # is reduced to a safe charset for the filename; a collision only makes the
+  # stored project mismatch, which denies as before.
+  pending_key="${project//[^A-Za-z0-9._-]/_}"
+  [[ -n "$session_id" ]] && pending="$pending_dir/$session_id.$boundary.${pending_key:--}"
+  if [[ -n "$pending" && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" \
+        && -f "$pending_dir/$session_id.seen" && -f "$pending" ]]; then
+    IFS=$'\x1f' read -r pending_epoch pending_project pending_draft pending_captured < <(jq -r '[(.epoch // 0 | tostring), (.project // ""), (.draft // ""), (.captured // false | tostring)] | join("\u001f")' "$pending" 2>/dev/null) || pending_epoch=""
+    if [[ "${pending_epoch:-}" =~ ^[0-9]+$ && "${pending_project:-}" == "$project" ]] \
+       && (( now_epoch - pending_epoch <= reuse_window )); then
+      reused=true; credit_draft="${pending_draft:-}"
+    fi
+  fi
+  # `credit_draft` comes from the JSONL file (or the marker written from it)
+  # and becomes part of a path this hook WRITES to, so it is untrusted: a bare
+  # *.draft.txt filename only.
   case "$credit_draft" in
     *.draft.txt) [[ "$credit_draft" == */* || "$credit_draft" == .* ]] && credit_draft="" ;;
     *) credit_draft="" ;;
   esac
-  [[ "${recent:-0}" -gt 0 ]] && delegated=true
+  [[ "$reused" == "true" || "${recent:-0}" -gt 0 ]] && delegated=true
 fi
 
 # --- record the opportunity (the trigger-rate sensor) ---------------------
@@ -737,6 +789,35 @@ append_row() {
      >> "$metrics_file" 2>/dev/null
 }
 
+# The marker the confirm hook removes when this call succeeds (#497): the
+# call's id, the project and draft stem the credit pairs with, and the FIRST
+# attempt's epoch, so a chain of refusals cannot extend the window. Without
+# an id there is nothing a confirmation could match, and when the boundary
+# is not the call's last segment its outcome is not the call's, so none is
+# written and the credit is spent for good as before.
+write_pending() {
+  [[ -n "$pending" && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] || return 0
+  # A reused marker is consumed FIRST: this call is already allowed and its
+  # confirmation carries the new id, so a re-arm that fails below must not
+  # leave the old id for a further post to reuse. The same holds for a
+  # credited call that can leave no marker at all.
+  [[ "$reused" == "true" ]] && rm -f "$pending" 2>/dev/null
+  [[ -n "$tool_use_id" && "$boundary_last" == "true" ]] || return 0
+  local epoch="$now_epoch"
+  [[ "$reused" == "true" ]] && epoch="$pending_epoch"
+  mkdir -p "$pending_dir" 2>/dev/null || return 0
+  chmod 700 "$pending_dir" 2>/dev/null || true
+  jq -nc --arg id "$tool_use_id" --argjson epoch "$epoch" --arg project "$project" \
+     --arg draft "$credit_draft" --argjson captured "$final_captured" \
+    '{id:$id, epoch:$epoch, project:$project, draft:$draft, captured:$captured}' > "$pending" 2>/dev/null \
+    || rm -f "$pending" 2>/dev/null
+  # Opportunistic prune; -mtime/-delete work on BSD and GNU find. The .seen
+  # files are on a week's retention, not a day's: a session older than a
+  # day would otherwise lose its confirmation on its next refused post.
+  find "$pending_dir" -type f ! -name '*.seen' -mtime +1 -delete 2>/dev/null || true
+  find "$pending_dir" -type f -name '*.seen' -mtime +7 -delete 2>/dev/null || true
+}
+
 # --- the critical section ends here ---------------------------------------
 # Only a credited post spends a credit, so only it appends under the lock. An
 # uncredited post releases the lock FIRST and then decides on the deny: a slow
@@ -750,19 +831,33 @@ if [[ "$delegated" == "true" ]]; then
   # draft's own stem. Never overwritten: the `set -C` on the write is the
   # guarantee, the `-e` check only skips the work. The capture is PRE-post,
   # so a post that then fails leaves a final for text that never shipped.
+  # One exception (#497): on a reused credit the marker proves the earlier
+  # attempt never ran, so a final THIS HOOK wrote for it (`captured` on the
+  # marker; a verdict's explicit --final is never marked) is replaced by what
+  # the retry sends, when that is measurable. The last measurable attempt is
+  # the text a confirmation then stands behind.
+  final_captured=false
+  [[ "$reused" == "true" && "$pending_captured" == "true" ]] && final_captured=true
   if [[ "$delegated" == "true" && -n "${credit_draft:-}" \
         && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
     drafts_dir="$(dirname "$metrics_file")/drafts"
     final_path="$drafts_dir/${credit_draft%.draft.txt}.final.txt"
-    if [[ ! -e "$final_path" && -n "$body_text" ]]; then
+    if [[ -n "$body_text" ]] && [[ ! -e "$final_path" || "$final_captured" == "true" ]]; then
       if mkdir -p "$drafts_dir" 2>/dev/null; then
         chmod 700 "$drafts_dir" 2>/dev/null || true
-        ( umask 077; set -C; printf '%s' "$body_text" > "$final_path" ) 2>/dev/null || true
+        if [[ "$final_captured" == "true" ]]; then
+          ( umask 077; printf '%s' "$body_text" > "$final_path" ) 2>/dev/null || true
+        else
+          ( umask 077; set -C; printf '%s' "$body_text" > "$final_path" ) 2>/dev/null && final_captured=true
+        fi
         [[ -f "$final_path" ]] && chmod 600 "$final_path" 2>/dev/null
       fi
     fi
   fi
-  append_row || true
+  # A reused credit was recorded by the attempt that did not run: this call
+  # inherits that row and re-arms the marker so its own outcome is confirmed.
+  if [[ "$reused" != "true" ]]; then append_row || true; fi
+  write_pending
   release_lock
 else
   release_lock
