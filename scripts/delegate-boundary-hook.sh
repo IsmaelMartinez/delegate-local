@@ -546,7 +546,7 @@ now_epoch=$(date -u +%s)
 # corpus, and the confirmation is what spends a credit for good.
 pending_dir="$(dirname "$metrics_file")/.boundary-pending"
 reuse_window=300
-reused=false pending="" pending_epoch="" pending_project="" pending_draft=""
+reused=false pending="" pending_epoch="" pending_project="" pending_draft="" pending_captured=false
 
 # --- is this enough text to be drafting? (#483) ----------------------------
 # `body_chars` is a count, never the text, recorded only when the body is
@@ -746,7 +746,7 @@ if [[ -f "$metrics_file" ]]; then
   [[ -n "$session_id" ]] && pending="$pending_dir/$session_id.$boundary.${pending_key:--}"
   if [[ -n "$pending" && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" \
         && -f "$pending_dir/$session_id.seen" && -f "$pending" ]]; then
-    IFS=$'\x1f' read -r pending_epoch pending_project pending_draft < <(jq -r '[(.epoch // 0 | tostring), (.project // ""), (.draft // "")] | join("\u001f")' "$pending" 2>/dev/null) || pending_epoch=""
+    IFS=$'\x1f' read -r pending_epoch pending_project pending_draft pending_captured < <(jq -r '[(.epoch // 0 | tostring), (.project // ""), (.draft // ""), (.captured // false | tostring)] | join("\u001f")' "$pending" 2>/dev/null) || pending_epoch=""
     if [[ "${pending_epoch:-}" =~ ^[0-9]+$ && "${pending_project:-}" == "$project" ]] \
        && (( now_epoch - pending_epoch <= reuse_window )); then
       reused=true; credit_draft="${pending_draft:-}"
@@ -806,10 +806,14 @@ write_pending() {
   [[ "$reused" == "true" ]] && epoch="$pending_epoch"
   mkdir -p "$pending_dir" 2>/dev/null || return 0
   chmod 700 "$pending_dir" 2>/dev/null || true
-  jq -nc --arg id "$tool_use_id" --argjson epoch "$epoch" --arg project "$project" --arg draft "$credit_draft" \
-    '{id:$id, epoch:$epoch, project:$project, draft:$draft}' > "$pending" 2>/dev/null || true
-  # Opportunistic prune; -mtime/-delete work on BSD and GNU find.
-  find "$pending_dir" -type f -mtime +1 -delete 2>/dev/null || true
+  jq -nc --arg id "$tool_use_id" --argjson epoch "$epoch" --arg project "$project" \
+     --arg draft "$credit_draft" --argjson captured "$final_captured" \
+    '{id:$id, epoch:$epoch, project:$project, draft:$draft, captured:$captured}' > "$pending" 2>/dev/null || true
+  # Opportunistic prune; -mtime/-delete work on BSD and GNU find. The .seen
+  # files are on a week's retention, not a day's: a session older than a
+  # day would otherwise lose its confirmation on its next refused post.
+  find "$pending_dir" -type f ! -name '*.seen' -mtime +1 -delete 2>/dev/null || true
+  find "$pending_dir" -type f -name '*.seen' -mtime +7 -delete 2>/dev/null || true
 }
 
 # --- the critical section ends here ---------------------------------------
@@ -825,14 +829,25 @@ if [[ "$delegated" == "true" ]]; then
   # draft's own stem. Never overwritten: the `set -C` on the write is the
   # guarantee, the `-e` check only skips the work. The capture is PRE-post,
   # so a post that then fails leaves a final for text that never shipped.
+  # One exception (#497): on a reused credit the marker proves the earlier
+  # attempt never ran, so a final THIS HOOK wrote for it (`captured` on the
+  # marker; a verdict's explicit --final is never marked) is replaced by what
+  # the retry sends, when that is measurable. The last measurable attempt is
+  # the text a confirmation then stands behind.
+  final_captured=false
+  [[ "$reused" == "true" && "$pending_captured" == "true" ]] && final_captured=true
   if [[ "$delegated" == "true" && -n "${credit_draft:-}" \
         && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
     drafts_dir="$(dirname "$metrics_file")/drafts"
     final_path="$drafts_dir/${credit_draft%.draft.txt}.final.txt"
-    if [[ ! -e "$final_path" && -n "$body_text" ]]; then
+    if [[ -n "$body_text" ]] && [[ ! -e "$final_path" || "$final_captured" == "true" ]]; then
       if mkdir -p "$drafts_dir" 2>/dev/null; then
         chmod 700 "$drafts_dir" 2>/dev/null || true
-        ( umask 077; set -C; printf '%s' "$body_text" > "$final_path" ) 2>/dev/null || true
+        if [[ "$final_captured" == "true" ]]; then
+          ( umask 077; printf '%s' "$body_text" > "$final_path" ) 2>/dev/null || true
+        else
+          ( umask 077; set -C; printf '%s' "$body_text" > "$final_path" ) 2>/dev/null && final_captured=true
+        fi
         [[ -f "$final_path" ]] && chmod 600 "$final_path" 2>/dev/null
       fi
     fi

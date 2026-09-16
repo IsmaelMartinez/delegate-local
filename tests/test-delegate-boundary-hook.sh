@@ -2012,6 +2012,44 @@ assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo presen
 reset497; seed_draft commit-message d497.draft.txt
 payload_id "$commit" "$tmpcwd" sess-A toolu-1 | DELEGATE_LOCAL_NO_METRICS=1 dflt bash "$HOOK" >/dev/null
 assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "marker: DELEGATE_LOCAL_NO_METRICS=1 leaves none"
+# A provisional final is replaced by what the retry actually sends: the
+# refused attempt's measurable body was stored pre-post, and the marker
+# proves it never shipped. A bare final the hook did not write (a verdict's
+# explicit --final, recorded while the marker was pending) is left alone.
+reset497; seed_draft commit-message d497.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+assert_eq "$body300" "$(cat "$METRICS_DIR/drafts/d497.final.txt" 2>/dev/null)" "recapture: the refused attempt stored its body as the final"
+rewritten="git commit -m \"fix: rewritten after the refusal. $body300\""
+payload_id "$rewritten" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK" >/dev/null
+assert_eq "fix: rewritten after the refusal. $body300" "$(cat "$METRICS_DIR/drafts/d497.final.txt" 2>/dev/null)" "recapture: the reused retry replaces the final the refused attempt wrote"
+payload_id "git commit -F -" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK" >/dev/null
+assert_eq "fix: rewritten after the refusal. $body300" "$(cat "$METRICS_DIR/drafts/d497.final.txt" 2>/dev/null)" "recapture: an unmeasurable retry leaves the last measurable text"
+reset497; seed_draft commit-message d497.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "git commit -F -" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+mkdir -p "$METRICS_DIR/drafts"; printf 'from --final' > "$METRICS_DIR/drafts/d497.final.txt"
+payload_id "$rewritten" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK" >/dev/null
+assert_eq "from --final" "$(cat "$METRICS_DIR/drafts/d497.final.txt" 2>/dev/null)" "recapture: a final the hook did not write is never overwritten"
+# The daily prune of stale markers keeps the session's .seen file, which is
+# on a week's retention: a session older than a day would otherwise lose
+# its confirmation on the next refused post.
+reset497; seed_draft commit-message d497.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+touch -t "$(date -v-2d +%Y%m%d%H%M 2>/dev/null || date -d '2 days ago' +%Y%m%d%H%M)" "$pending/sess-A.seen"
+printf '{"id":"old","epoch":1,"project":"x","draft":""}' > "$pending/sess-old.git-commit.x"
+touch -t 202001010000 "$pending/sess-old.git-commit.x"
+: > "$pending/sess-dead.seen"; touch -t 202001010000 "$pending/sess-dead.seen"
+payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+assert_eq "present" "$([[ -e "$pending/sess-A.seen" ]] && echo present || echo absent)" "prune: a day-old .seen survives the marker prune"
+assert_eq "absent" "$([[ -e "$pending/sess-old.git-commit.x" ]] && echo present || echo absent)" "prune: a stale marker is removed"
+assert_eq "absent" "$([[ -e "$pending/sess-dead.seen" ]] && echo present || echo absent)" "prune: a .seen older than a week is removed"
+# The confirm hook resolves a relative DELEGATE_METRICS_FILE against the
+# payload cwd, as the boundary hook does, so both use one pending directory.
+rel=$(mktemp -d); mk_repo "$rel" >/dev/null 2>&1; mkdir -p "$rel/elsewhere"
+( cd "$rel/elsewhere" && post_payload 'ls' "$rel" sess-R toolu-0 | DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE=data/metrics.jsonl bash "$CONFIRM" 2>/dev/null )
+assert_eq "present" "$([[ -e "$rel/data/.boundary-pending/sess-R.seen" ]] && echo present || echo absent)" "relative metrics: the confirm hook writes .seen under the payload cwd, not its own"
+rm -rf "$rel"
 # The confirm hook fails open and is silent.
 ec=0; out=$(printf 'not json' | dflt bash "$CONFIRM" 2>/dev/null) || ec=$?
 assert_eq 0 "$ec" "confirm: malformed stdin exits 0"

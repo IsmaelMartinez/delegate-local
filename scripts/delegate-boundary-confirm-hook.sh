@@ -29,11 +29,14 @@ command -v jq >/dev/null 2>&1 || exit 0
 # failed post and deny its retry, so the event is checked, not assumed. Unit
 # separator, not tab: tab is IFS whitespace, so an empty field would collapse
 # and shift the tool id into the session.
-IFS=$'\x1f' read -r event session_id tool_use_id interrupted < <(jq -r '
+IFS=$'\x1f' read -r event session_id tool_use_id interrupted hook_cwd < <(jq -r '
   [(.hook_event_name // ""), (.session_id // ""), (.tool_use_id // ""),
-   ((.tool_response.interrupted // false) | tostring)] | join("\u001f")' <<<"$input" 2>/dev/null) || exit 0
+   ((.tool_response.interrupted // false) | tostring), (.cwd // "")] | join("\u001f")' <<<"$input" 2>/dev/null) || exit 0
 [[ "${event:-}" == "PostToolUse" && -n "${session_id:-}" ]] || exit 0
 
+# The boundary hook resolves a relative metrics path after chdir to the
+# payload cwd; the same chdir here keeps both on one pending directory.
+[[ -n "${hook_cwd:-}" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
 metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 pending_dir="$(dirname "$metrics_file")/.boundary-pending"
 

@@ -44,9 +44,11 @@ a refused or failed call, so its marker stays.
 When the same session reaches the same boundary for the same project while
 its marker is still there and less than 300 seconds old, the new call is the
 post that did not happen: it is credited on the same delegation, writes no
-second opportunity row, stores the draft's final if the first attempt could
-not measure the body, and re-arms the marker under its own id, keeping the
-first attempt's epoch so a chain of refusals cannot extend the window. The
+second opportunity row, stores its own body as the draft's final (replacing
+one the hook wrote for the refused attempt, which the marker records as
+`captured`; never one it did not write, such as a verdict's explicit
+`--final`), and re-arms the marker under its own id, keeping the first
+attempt's epoch so a chain of refusals cannot extend the window. The
 marker outranks a fresh credit, because a sweep that delegates again before
 retrying its refused post would otherwise spend the new delegation on the
 retry and be denied on the post it was for.
@@ -72,7 +74,8 @@ denied-and-retried exclusion now covers only genuine denials.
 ## Consequences
 
 The pending directory is new per-user state beside the lock and the verdict
-markers, pruned opportunistically after a day. The install block in
+markers, pruned opportunistically: markers after a day, `.seen` files after
+a week, so a session that outlives a day keeps its confirmation. The install block in
 `docs/boundary-hook.md` gains a `PostToolUse` entry, and both hooks must be
 installed together; the seen file is per session, so an uninstall takes
 effect with the next session.
