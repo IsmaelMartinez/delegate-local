@@ -1518,41 +1518,66 @@ out=$(payload "git commit -m \"$para1\" -m \"$para2\"" "$tmpcwd" | DELEGATE_BOUN
 assert_eq "$(( ${#para1} + 2 + ${#para2} ))" "$(jq -r '.body_chars // empty' <<<"$(last_row)")" "summed -m: body_chars is both paragraphs plus the blank line"
 assert_contains '"permissionDecision":"deny"' "$out" "summed -m: two 40-char paragraphs clear a 60-char floor together"
 
-# 70. Never a permanent block: after two consecutive denials for the same
-# session and boundary the third attempt is warned (enforce_skipped:"retry-cap"),
-# and a metrics file the hook cannot append to fails open.
+# 70. Never a permanent block, never a free pass: after two consecutive
+# denials for the same session and boundary the third attempt is warned
+# (enforce_skipped:"retry-cap") ONLY when the session recorded a delegation
+# for the recipe since the streak began (#511). A plain retry records nothing
+# and stays denied; a metrics file the hook cannot append to fails open.
 seed_denied() { # session boundary [ts]
   jq -nc --arg ts "${3:-$nowts}" --arg p "$proj" --arg s "$1" --arg b "$2" \
     '{ts:$ts, source:"opportunity", boundary:$b, suggested_recipe:"x", delegated:false, denied:true, project:$p, session:$s}' >> "$METRICS"
 }
-: > "$METRICS"; seed_denied sess-A git-commit; seed_denied sess-A git-commit
+seed_attempt() { # session recipe [ts] [exit_status] -- a delegate row that did not credit
+  jq -nc --arg ts "${3:-$nowts}" --arg s "$1" --arg r "$2" --argjson ec "${4:-0}" \
+    '{ts:$ts, source:"delegate", project:"elsewhere", recipe:$r, tier:"prose", session:$s, exit_status:$ec}' >> "$METRICS"
+}
+# Two denials and a delegation after them (credited nowhere: wrong project) open the cap.
+: > "$METRICS"; seed_denied sess-A git-commit; seed_denied sess-A git-commit; seed_attempt sess-A commit-message
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "retry cap: the third consecutive attempt is not denied"
+assert_contains '"permissionDecision":"allow"' "$out" "retry cap: two denials plus a delegation since -> the third attempt is not denied"
 assert_eq retry-cap "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "retry cap: the row records enforce_skipped=retry-cap"
 assert_eq false "$(jq 'has("denied")' <<<"$(last_row)")" "retry cap: the row is not a denial"
 assert_contains 'twice' "$(hook_msg "$out")" "retry cap: the reminder says why the call proceeds"
-# The natural sequence, with nothing seeded: deny, deny, proceed.
-: > "$METRICS"
-for i in 1 2; do
-  out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
-  assert_contains '"permissionDecision":"deny"' "$out" "retry cap: attempt $i is denied"
-done
+# A failed delegation (canary stall, exit 3) is still an attempt.
+: > "$METRICS"; seed_denied sess-A git-commit; seed_denied sess-A git-commit; seed_attempt sess-A commit-message "$nowts" 3
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "retry cap: attempt 3 proceeds"
+assert_contains '"permissionDecision":"allow"' "$out" "retry cap: a delegation that failed (exit 3) still counts as the attempt"
+# Two denials and NOTHING delegated: the third, fourth and fifth stay denied.
+: > "$METRICS"
+for i in 1 2 3 4 5; do
+  out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+  assert_contains '"permissionDecision":"deny"' "$out" "retry cap: plain retry $i with no delegation is denied (#511)"
+done
+assert_eq 0 "$(jq -r 'select(.enforce_skipped == "retry-cap") | 1' "$METRICS" | wc -l | tr -d ' ')" "retry cap: no fall-open row was written for the plain retries"
+# A delegation BEFORE the streak began is not the attempt the streak asks for.
+: > "$METRICS"
+seed_attempt sess-A commit-message "$(jq -rn --argjson now "$(date -u +%s)" '($now - 120) | todateiso8601')"
+seed_denied sess-A git-commit; seed_denied sess-A git-commit
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "retry cap: a delegation from before the streak does not open it"
+# Another session's delegation does not count for this one.
+: > "$METRICS"; seed_denied sess-A git-commit; seed_denied sess-A git-commit; seed_attempt sess-B commit-message
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "retry cap: another session's delegation does not open this session's cap"
+# A delegation for another recipe does not count either.
+: > "$METRICS"; seed_denied sess-A git-commit; seed_denied sess-A git-commit; seed_attempt sess-A pr-description
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "retry cap: a delegation for another recipe does not open the cap"
 # A credited post in between resets the streak, so the cap cannot be banked.
 : > "$METRICS"; seed_denied sess-A git-commit; seed_denied sess-A git-commit
 jq -nc --arg ts "$nowts" --arg p "$proj" '{ts:$ts, source:"opportunity", boundary:"git-commit", suggested_recipe:"commit-message", delegated:true, project:$p, session:"sess-A"}' >> "$METRICS"
+seed_attempt sess-A commit-message
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "retry cap: a later non-denied row resets the streak"
 # Scoped to the session and the boundary.
-: > "$METRICS"; seed_denied sess-B git-commit; seed_denied sess-B git-commit
+: > "$METRICS"; seed_denied sess-B git-commit; seed_denied sess-B git-commit; seed_attempt sess-A commit-message
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "retry cap: another session's denials do not count"
-: > "$METRICS"; seed_denied sess-A comment-reply; seed_denied sess-A comment-reply
+: > "$METRICS"; seed_denied sess-A comment-reply; seed_denied sess-A comment-reply; seed_attempt sess-A commit-message
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "retry cap: another boundary's denials do not count"
 # Outside the window the denials have expired.
-: > "$METRICS"; seed_denied sess-A git-commit 2020-01-01T00:00:00Z; seed_denied sess-A git-commit 2020-01-01T00:00:01Z
+: > "$METRICS"; seed_denied sess-A git-commit 2020-01-01T00:00:00Z; seed_denied sess-A git-commit 2020-01-01T00:00:01Z; seed_attempt sess-A commit-message
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "retry cap: denials outside the window do not count"
 # Metrics unwritable: a directory where the file should be.
