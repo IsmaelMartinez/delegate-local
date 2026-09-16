@@ -69,9 +69,34 @@ produced and the text that actually shipped, plus three objective signals:
   `commit-message` body trimmed to the profile's word cap.
 - `SHAPE` — a list-vs-prose mismatch between the draft and what shipped.
 
+Where the delegation was a recipe call made after #516, the rendered input the
+model saw sits beside the draft as `<stem>.input.txt`, the bundle names it, and
+the signals are scored against what the caller actually supplied rather than
+against the draft alone:
+
+- `DROPPED` narrows to anchors the input supplied: present in the input and
+  the shipped text, absent from the draft. That is the model losing a fact it
+  was given, which is what a recipe guard can be aimed at.
+- `ADDED` — anchors in the shipped text that neither the input nor the draft
+  had. The human brought them from outside the delegation, so they say
+  nothing about the recipe; without the input they would have counted as
+  `DROPPED`.
+- `UNUSED` — salient tokens present in the input and absent from the shipped
+  text: the anchors the caller handed over that ended up nowhere, which for
+  the reply recipes is the "handed the input back" family measured directly.
+- `ECHOED` — input sentences the draft reproduced as written, with the count.
+  It is `no_context_echo`'s comparison (sentence unit, `echo_normalise`
+  rules, 40-character floor) run after the fact, so a rejection that says
+  "restated the facts" carries the sentences it means.
+
+The recipe's own template lines are subtracted from the input before either
+is computed, so an example path or issue number the recipe carries is never
+reported as a supplied anchor. Rows from before the input was captured print
+as they always did.
+
 The **capture coverage** line says how much of that you actually have. Drafts
-are captured automatically. The shipped text arrives either because a caller
-passed `--final` to `delegate-feedback.sh`, or because the boundary hook saw
+and inputs are captured automatically. The shipped text arrives either because
+a caller passed `--final` to `delegate-feedback.sh`, or because the boundary hook saw
 the post: when a `gh`/`glab` post is credited to a delegation, that post is
 that delegation's shipped form, so the hook stores it under the draft's own
 stem and the verdict adopts it. A final that arrived that way is marked
@@ -90,7 +115,8 @@ Rank candidates by evidence, not by how annoying the defect looks:
 1. A defect a deterministic check already flags, clustered on one recipe.
 2. A defect named in two or more rejection reasons for the same recipe.
 3. A single rejection that carries a draft/final pair showing a mechanical
-   defect — a dropped anchor, an invented value, a list where prose shipped.
+   defect — a dropped anchor, an invented value, a list where prose shipped,
+   a supplied sentence handed back.
 
 A single rejection with only a prose reason and no pair is **not** enough to
 edit a recipe on. Note it and wait for the second one.

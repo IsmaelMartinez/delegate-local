@@ -119,7 +119,7 @@ assert_contains "2.9" "$out" "INVENTED names the value the draft made up"
 assert_contains "SHAPE: draft used" "$out" "captured pair reports the list-vs-prose shape delta"
 
 # 10. Capture coverage is reported, so the loop can see its own blind spot.
-assert_contains "rejections=2  with draft=1  with final=1" "$out" "capture coverage counted"
+assert_contains "rejections=2  with draft=1  with input=0  with final=1" "$out" "capture coverage counted"
 
 # 11. The watermark advanced, so a second run has nothing to do.
 assert_eq "$(jq -r 'select(.source=="delegate") | .ts' "$tmp/m.jsonl" | tail -1)" \
@@ -398,6 +398,103 @@ assert_not_contains "N2.draft.txt" "$out" \
   "a numbered final does not fall back to the other delegation sharing the second"
 assert_contains "final:  $tmp/drafts/N1.final.2.txt" "$out" \
   "the numbered final itself is read"
+rm -rf "$tmp"
+
+# --- The stored input (#516): with <stem>.input.txt beside the pair, the
+# bundle names the supplied anchors the shipped text left out and the input
+# sentences the draft handed back, with the recipe's own template lines
+# subtracted so only what the caller supplied counts. Without the file, the
+# same rows print what they always printed ---
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts" "$tmp/prompts"
+cat > "$tmp/prompts/reply.md" <<'EOF'
+---
+tier: prose
+---
+# reply
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+Draft a reply from the facts below; see docs/example.md and issue #99 for the shape it takes.
+Facts:
+{{stdin}}
+```
+
+## Calibration notes
+n/a
+EOF
+it=$(iso_ago 600)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$it","source":"delegate","tier":"prose","model":"q","recipe":"reply","project":"p","exit_status":0,"draft_file":"I1.draft.txt","input_file":"I1.input.txt"}
+{"ts":"$(iso_ago 590)","source":"feedback","ref_ts":"$it","kept":false,"reason":"handed the facts back","verdict_source":"agent","final_file":"I1.final.txt"}
+EOF
+cat > "$tmp/drafts/I1.input.txt" <<'EOF'
+Draft a reply from the facts below; see docs/example.md and issue #99 for the shape it takes.
+Facts:
+The blank window is the sandbox flag, not your distro, and it reproduces on every wayland session we tried.
+The fix lives in src/main.js and all 531 tests pass with it applied, and the regression entered in 2.9.
+The launch flag is read from the desktop file before the sandbox check runs (#2601).
+EOF
+cat > "$tmp/drafts/I1.draft.txt" <<'EOF'
+The blank window is the sandbox flag, not your distro, and it reproduces on every wayland session we tried. The launch flag is read from the desktop file before the sandbox check runs. Could you confirm the flag?
+EOF
+# The shipped text carries 2.9 (supplied, the draft dropped it) and #2632
+# (supplied by nobody: context the human added), and neither src/main.js
+# nor 531.
+cat > "$tmp/drafts/I1.final.txt" <<'EOF'
+The sandbox flag is the cause on wayland since 2.9, and PR #2632 fixes it. Could you paste the launch flags?
+EOF
+out=$(DELEGATE_PROMPTS_DIR="$tmp/prompts" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_contains "input:  $tmp/drafts/I1.input.txt" "$out" \
+  "input: the stored input is named beside the pair"
+unused=$(printf '%s\n' "$out" | grep -F 'UNUSED')
+# salient() names an unbackticked path by its file component, as it does
+# for DROPPED.
+assert_contains "main.js" "$unused" \
+  "input: UNUSED names the supplied path the shipped text left out"
+assert_contains "531" "$unused" \
+  "input: UNUSED names the supplied number the shipped text left out"
+assert_not_contains "docs/example.md" "$unused" \
+  "input: the recipe template's own path is not a supplied anchor"
+assert_not_contains "#99" "$unused" \
+  "input: the recipe template's own issue ref is not a supplied anchor"
+echoed=$(printf '%s\n' "$out" | grep -F 'ECHOED')
+assert_contains "The blank window is the sandbox flag, not your distro" "$echoed" \
+  "input: ECHOED names the input sentence the draft reproduced"
+assert_not_contains "The fix lives in src/main.js" "$echoed" \
+  "input: ECHOED omits the input sentence the draft did not reproduce"
+# echo_normalise's rules apply, so a sentence the wrapper's no_context_echo
+# would match (the trailing (#NNN) stripped) is the one the bundle names.
+assert_contains "before the sandbox check runs" "$echoed" \
+  "input: ECHOED normalises as no_context_echo does (trailing issue ref stripped)"
+assert_contains "rejections=1  with draft=1  with input=1  with final=1" "$out" \
+  "input: capture coverage counts the stored input"
+# With the input, DROPPED is restricted to anchors the caller supplied; an
+# anchor the shipped text carries that neither the input nor the draft had
+# is context the human added, listed under ADDED.
+dropped=$(printf '%s\n' "$out" | grep -F 'DROPPED')
+added=$(printf '%s\n' "$out" | grep -F 'ADDED')
+assert_contains "2.9" "$dropped" "input: DROPPED names the supplied anchor the draft dropped"
+assert_not_contains "#2632" "$dropped" "input: DROPPED omits an anchor nobody supplied"
+assert_contains "#2632" "$added" "input: ADDED names the anchor in the shipped text that neither input nor draft had"
+# The same rows without the input file: nothing about inputs is printed, and
+# the pair renders as it did before the file existed.
+rm -f "$tmp/drafts/I1.input.txt"
+perl -pi -e 's/,"input_file":"I1.input.txt"//' "$tmp/m.jsonl"
+out=$(DELEGATE_PROMPTS_DIR="$tmp/prompts" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_not_contains "input:" "$out" "no input: the bundle names no input file"
+assert_not_contains "UNUSED" "$out" "no input: no UNUSED line"
+assert_not_contains "ECHOED" "$out" "no input: no ECHOED line"
+assert_not_contains "ADDED" "$out" "no input: no ADDED line"
+assert_contains "#2632" "$(printf '%s\n' "$out" | grep -F 'DROPPED')" \
+  "no input: DROPPED is the full shipped-minus-draft set, as before"
+assert_contains "draft:  $tmp/drafts/I1.draft.txt" "$out" "no input: the draft still renders"
+assert_contains "final:  $tmp/drafts/I1.final.txt" "$out" "no input: the final still renders"
+assert_contains "rejections=1  with draft=1  with input=0  with final=1" "$out" \
+  "no input: capture coverage shows the blind spot"
 rm -rf "$tmp"
 
 echo

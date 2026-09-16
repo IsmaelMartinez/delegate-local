@@ -5,7 +5,11 @@
 # verdicts, reasons, per-recipe keep rates, deterministic check failures and,
 # where both were captured, a diff between the draft and the shipped text.
 # The diff is the one objective part of a MISS: DROPPED names the tokens the
-# human had to put back, which is what a calibrated recipe edit aims at.
+# human had to put back, which is what a calibrated recipe edit aims at. Where
+# the rendered input was stored too (#516), the pair is scored against what
+# the caller supplied: DROPPED narrows to supplied anchors and ADDED takes
+# the ones nobody supplied, UNUSED names the supplied anchors the shipped
+# text left out, ECHOED the supplied sentences the draft handed back.
 #
 # Usage:
 #   self-improve.sh [--file PATH] [--peek] [--min-delegations N] [--days N]
@@ -19,6 +23,8 @@
 #   DELEGATE_METRICS_FILE        metrics JSONL (default <data dir>/metrics.jsonl)
 #   DELEGATE_LOCAL_DATA_DIR      per-user data (default ~/.local/share/delegate-local)
 #   DELEGATE_SELF_IMPROVE_STATE  watermark file (default <data dir>/self-improve.state)
+#   DELEGATE_PROMPTS_DIR         recipe directory whose templates are subtracted
+#                                from a stored input (default <script dir>/../prompts)
 # Exit: 0 evidence emitted, 10 nothing new (quiet, the normal cron outcome),
 #       2 usage or dependency error.
 set -uo pipefail
@@ -52,6 +58,8 @@ case "$min_delegations" in ''|*[!0-9]*) echo "self-improve: --min-delegations mu
 case "$window_days" in ''|*[!0-9]*) echo "self-improve: --days must be a number" >&2; exit 2;; esac
 
 drafts_dir="$(dirname "$metrics_file")/drafts"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 
 # An absent watermark (first run, or a reset corpus) means everything is new.
 prev_ts=""
@@ -211,6 +219,52 @@ list_markers() {
   echo "${n:-0}"
 }
 
+# supplied <input file> <recipe> — the caller's half of a stored input: every
+# line of it that is not a line of the recipe's PRE-substitution template,
+# whole-line and literal, the comparison no_example_echo makes. The template
+# is read from prompts/ as delegate.sh reads it; without it (a renamed
+# recipe) the whole input counts, and the template's own example paths and
+# numbers would read as supplied anchors. A substituted line differs from its
+# template line, so it survives, which is the caller's value on it.
+supplied() {
+  local tmpl=""
+  [[ -f "$prompts_dir/$2.md" ]] && tmpl=$(awk '
+    /^## Prompt template[[:space:]]*$/ { in_section=1; next }
+    /^## / && in_section && !in_block { in_section=0 }
+    in_section && /^```/ {
+      if (in_block) { exit }
+      in_block=1; next
+    }
+    in_section && in_block { print }
+  ' "$prompts_dir/$2.md" 2>/dev/null)
+  if [[ -n "$tmpl" ]]; then
+    grep -Fxvf <(printf '%s\n' "$tmpl") "$1"
+  else
+    cat "$1"
+  fi
+}
+
+# sentences — one per line, terminator dropped, normalised, under the 40-char
+# floor discarded: the unit, normalisation and floor no_context_echo applies
+# in delegate.sh (split_sentences, echo_normalise, echo_matches), so the
+# sentence the bundle names is the one the wrapper would have flagged. The
+# sed is echo_normalise's, rule for rule and in its order: trim, the
+# Wrong:/Correct: label, the commit type prefix, a trailing (#NNN). Not
+# shared because the helpers sit inside delegate.sh's checks region.
+sentences() {
+  awk '{ gsub(/[.?!]+[[:space:]]+/, "\n"); sub(/[.?!]+[[:space:]]*$/, "") } 1' \
+    | sed -E -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+             -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
+             -e 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' \
+             -e 's/[[:space:]]*\(#[0-9]+\)$//' \
+    | awk 'length($0) >= 40'
+}
+
+# The supplied half of the input, extracted once per rejection: salient reads
+# a file four times over.
+supplied_tmp=$(mktemp)
+trap 'rm -f "$supplied_tmp"' EXIT
+
 # One record per rejected delegation. The separator is US (\u001f), not a tab: tab is IFS
 # whitespace, so `read` would collapse the frequently-empty draft_file /
 # final_file fields and shift every later field left.
@@ -243,6 +297,16 @@ jq -rs --arg prev "$prev_ts" '
     dpath="$drafts_dir/$draft"
     dbytes=$(wc -c < "$dpath" | tr -d ' ')
     echo "    draft:  $dpath ($dbytes bytes)"
+    # The input shares the draft's stem (#516), so it is provably the same
+    # delegation's; rows from before it carry none and print as they did.
+    ipath="$drafts_dir/${draft%.draft.txt}.input.txt"
+    if [[ -f "$ipath" ]]; then
+      ibytes=$(wc -c < "$ipath" | tr -d ' ')
+      echo "    input:  $ipath ($ibytes bytes)"
+      supplied "$ipath" "$rec" > "$supplied_tmp"
+    else
+      ipath=""
+    fi
     if [[ -n "$final" && -f "$drafts_dir/$final" ]]; then
       fpath="$drafts_dir/$final"
       fbytes=$(wc -c < "$fpath" | tr -d ' ')
@@ -253,16 +317,31 @@ jq -rs --arg prev "$prev_ts" '
       else
         echo "    final:  $fpath ($fbytes bytes)"
       fi
-      dropped=$(comm -13 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
+      # The tokens the shipped text carries and the draft did not, sorted, as
+      # comm emits them.
+      new_tokens=$(comm -13 <(salient "$dpath") <(salient "$fpath"))
       draft_only=$(comm -23 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
-      [[ -n "${dropped// /}"  ]] && echo "    DROPPED  (in the shipped text, absent from the draft): $dropped"
+      # With the input, DROPPED is what the caller supplied and the model
+      # dropped; a token the shipped text carries that neither the input nor
+      # the draft had is context the human added, not a fact the model lost,
+      # and goes under ADDED. Without one, DROPPED is the whole set, as ever.
+      if [[ -n "$ipath" ]]; then
+        dropped=$(printf '%s\n' "$new_tokens" | comm -12 - <(salient "$supplied_tmp") | head -n 12 | tr '\n' ' ')
+        added=$(printf '%s\n' "$new_tokens" | comm -23 - <(salient "$supplied_tmp") | head -n 12 | tr '\n' ' ')
+        [[ -n "${dropped// /}" ]] && echo "    DROPPED  (in the input and the shipped text, absent from the draft): $dropped"
+        [[ -n "${added// /}"   ]] && echo "    ADDED    (in the shipped text, absent from the input and the draft): $added"
+      else
+        dropped=$(printf '%s\n' "$new_tokens" | head -n 12 | tr '\n' ' ')
+        [[ -n "${dropped// /}" ]] && echo "    DROPPED  (in the shipped text, absent from the draft): $dropped"
+      fi
       # A draft token absent from the shipped text has two causes, and calling
       # both INVENTED reported hallucination on the commonest rejection (a body
-      # the human cut for length). The discriminator is DROPPED alone: invention
-      # is a claim something was replaced, and the only evidence is the shipped
-      # text carrying a token the draft lacked.
+      # the human cut for length). The discriminator is the new-token set
+      # alone, DROPPED and ADDED together: invention is a claim something was
+      # replaced, and the only evidence is the shipped text carrying a token
+      # the draft lacked, whoever supplied it.
       if [[ -n "${draft_only// /}" ]]; then
-        if [[ -z "${dropped// /}" ]]; then
+        if [[ -z "$new_tokens" ]]; then
           echo "    CUT      (in the draft, removed; the shipped text put nothing in their place): $draft_only"
         else
           echo "    INVENTED (in the draft, replaced in the shipped text): $draft_only"
@@ -274,8 +353,24 @@ jq -rs --arg prev "$prev_ts" '
       elif (( fm > 0 && dm == 0 )); then
         echo "    SHAPE: shipped text used $fm list item(s); the draft used none"
       fi
+      # Scored against what was supplied rather than against the draft: the
+      # anchors the caller gave that the shipped text carried nowhere.
+      if [[ -n "$ipath" ]]; then
+        unused=$(comm -23 <(salient "$supplied_tmp") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
+        [[ -n "${unused// /}" ]] && echo "    UNUSED   (in the input, absent from the shipped text): $unused"
+      fi
     else
       echo "    final:  (not captured — pass --final to delegate-feedback.sh to make the next one diffable)"
+    fi
+    # The supplied sentences the draft returned as written, the defect
+    # no_context_echo measures at generation time, named from the pair so a
+    # rejection reads "handed the facts back" with the facts beside it.
+    if [[ -n "$ipath" ]]; then
+      echoed=$(sentences < "$supplied_tmp" | grep -Fxf - <(sentences < "$dpath") | sort -u)
+      if [[ -n "$echoed" ]]; then
+        echoed_n=$(printf '%s\n' "$echoed" | grep -c '')
+        echo "    ECHOED   ($echoed_n input sentence(s) reproduced in the draft): $(printf '%s\n' "$echoed" | head -n 3 | cut -c1-120 | sed 's/.*/"&"/' | paste -sd ' ' -)"
+      fi
     fi
   else
     echo "    draft:  (not captured)"
@@ -293,9 +388,10 @@ jq -rs --arg prev "$prev_ts" '
   map(select(referenced and (.kept | not)))
   | map(select($prev == "" or (parent.ts // "") > $prev))
   | (map(select((parent.draft_file // "") != "")) | length) as $wd
+  | (map(select((parent.input_file // "") != "")) | length) as $wi
   | (map(select((.final_file // "") != "")) | length) as $wf
   | (map(select((.reason // "") == "")) | length) as $nr
-  | "  rejections=\(length)  with draft=\($wd)  with final=\($wf)  with no reason=\($nr)"
+  | "  rejections=\(length)  with draft=\($wd)  with input=\($wi)  with final=\($wf)  with no reason=\($nr)"
 ' "$metrics_file"
 
 if (( peek == 0 )); then
