@@ -1140,9 +1140,12 @@ content_words() {
 # context is the model's own, one in the ask is the caller's). With no anchor
 # the unit is the content word, two or more from the context and none from
 # the ask: one shared word is any question at all ("could you make that
-# change?"). Measured on the 18 spike cases: anchors alone flag 6 of the 11
-# confirm/question rejections, the fallback lifts it to 8, both at 0 of the
-# 16 shipped finals. comm wants both sides sorted, which the extractors are.
+# change?"). A question found verbatim in the caller's own text ($4, every
+# --var value) is skipped first: an opener or sign-off is emitted as written
+# and STATED-NOT-ASKED exempts it whatever it asks. Measured on the 18 spike
+# cases: anchors alone flag 6 of the 11 confirm/question rejections, the
+# fallback lifts it to 8, both at 0 of the 16 shipped finals. comm wants
+# both sides sorted, which the extractors are.
 fact_as_question_matches() {
   local q units ctx_anchors ask_anchors ctx_words ask_words n_ctx n_out n_ask
   ctx_anchors=$(printf '%s\n' "$2" | fact_anchors)
@@ -1150,6 +1153,7 @@ fact_as_question_matches() {
   ctx_words=$(printf '%s\n' "$2" | content_words)
   ask_words=$(printf '%s\n' "$3" | content_words)
   while IFS= read -r q; do
+    [[ -n "${4:-}" && "${4:-}" == *"$q"* ]] && continue
     units=$(printf '%s\n' "$q" | fact_anchors)
     if [[ -n "$units" ]]; then
       n_out=$(comm -23 <(printf '%s\n' "$units") <(printf '%s\n' "$ctx_anchors") | grep -c '')
@@ -1169,7 +1173,7 @@ fact_as_question_matches() {
 run_output_checks() {
 # The result and the counters (output, checks_*, capability_failed) are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio fact_questions
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio fact_questions caller_text
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -1539,17 +1543,22 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         # names the --var holding the caller's asks, as no_invented_task_list
         # names its authority: a question whose anchors are all in the piped
         # context and none in that var is a fact, not an ask. Context only,
-        # never the other --var values, as no_context_echo. Never retried on
-        # its own: the spike's validator arm cleared 3 of 13 on a second pass.
+        # never the other --var values, as no_context_echo; a question found
+        # verbatim in any --var (an opener, a sign-off) is the caller's and
+        # is skipped. Never retried on its own: the spike's validator arm
+        # cleared 3 of 13 on a second pass.
         if [[ -n "$cval" ]]; then
           checks_run=$((checks_run + 1))
           authority=""
+          caller_text=""
           for _kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
             if [[ "${_kv%%=*}" == "$cval" ]]; then
               authority="${_kv#*=}"
             fi
+            caller_text="${caller_text}${_kv#*=}
+"
           done
-          fact_questions=$(fact_as_question_matches "$output" "$context" "$authority")
+          fact_questions=$(fact_as_question_matches "$output" "$context" "$authority" "$caller_text")
           if [[ -n "$fact_questions" ]]; then
             echo "delegate: check 'no_fact_as_question' FAILED — a supplied fact comes back as a question to the reader: \"$(printf '%s\n' "$fact_questions" | head -n 1 | cut -c1-120)\"" >&2
             echo "  What it asks about is in the piped facts and absent from the '$cval' var: the reader is asked to confirm what the facts already state. State it instead." >&2
