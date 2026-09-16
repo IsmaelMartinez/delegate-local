@@ -6609,6 +6609,193 @@ assert_contains 'max_context_ratio' "$(tail -1 "$metrics")" \
   "review-reply floor: the 900-char failure is named on the row"
 rm -rf "$tmp" "$metrics"
 
+# --- 51. no_fact_as_question (#513): opt-in per recipe, the value names the
+# --var holding the asks; fails when a question's anchors are all in the
+# piped facts and none in that var (or, with no anchor, two-plus content
+# words from the facts and none from the var). Never retried on its own. ---
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+fq_recipe() {
+  # $1 = recipe basename, $2.. = the checks block lines, verbatim.
+  local name="$1"; shift
+  { printf -- '---\ntier: prose\nchecks:\n'; printf '  %s\n' "$@"; printf -- '---\n'
+    printf '# %s\n\n## When to use\nn/a\n\n## Prompt template\n\n```\nReply using only the facts below.\n\n=== OPENER ===\n{{opener}}\n\n=== ASK ===\n{{ask}}\n\n=== FACTS ===\n{{stdin}}\n```\n\n## Calibration notes\nn/a\n' "$name"; } > "$prompts/$name.md"
+}
+fq_recipe fq 'no_fact_as_question: ask'
+fq_recipe fq_list 'no_single_item_list: true' 'no_fact_as_question: ask'
+fq_recipe fq_echo 'no_context_echo: true' 'no_fact_as_question: ask'
+fq_recipe fq_off 'no_padding_tail: true'
+fq_facts=$'The blank window is the GPU sandbox flag flip in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.\nThe token drop is on the Teams side, in its MSAL cache, not in teams-for-linux.'
+fq_ask='whether the token survives a cold start of the app'
+run_fq() {
+  # $1 = recipe, $2 = the ask var; $fq_facts is piped, no retry.
+  printf '%s\n' "$fq_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe "$1" --var ask="${2:-$fq_ask}" --var opener="Thanks for the report on build 4711." prose "go" 2>&1 >/dev/null
+}
+
+# 51a. A fact with anchors handed back as a question -> FAILED, quoted, named, counted.
+: > "$metrics"
+make_mock_curl_think "$tmp" 'Not a regression, the flip is the sandbox flag at src/main.js:412. Could you confirm that all 531 tests pass on PR #2632?'
+out=$(run_fq fq)
+assert_contains "check 'no_fact_as_question' FAILED" "$out" \
+  "fact-question: a fact's anchors asked back to the reader are caught"
+assert_contains 'Could you confirm that all 531 tests pass on PR #2632?' "$out" \
+  "fact-question: the offending question is quoted"
+row=$(tail -1 "$metrics")
+assert_contains '"checks_failed_names":["no_fact_as_question"]' "$row" \
+  "fact-question: named on the metrics row"
+assert_contains '"checks_run":2' "$row" \
+  "fact-question: counted in checks_run beside the default echo check"
+
+# 51a-ii. No anchor at all: two-plus content words from the facts and none
+# from the ask is the same fact asked back.
+: > "$metrics"
+make_mock_curl_think "$tmp" 'The flip is the sandbox flag in the Electron 39 upgrade. Can you confirm the tests pass with the flag forced back on?'
+out=$(run_fq fq)
+assert_contains "check 'no_fact_as_question' FAILED" "$out" \
+  "fact-question: a fact without anchors asked back is caught on its content words"
+assert_contains 'Can you confirm the tests pass with the flag forced back on?' "$out" \
+  "fact-question: the zero-anchor question is the one quoted"
+
+# 51a-iii. A MULTI-ASK-SPLIT item is a question of its own, arriving bare.
+make_mock_curl_think "$tmp" 'The flip is the sandbox flag at src/main.js:412.\n1. Could you confirm that all 531 tests pass on PR #2632?\n2. Could you check whether the token survives a cold start of the app?'
+out=$(run_fq fq)
+assert_contains "check 'no_fact_as_question' FAILED" "$out" \
+  "fact-question: a numbered item that asks a fact back is caught"
+assert_contains ': "Could you confirm that all 531 tests pass on PR #2632?"' "$out" \
+  "fact-question: the numbered item is quoted without its number"
+
+# 51b. The caller's ask as a question is the recipe's shape: never flagged,
+# still counted as run.
+: > "$metrics"
+make_mock_curl_think "$tmp" 'The flip is the sandbox flag at src/main.js:412 in the Electron 39 upgrade. Could you check whether the token survives a cold start of the app?'
+out=$(run_fq fq)
+if [[ "$out" == *"no_fact_as_question"* ]]; then
+  echo "  FAIL  fact-question: the caller's ask phrased as a question must pass ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  fact-question: the caller's ask phrased as a question passes"; pass=$((pass+1))
+fi
+row=$(tail -1 "$metrics")
+assert_contains '"checks_run":2' "$row" \
+  "fact-question: the silent case still ran the check"
+if [[ "$row" == *'"checks_failed_names"'* ]]; then
+  echo "  FAIL  fact-question: a passing check must leave no failed name on the row"; fail=$((fail+1))
+else
+  echo "  PASS  fact-question: a passing check leaves no failed name on the row"; pass=$((pass+1))
+fi
+
+# 51b-ii. An anchor the ask var carries is the caller's, even when the facts
+# carry it too.
+make_mock_curl_think "$tmp" 'The flip is the sandbox flag at src/main.js:412. Does PR #2632 still reproduce it on your machine?'
+out=$(run_fq fq 'whether PR #2632 still reproduces it')
+if [[ "$out" == *"no_fact_as_question"* ]]; then
+  echo "  FAIL  fact-question: an anchor named in the ask var must not flag ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  fact-question: an anchor named in the ask var is the caller's ask"; pass=$((pass+1))
+fi
+
+# 51c. An anchor the facts do not hold is the model's own question, not a fact.
+make_mock_curl_think "$tmp" 'The flip is the sandbox flag at src/main.js:412. Could you try Electron 40 and report back?'
+out=$(run_fq fq)
+if [[ "$out" == *"no_fact_as_question"* ]]; then
+  echo "  FAIL  fact-question: an anchor outside the facts must not flag ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  fact-question: an anchor outside the facts is not a supplied fact"; pass=$((pass+1))
+fi
+
+# 51c-ii. One shared content word is any question at all: below the floor.
+make_mock_curl_think "$tmp" 'The flip is the sandbox flag at src/main.js:412. Could you paste the flag you use?'
+out=$(run_fq fq)
+if [[ "$out" == *"no_fact_as_question"* ]]; then
+  echo "  FAIL  fact-question: one shared word must stay below the floor ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  fact-question: one shared word stays below the two-word floor"; pass=$((pass+1))
+fi
+
+# 51c-iii. Only the piped facts are a source: a --var value asked back is not
+# a supplied fact (the mirror of 48a-iii).
+make_mock_curl_think "$tmp" 'Thanks for the report on build 4711. The flip is the sandbox flag at src/main.js:412. Could you confirm the report was on build 4711?'
+out=$(run_fq fq)
+if [[ "$out" == *"no_fact_as_question"* ]]; then
+  echo "  FAIL  fact-question: a --var value asked back must not flag ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  fact-question: a --var value asked back is not a supplied fact"; pass=$((pass+1))
+fi
+
+# 51d. Never retried on its own: one dispatch, the failure stays on the row
+# and its stderr reaches the caller.
+counter="$tmp/calls"
+make_mock_curl_seq "$tmp" "$counter" \
+  'Not a regression, the flip is the sandbox flag at src/main.js:412. Could you confirm that all 531 tests pass on PR #2632?' \
+  'The flip is the sandbox flag at src/main.js:412 and all 531 tests pass with it forced on. Could you check whether the token survives a cold start of the app?'
+: > "$metrics"
+out=$(printf '%s\n' "$fq_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe fq --var ask="$fq_ask" --var opener="Thanks." prose "go" 2>&1 >/dev/null)
+assert_eq 1 "$(wc -l < "$counter" | tr -d ' ')" \
+  "fact-question: a failure on its own costs exactly one dispatch"
+assert_contains "check 'no_fact_as_question' FAILED" "$out" \
+  "fact-question: the un-retried failure is reported to the caller"
+row=$(tail -1 "$metrics")
+assert_contains '"checks_failed_names":["no_fact_as_question"]' "$row" \
+  "fact-question: the un-retried failure is on the row"
+if [[ "$row" == *'"retried"'* ]]; then
+  echo "  FAIL  fact-question: the row must not be marked retried"; fail=$((fail+1))
+else
+  echo "  PASS  fact-question: the row is not marked retried"; pass=$((pass+1))
+fi
+
+# 51d-ii. Beside a check that does retry, the retry runs for that check and
+# its notice names only that check.
+make_mock_curl_seq "$tmp" "$counter" \
+  'The flip is the sandbox flag at src/main.js:412.\n1. Could you confirm that all 531 tests pass on PR #2632?' \
+  'The flip is the sandbox flag at src/main.js:412 and all 531 tests pass with it forced on. Could you check whether the token survives a cold start of the app?'
+: > "$metrics"
+out=$(printf '%s\n' "$fq_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe fq_list --var ask="$fq_ask" --var opener="Thanks." prose "go" 2>&1 >/dev/null)
+assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
+  "fact-question: a retried check beside it still costs two dispatches"
+assert_contains "check(s) no_single_item_list failed" "$out" \
+  "fact-question: the retry line names only the check that earns it"
+if [[ "$(cat "$tmp/payload.2.json")" == *"no_fact_as_question"* ]]; then
+  echo "  FAIL  fact-question: the retry notice must not carry this check"; fail=$((fail+1))
+else
+  echo "  PASS  fact-question: the retry notice leaves this check out"; pass=$((pass+1))
+fi
+assert_contains '"retried":true' "$(tail -1 "$metrics")" \
+  "fact-question: the other check's retry is marked on the row"
+
+# 51d-iii. Beside no_context_echo, which does not earn the retry on its own
+# either (#514), nothing is regenerated and both are named on the row.
+make_mock_curl_seq "$tmp" "$counter" \
+  'The blank window is the GPU sandbox flag flip in the Electron 39 upgrade at src/main.js:412. All 531 tests pass on the branch with the flag forced back on, see PR #2632. Could you confirm that all 531 tests pass on PR #2632?' \
+  'The flip is the sandbox flag at src/main.js:412 and all 531 tests pass with it forced on. Could you check whether the token survives a cold start of the app?'
+: > "$metrics"
+out=$(printf '%s\n' "$fq_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe fq_echo --var ask="$fq_ask" --var opener="Thanks." prose "go" 2>&1 >/dev/null)
+assert_eq 1 "$(wc -l < "$counter" | tr -d ' ')" \
+  "fact-question: beside echo alone, neither earns the retry: one dispatch"
+assert_contains '"checks_failed_names":["no_context_echo","no_fact_as_question"]' "$(tail -1 "$metrics")" \
+  "fact-question: beside echo alone, both failures are named on the row"
+
+# 51e. Undeclared recipes never run it.
+: > "$metrics"
+make_mock_curl_think "$tmp" 'Not a regression, the flip is the sandbox flag at src/main.js:412. Could you confirm that all 531 tests pass on PR #2632?'
+out=$(run_fq fq_off)
+if [[ "$out" == *"no_fact_as_question"* ]]; then
+  echo "  FAIL  fact-question: an undeclared recipe must not run it ($out)"; fail=$((fail+1))
+else
+  echo "  PASS  fact-question: an undeclared recipe never runs it"; pass=$((pass+1))
+fi
+assert_contains '"checks_run":2' "$(tail -1 "$metrics")" \
+  "fact-question: undeclared, only the declared and default checks are counted"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

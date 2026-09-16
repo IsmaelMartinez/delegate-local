@@ -1104,10 +1104,72 @@ split_sentences() {
   awk '{ gsub(/[.?!]+[[:space:]]+/, "\n"); sub(/[.?!]+[[:space:]]*$/, "") } 1'
 }
 
+# question_units — the questions of the text on stdin, one per line, each
+# ending in its `?`. Split where split_sentences splits, but the terminator is
+# KEPT: it is what makes a unit a question. A numbered item's `1. ` prefix
+# splits off as a unit of its own, so a MULTI-ASK-SPLIT question arrives bare.
+question_units() {
+  awk '{ gsub(/[.?!]+[[:space:]]+/, "&\n") } 1' | sed -E 's/[[:space:]]+$//' | grep -E '\?$'
+}
+
+# fact_anchors — the anchors of the text on stdin, one per line, sorted
+# unique: issue refs, file:line, file names, numbers of two-plus digits,
+# snake_case and camelCase identifiers. The spike's scorer regex (#513), in
+# ERE; `\b` is honoured by BSD and GNU grep alike. Leftmost-longest keeps
+# `#3359` one ref and `test_x.py` one file rather than an identifier.
+fact_anchors() {
+  grep -oE '#[0-9]+|\b[[:alnum:]_./-]+\.[[:alnum:]_]+:[0-9]+\b|\b[[:alnum:]_-]+\.(py|js|ts|sh|md|toml|json|ya?ml|go|c|h|txt)\b|\b[0-9]{2,}\b|\b[A-Za-z]+_[A-Za-z_]+\b|\b[a-z]+[A-Z][A-Za-z]+\b' \
+    | sort -u
+}
+
+# content_words — the topic words of the text on stdin, one per line, sorted
+# unique: lowercased words of four-plus letters, minus the function words a
+# question is built from (modals, pronouns, prepositions). Without that
+# subtraction "could", "that" and "your" match the ask on every question and
+# exempt it; measured, the fallback below then flags nothing at all.
+content_words() {
+  tr 'A-Z' 'a-z' | grep -oE '\b[a-z][a-z-]{3,}\b' \
+    | grep -vxE 'could|would|should|shall|will|have|does|been|were|being|that|this|these|those|what|which|when|where|whether|your|yours|them|they|their|there|here|each|both|same|other|another|such|some|many|much|most|more|very|else|itself|yourself|with|from|into|onto|upon|about|over|once|only|also|then|than|while|until|before|after|because|since|though|although|make|made|know|want|need|like|able|sure|must|might|please|just|still' \
+    | sort -u
+}
+
+# fact_as_question_matches — the questions of the output ($1) that hand a
+# supplied fact back to the reader (#513), one per line in order. The unit is
+# the anchor when the question carries one: every anchor in the piped context
+# ($2) and none in the ask ($3) is a fact, not an ask (an anchor outside the
+# context is the model's own, one in the ask is the caller's). With no anchor
+# the unit is the content word, two or more from the context and none from
+# the ask: one shared word is any question at all ("could you make that
+# change?"). Measured on the 18 spike cases: anchors alone flag 6 of the 11
+# confirm/question rejections, the fallback lifts it to 8, both at 0 of the
+# 16 shipped finals. comm wants both sides sorted, which the extractors are.
+fact_as_question_matches() {
+  local q units ctx_anchors ask_anchors ctx_words ask_words n_ctx n_out n_ask
+  ctx_anchors=$(printf '%s\n' "$2" | fact_anchors)
+  ask_anchors=$(printf '%s\n' "$3" | fact_anchors)
+  ctx_words=$(printf '%s\n' "$2" | content_words)
+  ask_words=$(printf '%s\n' "$3" | content_words)
+  while IFS= read -r q; do
+    units=$(printf '%s\n' "$q" | fact_anchors)
+    if [[ -n "$units" ]]; then
+      n_out=$(comm -23 <(printf '%s\n' "$units") <(printf '%s\n' "$ctx_anchors") | grep -c '')
+      n_ask=$(comm -12 <(printf '%s\n' "$units") <(printf '%s\n' "$ask_anchors") | grep -c '')
+      (( n_out == 0 && n_ask == 0 )) && printf '%s\n' "$q"
+      continue
+    fi
+    units=$(printf '%s\n' "$q" | content_words)
+    [[ -z "$units" ]] && continue
+    n_ctx=$(comm -12 <(printf '%s\n' "$units") <(printf '%s\n' "$ctx_words") | grep -c '')
+    n_ask=$(comm -12 <(printf '%s\n' "$units") <(printf '%s\n' "$ask_words") | grep -c '')
+    (( n_ctx >= 2 && n_ask == 0 )) && printf '%s\n' "$q"
+  done < <(printf '%s\n' "$1" | question_units)
+  return 0
+}
+
 run_output_checks() {
 # The result and the counters (output, checks_*, capability_failed) are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio fact_questions
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -1470,6 +1532,33 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
           fi
         fi
         ;;
+      no_fact_as_question)
+        # A supplied fact handed back as a question to the reader (#513), the
+        # defect STATED-NOT-ASKED forbids and 65 of 132 maintainer-reply
+        # rejections described while one carried a failed check. The value
+        # names the --var holding the caller's asks, as no_invented_task_list
+        # names its authority: a question whose anchors are all in the piped
+        # context and none in that var is a fact, not an ask. Context only,
+        # never the other --var values, as no_context_echo. Never retried on
+        # its own: the spike's validator arm cleared 3 of 13 on a second pass.
+        if [[ -n "$cval" ]]; then
+          checks_run=$((checks_run + 1))
+          authority=""
+          for _kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
+            if [[ "${_kv%%=*}" == "$cval" ]]; then
+              authority="${_kv#*=}"
+            fi
+          done
+          fact_questions=$(fact_as_question_matches "$output" "$context" "$authority")
+          if [[ -n "$fact_questions" ]]; then
+            echo "delegate: check 'no_fact_as_question' FAILED — a supplied fact comes back as a question to the reader: \"$(printf '%s\n' "$fact_questions" | head -n 1 | cut -c1-120)\"" >&2
+            echo "  What it asks about is in the piped facts and absent from the '$cval' var: the reader is asked to confirm what the facts already state. State it instead." >&2
+            checks_failed=$((checks_failed + 1))
+            checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_fact_as_question"
+            capability_failed=$((capability_failed + 1))
+          fi
+        fi
+        ;;
       min_context_chars)
         # The floor max_context_ratio reads out of the same block (above); a
         # setting, not a check of its own, so it is accepted and does nothing.
@@ -1504,8 +1593,14 @@ rejected_output_chars=${#output}
 run_output_checks 2>"$checks_stderr"
 
 retried=""
-if (( status == 0 )) && (( checks_failed > 0 )) \
-   && [[ "$checks_failed_names" != "no_context_echo" ]] \
+# no_fact_as_question never earns the retry (#513): the spike's validator arm
+# cleared 3 of 13 on a second generation, so the row records it and the
+# caller decides. It is dropped from the trigger and from the notice; the
+# other names still retry as before, and no_context_echo left alone by that
+# subtraction is the #514 case above, so it does not retry either.
+retry_names=$(printf '%s' "$checks_failed_names" | tr ',' '\n' | grep -vx 'no_fact_as_question' | paste -s -d ',' -)
+if (( status == 0 )) && [[ -n "$retry_names" ]] \
+   && [[ "$retry_names" != "no_context_echo" ]] \
    && [[ -n "$recipe" ]] \
    && [[ "${DELEGATE_NO_RETRY:-}" != "1" ]]; then
   retried="true"
@@ -1514,11 +1609,11 @@ if (( status == 0 )) && (( checks_failed > 0 )) \
   # "the request that produced the answer you got".
   retry_chars=$rejected_output_chars
   retry_notice=""
-  for _rc in $(printf '%s' "$checks_failed_names" | tr ',' ' '); do
+  for _rc in $(printf '%s' "$retry_names" | tr ',' ' '); do
     retry_notice="${retry_notice}- $(retry_constraint_for "$_rc")
 "
   done
-  echo "delegate: check(s) ${checks_failed_names} failed — regenerating once." >&2
+  echo "delegate: check(s) ${retry_names} failed — regenerating once." >&2
   # Appended to the SAME templated prompt: a fresh, differently worded prompt
   # would have failures that could not be attributed to the recipe.
   retry_input_before=${#full_input}
