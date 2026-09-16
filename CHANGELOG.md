@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.36.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.35.2...v0.36.0) (2026-09-16)
+
+
+### Features
+
+* add no_fact_as_question check to delegate.sh ([#527](https://github.com/IsmaelMartinez/delegate-local/issues/527)) ([5df5685](https://github.com/IsmaelMartinez/delegate-local/commit/5df568518dec5ef9a0083cc38ea3d024f4ffb3dd))
+* store the rendered recipe input beside the captured draft ([#525](https://github.com/IsmaelMartinez/delegate-local/issues/525)) ([8a74132](https://github.com/IsmaelMartinez/delegate-local/commit/8a741328deb2f8847214d2747e8cc085abdfc93c))
+
+
+### Bug Fixes
+
+* confirm a boundary credit only once the post has run ([#526](https://github.com/IsmaelMartinez/delegate-local/issues/526)) ([2eecac3](https://github.com/IsmaelMartinez/delegate-local/commit/2eecac39faffc26be2db2ab62d645d1f383bfa08))
+* keep {{recipient}} out of the reply-recipe instruction text ([#523](https://github.com/IsmaelMartinez/delegate-local/issues/523)) ([4b51619](https://github.com/IsmaelMartinez/delegate-local/commit/4b5161929d5205f48cf7de8bfa34e9595d510a1c)), closes [#520](https://github.com/IsmaelMartinez/delegate-local/issues/520)
+* skip the retry when no_context_echo is the only failed check ([#524](https://github.com/IsmaelMartinez/delegate-local/issues/524)) ([0d5340b](https://github.com/IsmaelMartinez/delegate-local/commit/0d5340be8f6b4a8fe43f1ca8120017465be2ce5f)), closes [#514](https://github.com/IsmaelMartinez/delegate-local/issues/514)
+
+
+### Documentation
+
+* ADR 0031 and the reply-recipes milestone plan ([#519](https://github.com/IsmaelMartinez/delegate-local/issues/519)) ([6c99825](https://github.com/IsmaelMartinez/delegate-local/commit/6c998258d03d0515ac7a8b2bca255154b12b6dfc))
+
 ## [0.35.2](https://github.com/IsmaelMartinez/delegate-local/compare/v0.35.1...v0.35.2) (2026-09-16)
 
 
