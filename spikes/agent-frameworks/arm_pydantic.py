@@ -14,6 +14,8 @@
   A5-model    A0-py on another model (the model-vs-flow confound)
   A6-think    A0-py with the model's thinking switched on (the docker agent
               path cannot switch it off, so this isolates what thinking does)
+  A7-loop     draft, then up to three critique-and-revise rounds in one
+              conversation, stopping when checks and critic are both clean
 
 Run:  uv run arm_pydantic.py <arm> [--model NAME] [--critic-model NAME] [--limit N] [--name LABEL]
 """
@@ -280,6 +282,47 @@ def run_critic_pipeline(cases, model_name, critic_name, arm, think_critic=False)
         print(f"{arm} revise {c['id']} {len(out)} chars", flush=True)
 
 
+# ---------------------------------------------------------------- A7 multi-round loop
+
+def run_loop(case, model_name, critic_name, rounds=3):
+    """Draft, then up to `rounds` critique-and-revise turns in ONE conversation:
+    the drafter keeps its message history, so each revision sees every earlier
+    draft and every critique. Stops when the deterministic checks and the
+    critic both find nothing."""
+    drafter = Agent(model(model_name), output_type=str, model_settings=settings())
+    critic = Agent(model(critic_name), output_type=Critique, retries=2, model_settings=settings(),
+                   instructions=CRITIC_INSTRUCTIONS)
+    t0 = time.time()
+    result = drafter.run_sync(render(case))
+    draft, history = result.output.strip(), result.all_messages()
+    trace = [{"round": 0, "chars": len(draft), "det": len(input_only_violations(case, draft))}]
+    stopped = "rounds exhausted"
+    for r in range(1, rounds + 1):
+        det = input_only_violations(case, draft)
+        prompt = (render(case) + "\n\n=== DRAFT UNDER REVIEW ===\n" + draft
+                  + "\n\n=== Deterministic findings ===\n" + ("\n".join(det) if det else "(none)"))
+        try:
+            crit = critic.run_sync(prompt).output
+        except Exception as e:
+            crit = Critique(violations=[Violation(label="OTHER", quote="", fix=f"critic failed: {e}")])
+        if not det and not crit.violations:
+            stopped, trace = "clean", trace + [{"round": r, "critic": 0, "det": 0}]
+            break
+        notes = "\n".join(f"- {x.label}: \"{x.quote}\" -> {x.fix}" for x in crit.violations) or "(critic: none)"
+        det_notes = "\n".join(f"- {d}" for d in det) or "(checks: none)"
+        result = drafter.run_sync(
+            "Review of your last draft. Fix every item below and keep everything else; output only the corrected reply text.\n"
+            + "Critic:\n" + notes + "\nChecks:\n" + det_notes,
+            message_history=history)
+        draft, history = result.output.strip(), result.all_messages()
+        trace.append({"round": r, "critic": len(crit.violations), "det_before": len(det),
+                      "chars": len(draft), "det_after": len(input_only_violations(case, draft))})
+    return draft, {"ms": int((time.time() - t0) * 1000), "requests": 1 + 2 * (len(trace) - 1),
+                   "rounds": len(trace) - 1, "stopped": stopped, "trace": trace,
+                   "violations_final": input_only_violations(case, draft),
+                   "model": model_name, "critic_model": critic_name}
+
+
 # ---------------------------------------------------------------- main
 
 if __name__ == "__main__":
@@ -308,6 +351,8 @@ if __name__ == "__main__":
             out, extra = run_text(case, a.model, validate=True, retries=2)
         elif a.arm == "A2-struct":
             out, extra = run_struct(case, a.model, retries=2)
+        elif a.arm == "A7-loop":
+            out, extra = run_loop(case, a.model, a.critic_model)
         else:
             sys.exit(f"unknown arm {a.arm}")
         extra["model"] = a.model

@@ -1,0 +1,44 @@
+# Spike arm A4c: a model-driven back-and-forth. docker agent's force_handoff
+# rejects cycles, so an iterative critic loop can only be expressed by giving
+# the drafter the critic as a sub-agent and telling it to iterate; the local
+# model decides when to call the critic and when to stop.
+agents:
+  root:
+    model: mlx_prose
+    description: Drafts the reply and iterates with the critic until it passes
+    instruction: |
+      Write the reply the user's message asks for, following every rule in it.
+      Then call the critic sub-agent, passing it the complete user message
+      (rules and facts) followed by your draft under a "=== DRAFT ===" line.
+      If the critic reports violations, fix every one of them and call the
+      critic again with the corrected draft. Repeat until the critic answers
+      exactly NO VIOLATIONS, or until you have called it three times. Then
+      output only the final reply text, nothing else: no commentary, no
+      explanation of what you changed.
+    sub_agents:
+      - critic
+    max_iterations: 10
+
+  critic:
+    model: mlx_prose
+    description: Reviews a draft reply against the rules and facts it is given
+    instruction: |
+      You receive a user message holding rules and facts, then a draft reply
+      under "=== DRAFT ===". Do not rewrite the draft. List each concrete
+      violation of the rules on its own line, quoting the offending words,
+      using these labels: ECHO (a fact line copied as written),
+      ASKED-NOT-STATED (a supplied fact turned into a question), INVENTED (a
+      value or action not in the facts), DROPPED (an anchor from the facts
+      missing), MERGED (distinct asks joined), LIST (numbered list where prose
+      was asked, or vice versa), LENGTH (over the word limit in the ask),
+      OPENER (the opener or handle not first, or thanks invented), TAIL (a
+      closing restatement or participial clause). If there is no violation,
+      answer exactly: NO VIOLATIONS.
+
+models:
+  mlx_prose:
+    provider: openai
+    model: mlx-community/Qwen3.6-35B-A3B-8bit
+    base_url: http://localhost:8080/v1
+    temperature: 0
+    max_tokens: 16384
