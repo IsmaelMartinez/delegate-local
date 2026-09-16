@@ -93,6 +93,28 @@ joining feedback rows to their delegate rows.
 6. #518, this section and ADR 0031. Goal: every self-improvement bundle for the
    two recipes quotes these goals beside the current numbers.
 
+Status, 2026-09-16 evening. All six issues are closed. v0.36.0 (13:10Z)
+shipped #513, #514 and #516 together with #520 (the `{{recipient}}`
+placeholder out of the instruction text) and #497 (the PostToolUse credit
+confirmation, ADR 0032); #517 and #521 (pr-review-body enforced by default)
+followed on main. Offline results: `no_fact_as_question` flags 8 of the 11
+target rejections (the three left share words with the caller's own ask) and
+0 of 16 shipped finals; the 900 floor clears all 5 graded review-reply finals
+where 400 failed 2, and an echo-only failure no longer dispatches a retry; the
+lead var took question-count mismatches from 13 to 2 of 16 and blind grade ≥ 4
+from 0 to 6 of 16 (38%) with the same leads on both arms. #515 was measured and
+closed as not planned: on the post-#517 template `Qwen3.5-122B-A10B-4bit`
+graded 6% and 0% at ≥ 4 against 38% and 20% for the 35B, generated at p50
+6.8 s and 5.7 s, and its 65 GB residency put the 125 GB machine into memory
+pressure; the lift came from the template, not the model, and the tier stays
+`prose`. The first rows after the release (n=8 and n=2, the delegate rows with
+`ts >= 2026-09-16T13:10:54Z` joined to their feedback rows; `metrics-summary.sh
+--since 2026-09-16` takes a date and reads the whole day, so it is the
+next-day read) already show the visibility goals holding: every recipe row carries `input_file`, 4 of the 5 maintainer-reply
+rejections carry a failed check (was 3 of 132), and the one echo failure on
+the review recipe spent no retry. The kept and usable goals need 30 tracked
+rows per recipe and are the next self-improvement session's read.
+
 The milestone is done when both recipes read usable ≥ 65% and 60% and kept
 ≥ 10% on `metrics-summary.sh --days 30`, or when the remaining gap is shown to
 be the task definition rather than the draft, in which case the recipes are
