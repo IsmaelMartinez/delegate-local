@@ -797,18 +797,20 @@ append_row() {
 # written and the credit is spent for good as before.
 write_pending() {
   [[ -n "$pending" && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] || return 0
-  if [[ -z "$tool_use_id" || "$boundary_last" != "true" ]]; then
-    # A credited call that can leave no marker leaves none: a reused one
-    # would otherwise stay for a further post to reuse.
-    rm -f "$pending" 2>/dev/null; return 0
-  fi
+  # A reused marker is consumed FIRST: this call is already allowed and its
+  # confirmation carries the new id, so a re-arm that fails below must not
+  # leave the old id for a further post to reuse. The same holds for a
+  # credited call that can leave no marker at all.
+  [[ "$reused" == "true" ]] && rm -f "$pending" 2>/dev/null
+  [[ -n "$tool_use_id" && "$boundary_last" == "true" ]] || return 0
   local epoch="$now_epoch"
   [[ "$reused" == "true" ]] && epoch="$pending_epoch"
   mkdir -p "$pending_dir" 2>/dev/null || return 0
   chmod 700 "$pending_dir" 2>/dev/null || true
   jq -nc --arg id "$tool_use_id" --argjson epoch "$epoch" --arg project "$project" \
      --arg draft "$credit_draft" --argjson captured "$final_captured" \
-    '{id:$id, epoch:$epoch, project:$project, draft:$draft, captured:$captured}' > "$pending" 2>/dev/null || true
+    '{id:$id, epoch:$epoch, project:$project, draft:$draft, captured:$captured}' > "$pending" 2>/dev/null \
+    || rm -f "$pending" 2>/dev/null
   # Opportunistic prune; -mtime/-delete work on BSD and GNU find. The .seen
   # files are on a week's retention, not a day's: a session older than a
   # day would otherwise lose its confirmation on its next refused post.

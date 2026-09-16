@@ -2050,6 +2050,22 @@ rel=$(mktemp -d); mk_repo "$rel" >/dev/null 2>&1; mkdir -p "$rel/elsewhere"
 ( cd "$rel/elsewhere" && post_payload 'ls' "$rel" sess-R toolu-0 | DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE=data/metrics.jsonl bash "$CONFIRM" 2>/dev/null )
 assert_eq "present" "$([[ -e "$rel/data/.boundary-pending/sess-R.seen" ]] && echo present || echo absent)" "relative metrics: the confirm hook writes .seen under the payload cwd, not its own"
 rm -rf "$rel"
+# A reused marker is consumed before the re-arm is written: the retry is
+# already allowed, its PostToolUse carries the new id, and a re-arm that
+# fails would otherwise leave the old id for a further post to reuse.
+reset497; seed_draft commit-message d497.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+# A jq that fails on the marker write only (its --argjson captured is unique).
+BADJQ=$(mktemp -d)
+printf '#!/usr/bin/env bash\ncase " $* " in *" --argjson captured "*) exit 1 ;; esac\nexec %q "$@"\n' "$REAL_JQ" > "$BADJQ/jq"
+chmod +x "$BADJQ/jq"
+out=$(payload_id "$commit" "$tmpcwd" sess-A toolu-2 | PATH="$BADJQ:$PATH" dflt bash "$HOOK")
+assert_eq "" "$out" "re-arm failure: the retry is still allowed on the reused credit"
+assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "re-arm failure: ...and the old marker is consumed, not left with its old id"
+out=$(payload_id "$commit" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "re-arm failure: a further post cannot reuse the consumed marker"
+rm -rf "$BADJQ"
 # The confirm hook fails open and is silent.
 ec=0; out=$(printf 'not json' | dflt bash "$CONFIRM" 2>/dev/null) || ec=$?
 assert_eq 0 "$ec" "confirm: malformed stdin exits 0"
