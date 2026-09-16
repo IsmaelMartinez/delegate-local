@@ -257,8 +257,8 @@ assert_contains "NO-CLAIMED-ACTION — non-negotiable" "$maintainer_reply_templa
 # list of the caller's asks is correct, and verbatim slots are exempt.
 assert_contains "a numbered list of the caller's asks, one question each, is correct" "$maintainer_reply_template" \
   "maintainer-reply.md STATED-NOT-ASKED keeps a numbered list of the caller's asks correct"
-assert_contains "Outside the supplied opener, sign-off and anchors" "$maintainer_reply_template" \
-  "maintainer-reply.md STATED-NOT-ASKED exempts the verbatim slots from the question-mark rule"
+assert_contains "Outside the supplied opener, lead, sign-off and anchors" "$maintainer_reply_template" \
+  "maintainer-reply.md STATED-NOT-ASKED exempts the verbatim slots, the lead among them, from the question-mark rule"
 if printf '%s' "$maintainer_reply_template" | grep -qi 'questionnaire'; then
   echo "  FAIL  maintainer-reply.md prompt template still calls a list of asks a questionnaire defect"; fail=$((fail+1))
 else
@@ -268,6 +268,39 @@ assert_contains "STATED-NOT-ASKED" "$maintainer_reply_guards" \
   "maintainer-reply.md '## Anti-hallucination guards' names STATED-NOT-ASKED"
 assert_contains "NO-CLAIMED-ACTION" "$maintainer_reply_guards" \
   "maintainer-reply.md '## Anti-hallucination guards' names NO-CLAIMED-ACTION"
+# #517: the judgment sentence is the caller's. `lead` is a required input
+# (no trailing `?`, so delegate.sh exits 2 without it and the boundary hook's
+# nudge names it), and the template places {{lead}} exactly once, after the
+# opener and before the facts, so the reply carries it verbatim in that
+# position. The template no longer asks the model to derive the judgment.
+maintainer_reply_fm=$(awk '/^---[[:space:]]*$/{d++; if (d==2) exit; next} d==1' "$PROMPTS_DIR/maintainer-reply.md")
+if printf '%s\n' "$maintainer_reply_fm" | grep -qE '^[[:space:]]+lead:[[:space:]]*string[[:space:]]*$'; then
+  echo "  PASS  maintainer-reply.md declares lead as a required input (#517)"; pass=$((pass+1))
+else
+  echo "  FAIL  maintainer-reply.md does not declare lead: string as a required input (#517)"; fail=$((fail+1))
+fi
+lead_count=$(printf '%s' "$maintainer_reply_template" | grep -o '{{lead}}' | grep -c '')
+if (( lead_count == 1 )); then
+  echo "  PASS  maintainer-reply.md prompt template carries {{lead}} exactly once (#517)"; pass=$((pass+1))
+else
+  echo "  FAIL  maintainer-reply.md prompt template carries {{lead}} $lead_count times, expected exactly once (#517)"; fail=$((fail+1))
+fi
+opener_line=$(printf '%s\n' "$maintainer_reply_template" | grep -n -F '{{opener}}' | head -1 | cut -d: -f1)
+lead_line=$(printf '%s\n' "$maintainer_reply_template" | grep -n -F '{{lead}}' | head -1 | cut -d: -f1)
+stdin_line=$(printf '%s\n' "$maintainer_reply_template" | grep -n -F '{{stdin}}' | head -1 | cut -d: -f1)
+if [[ -n "$opener_line" && -n "$lead_line" && -n "$stdin_line" ]] \
+   && (( opener_line < lead_line && lead_line < stdin_line )); then
+  echo "  PASS  maintainer-reply.md prompt template places {{lead}} after {{opener}} and before {{stdin}} (#517)"; pass=$((pass+1))
+else
+  echo "  FAIL  maintainer-reply.md prompt template must place {{lead}} after {{opener}} and before {{stdin}} (opener=$opener_line lead=$lead_line stdin=$stdin_line) (#517)"; fail=$((fail+1))
+fi
+assert_contains "ASK-OR-NONE — first match wins, non-negotiable" "$maintainer_reply_template" \
+  "maintainer-reply.md prompt template decides the question with ASK-OR-NONE (#517)"
+if printf '%s' "$maintainer_reply_template" | grep -qE 'either specific praise for what the contributor did, or a plain statement of the confirmed cause'; then
+  echo "  FAIL  maintainer-reply.md prompt template still asks the model to derive the praise-or-cause sentence (#517)"; fail=$((fail+1))
+else
+  echo "  PASS  maintainer-reply.md prompt template no longer asks the model to derive the judgment (#517)"; pass=$((pass+1))
+fi
 
 # pr-description.md: EVIDENCE outranks SHAPE explicitly, and the ban is on
 # boxes that assert a verification, not on every `- [x]`.
@@ -468,8 +501,15 @@ for base in maintainer-reply maintainer-review-reply; do
   else
     echo "  FAIL  $base.md does not declare ask: string? (#471)"; fail=$((fail+1))
   fi
-  assert_contains "If the ask block below is empty, there is no item 3" "$rf_template" \
-    "$base.md prompt template has a no-ask branch (#471)"
+  # The item number differs: the lead (#517) makes the ask item 4 in
+  # maintainer-reply, and ASK-OR-NONE is what names the empty block there.
+  if [[ "$base" == maintainer-reply ]]; then
+    assert_contains "When ASK-OR-NONE says there is none, there is no item 4" "$rf_template" \
+      "$base.md prompt template has a no-ask branch (#471)"
+  else
+    assert_contains "If the ask block below is empty, there is no item 3" "$rf_template" \
+      "$base.md prompt template has a no-ask branch (#471)"
+  fi
   assert_contains "Never ask the contributor to confirm, approve or authorise a merge" "$rf_template" \
     "$base.md prompt template forbids asking the contributor to confirm a merge (#471)"
   # #520: {{recipient}} may appear only inside the "=== Recipient handle
