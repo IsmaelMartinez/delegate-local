@@ -211,21 +211,45 @@ compute_tokens_local() {
   echo $(( (pchars + cchars + ochars) / 4 ))
 }
 
-# capture_draft — persist the generated draft beside the metrics row that
-# scores it and echo the basename for the row's `draft_file`. With the shipped
-# text from `delegate-feedback.sh --final` a MISS becomes a (generated,
-# shipped) pair the calibration loop can diff. Local-only: the files sit under
-# DELEGATE_LOCAL_DATA_DIR and inherit the sensitivity of the piped context.
-# DELEGATE_NO_DRAFT_CAPTURE=1 opts out; skipped when metrics are off.
+# capture_file <text> <path> <max> — one captured file, written under
+# `umask 077` then 600 so there is no window between create and chmod.
+# head -c bounds a runaway generation without failing the call; the marker
+# keeps a truncated file from being read later as complete. Returns 1 when
+# nothing was written, which the callers treat as "no file to name".
+capture_file() {
+  local text="$1" path="$2" max="$3" bytes
+  # Bytes, not ${#text}: that counts characters under a UTF-8 locale.
+  bytes=$(printf '%s' "$text" | wc -c | tr -d '[:space:]')
+  if [[ "$bytes" =~ ^[0-9]+$ ]] && (( bytes > 10#$max )); then
+    ( umask 077
+      { printf '%s' "$text" | head -c "$max"; printf '\n[truncated at %s bytes by DELEGATE_DRAFT_MAX_BYTES]\n' "$max"; } \
+        > "$path" ) 2>/dev/null || return 1
+  else
+    ( umask 077; printf '%s' "$text" > "$path" ) 2>/dev/null || return 1
+  fi
+  chmod 600 "$path" 2>/dev/null || true
+}
+
+# capture_draft <draft> <ts> [<input>] — persist the generated draft beside
+# the metrics row that scores it and, when given, the rendered input the model
+# saw (#516), under one stem; echo the basenames for the row's `draft_file`
+# and `input_file`, tab-separated, the input absent when none was written.
+# With the shipped text from `delegate-feedback.sh --final` a MISS becomes a
+# (generated, shipped) pair the calibration loop can diff, and the input is
+# what that pair is scored against: which supplied anchors each half carried,
+# which supplied sentences the draft handed back. Local-only: the files sit
+# under DELEGATE_LOCAL_DATA_DIR and inherit the sensitivity of the piped
+# context; the input holds all of it. One cap, one retention, one opt-out
+# for both files: DELEGATE_NO_DRAFT_CAPTURE=1 writes neither, and both are
+# skipped when metrics are off.
 capture_draft() {
-  local text="$1" ts="$2" stem dir max bytes
+  local text="$1" ts="$2" input="${3:-}" stem dir max names
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
   [[ "${DELEGATE_NO_DRAFT_CAPTURE:-}" == "1" ]] && return 0
   [[ -n "$text" ]] || return 0
   dir="$(dirname "$metrics_file")/drafts"
   mkdir -p "$dir" 2>/dev/null || return 0
-  # 700 on the directory, 600 on the files, writes under `umask 077` so there
-  # is no window between create and chmod.
+  # 700 on the directory, 600 on the files.
   chmod 700 "$dir" 2>/dev/null || true
   # The ts alone is not a safe name: second precision, and parallel callers
   # collide. The span id makes the stem unique; the ts stays in front so the
@@ -241,25 +265,21 @@ capture_draft() {
     echo "delegate: DELEGATE_DRAFT_MAX_BYTES='$max' is not a positive integer — using 65536" >&2
     max=65536
   fi
-  # Bytes, not ${#text}: that counts characters under a UTF-8 locale.
-  bytes=$(printf '%s' "$text" | wc -c | tr -d '[:space:]')
-  # head -c bounds a runaway generation without failing the call. The marker
-  # keeps a truncated file from being read later as a complete draft.
-  if [[ "$bytes" =~ ^[0-9]+$ ]] && (( bytes > 10#$max )); then
-    ( umask 077
-      { printf '%s' "$text" | head -c "$max"; printf '\n[truncated at %s bytes by DELEGATE_DRAFT_MAX_BYTES]\n' "$max"; } \
-        > "$dir/$stem.draft.txt" ) 2>/dev/null || return 0
-  else
-    ( umask 077; printf '%s' "$text" > "$dir/$stem.draft.txt" ) 2>/dev/null || return 0
+  capture_file "$text" "$dir/$stem.draft.txt" "$max" || return 0
+  names="$stem.draft.txt"
+  # The input shares the draft's stem, so the pair maps back to it the way a
+  # final does (ADR 0029), and the row names it only when it was written.
+  if [[ -n "$input" ]] && capture_file "$input" "$dir/$stem.input.txt" "$max"; then
+    names="$names"$'\t'"$stem.input.txt"
   fi
-  chmod 600 "$dir/$stem.draft.txt" 2>/dev/null || true
   # Retention prune, inline so there is no cron dependency. 0 disables.
-  # -mtime +N behaves the same on BSD and GNU find.
+  # -mtime +N behaves the same on BSD and GNU find; '*.txt' takes drafts,
+  # inputs and finals together.
   local keep="${DELEGATE_DRAFT_RETENTION_DAYS:-14}"
   if [[ "$keep" =~ ^[0-9]+$ ]] && (( 10#$keep > 0 )); then
     find "$dir" -type f -name '*.txt' -mtime "+$keep" -exec rm -f {} + 2>/dev/null || true
   fi
-  printf '%s' "$stem.draft.txt"
+  printf '%s' "$names"
 }
 
 # Returns 0 only when a row was appended: the meta line and the verdict nudge
@@ -270,7 +290,7 @@ log_metric() {
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
     s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}" \
     checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}" checks_failed_names="${22:-}" \
-    draft_file="${23:-}" retried="${24:-}" retry_chars="${25:-}"
+    draft_file="${23:-}" retried="${24:-}" retry_chars="${25:-}" input_file="${26:-}"
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$(( ochars + ${retry_chars:-0} ))")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -290,7 +310,7 @@ log_metric() {
     --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
     --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
     --arg crun "$checks_run" --arg cfail "$checks_failed" --arg cfix "$checks_autofixed" \
-    --arg cnames "$checks_failed_names" --arg draft "$draft_file" \
+    --arg cnames "$checks_failed_names" --arg draft "$draft_file" --arg input "$input_file" \
     --arg retried "$retried" --arg retry_chars "$retry_chars" \
     '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
      + (if $recipe != "" then {recipe:$recipe} else {} end)
@@ -305,6 +325,7 @@ log_metric() {
      + (if ($crun != "" and ($crun|tonumber) > 0) then {checks_run:($crun|tonumber), checks_failed:($cfail|tonumber), checks_autofixed:($cfix|tonumber)} else {} end)
      + (if $cnames != "" then {checks_failed_names:($cnames|split(","))} else {} end)
      + (if $draft != "" then {draft_file:$draft} else {} end)
+     + (if $input != "" then {input_file:$input} else {} end)
      + (if $retried != "" then {retried:true, retry_chars:($retry_chars|tonumber)} else {} end)' \
     >> "$metrics_file" 2>/dev/null
 }
@@ -1538,13 +1559,18 @@ output_chars=${#output}
 tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$(( output_chars + ${retry_chars:-0} ))")
 
 draft_file=""
+input_file=""
 if (( status == 0 )); then
-  draft_file=$(capture_draft "$output" "$ts_start")
+  # The rendered input is stored for recipe calls only (#516): a recipe is
+  # what the pair calibrates, and a bare call's context has no recipe to be
+  # scored against. After a retry $full_input carries the appended notice,
+  # which is exactly the prompt that produced the draft stored beside it.
+  IFS=$'\t' read -r draft_file input_file <<<"$(capture_draft "$output" "$ts_start" "${recipe:+$full_input}")"
 fi
 # row_written is what the meta line's ts/id and the verdict nudge are gated
 # on: they name the row this call wrote, so they are only true when one was.
 row_written=false
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}" && row_written=true
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}" "$input_file" && row_written=true
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project" "${retry_chars:-}"
 
 # The stderr line SKILL.md teaches the assistant to read after every

@@ -5185,14 +5185,15 @@ case "$draft_name" in
   *) echo "  FAIL  draft-capture: unexpected draft filename '$draft_name'"; fail=$((fail+1)) ;;
 esac
 # 41a-i. Two delegations in the same second must not clobber each other.
-before_count=$(ls "$data/drafts" | grep -c '')
+# Drafts only: a recipe call also stores its input beside each draft (#516).
+before_count=$(ls "$data/drafts" | grep -c '\.draft\.txt$')
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
-after_count=$(ls "$data/drafts" | grep -c '')
+after_count=$(ls "$data/drafts" | grep -c '\.draft\.txt$')
 if (( after_count == before_count + 2 )); then
   echo "  PASS  draft-capture: two same-second delegations write two distinct files"; pass=$((pass+1))
 else
@@ -5223,6 +5224,8 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_DRAFT_CAPTURE=1 \
   bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
 assert_eq "false" "$(tail -1 "$metrics" | jq -r 'has("draft_file")')" \
   "draft-capture: DELEGATE_NO_DRAFT_CAPTURE=1 writes no draft_file field"
+assert_eq "false" "$(tail -1 "$metrics" | jq -r 'has("input_file")')" \
+  "draft-capture: DELEGATE_NO_DRAFT_CAPTURE=1 writes no input_file field either"
 if [[ -d "$data/drafts" ]]; then
   echo "  FAIL  draft-capture: opt-out must not create the drafts directory"; fail=$((fail+1))
 else
@@ -5267,6 +5270,81 @@ assert_contains "is not a positive integer" "$out" "draft-capture: malformed byt
 draft_name=$(tail -1 "$metrics" | jq -r '.draft_file // ""')
 assert_eq "short" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
   "draft-capture: malformed byte cap still captures under the default bound"
+# 41g. The rendered input the model saw is stored beside the draft under the
+# same stem and named on the row (#516), so the calibration loop can score the
+# pair against the supplied facts without the caller re-supplying them.
+rm -rf "$data"; mkdir -p "$data"
+cat > "$prompts/capin.md" <<'EOF'
+---
+tier: prose
+---
+# capin
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+RENDERED-TEMPLATE-MARKER
+Facts:
+{{stdin}}
+```
+
+## Calibration notes
+n/a
+EOF
+make_mock_curl_think "$tmp" 'a draft worth keeping around'
+( umask 000
+  printf 'the distinctive piped fact about widget-7\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe capin prose "go" >/dev/null 2>&1 )
+row=$(tail -1 "$metrics")
+draft_name=$(printf '%s' "$row" | jq -r '.draft_file // ""')
+input_name=$(printf '%s' "$row" | jq -r '.input_file // ""')
+assert_eq "${draft_name%.draft.txt}.input.txt" "$input_name" \
+  "input-capture: input_file shares the draft's stem"
+if [[ -n "$input_name" && -f "$data/drafts/$draft_name" && -f "$data/drafts/$input_name" ]]; then
+  echo "  PASS  input-capture: draft and input both exist on disk"; pass=$((pass+1))
+else
+  echo "  FAIL  input-capture: draft or input missing (draft='$draft_name' input='$input_name')"; fail=$((fail+1))
+fi
+input_body=$(cat "$data/drafts/$input_name" 2>/dev/null)
+assert_contains "RENDERED-TEMPLATE-MARKER" "$input_body" "input-capture: file holds the recipe template"
+assert_contains "the distinctive piped fact about widget-7" "$input_body" \
+  "input-capture: file holds the piped context, substituted for {{stdin}}"
+assert_eq $'RENDERED-TEMPLATE-MARKER\nFacts:\nthe distinctive piped fact about widget-7\n\ngo' "$input_body" \
+  "input-capture: file is exactly the rendered prompt the model was sent"
+assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$data/drafts/$input_name")" \
+  "input-capture: input file is private (600) under a permissive umask"
+# 41g-i. A bare call is unchanged: the draft alone, no input file, no field.
+printf 'bare piped context\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+draft_name=$(printf '%s' "$row" | jq -r '.draft_file // ""')
+assert_eq "true" "$(printf '%s' "$row" | jq -r 'has("draft_file")')" \
+  "input-capture: a bare call still captures its draft"
+assert_eq "false" "$(printf '%s' "$row" | jq -r 'has("input_file")')" \
+  "input-capture: a bare call writes no input_file field"
+if [[ -n "$draft_name" && ! -e "$data/drafts/${draft_name%.draft.txt}.input.txt" ]]; then
+  echo "  PASS  input-capture: a bare call writes no input file"; pass=$((pass+1))
+else
+  echo "  FAIL  input-capture: a bare call wrote an input file beside '$draft_name'"; fail=$((fail+1))
+fi
+# 41g-ii. Retention prunes the input with the draft it belongs to.
+old_stem="20200101T000000Z-deadbeef"
+printf 'old' > "$data/drafts/$old_stem.draft.txt"
+printf 'old' > "$data/drafts/$old_stem.input.txt"
+touch -t 202001010000 "$data/drafts/$old_stem.draft.txt" "$data/drafts/$old_stem.input.txt"
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_RETENTION_DAYS=1 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capin prose "go" >/dev/null 2>&1
+if [[ ! -e "$data/drafts/$old_stem.draft.txt" && ! -e "$data/drafts/$old_stem.input.txt" ]]; then
+  echo "  PASS  input-capture: retention removes the expired draft and its input"; pass=$((pass+1))
+else
+  echo "  FAIL  input-capture: retention left $(ls "$data/drafts" | grep -c "^$old_stem") expired file(s)"; fail=$((fail+1))
+fi
 rm -rf "$tmp" "$data"
 
 # --- 42. body_max_words: the body is everything after the first blank line;
