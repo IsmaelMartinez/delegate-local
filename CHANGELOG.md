@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.37.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.36.0...v0.37.0) (2026-09-16)
+
+
+### Features
+
+* maintainer-reply takes the lead sentence from the caller ([#531](https://github.com/IsmaelMartinez/delegate-local/issues/531)) ([540deb3](https://github.com/IsmaelMartinez/delegate-local/commit/540deb36eda91b43da4876bddc40d462aa8ebfa6))
+
+
+### Bug Fixes
+
+* move pr-review-body from warn to enforce mode ([#529](https://github.com/IsmaelMartinez/delegate-local/issues/529)) ([bc91b5e](https://github.com/IsmaelMartinez/delegate-local/commit/bc91b5ed43cbc1781ccf94efaa210176ece09183)), closes [#521](https://github.com/IsmaelMartinez/delegate-local/issues/521)
+
+
+### Documentation
+
+* record the reply-recipes milestone status in the ROADMAP ([#532](https://github.com/IsmaelMartinez/delegate-local/issues/532)) ([a08c0b3](https://github.com/IsmaelMartinez/delegate-local/commit/a08c0b3fe1bdabbaa92d7eae1b5c8a505e9ea74c))
+
 ## [0.36.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.35.2...v0.36.0) (2026-09-16)
 
 
