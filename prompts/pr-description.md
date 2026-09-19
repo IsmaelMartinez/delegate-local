@@ -57,6 +57,11 @@ The recent merged-PR examples are the shape authority. Match their length, their
 Wrong (examples were two sentences of prose): ## Summary\n- Adds X\n- Refactors Y\n\n### Rationale\n...\n\n## Test plan\n- [ ] Run the suite
 Correct (examples were two sentences of prose): Adds X so that Y no longer needs Z. The behaviour is unchanged for existing callers.
 
+PARAGRAPHS — the examples set the paragraph count, the Context does not:
+When the examples are prose without headings, match how many paragraphs they use, never how many the Context has. An example of several paragraphs, one for each thing it did (the cause, the change, the evidence), means several paragraphs here too: one for each distinct change the stats and the Context describe, a blank line between them, each naming the files or names that change lives in, and never one block that runs every change together. The Context is usually one paragraph because it is a note to you; its paragraphing is not the shape to copy.
+Wrong (examples were four paragraphs, one per change; Context was one paragraph): <every change, the reason and the evidence run together in one paragraph of the Context's length>
+Correct (same examples): <one paragraph: the first change and the files it touches>\n\n<one paragraph: the second change and the files it touches>\n\n<one paragraph: the evidence, as the Context states it>
+
 TEST-PLAN SOURCING — applies only when the examples use a test plan:
 Every test-plan item MUST correspond to something stated in the Context. If the Context names no verifiable checks, omit the section rather than inventing items to fill it.
 Wrong: - [x] Verified incremental sync still works (nothing in the Context says this was run)
@@ -141,6 +146,10 @@ Adds X so that Y no longer needs Z. The behaviour is unchanged for existing call
 Verify before recording verdict: the output's shape matches the anchor examples' shape (headings only if the examples used headings — a multi-section body against terse examples is a MISS, not a bonus), no `PR #NN` prefix in any heading, no fabricated tool output (any code block claiming to show CLI / metrics output should be cross-checked against the actual format), and — where a test plan is present at all — every item traces to something stated in the Context and no box is pre-checked. A single `- [x]` is an automatic MISS: it asserts a verification that did not happen.
 
 ## Calibration notes
+
+### 2026-09-19 — PARAGRAPHS: the draft collapses to one paragraph where the examples use several
+
+Observed on 10 of 10 pr-description pairs captured on 2026-09-19 across ismaelmartinez.me.uk, teams-for-linux, pr-agent and delegate-local, and on docker-agent and delegate-local in the fortnight before ("returned the supplied context as one paragraph with no shaping", "one 120-word run-on sentence"): every draft was one paragraph (two in two cases) while every shipped body was three to seven. Three drafts were terse summaries a quarter the length of what shipped (147 to 593, 224 to 1741, 344 to 2476 chars), dropping the per-change items a reviewer checks; three carried the same content reflowed into one block (2027 to 2909 chars into seven paragraphs). The rendered input showed the cause: the exemplar PR #317 was five paragraphs of prose with no headings, the Context var was one 2.3 KB paragraph, and the draft matched the Context's paragraphing. The SHAPE rule named "length, section structure, register" and anchored only two shapes, "a sentence or two of prose" against headed sections, so the middle shape the exemplar had was unnamed. This entry adds the PARAGRAPHS guard: the examples set the paragraph count, one paragraph per distinct change, and the Context's paragraphing is never the shape. It is the first prompt-text attempt on this defect. Gated before merge with `replay-recipe.sh` on 18 recovered cases (16 rejections, 2 kept); the replay's `shape` signal (one paragraph against three or more shipped) fired on 15 of 18 under the previous template. Re-measure after ~10 more calls; if the collapse survives, the next attempt is a check against the exemplar's paragraph count, as `no_invented_headings` checks its headings.
 
 ### 2026-08-26 — `recent_prs` declared as an echo-guarded exemplar (issue #428)
 
