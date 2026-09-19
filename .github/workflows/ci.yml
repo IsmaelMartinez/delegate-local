@@ -111,6 +111,8 @@ jobs:
 
       - name: Self-improve tests
         run: bash tests/test-self-improve.sh
+      - name: replay-recipe unit tests
+        run: bash tests/test-replay-recipe.sh
 
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh

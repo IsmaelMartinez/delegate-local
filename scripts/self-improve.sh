@@ -91,25 +91,12 @@ echo "Watermark:  ${prev_ts:-(none — first run, reporting the whole corpus)}"
 echo "Newest row: $newest_ts"
 echo "New delegations since watermark: $new_count"
 
-# The feedback-to-delegation join, defined once and interpolated into every
-# jq program below. Keyed on otel_span_id first and ts second (#481): ts is
-# second-precision and INDEX(.ts) kept one row per second, so a verdict on
-# the other sibling was filed under the wrong recipe. `pkey` collapses
-# several verdicts on one delegation to the latest. A feedback row with
-# neither ref_id nor ref_ts is skipped everywhere (`referenced`), as
-# metrics-summary.sh skips it: keyed on the empty reference, every such row
-# would share one pkey.
-parent_join='
-  def referenced: .source == "feedback" and (.ref_id != null or .ref_ts != null);
-  (map(select((.source // "delegate") == "delegate" and .ts != null))) as $dl
-  | (($dl | INDEX("ts:" + .ts)) + ($dl | map(select(.otel_span_id != null)) | INDEX("id:" + .otel_span_id))) as $d
-  | def parent: $d["id:" + (.ref_id // "")] // $d["ts:" + (.ref_ts // "")];
-  def pkey: parent as $p
-    | if $p == null then (if (.ref_id // "") != "" then "id:" + .ref_id else "ts:" + .ref_ts end)
-      elif $p.otel_span_id != null then "id:" + $p.otel_span_id
-      else "ts:" + $p.ts end;
-  def latest_verdicts: [.[] | select(referenced)] | sort_by(.ts) | INDEX(pkey) | [.[]];
-'
+# The feedback-to-delegation join (`parent_join`, interpolated into every jq
+# program below) and the pair scorers (`salient`, `list_markers`,
+# `sentences`) are shared with replay-recipe.sh, so a rejection's DROPPED
+# list and a replay's dropped count are one measurement.
+# shellcheck source=lib/pair-score.sh
+. "$script_dir/lib/pair-score.sh"
 
 # A ref_ts-only verdict on a second shared by several delegations cannot say
 # which it scored; say so rather than report a guess. Captured pairs are
@@ -171,6 +158,41 @@ jq -rs --argjson days "$window_days" '
 echo
 
 # ---------------------------------------------------------------------------
+# Section 2b — the same outcomes split by the template that produced them,
+# for every recipe that ran under more than one template in the window: the
+# online half of the replay gate (docs/self-improvement-loop.md, "Revert").
+# A row from before the template hash was recorded is one bucket,
+# `(unhashed)`, so the pre-edit baseline sits beside the first hashed
+# template rather than vanishing. Silent when no recipe changed template.
+# ---------------------------------------------------------------------------
+template_lines=$(jq -rs --argjson days "$window_days" '
+  (now - ($days * 86400)) as $cut
+  | '"$parent_join"'
+  latest_verdicts
+  | map(select(((parent.ts // "") | if . == "" then 0 else (fromdateiso8601? // 0) end) > $cut))
+  | map({r: (parent.recipe // "(bare)"),
+         sha: (parent.template_sha // "(unhashed)"),
+         ts: (parent.ts // ""),
+         u: (if .kept then "kept" elif .scaffold then "scaffold" else "rewrote" end)})
+  | group_by(.r)
+  | map(select((map(.sha) | unique | length) > 1))
+  | map(.[0].r as $r
+        | group_by(.sha)
+        | map({recipe: $r, sha: .[0].sha, since: (map(.ts) | min), n: length,
+               kept: (map(select(.u == "kept")) | length),
+               scaffold: (map(select(.u == "scaffold")) | length),
+               rewrote: (map(select(.u == "rewrote")) | length)})
+        | sort_by(.since) | reverse)
+  | .[] | .[]
+  | "  \(.recipe)  template=\(.sha)  since=\(.since)  n=\(.n)  kept=\(.kept)  scaffold=\(.scaffold)  rewrote=\(.rewrote)  usable=\(if .n > 0 then ((.kept + .scaffold) * 100 / .n | floor) else 0 end)%"
+' "$metrics_file")
+if [[ -n "$template_lines" ]]; then
+  echo "--- per-template outcomes, last ${window_days}d (recipes that changed template, newest first) ---"
+  echo "$template_lines"
+  echo
+fi
+
+# ---------------------------------------------------------------------------
 # Section 3 — deterministic check failures. These need no interpretation: the
 # wrapper already decided the output broke a declared constraint, so any
 # cluster here is the cheapest possible fix target.
@@ -199,26 +221,6 @@ echo
 # ---------------------------------------------------------------------------
 echo "--- rejected drafts since watermark ---"
 
-salient() {
-  # Emit one salient token per line, deduped, lowercased for comparison.
-  [[ -f "$1" ]] || return 0
-  {
-    grep -oE '`[^`]+`' "$1" 2>/dev/null | tr -d '`'
-    grep -oE '#[0-9]+' "$1" 2>/dev/null
-    grep -oE '[A-Za-z0-9_][A-Za-z0-9_-]*\.[A-Za-z0-9_]+[A-Za-z0-9_.:/-]*' "$1" 2>/dev/null
-    grep -oE '[0-9]+' "$1" 2>/dev/null | awk 'length($0) >= 2'
-  } | tr '[:upper:]' '[:lower:]' | sed 's/[.,;:)]*$//' | awk 'NF' | sort -u
-}
-
-list_markers() {
-  # grep -c prints 0 and exits 1 on no match, so a `|| echo 0` fallback
-  # would append a second zero.
-  local n
-  [[ -f "$1" ]] || { echo 0; return 0; }
-  n=$(grep -cE '^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]' "$1" 2>/dev/null)
-  echo "${n:-0}"
-}
-
 # supplied <input file> <recipe> — the caller's half of a stored input: every
 # line of it that is not a line of the recipe's PRE-substitution template,
 # whole-line and literal, the comparison no_example_echo makes. The template
@@ -242,22 +244,6 @@ supplied() {
   else
     cat "$1"
   fi
-}
-
-# sentences — one per line, terminator dropped, normalised, under the 40-char
-# floor discarded: the unit, normalisation and floor no_context_echo applies
-# in delegate.sh (split_sentences, echo_normalise, echo_matches), so the
-# sentence the bundle names is the one the wrapper would have flagged. The
-# sed is echo_normalise's, rule for rule and in its order: trim, the
-# Wrong:/Correct: label, the commit type prefix, a trailing (#NNN). Not
-# shared because the helpers sit inside delegate.sh's checks region.
-sentences() {
-  awk '{ gsub(/[.?!]+[[:space:]]+/, "\n"); sub(/[.?!]+[[:space:]]*$/, "") } 1' \
-    | sed -E -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-             -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
-             -e 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' \
-             -e 's/[[:space:]]*\(#[0-9]+\)$//' \
-    | awk 'length($0) >= 40'
 }
 
 # The supplied half of the input, extracted once per rejection: salient reads

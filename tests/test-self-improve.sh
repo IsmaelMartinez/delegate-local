@@ -495,6 +495,40 @@ assert_contains "draft:  $tmp/drafts/I1.draft.txt" "$out" "no input: the draft s
 assert_contains "final:  $tmp/drafts/I1.final.txt" "$out" "no input: the final still renders"
 assert_contains "rejections=1  with draft=1  with input=0  with final=1" "$out" \
   "no input: capture coverage shows the blind spot"
+assert_not_contains "per-template outcomes" "$out" \
+  "per-template: a corpus where no recipe changed template prints no section"
+rm -rf "$tmp"
+
+# --- Per-template outcomes: the online half of the replay gate. A recipe
+# that ran under two templates in the window gets one line per template,
+# newest first, with the unhashed rows as their own bucket; a recipe that
+# ran under one template gets nothing. ---
+tmp=$(mktemp -d)
+t1=$(iso_ago 7200); t2=$(iso_ago 5400); t3=$(iso_ago 3600); t4=$(iso_ago 1800); t5=$(iso_ago 900)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$t1","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","duration_ms":1,"exit_status":0,"estimated_tokens_avoided":1,"otel_span_id":"a1"}
+{"ts":"$(iso_ago 7190)","source":"feedback","ref_id":"a1","kept":false,"reason":"r","verdict_source":"agent"}
+{"ts":"$t2","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","duration_ms":1,"exit_status":0,"estimated_tokens_avoided":1,"otel_span_id":"a2","template_sha":"oldoldoldold"}
+{"ts":"$(iso_ago 5390)","source":"feedback","ref_id":"a2","kept":false,"scaffold":true,"reason":"r","verdict_source":"agent"}
+{"ts":"$t3","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","duration_ms":1,"exit_status":0,"estimated_tokens_avoided":1,"otel_span_id":"a3","template_sha":"newnewnewnew"}
+{"ts":"$(iso_ago 3590)","source":"feedback","ref_id":"a3","kept":true,"verdict_source":"agent"}
+{"ts":"$t4","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","duration_ms":1,"exit_status":0,"estimated_tokens_avoided":1,"otel_span_id":"a4","template_sha":"newnewnewnew"}
+{"ts":"$(iso_ago 1790)","source":"feedback","ref_id":"a4","kept":false,"reason":"r","verdict_source":"agent"}
+{"ts":"$t5","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","duration_ms":1,"exit_status":0,"estimated_tokens_avoided":1,"otel_span_id":"c1","template_sha":"cmcmcmcmcmcm"}
+{"ts":"$(iso_ago 890)","source":"feedback","ref_id":"c1","kept":true,"verdict_source":"agent"}
+EOF
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
+assert_contains "per-template outcomes" "$out" "per-template: a recipe that changed template gets the section"
+section=$(printf '%s\n' "$out" | sed -n '/per-template outcomes/,/^$/p')
+assert_contains "maintainer-reply  template=newnewnewnew  since=$t3  n=2  kept=1  scaffold=0  rewrote=1  usable=50%" "$section" \
+  "per-template: the newest template's line carries its first ts, n and usable rate"
+assert_contains "maintainer-reply  template=oldoldoldold  since=$t2  n=1  kept=0  scaffold=1  rewrote=0  usable=100%" "$section" \
+  "per-template: the previous template's line sits beside it"
+assert_contains "maintainer-reply  template=(unhashed)  since=$t1  n=1  kept=0  scaffold=0  rewrote=1  usable=0%" "$section" \
+  "per-template: rows from before the hash are their own bucket"
+first_line=$(printf '%s\n' "$section" | grep -E '^  maintainer-reply' | head -1)
+assert_contains "template=newnewnewnew" "$first_line" "per-template: newest template first"
+assert_not_contains "commit-message" "$section" "per-template: a recipe under one template is not listed"
 rm -rf "$tmp"
 
 echo

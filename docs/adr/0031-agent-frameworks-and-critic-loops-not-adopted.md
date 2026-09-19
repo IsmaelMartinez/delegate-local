@@ -101,3 +101,37 @@ deterministic way to cycle. Keeping the spike harness on main as an eval
 suite: rejected under the lean-core reset's principle of not adding gates;
 the input capture (#516) is what makes a future eval buildable from the
 corpus without transcript mining.
+
+## Amendment, 2026-09-19: a replay harness is kept
+
+The last alternative above was rejected too broadly. What the lean-core
+principle protects is what a consumer has to take in, and what the loop in
+`docs/self-improvement-loop.md` lacked was not a gate on PRs but a
+measurement a session could take in minutes. Online, the agent's verdicts
+need about 134 tracked delegations per arm to distinguish a fifteen-point
+lift in usable rate at a one-sided 5% test with 80% power, which at the
+reply recipes' eight to ten calls a day is two to three weeks per edit; the
+procedure could rank evidence but never confirm a fix, and the 2-hourly
+session that was meant to run it had been dead since 2026-08-27 without
+anyone noticing. Offline, the same property this ADR relied on cuts the
+other way: greedy decoding is deterministic, so re-rendering a stored case
+under two templates is a paired comparison with no sampling noise, and six
+wins to no losses is already p = 0.016 on a sign test.
+
+So a replay harness is kept, as maintainer tooling and not a CI gate. Every
+recipe call stores its structured inputs (the piped stdin, each `--var`, the
+positional prompt) as `<stem>.inputs.json` beside the rendered input, under
+the same cap, retention and opt-out, and carries the template's content hash
+on the row as `template_sha`. `scripts/replay-recipe.sh` reads the cases the
+corpus already holds (a delegation with its inputs, a verdict and the shipped
+text, the draft itself when the verdict was kept), re-renders them through
+`delegate.sh` under the live template and a candidate, scores each output
+with the bundle's own DROPPED and ECHOED measures plus the wrapper's failed
+checks, and prints ACCEPT, REJECT or INCONCLUSIVE from a sign test over
+per-case wins. `self-improve.sh` splits a recipe's outcomes by template hash,
+which is the post-merge read and the revert signal. Nothing in the installed
+runtime changed shape: one request, at most one retry, no critic. The decision
+above stands for the runtime; this amendment is about how the loop measures
+its own edits, and it does not revive the spike's Python harness, whose
+maintainer-reply cases cannot be replayed under the post-#517 template in any
+case because their `lead` values were never stored.

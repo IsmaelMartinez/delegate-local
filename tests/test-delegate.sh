@@ -1397,6 +1397,10 @@ metric_line=$(cat "$metrics")
 assert_contains '"exit_status":3' "$metric_line" "canary timeout: metrics row tagged status:3"
 assert_contains '"recipe":"canary-recipe"' "$metric_line" "canary timeout: metrics row carries recipe name"
 assert_contains '"model":"qwen3.6:35b-a3b"' "$metric_line" "canary timeout: metrics row carries resolved model"
+# A failed recipe row still names the template that was live.
+. "$REPO/scripts/lib/recipe.sh"
+assert_contains "\"template_sha\":\"$(recipe_template_sha "$prompts/canary-recipe.md")\"" "$metric_line" \
+  "canary timeout: metrics row carries template_sha"
 # Verdict nudge must NOT fire on a status:3 exit.
 if echo "$stderr_content" | grep -q "record verdict"; then
   echo "  FAIL  canary timeout: verdict nudge leaked"; fail=$((fail+1))
@@ -5344,6 +5348,143 @@ if [[ ! -e "$data/drafts/$old_stem.draft.txt" && ! -e "$data/drafts/$old_stem.in
   echo "  PASS  input-capture: retention removes the expired draft and its input"; pass=$((pass+1))
 else
   echo "  FAIL  input-capture: retention left $(ls "$data/drafts" | grep -c "^$old_stem") expired file(s)"; fail=$((fail+1))
+fi
+# 41h. The structured inputs — piped stdin, every --var as passed, the
+# positional prompt — are stored as JSON under the same stem and named on the
+# row as inputs_file, and the row carries the template's content hash, so
+# replay-recipe.sh can render the same case under another template and the
+# outcomes before and after an edit can be told apart.
+rm -rf "$data"; mkdir -p "$data"
+cat > "$prompts/capvar.md" <<'EOF'
+---
+tier: prose
+inputs:
+  stdin: string
+  who: string
+  note: string?
+---
+# capvar
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+To {{who}}:
+{{stdin}}
+Note: {{note}}
+```
+
+## Calibration notes
+n/a
+EOF
+make_mock_curl_think "$tmp" 'a draft'
+printf 'fact one about widget-7\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=alice --var "note=$(printf 'two\nlines')" prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+draft_name=$(printf '%s' "$row" | jq -r '.draft_file // ""')
+inputs_name=$(printf '%s' "$row" | jq -r '.inputs_file // ""')
+assert_eq "${draft_name%.draft.txt}.inputs.json" "$inputs_name" \
+  "inputs-capture: inputs_file shares the draft's stem"
+inputs_path="$data/drafts/$inputs_name"
+if [[ -n "$inputs_name" && -f "$inputs_path" ]]; then
+  echo "  PASS  inputs-capture: the inputs file exists on disk"; pass=$((pass+1))
+else
+  echo "  FAIL  inputs-capture: inputs file missing (inputs='$inputs_name')"; fail=$((fail+1))
+fi
+assert_eq "capvar" "$(jq -r '.recipe' "$inputs_path" 2>/dev/null)" "inputs-capture: file names the recipe"
+assert_eq "fact one about widget-7" "$(jq -r '.stdin' "$inputs_path" 2>/dev/null)" \
+  "inputs-capture: file holds the piped stdin"
+assert_eq "alice" "$(jq -r '.vars.who' "$inputs_path" 2>/dev/null)" "inputs-capture: file holds each --var by key"
+assert_eq $'two\nlines' "$(jq -r '.vars.note' "$inputs_path" 2>/dev/null)" \
+  "inputs-capture: a --var value keeps its newline"
+assert_eq "go" "$(jq -r '.prompt' "$inputs_path" 2>/dev/null)" "inputs-capture: file holds the positional prompt"
+assert_eq "prose" "$(jq -r '.tier' "$inputs_path" 2>/dev/null)" "inputs-capture: file holds the resolved tier"
+assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$inputs_path")" \
+  "inputs-capture: inputs file is private (600)"
+# The hash covers the frontmatter and the prompt block, the parts that shape
+# the output, and is computed by the helper both scripts share.
+. "$REPO/scripts/lib/recipe.sh"
+expected_sha=$(recipe_template_sha "$prompts/capvar.md")
+assert_eq "$expected_sha" "$(printf '%s' "$row" | jq -r '.template_sha // ""')" \
+  "template-sha: the row carries the 12-char hash of the recipe's frontmatter and prompt block"
+if [[ "$expected_sha" =~ ^[0-9a-f]{12}$ ]]; then
+  echo "  PASS  template-sha: the hash is 12 hex characters"; pass=$((pass+1))
+else
+  echo "  FAIL  template-sha: unexpected hash '$expected_sha'"; fail=$((fail+1))
+fi
+# A key passed twice keeps its first value in the inputs, because that is
+# the value the substitution used.
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=alice --var who=bob prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+dup_inputs="$data/drafts/$(printf '%s' "$row" | jq -r '.inputs_file // ""')"
+dup_input="$data/drafts/$(printf '%s' "$row" | jq -r '.input_file // ""')"
+assert_contains "To alice:" "$(cat "$dup_input" 2>/dev/null)" \
+  "inputs-capture: a --var passed twice is rendered with its first value"
+assert_eq "alice" "$(jq -r '.vars.who' "$dup_inputs" 2>/dev/null)" \
+  "inputs-capture: a --var passed twice is recorded with its first value"
+# A calibration note does not change the hash; an edit to the prompt block does.
+printf '\n- 2026-09-19: a dated note, prose only\n' >> "$prompts/capvar.md"
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=dora prose "go" >/dev/null 2>&1
+assert_eq "$expected_sha" "$(tail -1 "$metrics" | jq -r '.template_sha // ""')" \
+  "template-sha: a calibration-notes edit keeps the hash"
+sed -i.bak 's/^To {{who}}:$/Dear {{who}}:/' "$prompts/capvar.md" && rm -f "$prompts/capvar.md.bak"
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=erin prose "go" >/dev/null 2>&1
+edited_sha=$(tail -1 "$metrics" | jq -r '.template_sha // ""')
+if [[ -n "$edited_sha" && "$edited_sha" != "$expected_sha" ]]; then
+  echo "  PASS  template-sha: a prompt-block edit changes the hash"; pass=$((pass+1))
+else
+  echo "  FAIL  template-sha: prompt-block edit left the hash at '$edited_sha'"; fail=$((fail+1))
+fi
+# Over the byte cap the JSON is not written at all: a cut JSON is unreadable.
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_MAX_BYTES=40 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=frank prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+assert_eq "true" "$(printf '%s' "$row" | jq -r 'has("draft_file")')" \
+  "inputs-capture: over the cap the draft is still captured (truncated)"
+assert_eq "false" "$(printf '%s' "$row" | jq -r 'has("inputs_file")')" \
+  "inputs-capture: over the cap no inputs file is written and no field names one"
+# The draft alone can be switched off and the hash still lands: it is on
+# the row, not in a file.
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_DRAFT_CAPTURE=1 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=bob prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+assert_eq "false" "$(printf '%s' "$row" | jq -r 'has("inputs_file")')" \
+  "inputs-capture: DELEGATE_NO_DRAFT_CAPTURE=1 writes no inputs_file field"
+# Against the file as it now stands: the prompt-block edit above changed it.
+assert_eq "$(recipe_template_sha "$prompts/capvar.md")" "$(printf '%s' "$row" | jq -r '.template_sha // ""')" \
+  "template-sha: recorded even when the draft capture is off"
+# A bare call has no template to hash and no recipe to replay.
+printf 'bare piped context\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+assert_eq "false" "$(printf '%s' "$row" | jq -r 'has("inputs_file")')" \
+  "inputs-capture: a bare call writes no inputs_file field"
+assert_eq "false" "$(printf '%s' "$row" | jq -r 'has("template_sha")')" \
+  "template-sha: a bare call carries no template_sha"
+# Retention prunes the structured inputs with the draft they belong to.
+old_stem="20200101T000000Z-deadbeef"
+printf 'old' > "$data/drafts/$old_stem.draft.txt"
+printf '{}' > "$data/drafts/$old_stem.inputs.json"
+touch -t 202001010000 "$data/drafts/$old_stem.draft.txt" "$data/drafts/$old_stem.inputs.json"
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_RETENTION_DAYS=1 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=carol prose "go" >/dev/null 2>&1
+if [[ ! -e "$data/drafts/$old_stem.draft.txt" && ! -e "$data/drafts/$old_stem.inputs.json" ]]; then
+  echo "  PASS  inputs-capture: retention removes the expired inputs file with its draft"; pass=$((pass+1))
+else
+  echo "  FAIL  inputs-capture: retention left $(ls "$data/drafts" | grep -c "^$old_stem") expired file(s)"; fail=$((fail+1))
 fi
 rm -rf "$tmp" "$data"
 
