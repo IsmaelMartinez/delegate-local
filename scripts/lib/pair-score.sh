@@ -39,18 +39,27 @@ salient() {
 }
 
 # absent_from <file> — filter: reads salient tokens on stdin and prints the
-# ones that do not occur in <file> as a case-insensitive substring. The
-# extraction above is asymmetric between a backticked span and the same
-# name written bare (`inLocale()` yields a token, inLocale() yields none),
-# so a set difference alone reported four inventions on a 2026-09-19 draft
-# whose every name was in the context. A token that is in the text, however
-# it was written, was neither dropped nor invented.
+# ones that do not occur in <file>, case-insensitively, as a whole token:
+# not preceded or followed by a word character, so `#12` is not found in
+# `#123` and `412` is found in `main.js:412`. The extraction above is
+# asymmetric between a backticked span and the same name written bare
+# (`inLocale()` yields a token, inLocale() yields none), so a set difference
+# alone reported four inventions on a 2026-09-19 draft whose every name was
+# in the context. A token that is in the text, however it was written, was
+# neither dropped nor invented. One perl per call, the token quoted literal
+# and the boundaries fixed-width, so the match is linear.
 absent_from() {
-  local tok
-  while IFS= read -r tok; do
-    [[ -n "$tok" ]] || continue
-    grep -qiF -- "$tok" "$1" 2>/dev/null || printf '%s\n' "$tok"
-  done
+  perl -e '
+    my $file = shift;
+    my $text = "";
+    if (open(my $fh, "<", $file)) { local $/; $text = <$fh>; close $fh; }
+    while (my $tok = <STDIN>) {
+      chomp $tok;
+      next if $tok eq "";
+      my $q = quotemeta($tok);
+      print "$tok\n" unless $text =~ /(?<![A-Za-z0-9_])$q(?![A-Za-z0-9_])/i;
+    }
+  ' "$1"
 }
 
 # list_markers <file> — how many lines open with a list marker. grep -c

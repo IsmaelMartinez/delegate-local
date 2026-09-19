@@ -52,7 +52,12 @@ esac
 checks=0
 case "$DELEGATE_PROMPTS_DIR" in *"${STUB_CHECKS:-__none__}"*) checks=1 ;; esac
 case "$*" in *"${STUB_FAIL_ON:-__none__}"*) echo "stub: refusing" >&2; exit 2 ;; esac
-echo "delegate-meta: model=\"stub-model\" tier=\"prose\" recipe=\"rp\" checks_failed=$checks" >&2
+# As delegate.sh: no meta line (and no checks) under NO_META=1, and the
+# checks_failed field only when it is non-zero.
+[[ "${DELEGATE_LOCAL_NO_META:-}" == "1" ]] && exit 0
+meta="delegate-meta: model=\"${STUB_MODEL:-stub-model}\" tier=\"prose\" recipe=\"rp\""
+(( checks > 0 )) && meta="$meta checks_failed=$checks"
+echo "$meta" >&2
 exit 0
 EOF
   chmod +x "$1/stub-delegate.sh"
@@ -119,6 +124,8 @@ write_recipe "$tmp/echo" "ECHO"
 write_recipe "$tmp/noted" "CHAMPION" "- 2026-09-19: a dated note, prose only"
 . "$REPO/scripts/lib/recipe.sh"
 champ_sha=$(recipe_template_sha "$tmp/champion/rp.md")
+# The cache key carries a digest of the model id, not its name.
+mkey=$(printf '%s' stub-model | shasum -a 256 | cut -c1-10)
 run() { # extra args
   DELEGATE_REPLAY_DELEGATE_SH="$tmp/stub-delegate.sh" DELEGATE_METRICS_FILE="$tmp/data/m.jsonl" \
     DELEGATE_REPLAY_MODEL=stub-model STUB_CALLS="$tmp/calls" \
@@ -179,7 +186,7 @@ out2=$(run --recipe rp --candidate "$tmp/good")
 assert_eq "0" "$(calls)" "cached outputs are reused"
 assert_contains "Summary: n=3  wins=2  losses=0  ties=1  errors=0" "$out2" "the cached run reports the same tally"
 cand_sha=$(recipe_template_sha "$tmp/good/rp.md")
-rm -f "$tmp/out/kept0001.$cand_sha.stub-model.checks"
+rm -f "$tmp/out/kept0001.$cand_sha.$mkey.checks"
 rm -f "$tmp/calls"
 out2=$(run --recipe rp --candidate "$tmp/good")
 assert_eq "1" "$(calls)" "an output with no checks sidecar is regenerated"
@@ -225,8 +232,33 @@ printf '\n[truncated at 20 bytes by DELEGATE_DRAFT_MAX_BYTES]\n' >> "$tmp/data/d
 rm -rf "$tmp/out"; rm -f "$tmp/calls"
 out=$(run --recipe rp)
 assert_eq "1" "$(calls)" "a draft cut at the byte cap is regenerated, the others are read from disk"
-assert_not_contains "[truncated at" "$(cat "$tmp/out/rej00001.$champ_sha.stub-model.out.txt")" \
+assert_not_contains "[truncated at" "$(cat "$tmp/out/rej00001.$champ_sha.$mkey.out.txt")" \
   "the truncated case's champion output is the fresh generation, not the cut draft"
+
+# 9b. The wrapper resolves its own model; a run on another model is an
+# error, not a cached output under the pinned model's key, and a wrapper
+# that reports no meta line (NO_META inherited, which also skips the
+# checks) is an error too — the replay forces the line on.
+seed "$tmp/data" 2 "otherotherot"
+rm -rf "$tmp/out"; rm -f "$tmp/calls"
+out=$(STUB_MODEL=some-other-model run --recipe rp)
+assert_contains "ERR (champion)" "$out" "a run on a model other than the pinned one is an error"
+assert_contains "Verdict: ERROR — every case failed to run" "$out" "model mismatch on every case is the error verdict"
+assert_contains "ran on some-other-model, the replay measures stub-model" "$(cat "$tmp/out"/*.err.txt)" \
+  "the err file names both models"
+rm -rf "$tmp/out"; rm -f "$tmp/calls"
+out=$(DELEGATE_LOCAL_NO_META=1 run --recipe rp)
+assert_contains "Verdict: BASELINE" "$out" "an inherited NO_META=1 is overridden so the wrapper still reports"
+assert_eq "3" "$(calls)" "the three regenerated cases ran"
+
+# 9c. Bytes round-trip: a --var ending in a newline keeps it, and a prompt
+# that starts with an option-like token is passed after -- as the prompt.
+seed "$tmp/data" 1 "otherotherot"
+printf '{"recipe":"rp","tier":"prose","stdin":"s","vars":{"who":"alice\\n"},"prompt":"--tier is not a flag here"}' > "$tmp/data/drafts/202601T100000Z-rej00001.inputs.json"
+rm -rf "$tmp/out"; rm -f "$tmp/calls"
+out=$(run --recipe rp)
+assert_contains $'--var who=alice\n --tier prose -- --tier is not a flag here :: s' "$(cat "$tmp/calls")" \
+  "a --var keeps its trailing newline and the prompt follows -- verbatim"
 
 # 10. Invented anchors and echoed sentences count against an output, so a
 # kept case is a regression guard rather than a free tie.
@@ -273,6 +305,13 @@ rm -rf "$tmp/out"
 out=$(run --recipe rp)
 assert_contains "Cases:     3 " "$out" "a ts-only verdict adds no case"
 assert_not_contains "tsonly01" "$out" "the ts-only delegation is not listed"
+
+# 10d. A token is present only as a whole token: #12 is not in #123, but
+# 412 is in main.js:412 and a backticked name matches its bare spelling.
+. "$REPO/scripts/lib/pair-score.sh"
+printf 'see #123 and main.js:412 and inLocale() here\n' > "$tmp/absent.txt"
+assert_eq "#12" "$(printf '#12\n412\ninlocale()\n' | absent_from "$tmp/absent.txt")" \
+  "absent_from: #12 is absent from #123 while 412 and inlocale() are present"
 
 # 11. Inputs that are not valid JSON are skipped, not run.
 seed "$tmp/data" 2 "$champ_sha"

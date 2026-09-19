@@ -147,10 +147,12 @@ if [[ -z "$model" && -x "$script_dir/pick-model.sh" ]]; then
   tier=$(recipe_tier "$champion/$recipe.md")
   [[ -n "$tier" ]] && model=$(bash "$script_dir/pick-model.sh" "$tier" 2>/dev/null | head -n 1)
 fi
+# The cache key carries a digest of the model id, not a slug: `foo:bar` and
+# `foo_bar` slug to the same name and would share an output.
 if [[ -n "$model" ]]; then
-  model_slug=$(printf '%s' "$model" | tr -c 'A-Za-z0-9.-' '_')
+  model_key=$(printf '%s' "$model" | shasum -a 256 | cut -c1-10)
 else
-  model_slug="unknown-model"
+  model_key="unknown-model"
 fi
 
 # ---------------------------------------------------------------------------
@@ -235,31 +237,49 @@ fi
 # One output per case and arm, cached by template hash and model.
 # ---------------------------------------------------------------------------
 
-# read_exact <file> — the file's bytes into stdout-free variable form: $(cat)
-# would strip a trailing newline, which a heredoc-built --var carries.
-read_exact() { local v; v=$(cat "$1"; printf x); printf '%s' "${v%x}"; }
+# read_into <var> <file> — the file's bytes into the named variable, in this
+# shell: a $(...) at the call site would strip a trailing newline, which a
+# heredoc-built --var carries, so the sentinel has to survive to the
+# assignment.
+read_into() { local _bytes; _bytes=$(cat "$2"; printf x); printf -v "$1" '%s' "${_bytes%x}"; }
 
 # run_wrapper <prompts dir> <inputs.json> <out file> <err file>: the same
 # call the original delegation made, under another template, on the tier it
 # was made on. Metrics, the canary and the nudge are off: a replay is a
-# measurement, not a delegation.
+# measurement, not a delegation. The meta line is forced on, because
+# delegate.sh gates the output checks on it as well, and the prompt goes
+# after `--` so one that starts with an option-like token is still the
+# prompt. Returns 1 when the wrapper failed or ran on a model other than
+# the one this replay measures.
 run_wrapper() {
-  local dir="$1" inputs="$2" out="$3" err="$4" k tier prompt
-  local args=()
+  local dir="$1" inputs="$2" out="$3" err="$4" k v tier prompt ran_model
+  local args=() tail=()
   while IFS= read -r k; do
     [[ -n "$k" ]] || continue
     jq -j --arg k "$k" '.vars[$k] | if type == "string" then . else tojson end' "$inputs" > "$work_tmp/var"
-    args+=(--var "$k=$(read_exact "$work_tmp/var")")
+    read_into v "$work_tmp/var"
+    args+=(--var "$k=$v")
   done < <(jq -r '.vars // {} | keys[]' "$inputs")
   tier=$(jq -r '.tier // ""' "$inputs")
   [[ -n "$tier" ]] && args+=(--tier "$tier")
   jq -j '.prompt // ""' "$inputs" > "$work_tmp/prompt"
-  prompt=$(read_exact "$work_tmp/prompt")
+  read_into prompt "$work_tmp/prompt"
+  [[ -n "$prompt" ]] && tail=(-- "$prompt")
   jq -j '.stdin // ""' "$inputs" \
     | env DELEGATE_PROMPTS_DIR="$dir" DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_NO_PREFLIGHT=1 \
-          DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 \
-          bash "$delegate_sh" --recipe "$recipe" ${args[@]+"${args[@]}"} ${prompt:+"$prompt"} \
-      > "$out" 2> "$err"
+          DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 DELEGATE_LOCAL_NO_META=0 \
+          bash "$delegate_sh" --recipe "$recipe" ${args[@]+"${args[@]}"} ${tail[@]+"${tail[@]}"} \
+      > "$out" 2> "$err" || return 1
+  # The wrapper resolves its own model; the run counts only when it is the
+  # one the report names and the cache is keyed on.
+  ran_model=$(grep -o 'delegate-meta: model="[^"]*"' "$err" | head -1 | sed 's/.*model="//; s/"$//')
+  if [[ -z "$ran_model" ]]; then
+    echo "replay-recipe: no delegate-meta line from the wrapper" >> "$err"; return 1
+  fi
+  if [[ -n "$model" && "$ran_model" != "$model" ]]; then
+    echo "replay-recipe: the wrapper ran on $ran_model, the replay measures $model" >> "$err"; return 1
+  fi
+  return 0
 }
 
 # arm_output <dir> <sha> <id> <draft> <inputs> <row sha> <row checks> <row model>:
@@ -271,9 +291,14 @@ run_wrapper() {
 # run leaves nothing a later run mistakes for a result.
 arm_output() {
   local dir="$1" sha="$2" id="$3" draft="$4" inputs="$5" row_sha="$6" row_checks="$7" row_model="$8"
-  local stem="$out_dir/$id.$sha.$model_slug" out checks_f err
+  local stem="$out_dir/$id.$sha.$model_key" out checks_f err
   out="$stem.out.txt"; checks_f="$stem.checks"
-  [[ -f "$out" && ! -f "$checks_f" ]] && rm -f "$out"
+  # An output without its sidecar is an interrupted run; if it cannot be
+  # cleared it cannot be trusted either.
+  if [[ -f "$out" && ! -f "$checks_f" ]] && ! rm -f "$out"; then
+    echo "ERR"
+    return 0
+  fi
   if [[ ! -f "$out" ]]; then
     if [[ -n "$row_sha" && "$row_sha" == "$sha" ]] \
        && { [[ -z "$model" ]] || [[ "$row_model" == "$model" ]]; } \
@@ -286,9 +311,14 @@ arm_output() {
     else
       err="$stem.err.txt"
       echo "replay-recipe: $id under $sha ..." >&2
-      if run_wrapper "$dir" "$inputs" "$out.tmp" "$err"; then
-        grep -o 'checks_failed=[0-9]*' "$err" | head -1 | cut -d= -f2 > "$checks_f"
-        mv "$out.tmp" "$out"
+      # The meta line omits checks_failed when it is zero, so an absent
+      # count is 0 once the line itself has been seen (run_wrapper insists
+      # on it); under pipefail the grep's own exit is not a write failure.
+      # Either write failing is an error, as in the branch above.
+      if run_wrapper "$dir" "$inputs" "$out.tmp" "$err" \
+         && { { grep -o 'checks_failed=[0-9]*' "$err" || true; } | head -1 | cut -d= -f2 > "$checks_f"; } \
+         && { [[ -s "$checks_f" ]] || printf '0' > "$checks_f"; } \
+         && mv "$out.tmp" "$out"; then
         rm -f "$err"
       else
         rm -f "$out.tmp" "$checks_f"
