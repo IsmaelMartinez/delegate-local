@@ -305,8 +305,10 @@ jq -rs --arg prev "$prev_ts" '
       fi
       # The tokens the shipped text carries and the draft did not, sorted, as
       # comm emits them.
-      new_tokens=$(comm -13 <(salient "$dpath") <(salient "$fpath"))
-      draft_only=$(comm -23 <(salient "$dpath") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
+      # A token is only new (or only the draft's) when the other text does
+      # not carry it in any spelling: `absent_from` in lib/pair-score.sh.
+      new_tokens=$(comm -13 <(salient "$dpath") <(salient "$fpath") | absent_from "$dpath")
+      draft_only=$(comm -23 <(salient "$dpath") <(salient "$fpath") | absent_from "$fpath" | head -n 12 | tr '\n' ' ')
       # With the input, DROPPED is what the caller supplied and the model
       # dropped; a token the shipped text carries that neither the input nor
       # the draft had is context the human added, not a fact the model lost,
@@ -334,15 +336,20 @@ jq -rs --arg prev "$prev_ts" '
         fi
       fi
       dm=$(list_markers "$dpath"); fm=$(list_markers "$fpath")
+      dp=$(paragraphs "$dpath"); fp=$(paragraphs "$fpath")
       if (( dm > 0 && fm == 0 )); then
         echo "    SHAPE: draft used $dm list item(s); the shipped text used none (prose was wanted)"
       elif (( fm > 0 && dm == 0 )); then
         echo "    SHAPE: shipped text used $fm list item(s); the draft used none"
+      elif (( dp == 1 && fp >= 3 )); then
+        echo "    SHAPE: draft was one paragraph; the shipped text used $fp (one per topic was wanted)"
+      elif (( fp == 1 && dp >= 3 )); then
+        echo "    SHAPE: draft used $dp paragraphs; the shipped text used one"
       fi
       # Scored against what was supplied rather than against the draft: the
       # anchors the caller gave that the shipped text carried nowhere.
       if [[ -n "$ipath" ]]; then
-        unused=$(comm -23 <(salient "$supplied_tmp") <(salient "$fpath") | head -n 12 | tr '\n' ' ')
+        unused=$(comm -23 <(salient "$supplied_tmp") <(salient "$fpath") | absent_from "$fpath" | head -n 12 | tr '\n' ' ')
         [[ -n "${unused// /}" ]] && echo "    UNUSED   (in the input, absent from the shipped text): $unused"
       fi
     else

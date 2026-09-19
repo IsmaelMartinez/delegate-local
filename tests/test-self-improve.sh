@@ -6,6 +6,13 @@ set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$REPO/scripts/self-improve.sh"
 
+# Every invocation reads a throwaway watermark unless a case sets its own:
+# the real one under ~/.local/share/delegate-local advances whenever the
+# maintainer runs a pass, and a fixture stamped minutes ago then read as
+# already consumed (17 assertions failed within ten minutes of a live run
+# on 2026-09-19).
+export DELEGATE_SELF_IMPROVE_STATE="$(mktemp -d)/unwritten.state"
+
 pass=0
 fail=0
 assert_eq() {

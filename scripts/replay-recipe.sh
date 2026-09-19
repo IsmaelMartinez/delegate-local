@@ -307,7 +307,7 @@ arm_output() {
 #   fin_sal    salient tokens the shipped text carries
 #   stdin_sent piped sentences (the unit no_context_echo measures)
 #   fin_echo   the piped sentences the shipped text itself reproduces
-#   fin_markers whether the shipped text is a list
+#   fin_path   the shipped text, for the shape comparison
 case_refs() { # <inputs.json> <final>
   jq -j '.stdin // ""' "$1" > "$work_tmp/stdin"
   { cat "$work_tmp/stdin"; echo; jq -r '(.vars // {} | .[] | if type == "string" then . else tojson end), (.prompt // "")' "$1"; } > "$work_tmp/supplied"
@@ -315,25 +315,24 @@ case_refs() { # <inputs.json> <final>
   salient "$2" > "$work_tmp/fin_sal"
   sentences < "$work_tmp/stdin" | sort -u > "$work_tmp/stdin_sent"
   sentences < "$2" | sort -u | comm -12 "$work_tmp/stdin_sent" - > "$work_tmp/fin_echo"
-  fin_markers=$(list_markers "$2")
+  fin_path="$2"
 }
 
 # score <output> <checks>: prints "c/d/i/e/s=total" where c is failed
 # checks, d the supplied anchors the shipped text carried and this output
 # dropped, i the anchors this output carries that neither the inputs nor the
 # shipped text do (the bundle's INVENTED), e the piped sentences this output
-# hands back beyond the ones the shipped text itself carries, s a
-# list-vs-prose mismatch against the shipped text. Symmetric on a kept case:
-# any anchor the output has over or under its reference counts.
+# hands back beyond the ones the shipped text itself carries, s a shape
+# mismatch against the shipped text (list against prose, or one paragraph
+# against three or more). Symmetric on a kept case: any anchor the output
+# has over or under its reference counts.
 score() {
-  local out="$1" checks="$2" dropped invented echoed shape om
+  local out="$1" checks="$2" dropped invented echoed shape
   salient "$out" > "$work_tmp/out_sal"
-  dropped=$(comm -12 "$work_tmp/sup_sal" "$work_tmp/fin_sal" | comm -23 - "$work_tmp/out_sal" | grep -c '')
-  invented=$(comm -23 "$work_tmp/out_sal" "$work_tmp/sup_sal" | comm -23 - "$work_tmp/fin_sal" | grep -c '')
+  dropped=$(comm -12 "$work_tmp/sup_sal" "$work_tmp/fin_sal" | comm -23 - "$work_tmp/out_sal" | absent_from "$out" | grep -c '')
+  invented=$(comm -23 "$work_tmp/out_sal" "$work_tmp/sup_sal" | comm -23 - "$work_tmp/fin_sal" | absent_from "$work_tmp/supplied" | absent_from "$fin_path" | grep -c '')
   echoed=$(sentences < "$out" | sort -u | comm -12 "$work_tmp/stdin_sent" - | comm -23 - "$work_tmp/fin_echo" | grep -c '')
-  om=$(list_markers "$out")
-  shape=0
-  if { (( om > 0 )) && (( fin_markers == 0 )); } || { (( fin_markers > 0 )) && (( om == 0 )); }; then shape=1; fi
+  shape=$(shape_mismatch "$out" "$fin_path")
   printf '%s/%s/%s/%s/%s=%s' "$checks" "$dropped" "$invented" "$echoed" "$shape" "$(( checks + dropped + invented + echoed + shape ))"
 }
 

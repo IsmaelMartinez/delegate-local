@@ -38,6 +38,21 @@ salient() {
   } | tr '[:upper:]' '[:lower:]' | sed 's/[.,;:)]*$//' | awk 'NF' | sort -u
 }
 
+# absent_from <file> — filter: reads salient tokens on stdin and prints the
+# ones that do not occur in <file> as a case-insensitive substring. The
+# extraction above is asymmetric between a backticked span and the same
+# name written bare (`inLocale()` yields a token, inLocale() yields none),
+# so a set difference alone reported four inventions on a 2026-09-19 draft
+# whose every name was in the context. A token that is in the text, however
+# it was written, was neither dropped nor invented.
+absent_from() {
+  local tok
+  while IFS= read -r tok; do
+    [[ -n "$tok" ]] || continue
+    grep -qiF -- "$tok" "$1" 2>/dev/null || printf '%s\n' "$tok"
+  done
+}
+
 # list_markers <file> — how many lines open with a list marker. grep -c
 # prints 0 and exits 1 on no match, so a `|| echo 0` fallback would append a
 # second zero.
@@ -46,6 +61,28 @@ list_markers() {
   [[ -f "$1" ]] || { echo 0; return 0; }
   n=$(grep -cE '^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]' "$1" 2>/dev/null)
   echo "${n:-0}"
+}
+
+# paragraphs <file> — how many blank-line-separated blocks. With
+# list_markers it is the shape signal: a draft of one paragraph where three
+# or more shipped is the collapse pr-description showed on 10 of 10 pairs on
+# 2026-09-19 (drafts of 1 paragraph against shipped bodies of 3 to 7).
+paragraphs() {
+  [[ -f "$1" ]] || { echo 0; return 0; }
+  awk 'BEGIN { RS=""; n=0 } { n++ } END { print n }' "$1" 2>/dev/null
+}
+
+# shape_mismatch <a> <b> — 1 when the two texts differ in shape: one is a
+# list and the other prose, or one is a single paragraph and the other three
+# or more. Symmetric, so a kept case scores a candidate that adds structure
+# the same as one that removes it.
+shape_mismatch() {
+  local am bm ap bp
+  am=$(list_markers "$1"); bm=$(list_markers "$2")
+  ap=$(paragraphs "$1"); bp=$(paragraphs "$2")
+  if { (( am > 0 )) && (( bm == 0 )); } || { (( bm > 0 )) && (( am == 0 )); }; then echo 1; return 0; fi
+  if { (( ap == 1 )) && (( bp >= 3 )); } || { (( bp == 1 )) && (( ap >= 3 )); }; then echo 1; return 0; fi
+  echo 0
 }
 
 # sentences — stdin to one sentence per line, terminator dropped, normalised,
