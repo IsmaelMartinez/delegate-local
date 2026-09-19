@@ -61,6 +61,13 @@ bash scripts/self-improve.sh
 bash scripts/self-improve.sh --peek --days 7
 ```
 
+Gate a recipe edit with the offline replay before opening its PR (ADR 0031 as amended 2026-09-19). Since that date every recipe call also stores its structured inputs — the piped stdin, each `--var` as passed, the positional prompt — as `<stem>.inputs.json` under the draft's stem, named on the row as `inputs_file` under the same cap, retention and `DELEGATE_NO_DRAFT_CAPTURE=1` opt-out, and carries the recipe file's 12-character sha256 as `template_sha` on every recipe row whether or not capture is on. The rendered input cannot be un-rendered, and the 2026-09-16 spike could not replay its 18 maintainer-reply cases under the post-#517 template because their `lead` values were never stored, which is the gap this closes. `replay-recipe.sh` builds cases from the corpus (a recipe row with `inputs_file`, a verdict and a stored final, or the draft itself when kept; `--seed FILE` adds cases in the spike's JSON schema), runs each through `delegate.sh` under the champion template and the candidate with metrics, canary and nudge off, scores the output as `checks/dropped/echoed/shape` against the supplied inputs and the shipped text using the same `salient` and `sentences` helpers the bundle uses (`scripts/lib/pair-score.sh`, where `parent_join` now lives too), and prints a verdict from a one-sided sign test: `ACCEPT` at p < 0.05 with no rise in failed checks, `REJECT` at the mirror, `INCONCLUSIVE` otherwise; a candidate byte-identical to the champion is reported without a run. Outputs are cached under `<data dir>/replay/<id>.<sha>.out.txt`, and a case whose row hash equals the champion's is scored from its stored draft without a call. The online half is `self-improve.sh`'s per-template section, printed for any recipe that ran under two hashes in the window, which is what a merged edit is read against and reverted on. The procedure and the thresholds are in `docs/self-improvement-loop.md`:
+
+```bash
+bash scripts/replay-recipe.sh --recipe maintainer-reply                         # baseline read
+bash scripts/replay-recipe.sh --recipe maintainer-reply --candidate /path/to/worktree/prompts
+```
+
 Run the validation pipeline locally (the same gates CI runs on every PR — frontmatter shape, content scan, trigger-eval shape, plus per-script unit tests):
 
 ```bash

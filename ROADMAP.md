@@ -120,6 +120,36 @@ The milestone is done when both recipes read usable ≥ 65% and 60% and kept
 be the task definition rather than the draft, in which case the recipes are
 narrowed further or retired.
 
+## Replay-gated self-improvement (milestone, 2026-09-19)
+
+The calibration loop had a procedure and no measurement. Online, the agent's
+verdicts need about 134 tracked delegations per arm to tell a fifteen-point
+lift in usable rate from noise, which at the reply recipes' volume is weeks
+per edit, and the session meant to run the loop every two hours had been dead
+since 2026-08-27 (session-bound cron). ADR 0031 as amended keeps a replay
+harness as maintainer tooling: `delegate.sh` stores each recipe call's
+structured inputs and stamps the template hash on the row, `replay-recipe.sh`
+re-renders stored cases under the live and a candidate template and decides
+with a paired sign test, and `self-improve.sh` splits outcomes by template
+hash for the post-merge read. Goals, read off `metrics.jsonl`:
+
+1. Every recipe row written after this lands carries `template_sha` and, when
+   capture is on, `inputs_file`; the bundle's capture-coverage line stays at
+   `with input=` equal to `with draft=`.
+2. The first recipe edit proposed by the loop after this lands quotes a replay
+   verdict in its PR; no recipe edit merges on an `INCONCLUSIVE` or absent
+   replay.
+3. Within thirty tracked rows of any merged edit, the per-template section
+   prints the new hash beside the old with both rates, and a drop past the
+   resolvable margin produces a revert PR rather than a second edit.
+4. The loop runs on a schedule that outlives a session: one calibration pass a
+   day, each pass either quiet (exit 10), a PR with a replay line, or a report
+   saying the evidence is thin.
+
+The milestone is done when a full cycle has happened at least once: an edit
+accepted by replay, merged, and read online at thirty rows, whichever way that
+read went.
+
 ## Where we're going (next, priority-ordered)
 
 1. Decide on a deeper recipe prune. The reset kept every recipe with real usage
