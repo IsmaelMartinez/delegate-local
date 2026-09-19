@@ -5397,11 +5397,58 @@ assert_eq "alice" "$(jq -r '.vars.who' "$inputs_path" 2>/dev/null)" "inputs-capt
 assert_eq $'two\nlines' "$(jq -r '.vars.note' "$inputs_path" 2>/dev/null)" \
   "inputs-capture: a --var value keeps its newline"
 assert_eq "go" "$(jq -r '.prompt' "$inputs_path" 2>/dev/null)" "inputs-capture: file holds the positional prompt"
+assert_eq "prose" "$(jq -r '.tier' "$inputs_path" 2>/dev/null)" "inputs-capture: file holds the resolved tier"
 assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$inputs_path")" \
   "inputs-capture: inputs file is private (600)"
-expected_sha=$(shasum -a 256 "$prompts/capvar.md" | cut -c1-12)
+# The hash covers the frontmatter and the prompt block, the parts that shape
+# the output, and is computed by the helper both scripts share.
+. "$REPO/scripts/lib/recipe.sh"
+expected_sha=$(recipe_template_sha "$prompts/capvar.md")
 assert_eq "$expected_sha" "$(printf '%s' "$row" | jq -r '.template_sha // ""')" \
-  "template-sha: the row carries the recipe file's 12-char content hash"
+  "template-sha: the row carries the 12-char hash of the recipe's frontmatter and prompt block"
+if [[ "$expected_sha" =~ ^[0-9a-f]{12}$ ]]; then
+  echo "  PASS  template-sha: the hash is 12 hex characters"; pass=$((pass+1))
+else
+  echo "  FAIL  template-sha: unexpected hash '$expected_sha'"; fail=$((fail+1))
+fi
+# A key passed twice keeps its first value in the inputs, because that is
+# the value the substitution used.
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=alice --var who=bob prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+dup_inputs="$data/drafts/$(printf '%s' "$row" | jq -r '.inputs_file // ""')"
+dup_input="$data/drafts/$(printf '%s' "$row" | jq -r '.input_file // ""')"
+assert_contains "To alice:" "$(cat "$dup_input" 2>/dev/null)" \
+  "inputs-capture: a --var passed twice is rendered with its first value"
+assert_eq "alice" "$(jq -r '.vars.who' "$dup_inputs" 2>/dev/null)" \
+  "inputs-capture: a --var passed twice is recorded with its first value"
+# A calibration note does not change the hash; an edit to the prompt block does.
+printf '\n- 2026-09-19: a dated note, prose only\n' >> "$prompts/capvar.md"
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=dora prose "go" >/dev/null 2>&1
+assert_eq "$expected_sha" "$(tail -1 "$metrics" | jq -r '.template_sha // ""')" \
+  "template-sha: a calibration-notes edit keeps the hash"
+sed -i.bak 's/^To {{who}}:$/Dear {{who}}:/' "$prompts/capvar.md" && rm -f "$prompts/capvar.md.bak"
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=erin prose "go" >/dev/null 2>&1
+edited_sha=$(tail -1 "$metrics" | jq -r '.template_sha // ""')
+if [[ -n "$edited_sha" && "$edited_sha" != "$expected_sha" ]]; then
+  echo "  PASS  template-sha: a prompt-block edit changes the hash"; pass=$((pass+1))
+else
+  echo "  FAIL  template-sha: prompt-block edit left the hash at '$edited_sha'"; fail=$((fail+1))
+fi
+# Over the byte cap the JSON is not written at all: a cut JSON is unreadable.
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_MAX_BYTES=40 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=frank prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+assert_eq "true" "$(printf '%s' "$row" | jq -r 'has("draft_file")')" \
+  "inputs-capture: over the cap the draft is still captured (truncated)"
+assert_eq "false" "$(printf '%s' "$row" | jq -r 'has("inputs_file")')" \
+  "inputs-capture: over the cap no inputs file is written and no field names one"
 # The draft alone can be switched off and the hash still lands: it is on
 # the row, not in a file.
 printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_DRAFT_CAPTURE=1 \
@@ -5410,7 +5457,8 @@ printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_DRAFT_CA
 row=$(tail -1 "$metrics")
 assert_eq "false" "$(printf '%s' "$row" | jq -r 'has("inputs_file")')" \
   "inputs-capture: DELEGATE_NO_DRAFT_CAPTURE=1 writes no inputs_file field"
-assert_eq "$expected_sha" "$(printf '%s' "$row" | jq -r '.template_sha // ""')" \
+# Against the file as it now stands: the prompt-block edit above changed it.
+assert_eq "$(recipe_template_sha "$prompts/capvar.md")" "$(printf '%s' "$row" | jq -r '.template_sha // ""')" \
   "template-sha: recorded even when the draft capture is off"
 # A bare call has no template to hash and no recipe to replay.
 printf 'bare piped context\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \

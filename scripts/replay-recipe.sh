@@ -15,7 +15,8 @@
 # (`inputs_file`), a verdict, and a reference for the shipped text: the
 # `final_file` a rejection stored, or the draft itself when the verdict was
 # kept. Kept cases are the regression guard — a candidate that changes an
-# output the agent shipped unedited has to answer for it.
+# output the agent shipped unedited has to answer for it, so every token the
+# output carries that the reference and the inputs do not counts against it.
 #
 # Usage:
 #   replay-recipe.sh --recipe NAME [--candidate DIR] [--champion DIR]
@@ -24,27 +25,38 @@
 #   --recipe NAME     recipe to replay (required)
 #   --candidate DIR   prompts directory holding the edited NAME.md; without
 #                     one the champion alone is scored (a baseline read)
-#   --champion DIR    the live prompts directory (default DELEGATE_PROMPTS_DIR,
-#                     else this checkout's prompts/)
+#   --champion DIR    the live prompts directory. Default: the recipe as
+#                     committed on `main` (DELEGATE_REPLAY_BASE overrides the
+#                     ref), materialised in a temp dir, so an edit made on a
+#                     branch in this same checkout is compared against what is
+#                     live rather than against itself; when git cannot show it,
+#                     DELEGATE_PROMPTS_DIR, else this checkout's prompts/
 #   --limit N         newest N cases (default 40)
-#   --seed FILE       JSON array of extra cases {id, ts, recipe, stdin, vars,
-#                     draft, final, verdict}; one without a final is skipped,
-#                     one whose id the corpus already has is skipped
+#   --seed FILE       JSON array of extra cases {id, ts, recipe, tier, stdin,
+#                     vars, draft, final, verdict, model}; one without a final
+#                     is skipped, one whose id the corpus already has is
+#                     skipped, ids are [A-Za-z0-9_-]+
 #   --out DIR         per-arm output cache (default <data dir>/replay); an
-#                     output is keyed by case and template hash, so a second
-#                     run against the same candidate sends nothing
+#                     output is keyed by case, template hash and model, so a
+#                     second run against the same candidate sends nothing.
+#                     Written under umask 077 and pruned on the same
+#                     DELEGATE_DRAFT_RETENTION_DAYS as the drafts.
 # Env:
 #   DELEGATE_METRICS_FILE, DELEGATE_LOCAL_DATA_DIR   as every other script
 #   DELEGATE_REPLAY_DELEGATE_SH   the wrapper to run (tests inject a stub)
+#   DELEGATE_REPLAY_MODEL         the model the arms run on, when known; else
+#                                 pick-model.sh resolves the recipe's tier once
 # Exit: 0 report printed (the last line is the verdict); 3 no replayable case
 #       for the recipe; 2 usage or dependency error; 4 every case errored.
 set -uo pipefail
+umask 077
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$script_dir/.."
 data_dir="${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}"
 metrics_file="${DELEGATE_METRICS_FILE:-$data_dir/metrics.jsonl}"
 delegate_sh="${DELEGATE_REPLAY_DELEGATE_SH:-$script_dir/delegate.sh}"
-champion="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
+champion=""
 candidate=""
 recipe=""
 limit=40
@@ -75,6 +87,34 @@ command -v jq >/dev/null || { echo "replay-recipe: jq not on PATH" >&2; exit 2; 
 command -v shasum >/dev/null || { echo "replay-recipe: shasum not on PATH" >&2; exit 2; }
 [[ -n "$recipe" ]] || { echo "replay-recipe: --recipe is required" >&2; exit 2; }
 case "$limit" in ''|*[!0-9]*|0) echo "replay-recipe: --limit must be a positive number" >&2; exit 2;; esac
+case "$recipe" in *[!A-Za-z0-9_-]*) echo "replay-recipe: recipe names are [A-Za-z0-9_-]+" >&2; exit 2;; esac
+
+work_tmp=$(mktemp -d)
+trap 'rm -rf "$work_tmp"' EXIT
+
+# shellcheck source=lib/pair-score.sh
+. "$script_dir/lib/pair-score.sh"
+# shellcheck source=lib/recipe.sh
+. "$script_dir/lib/recipe.sh"
+
+# The champion is what is live, which on this machine is the committed
+# recipe on main, not the working file: the procedure edits the recipe on a
+# branch in this checkout, and a champion read from the same checkout would
+# be the candidate.
+champion_label=""
+if [[ -z "$champion" ]]; then
+  base="${DELEGATE_REPLAY_BASE:-main}"
+  if git -C "$repo_root" show "$base:prompts/$recipe.md" > "$work_tmp/champion.md" 2>/dev/null \
+     && [[ -s "$work_tmp/champion.md" ]]; then
+    mkdir -p "$work_tmp/champion"
+    mv "$work_tmp/champion.md" "$work_tmp/champion/$recipe.md"
+    champion="$work_tmp/champion"
+    champion_label="$base:prompts/$recipe.md"
+  else
+    champion="${DELEGATE_PROMPTS_DIR:-$repo_root/prompts}"
+  fi
+fi
+[[ -n "$champion_label" ]] || champion_label="$champion"
 [[ -f "$champion/$recipe.md" ]] || { echo "replay-recipe: no $recipe.md in champion dir $champion" >&2; exit 2; }
 if [[ -n "$candidate" && ! -f "$candidate/$recipe.md" ]]; then
   echo "replay-recipe: no $recipe.md in candidate dir $candidate" >&2; exit 2
@@ -82,25 +122,44 @@ fi
 [[ -n "$seed" && ! -f "$seed" ]] && { echo "replay-recipe: seed file not found: $seed" >&2; exit 2; }
 [[ -f "$metrics_file" ]] || [[ -n "$seed" ]] || { echo "replay-recipe: metrics file not found: $metrics_file" >&2; exit 2; }
 
-# shellcheck source=lib/pair-score.sh
-. "$script_dir/lib/pair-score.sh"
-
 drafts_dir="$(dirname "$metrics_file")/drafts"
 mkdir -p "$out_dir" || { echo "replay-recipe: cannot create $out_dir" >&2; exit 2; }
 chmod 700 "$out_dir" 2>/dev/null || true
+# The cache holds model output derived from the piped context and, with
+# --seed, verbatim copies of it: the drafts' retention applies.
+keep="${DELEGATE_DRAFT_RETENTION_DAYS:-14}"
+if [[ "$keep" =~ ^[0-9]+$ ]] && (( 10#$keep > 0 )); then
+  find "$out_dir" -type f -mtime "+$keep" -exec rm -f {} + 2>/dev/null || true
+fi
 
-template_hash() { shasum -a 256 "$1" | cut -c1-12; }
-champion_sha=$(template_hash "$champion/$recipe.md")
+champion_sha=$(recipe_template_sha "$champion/$recipe.md")
 candidate_sha=""
-[[ -n "$candidate" ]] && candidate_sha=$(template_hash "$candidate/$recipe.md")
+[[ -n "$candidate" ]] && candidate_sha=$(recipe_template_sha "$candidate/$recipe.md")
+
+# The model both arms run on. A stored draft stands in for the champion's
+# output only when the same model produced it, and the cache is keyed on it,
+# so a routing change between the delegation and the replay is not read as
+# a template effect. Resolved once from the recipe's tier; unknown when no
+# provider answers, in which case the shortcut and the cache are model-blind
+# and the report says so.
+model="${DELEGATE_REPLAY_MODEL:-}"
+if [[ -z "$model" && -x "$script_dir/pick-model.sh" ]]; then
+  tier=$(recipe_tier "$champion/$recipe.md")
+  [[ -n "$tier" ]] && model=$(bash "$script_dir/pick-model.sh" "$tier" 2>/dev/null | head -n 1)
+fi
+if [[ -n "$model" ]]; then
+  model_slug=$(printf '%s' "$model" | tr -c 'A-Za-z0-9.-' '_')
+else
+  model_slug="unknown-model"
+fi
 
 # ---------------------------------------------------------------------------
 # Cases. One record per line, `|`-separated (no field can carry one):
-#   id|ts|verdict|draft path|final path|inputs path|template sha|checks_failed
+#   id|ts|verdict|draft path|final path|inputs path|template sha|checks_failed|model
 # Corpus first, newest first; then seed cases whose id is not already there.
 # ---------------------------------------------------------------------------
-cases_tmp=$(mktemp)
-trap 'rm -f "$cases_tmp"' EXIT
+cases_tmp="$work_tmp/cases"
+: > "$cases_tmp"
 
 if [[ -f "$metrics_file" ]]; then
   # `$d` is parent_join's delegate index; the drafts dir gets its own name.
@@ -117,11 +176,11 @@ if [[ -f "$metrics_file" ]]; then
              draft: ($p.draft_file // ""),
              final: (if .kept then ($p.draft_file // "") else (.final_file // "") end),
              inputs: $p.inputs_file, sha: ($p.template_sha // ""),
-             checks: ($p.checks_failed // 0)})
+             checks: ($p.checks_failed // 0), model: ($p.model // "")})
     | map(select(.final != "" and .draft != ""))
     | sort_by(.ts) | reverse
     | .[]
-    | [.id, .ts, .verdict, ($ddir + "/" + .draft), ($ddir + "/" + .final), ($ddir + "/" + .inputs), .sha, (.checks | tostring)]
+    | [.id, .ts, .verdict, ($ddir + "/" + .draft), ($ddir + "/" + .final), ($ddir + "/" + .inputs), .sha, (.checks | tostring), .model]
     | join("|")
   ' "$metrics_file" 2>/dev/null > "$cases_tmp"
 fi
@@ -131,26 +190,33 @@ if [[ -n "$seed" ]]; then
   mkdir -p "$seed_dir"
   jq -r --arg recipe "$recipe" '
     .[] | select(.recipe == $recipe and (.final // "") != "" and (.draft // "") != "")
-    | [.id, (.ts // "1970-01-01T00:00:00Z"), (.verdict // "rewrote")] | join("|")
-  ' "$seed" 2>/dev/null | while IFS='|' read -r sid sts sverdict; do
+    | [.id, (.ts // "1970-01-01T00:00:00Z"), (.verdict // "rewrote"), (.model // "")] | join("|")
+  ' "$seed" 2>/dev/null | while IFS='|' read -r sid sts sverdict smodel; do
     [[ -n "$sid" ]] || continue
-    grep -q "^$sid|" "$cases_tmp" && continue
-    jq -c --arg id "$sid" '.[] | select(.id == $id) | {recipe, stdin, vars: (.vars // {})}' "$seed" > "$seed_dir/$sid.inputs.json"
+    # The id names files and is matched literally: no metacharacters, no
+    # path separators.
+    case "$sid" in *[!A-Za-z0-9_-]*)
+      echo "replay-recipe: seed id '$sid' skipped (ids are [A-Za-z0-9_-]+)" >&2; continue;; esac
+    cut -d'|' -f1 "$cases_tmp" | grep -Fxq -- "$sid" && continue
+    jq -c --arg id "$sid" '.[] | select(.id == $id) | {recipe, stdin: (.stdin // ""), vars: (.vars // {})} + (if (.tier // "") != "" then {tier} else {} end)' "$seed" > "$seed_dir/$sid.inputs.json"
     jq -j --arg id "$sid" '.[] | select(.id == $id) | .draft' "$seed" > "$seed_dir/$sid.draft.txt"
     jq -j --arg id "$sid" '.[] | select(.id == $id) | .final' "$seed" > "$seed_dir/$sid.final.txt"
     case "$sverdict" in kept|scaffold|rewrote) ;; hit) sverdict=kept;; miss) sverdict=rewrote;; *) sverdict=rewrote;; esac
-    printf '%s|%s|%s|%s|%s|%s||0\n' "$sid" "$sts" "$sverdict" \
-      "$seed_dir/$sid.draft.txt" "$seed_dir/$sid.final.txt" "$seed_dir/$sid.inputs.json" >> "$cases_tmp"
+    printf '%s|%s|%s|%s|%s|%s||0|%s\n' "$sid" "$sts" "$sverdict" \
+      "$seed_dir/$sid.draft.txt" "$seed_dir/$sid.final.txt" "$seed_dir/$sid.inputs.json" "$smodel" >> "$cases_tmp"
   done
   # Newest first across both sources; the limit takes the newest.
   sort -t'|' -k2,2r "$cases_tmp" -o "$cases_tmp"
 fi
 
-# A case whose files were pruned (retention) cannot be replayed.
-usable_tmp=$(mktemp)
-while IFS='|' read -r id ts verdict draft final inputs sha checks; do
+# A case whose files were pruned (retention) cannot be replayed, nor one
+# whose inputs are not valid JSON (an over-cap capture is not written, but a
+# hand-made seed can be anything).
+usable_tmp="$work_tmp/usable"
+while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel; do
   [[ -f "$draft" && -f "$final" && -f "$inputs" ]] || continue
-  printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$ts" "$verdict" "$draft" "$final" "$inputs" "$sha" "$checks"
+  jq -e . "$inputs" >/dev/null 2>&1 || { echo "replay-recipe: $id skipped: $inputs is not valid JSON" >&2; continue; }
+  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$ts" "$verdict" "$draft" "$final" "$inputs" "$sha" "$checks" "$rmodel"
 done < "$cases_tmp" | head -n "$limit" > "$usable_tmp"
 mv "$usable_tmp" "$cases_tmp"
 
@@ -161,45 +227,62 @@ if (( n_cases == 0 )); then
 fi
 
 # ---------------------------------------------------------------------------
-# One output per case and arm, cached by template hash.
+# One output per case and arm, cached by template hash and model.
 # ---------------------------------------------------------------------------
 
+# read_exact <file> — the file's bytes into stdout-free variable form: $(cat)
+# would strip a trailing newline, which a heredoc-built --var carries.
+read_exact() { local v; v=$(cat "$1"; printf x); printf '%s' "${v%x}"; }
+
 # run_wrapper <prompts dir> <inputs.json> <out file> <err file>: the same
-# call the original delegation made, under another template. Metrics, the
-# canary and the nudge are off: a replay is a measurement, not a delegation.
+# call the original delegation made, under another template, on the tier it
+# was made on. Metrics, the canary and the nudge are off: a replay is a
+# measurement, not a delegation.
 run_wrapper() {
-  local dir="$1" inputs="$2" out="$3" err="$4" k v prompt
+  local dir="$1" inputs="$2" out="$3" err="$4" k tier prompt
   local args=()
   while IFS= read -r k; do
     [[ -n "$k" ]] || continue
-    v=$(jq -r --arg k "$k" '.vars[$k]' "$inputs")
-    args+=(--var "$k=$v")
+    jq -j --arg k "$k" '.vars[$k] | if type == "string" then . else tojson end' "$inputs" > "$work_tmp/var"
+    args+=(--var "$k=$(read_exact "$work_tmp/var")")
   done < <(jq -r '.vars // {} | keys[]' "$inputs")
-  prompt=$(jq -r '.prompt // ""' "$inputs")
-  jq -j '.stdin' "$inputs" \
+  tier=$(jq -r '.tier // ""' "$inputs")
+  [[ -n "$tier" ]] && args+=(--tier "$tier")
+  jq -j '.prompt // ""' "$inputs" > "$work_tmp/prompt"
+  prompt=$(read_exact "$work_tmp/prompt")
+  jq -j '.stdin // ""' "$inputs" \
     | env DELEGATE_PROMPTS_DIR="$dir" DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_NO_PREFLIGHT=1 \
           DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 \
           bash "$delegate_sh" --recipe "$recipe" ${args[@]+"${args[@]}"} ${prompt:+"$prompt"} \
       > "$out" 2> "$err"
 }
 
-# arm_output <dir> <sha> <case fields...>: prints "<out file>|<checks_failed>"
-# or "ERR". The champion's output for a case produced under the same
-# template is the stored draft itself, checks from the row: no call.
+# arm_output <dir> <sha> <id> <draft> <inputs> <row sha> <row checks> <row model>:
+# prints "<out file>|<checks_failed>" or "ERR". The champion's output for a
+# case produced under the same template by the same model is the stored
+# draft itself, checks from the row: no call — unless the draft was cut at
+# the byte cap, which a fresh output never is. The output is written to a
+# temp name and moved into place after its checks sidecar, so an interrupted
+# run leaves nothing a later run mistakes for a result.
 arm_output() {
-  local dir="$1" sha="$2" id="$3" draft="$4" inputs="$5" row_sha="$6" row_checks="$7"
-  local out="$out_dir/$id.$sha.out.txt" checks_f="$out_dir/$id.$sha.checks" err
+  local dir="$1" sha="$2" id="$3" draft="$4" inputs="$5" row_sha="$6" row_checks="$7" row_model="$8"
+  local stem="$out_dir/$id.$sha.$model_slug" out checks_f err
+  out="$stem.out.txt"; checks_f="$stem.checks"
+  [[ -f "$out" && ! -f "$checks_f" ]] && rm -f "$out"
   if [[ ! -f "$out" ]]; then
-    if [[ -n "$row_sha" && "$row_sha" == "$sha" ]]; then
-      cp "$draft" "$out" && printf '%s' "$row_checks" > "$checks_f"
+    if [[ -n "$row_sha" && "$row_sha" == "$sha" ]] \
+       && { [[ -z "$model" ]] || [[ "$row_model" == "$model" ]]; } \
+       && ! grep -qF '[truncated at ' "$draft"; then
+      cp "$draft" "$out.tmp" && printf '%s' "$row_checks" > "$checks_f" && mv "$out.tmp" "$out"
     else
-      err="$out_dir/$id.$sha.err.txt"
+      err="$stem.err.txt"
       echo "replay-recipe: $id under $sha ..." >&2
-      if run_wrapper "$dir" "$inputs" "$out" "$err"; then
+      if run_wrapper "$dir" "$inputs" "$out.tmp" "$err"; then
         grep -o 'checks_failed=[0-9]*' "$err" | head -1 | cut -d= -f2 > "$checks_f"
+        mv "$out.tmp" "$out"
         rm -f "$err"
       else
-        rm -f "$out"
+        rm -f "$out.tmp" "$checks_f"
         echo "ERR"
         return 0
       fi
@@ -210,24 +293,39 @@ arm_output() {
   printf '%s|%s' "$out" "${c:-0}"
 }
 
-# score <inputs.json> <final> <output> <checks>: prints "c/d/e/s=total" where
-# c is failed checks, d the supplied anchors the shipped text carried and
-# this output dropped, e the piped sentences this output handed back, s a
-# list-vs-prose mismatch against the shipped text. The same salient tokens
-# and sentence unit as the bundle's DROPPED and ECHOED.
+# The reference sets of one case, computed once for both arms:
+#   sup_sal    salient tokens the caller supplied (stdin, vars, prompt)
+#   fin_sal    salient tokens the shipped text carries
+#   stdin_sent piped sentences (the unit no_context_echo measures)
+#   fin_echo   the piped sentences the shipped text itself reproduces
+#   fin_markers whether the shipped text is a list
+case_refs() { # <inputs.json> <final>
+  jq -j '.stdin // ""' "$1" > "$work_tmp/stdin"
+  { cat "$work_tmp/stdin"; echo; jq -r '(.vars // {} | .[] | if type == "string" then . else tojson end), (.prompt // "")' "$1"; } > "$work_tmp/supplied"
+  salient "$work_tmp/supplied" > "$work_tmp/sup_sal"
+  salient "$2" > "$work_tmp/fin_sal"
+  sentences < "$work_tmp/stdin" | sort -u > "$work_tmp/stdin_sent"
+  sentences < "$2" | sort -u | comm -12 "$work_tmp/stdin_sent" - > "$work_tmp/fin_echo"
+  fin_markers=$(list_markers "$2")
+}
+
+# score <output> <checks>: prints "c/d/i/e/s=total" where c is failed
+# checks, d the supplied anchors the shipped text carried and this output
+# dropped, i the anchors this output carries that neither the inputs nor the
+# shipped text do (the bundle's INVENTED), e the piped sentences this output
+# hands back beyond the ones the shipped text itself carries, s a
+# list-vs-prose mismatch against the shipped text. Symmetric on a kept case:
+# any anchor the output has over or under its reference counts.
 score() {
-  local inputs="$1" final="$2" out="$3" checks="$4"
-  local supplied stdin dropped echoed shape om fm
-  supplied=$(mktemp); stdin=$(mktemp)
-  jq -j '.stdin' "$inputs" > "$stdin"
-  { cat "$stdin"; echo; jq -r '(.vars // {} | .[]), (.prompt // "")' "$inputs"; } > "$supplied"
-  dropped=$(comm -12 <(salient "$supplied") <(salient "$final") | comm -23 - <(salient "$out") | grep -c '')
-  echoed=$(sentences < "$stdin" | grep -Fxf - <(sentences < "$out") | sort -u | grep -c '')
-  om=$(list_markers "$out"); fm=$(list_markers "$final")
+  local out="$1" checks="$2" dropped invented echoed shape om
+  salient "$out" > "$work_tmp/out_sal"
+  dropped=$(comm -12 "$work_tmp/sup_sal" "$work_tmp/fin_sal" | comm -23 - "$work_tmp/out_sal" | grep -c '')
+  invented=$(comm -23 "$work_tmp/out_sal" "$work_tmp/sup_sal" | comm -23 - "$work_tmp/fin_sal" | grep -c '')
+  echoed=$(sentences < "$out" | sort -u | comm -12 "$work_tmp/stdin_sent" - | comm -23 - "$work_tmp/fin_echo" | grep -c '')
+  om=$(list_markers "$out")
   shape=0
-  if { (( om > 0 )) && (( fm == 0 )); } || { (( fm > 0 )) && (( om == 0 )); }; then shape=1; fi
-  rm -f "$supplied" "$stdin"
-  printf '%s/%s/%s/%s=%s' "$checks" "$dropped" "$echoed" "$shape" "$(( checks + dropped + echoed + shape ))"
+  if { (( om > 0 )) && (( fin_markers == 0 )); } || { (( fin_markers > 0 )) && (( om == 0 )); }; then shape=1; fi
+  printf '%s/%s/%s/%s/%s=%s' "$checks" "$dropped" "$invented" "$echoed" "$shape" "$(( checks + dropped + invented + echoed + shape ))"
 }
 
 # sign_p <wins> <losses>: one-sided exact sign test, P(X >= wins | n, 1/2).
@@ -238,13 +336,18 @@ sign_p() {
 }
 
 echo "=== replay: $recipe ==="
-echo "Champion:  $champion (template=$champion_sha)"
+echo "Champion:  $champion_label (template=$champion_sha)"
 if [[ -n "$candidate" ]]; then
   echo "Candidate: $candidate (template=$candidate_sha)"
   if [[ "$candidate_sha" == "$champion_sha" ]]; then
-    echo "Verdict: INCONCLUSIVE — the candidate template is byte-identical to the champion."
+    echo "Verdict: INCONCLUSIVE — the candidate's frontmatter and prompt block are identical to the champion's."
     exit 0
   fi
+fi
+if [[ -n "$model" ]]; then
+  echo "Model:     $model"
+else
+  echo "Model:     (unresolved — stored drafts stand in for the champion whatever model produced them)"
 fi
 kept_n=$(grep -c '|kept|' "$cases_tmp"); scaffold_n=$(grep -c '|scaffold|' "$cases_tmp"); rewrote_n=$(grep -c '|rewrote|' "$cases_tmp")
 echo "Cases:     $n_cases (kept=$kept_n scaffold=$scaffold_n rewrote=$rewrote_n; newest $limit)"
@@ -260,25 +363,26 @@ if [[ -n "$candidate" ]]; then
 else
   printf '  %-10s %-20s %-8s %-14s\n' case ts verdict champion
 fi
-while IFS='|' read -r id ts verdict draft final inputs sha checks; do
+while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel; do
   i=$((i + 1))
-  a=$(arm_output "$champion" "$champion_sha" "$id" "$draft" "$inputs" "$sha" "$checks")
+  case_refs "$inputs" "$final"
+  a=$(arm_output "$champion" "$champion_sha" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")
   if [[ "$a" == "ERR" ]]; then
     errors=$((errors + 1)); printf '  %-10s %-20s %-8s %s\n' "${id:0:10}" "$ts" "$verdict" "ERR (champion)"; continue
   fi
   a_out="${a%|*}"; a_checks="${a##*|}"
-  a_score=$(score "$inputs" "$final" "$a_out" "$a_checks")
+  a_score=$(score "$a_out" "$a_checks")
   champ_checks=$((champ_checks + a_checks))
   if [[ -z "$candidate" ]]; then
     printf '  %-10s %-20s %-8s %-14s\n' "${id:0:10}" "$ts" "$verdict" "$a_score"
     continue
   fi
-  b=$(arm_output "$candidate" "$candidate_sha" "$id" "$draft" "$inputs" "$sha" "$checks")
+  b=$(arm_output "$candidate" "$candidate_sha" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")
   if [[ "$b" == "ERR" ]]; then
     errors=$((errors + 1)); printf '  %-10s %-20s %-8s %-14s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "ERR (candidate)"; continue
   fi
   b_out="${b%|*}"; b_checks="${b##*|}"
-  b_score=$(score "$inputs" "$final" "$b_out" "$b_checks")
+  b_score=$(score "$b_out" "$b_checks")
   cand_checks=$((cand_checks + b_checks))
   a_total="${a_score##*=}"; b_total="${b_score##*=}"
   if (( b_total < a_total )); then
@@ -291,7 +395,7 @@ while IFS='|' read -r id ts verdict draft final inputs sha checks; do
   printf '  %-10s %-20s %-8s %-14s %-14s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "$b_score" "$result"
 done < "$cases_tmp"
 echo
-echo "Scores are checks/dropped/echoed/shape=total; lower is better."
+echo "Scores are checks/dropped/invented/echoed/shape=total; lower is better."
 
 if (( errors == n_cases )); then
   echo "Verdict: ERROR — every case failed to run; see $out_dir/*.err.txt"

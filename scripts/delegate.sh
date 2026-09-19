@@ -278,7 +278,11 @@ capture_draft() {
   if [[ -n "$input" ]] && capture_file "$input" "$dir/$stem.input.txt" "$max"; then
     names="$names"$'\t'"$stem.input.txt"
   fi
-  if [[ -n "$inputs" ]] && capture_file "$inputs" "$dir/$stem.inputs.json" "$max"; then
+  # The JSON is never truncated: a cut draft is still evidence, a cut JSON
+  # is unreadable, so over the cap it is simply not written and the row
+  # carries no inputs_file.
+  if [[ -n "$inputs" ]] && (( $(printf '%s' "$inputs" | wc -c | tr -d ' ') <= max )) \
+     && capture_file "$inputs" "$dir/$stem.inputs.json" "$max"; then
     names="$names"$'\t'"$stem.inputs.json"
   fi
   # Retention prune, inline so there is no cron dependency. 0 disables.
@@ -443,13 +447,13 @@ if [[ -n "$recipe" ]]; then
     echo "delegate: recipe '$recipe' not found at $recipe_file" >&2
     exit 2
   fi
-  # The template that produced this row, as a short content hash, so the
-  # outcomes before and after a recipe edit can be told apart without git
-  # archaeology (replay-recipe.sh reads it, self-improve.sh splits on it).
-  # Empty, and the field omitted, where shasum is missing.
-  if command -v shasum >/dev/null 2>&1; then
-    template_sha=$(shasum -a 256 "$recipe_file" 2>/dev/null | cut -c1-12)
-  fi
+  # The template that produced this row, as a short content hash of the
+  # frontmatter and the prompt block (lib/recipe.sh), so the outcomes before
+  # and after a recipe edit can be told apart without git archaeology
+  # (replay-recipe.sh reads it, self-improve.sh splits on it) while a
+  # calibration note does not start a new bucket. Empty, and the field
+  # omitted, where shasum is missing.
+  template_sha=$(recipe_template_sha "$recipe_file")
 
   # Frontmatter `tier:` (#411); an explicit tier (positional or --tier) still
   # wins. Read by `recipe_tier` in lib/recipe.sh, shared with the boundary hook.
@@ -1699,18 +1703,21 @@ if (( status == 0 )); then
   # scored against. After a retry $full_input carries the appended notice,
   # which is exactly the prompt that produced the draft stored beside it.
   # The structured inputs go beside it as JSON — the piped stdin, every
-  # --var as passed, the positional prompt when there was one — so
-  # replay-recipe.sh can render the same case under another template. jq
-  # builds it from the flat key/value list because values carry newlines.
+  # --var as passed, the resolved tier, the positional prompt when there was
+  # one — so replay-recipe.sh can render the same case under another
+  # template on the same tier. jq builds it from the flat key/value list
+  # because values carry newlines; a key passed twice keeps its first value,
+  # which is the one the substitution used (the second found no placeholder).
   inputs_json=""
   if [[ -n "$recipe" ]]; then
     kv_flat=()
     for kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
       kv_flat+=("${kv%%=*}" "${kv#*=}")
     done
-    inputs_json=$(jq -nc --arg recipe "$recipe" --arg stdin "$context" --arg prompt "$prompt" \
-      '{recipe:$recipe, stdin:$stdin,
-        vars:($ARGS.positional | [range(0; length; 2) as $i | {key: .[$i], value: .[$i+1]}] | from_entries)}
+    inputs_json=$(jq -nc --arg recipe "$recipe" --arg stdin "$context" --arg prompt "$prompt" --arg tier "$tier" \
+      '{recipe:$recipe, tier:$tier, stdin:$stdin,
+        vars:(reduce ($ARGS.positional | [range(0; length; 2) as $i | {key: .[$i], value: .[$i+1]}] | .[]) as $kv
+                ({}; if has($kv.key) then . else . + {($kv.key): $kv.value} end))}
        + (if $prompt != "" then {prompt:$prompt} else {} end)' \
       --args ${kv_flat[@]+"${kv_flat[@]}"} 2>/dev/null)
   fi

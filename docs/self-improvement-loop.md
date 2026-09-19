@@ -162,12 +162,20 @@ takes weeks per edit. The replay is the measurement. Every recipe call since
 so a stored case can be rendered again under another template.
 `replay-recipe.sh` does that for the template that is live and the one you
 edited, sends both through `delegate.sh` (so the checks and the retry are
-production's), and scores each output the way the bundle scores a pair: the
-wrapper's failed checks, the supplied anchors the shipped text carried and
-the output dropped, the piped sentences the output handed back, and a
-list-versus-prose mismatch. A kept delegation is a case too, with its draft
-as the reference, so an edit that disturbs an output the agent shipped
-unedited loses that case.
+production's, on the tier the case was made on), and scores each output the
+way the bundle scores a pair: the wrapper's failed checks, the supplied
+anchors the shipped text carried and the output dropped, the anchors the
+output carries that neither the inputs nor the shipped text do, the piped
+sentences the output hands back beyond those the shipped text itself
+carries, and a list-versus-prose mismatch. A kept delegation is a case too,
+with its draft as the reference, and the scoring is symmetric on it: an
+edit that disturbs an output the agent shipped unedited, by dropping or by
+adding, loses that case.
+
+The champion is the recipe as committed on `main`, read out of git into a
+temp dir, not the file in your checkout: you edit on a branch in this same
+checkout, so the working file is the candidate. Pass `--champion DIR` to
+compare against something else.
 
 ```bash
 bash scripts/replay-recipe.sh --recipe maintainer-reply --candidate /path/to/worktree/prompts
