@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.37.0...v0.38.0) (2026-09-19)
+
+
+### Features
+
+* gate recipe edits with an offline replay of stored cases ([#534](https://github.com/IsmaelMartinez/delegate-local/issues/534)) ([dcdb5cd](https://github.com/IsmaelMartinez/delegate-local/commit/dcdb5cd4f6ac241ccdce7b5a1855ce07890575f3))
+
 ## [0.37.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.36.0...v0.37.0) (2026-09-16)
 
 
