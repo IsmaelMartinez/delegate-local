@@ -28,7 +28,7 @@ Running it advances a watermark, so the next run sees only what is new. Use
 
 ## What the bundle gives you
 
-Five sections, in the order you should read them.
+Six sections, in the order you should read them.
 
 The **verdict tally** is the headline: how many of the new delegations were
 kept, used as a scaffold, or rewritten, and the usable rate over all of them.
@@ -45,6 +45,14 @@ recipe whose drafts are all thrown away is a different and worse problem, and
 a kept-only rate cannot tell the two apart. `commit-message` read 0% kept and
 80% usable on the same 25 rows the day this changed. Ignore a 0% on `n=1`; one
 delegation is not a signal.
+
+The **per-template outcomes** section appears only for a recipe that ran
+under more than one template in the window: one line per template, newest
+first, with the hash, the first row's timestamp and the same counts. Rows
+from before the hash was recorded are their own `(unhashed)` line. This is
+the post-merge read for an edit that landed, and the revert signal (see
+"Revert when the online read disagrees" below); when no recipe changed
+template there is nothing to read and the section is absent.
 
 The **deterministic check failures** section needs no interpretation. The
 wrapper already decided the output broke a constraint the recipe declared, so
@@ -143,6 +151,57 @@ be measured. And if the same defect survives two prompt-text fixes, stop
 rewording: the third attempt is a check, a new recipe, or a report saying the
 prose tier cannot do this.
 
+## Gate the fix with a replay
+
+A fix chosen on the evidence above is a hypothesis until it has been
+measured, and the online read is too slow to be the measurement: at eight to
+ten calls a day on a reply recipe, telling a fifteen-point lift from noise
+takes weeks per edit. The replay is the measurement. Every recipe call since
+2026-09-19 stores its structured inputs (stdin, each `--var`, the prompt) as
+`<stem>.inputs.json` beside the draft, and every row carries `template_sha`,
+so a stored case can be rendered again under another template.
+`replay-recipe.sh` does that for the template that is live and the one you
+edited, sends both through `delegate.sh` (so the checks and the retry are
+production's, on the tier the case was made on), and scores each output the
+way the bundle scores a pair: the wrapper's failed checks, the supplied
+anchors the shipped text carried and the output dropped, the anchors the
+output carries that neither the inputs nor the shipped text do, the piped
+sentences the output hands back beyond those the shipped text itself
+carries, and a list-versus-prose mismatch. A kept delegation is a case too,
+with its draft as the reference, and the scoring is symmetric on it: an
+edit that disturbs an output the agent shipped unedited, by dropping or by
+adding, loses that case.
+
+The champion is the recipe as committed on `main`, read out of git into a
+temp dir, not the file in your checkout: you edit on a branch in this same
+checkout, so the working file is the candidate. Pass `--champion DIR` to
+compare against something else.
+
+```bash
+bash scripts/replay-recipe.sh --recipe maintainer-reply --candidate /path/to/worktree/prompts
+```
+
+Read the verdict line. `ACCEPT` is more wins than losses at p < 0.05 on a
+one-sided sign test with no rise in failed checks: six wins to none, eight to
+one, ten to two. `REJECT` is the mirror. `INCONCLUSIVE` means the edit did
+not separate the arms on the cases there are, and the right response is
+usually to leave the recipe alone: the edit is not wrong, it is unmeasured,
+and the commonest cause is that it targets a defect the cases do not carry.
+The "newest third" line is the overfitting check: a candidate that wins only
+on the older cases the reasons were read from has learned those cases, not
+the defect.
+
+Greedy decoding is deterministic on this backend, so one pass per arm is the
+whole measurement. Outputs are cached by case and template hash, so a re-run
+against the same edit sends nothing, and a case whose stored template hash
+matches the champion's is scored from its stored draft without a call.
+Expect three to eight seconds per case per arm otherwise; `--limit` caps the
+case count (default 40, newest first).
+
+Quote the replay's summary and verdict lines in the PR body, with the n. A
+recipe edit with no replay line, or an inconclusive one, is a proposal, not a
+fix, and the PR should say so.
+
 ## Apply it
 
 Work on a branch, never on `main`. This checkout is symlinked in as the
@@ -157,6 +216,25 @@ Run the suites the change touches (`tests/test-delegate.sh`,
 `tests/test-prompts-library.sh`, `tests/test-self-improve.sh`), open a PR, and
 stop. **Never merge.** Opening a PR is a request for review. Report the PR
 number and the one-line reason it exists.
+
+## Revert when the online read disagrees
+
+The replay is the pre-merge gate; the online read is the post-merge one.
+Once an edit has landed, every row the recipe writes carries the new
+template hash, and the bundle's per-template section prints the recipe's
+outcomes under the new hash beside the previous one, with the n on each.
+Read it once the new template has thirty tracked rows, not before: below
+that a rate is a rumour, and the thrash rule already forbids a second edit
+inside 24 hours.
+
+If the new template's usable rate sits below the previous one's by more than
+the margin that n can resolve (at thirty rows a side, roughly twenty-five
+points; the replay's sign test was the fine instrument, this is the coarse
+one), open a revert PR, and write the failure into the recipe's calibration
+notes as a dated entry naming both hashes, the n on each side and the rates,
+so the next session does not try the same edit again. A revert is a normal
+outcome of the loop, not an incident. When the online read agrees with the
+replay, say so in the next bundle and move on.
 
 ## Do not fake progress
 
