@@ -51,6 +51,7 @@ case "$DELEGATE_PROMPTS_DIR" in
 esac
 checks=0
 case "$DELEGATE_PROMPTS_DIR" in *"${STUB_CHECKS:-__none__}"*) checks=1 ;; esac
+case "$*" in *"${STUB_FAIL_ON:-__none__}"*) echo "stub: refusing" >&2; exit 2 ;; esac
 echo "delegate-meta: model=\"stub-model\" tier=\"prose\" recipe=\"rp\" checks_failed=$checks" >&2
 exit 0
 EOF
@@ -239,6 +240,39 @@ rm -rf "$tmp/out"
 out=$(run --recipe rp --candidate "$tmp/echo")
 assert_contains "0/0/0/1/0=1" "$out" "a piped sentence handed back scores under echoed"
 assert_eq "1" "$(printf '%s\n' "$out" | grep -c ' LOSS$')" "the kept case is a LOSS when the candidate echoes what the shipped text did not"
+
+# 10b. A case that fails to run is neither a win nor a loss, and its
+# presence makes the verdict inconclusive whatever the others say; a
+# stored-draft copy that fails is an error too, not a zero-score arm.
+seed "$tmp/data" 6 "$champ_sha"
+printf '{"recipe":"rp","tier":"prose","stdin":"%s","vars":{"who":"zed"}}' "$STDIN" > "$tmp/data/drafts/202601T100000Z-rej00001.inputs.json"
+rm -rf "$tmp/out"
+out=$(STUB_FAIL_ON=who=zed run --recipe rp --candidate "$tmp/good")
+assert_contains "ERR (candidate)" "$out" "a case the wrapper refuses is marked ERR"
+assert_contains "Summary: n=7  wins=5  losses=0  ties=1  errors=1" "$out" "the errored case is left out of the tally"
+assert_contains "Verdict: INCONCLUSIVE — 1 case(s) failed to run" "$out" "an errored case blocks acceptance even at five wins to none"
+seed "$tmp/data" 2 "$champ_sha"
+chmod 000 "$tmp/data/drafts/202601T100000Z-rej00001.draft.txt"
+rm -rf "$tmp/out"
+out=$(run --recipe rp --candidate "$tmp/good")
+chmod 600 "$tmp/data/drafts/202601T100000Z-rej00001.draft.txt"
+assert_contains "ERR (champion)" "$out" "a stored draft that cannot be copied is an error, not a zero-score champion"
+assert_contains "Verdict: INCONCLUSIVE — 1 case(s) failed to run" "$out" "the copy failure blocks the verdict"
+
+# 10c. A verdict that names only a timestamp is not a case: two delegations
+# can share the second, and a replay takes no case it cannot be sure of.
+seed "$tmp/data" 2 "$champ_sha"
+stem="20260915T100000Z-tsonly01"
+printf '%s\n' "$BAD" > "$tmp/data/drafts/$stem.draft.txt"
+printf '%s\n' "$GOOD" > "$tmp/data/drafts/$stem.final.txt"
+printf '{"recipe":"rp","tier":"prose","stdin":"%s","vars":{"who":"alice"}}' "$STDIN" > "$tmp/data/drafts/$stem.inputs.json"
+printf '{"ts":"2026-09-15T10:00:00Z","source":"delegate","recipe":"rp","model":"stub-model","exit_status":0,"otel_span_id":"tsonly01","draft_file":"%s.draft.txt","inputs_file":"%s.inputs.json","template_sha":"%s","checks_failed":0}\n' \
+  "$stem" "$stem" "$champ_sha" >> "$tmp/data/m.jsonl"
+printf '{"ts":"2026-09-15T10:00:00Z","source":"feedback","ref_ts":"2026-09-15T10:00:00Z","kept":false,"reason":"r","final_file":"%s.final.txt"}\n' "$stem" >> "$tmp/data/m.jsonl"
+rm -rf "$tmp/out"
+out=$(run --recipe rp)
+assert_contains "Cases:     3 " "$out" "a ts-only verdict adds no case"
+assert_not_contains "tsonly01" "$out" "the ts-only delegation is not listed"
 
 # 11. Inputs that are not valid JSON are skipped, not run.
 seed "$tmp/data" 2 "$champ_sha"

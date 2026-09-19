@@ -1397,6 +1397,10 @@ metric_line=$(cat "$metrics")
 assert_contains '"exit_status":3' "$metric_line" "canary timeout: metrics row tagged status:3"
 assert_contains '"recipe":"canary-recipe"' "$metric_line" "canary timeout: metrics row carries recipe name"
 assert_contains '"model":"qwen3.6:35b-a3b"' "$metric_line" "canary timeout: metrics row carries resolved model"
+# A failed recipe row still names the template that was live.
+. "$REPO/scripts/lib/recipe.sh"
+assert_contains "\"template_sha\":\"$(recipe_template_sha "$prompts/canary-recipe.md")\"" "$metric_line" \
+  "canary timeout: metrics row carries template_sha"
 # Verdict nudge must NOT fire on a status:3 exit.
 if echo "$stderr_content" | grep -q "record verdict"; then
   echo "  FAIL  canary timeout: verdict nudge leaked"; fail=$((fail+1))

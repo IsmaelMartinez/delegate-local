@@ -380,7 +380,11 @@ emit_failure() {
   fp=$(( ${#recipe_template} + ${#prompt} ))
   fc=${#context}
   ftoks=$(compute_tokens_local "$fp" "$fc" 0)
-  log_metric "$ts_start" "$tier" "$fmodel" "$fp" "$fc" 0 "$fdur" "$fstatus" "$recipe" 0 "$fdur" "$otel_trace_id" "$otel_span_id" "$fs_temp" "$fs_top_p" "$fs_top_k" "$fs_pp" "$delegate_project"
+  # A failed recipe row still names its template (arg 27), so a stall or a
+  # flaky refusal is attributed to the template that was live; the eight
+  # check and capture fields between are empty, as nothing was generated.
+  log_metric "$ts_start" "$tier" "$fmodel" "$fp" "$fc" 0 "$fdur" "$fstatus" "$recipe" 0 "$fdur" "$otel_trace_id" "$otel_span_id" "$fs_temp" "$fs_top_p" "$fs_top_k" "$fs_pp" "$delegate_project" \
+    "" "" "" "" "" "" "" "" "${template_sha:-}"
   emit_otel_span "$start_epoch_ms" "$fdur" "$fstatus" "$otel_trace_id" "$otel_span_id" "$fmodel" "$backend" "$tier" "$recipe" "$fp" "$fc" 0 0 "$fdur" "$ftoks" "${recipe_template}${prompt}" "$context" "" "$delegate_project"
 }
 

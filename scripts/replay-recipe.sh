@@ -163,10 +163,15 @@ cases_tmp="$work_tmp/cases"
 
 if [[ -f "$metrics_file" ]]; then
   # `$d` is parent_join's delegate index; the drafts dir gets its own name.
+  # Only verdicts pinned by ref_id: a ts-only verdict on a second two
+  # delegations share would pair the other one's inputs and final with this
+  # case, and a replay decides on cases, so it takes none it cannot be sure
+  # of.
   jq -rs --arg recipe "$recipe" --arg ddir "$drafts_dir" '
     '"$parent_join"'
     latest_verdicts
-    | map(select(parent != null
+    | map(select((.ref_id // "") != ""
+                 and parent != null
                  and (parent.recipe // "") == $recipe
                  and (parent.inputs_file // "") != ""
                  and (parent.exit_status // 0) == 0))
@@ -273,7 +278,11 @@ arm_output() {
     if [[ -n "$row_sha" && "$row_sha" == "$sha" ]] \
        && { [[ -z "$model" ]] || [[ "$row_model" == "$model" ]]; } \
        && ! grep -qF '[truncated at ' "$draft"; then
-      cp "$draft" "$out.tmp" && printf '%s' "$row_checks" > "$checks_f" && mv "$out.tmp" "$out"
+      if ! { cp "$draft" "$out.tmp" && printf '%s' "$row_checks" > "$checks_f" && mv "$out.tmp" "$out"; }; then
+        rm -f "$out.tmp" "$checks_f"
+        echo "ERR"
+        return 0
+      fi
     else
       err="$stem.err.txt"
       echo "replay-recipe: $id under $sha ..." >&2
@@ -410,6 +419,13 @@ fi
 echo "Summary: n=$n_cases  wins=$wins  losses=$losses  ties=$ties  errors=$errors"
 echo "Checks failed: champion=$champ_checks  candidate=$cand_checks"
 echo "Newest third ($newest_n cases): wins=$newest_wins  losses=$newest_losses"
+# A case that did not run is neither a win nor a loss, and a gate that
+# accepts on the cases that happened to run would pass a candidate that
+# fails on the ones that did not.
+if (( errors > 0 )); then
+  echo "Verdict: INCONCLUSIVE — $errors case(s) failed to run; fix the errors (see $out_dir/*.err.txt) and run again."
+  exit 0
+fi
 if (( wins > losses )); then
   p=$(sign_p "$wins" "$losses")
   echo "Sign test: p=$p (one-sided, $wins wins to $losses)"
