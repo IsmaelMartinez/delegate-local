@@ -504,12 +504,27 @@ for base in maintainer-reply maintainer-review-reply; do
   else
     echo "  PASS  $base.md prompt template carries no unconditional SHORTER rule"; pass=$((pass+1))
   fi
-  # The prose side of the ceiling (CURATION) lives only in the evidence-led recipe.
+  # The evidence-led recipe narrowed on 2026-09-20: the facts are the
+  # maintainer's notes and the reply never describes the change back to its
+  # author; the every-anchor rule that produced that description is gone and
+  # the length is a numeric cap the caller can set.
   if [[ "$base" == maintainer-review-reply ]]; then
-    assert_contains "CURATION: the reply carries the anchors" "$rf_template" \
-      "$base.md prompt template carries the CURATION rule"
-    assert_contains "On a fact list of more than a few lines it runs well under the facts' length" "$rf_template" \
-      "$base.md CURATION states the ceiling relative to the facts, scoped to a long list"
+    assert_contains "VERIFIED-NOT-DESCRIBED" "$rf_template" \
+      "$base.md prompt template carries the VERIFIED-NOT-DESCRIBED guard"
+    if printf '%s' "$rf_template" | grep -q 'EVERY anchor in the FACTS block must appear'; then
+      echo "  FAIL  $base.md prompt template still demands every anchor in the facts"; fail=$((fail+1))
+    else
+      echo "  PASS  $base.md prompt template no longer demands every anchor in the facts"; pass=$((pass+1))
+    fi
+    assert_contains "or 80 words when that block is empty" "$rf_template" \
+      "$base.md LENGTH states the numeric cap and its default"
+    assert_contains "{{max_words}}" "$rf_template" \
+      "$base.md prompt template carries the {{max_words}} slot"
+    if printf '%s\n' "$rf_fm" | grep -qE '^[[:space:]]+max_words:[[:space:]]*integer\?'; then
+      echo "  PASS  $base.md declares max_words as an optional integer input"; pass=$((pass+1))
+    else
+      echo "  FAIL  $base.md does not declare max_words: integer?"; fail=$((fail+1))
+    fi
   fi
   # A clean approval has no ask (#471): `ask` is optional in both reply
   # recipes, the template stops after the evidence (or the cause sentence)
