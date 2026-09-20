@@ -15,8 +15,13 @@
 # (`inputs_file`), a verdict, and a reference for the shipped text: the
 # `final_file` a rejection stored, or the draft itself when the verdict was
 # kept. Kept cases are the regression guard — a candidate that changes an
-# output the agent shipped unedited has to answer for it, so every token the
-# output carries that the reference and the inputs do not counts against it.
+# output the agent shipped unedited has to answer for it, so every anchor
+# the output carries that the reference does not counts against it, whether
+# the inputs supplied it (`over`) or not (`invented`). The two are kept
+# apart because they name different defects: on 2026-09-20 six rejected
+# maintainer-review-reply drafts scored a perfect zero under the first four
+# measures while carrying 40-100% of the facts' anchors against a shipped
+# reply carrying 6%, the restatement the maintainer had rejected them for.
 #
 # Usage:
 #   replay-recipe.sh --recipe NAME [--candidate DIR] [--champion DIR]
@@ -348,22 +353,26 @@ case_refs() { # <inputs.json> <final>
   fin_path="$2"
 }
 
-# score <output> <checks>: prints "c/d/i/e/s=total" where c is failed
+# score <output> <checks>: prints "c/d/o/i/e/s=total" where c is failed
 # checks, d the supplied anchors the shipped text carried and this output
-# dropped, i the anchors this output carries that neither the inputs nor the
-# shipped text do (the bundle's INVENTED), e the piped sentences this output
-# hands back beyond the ones the shipped text itself carries, s a shape
-# mismatch against the shipped text (list against prose, or one paragraph
-# against three or more). Symmetric on a kept case: any anchor the output
-# has over or under its reference counts.
+# dropped, o the supplied anchors this output carries that the shipped text
+# does not (the facts handed back in the model's own sentences, which the
+# bundle lists as CUT and which no other measure sees), i the anchors this
+# output carries that neither the inputs nor the shipped text do (the
+# bundle's INVENTED), e the piped sentences this output hands back beyond
+# the ones the shipped text itself carries, s a shape mismatch against the
+# shipped text (list against prose, or one paragraph against three or
+# more). Symmetric on every case: an anchor the output has over or under
+# its reference counts, and on a kept case the reference is the draft.
 score() {
-  local out="$1" checks="$2" dropped invented echoed shape
+  local out="$1" checks="$2" dropped over invented echoed shape
   salient "$out" > "$work_tmp/out_sal"
   dropped=$(comm -12 "$work_tmp/sup_sal" "$work_tmp/fin_sal" | comm -23 - "$work_tmp/out_sal" | absent_from "$out" | grep -c '')
+  over=$(comm -12 "$work_tmp/out_sal" "$work_tmp/sup_sal" | comm -23 - "$work_tmp/fin_sal" | absent_from "$fin_path" | grep -c '')
   invented=$(comm -23 "$work_tmp/out_sal" "$work_tmp/sup_sal" | comm -23 - "$work_tmp/fin_sal" | absent_from "$work_tmp/supplied" | absent_from "$fin_path" | grep -c '')
   echoed=$(sentences < "$out" | sort -u | comm -12 "$work_tmp/stdin_sent" - | comm -23 - "$work_tmp/fin_echo" | grep -c '')
   shape=$(shape_mismatch "$out" "$fin_path")
-  printf '%s/%s/%s/%s/%s=%s' "$checks" "$dropped" "$invented" "$echoed" "$shape" "$(( checks + dropped + invented + echoed + shape ))"
+  printf '%s/%s/%s/%s/%s/%s=%s' "$checks" "$dropped" "$over" "$invented" "$echoed" "$shape" "$(( checks + dropped + over + invented + echoed + shape ))"
 }
 
 # sign_p <wins> <losses>: one-sided exact sign test, P(X >= wins | n, 1/2).
@@ -397,9 +406,9 @@ newest_n=$(( (n_cases + 2) / 3 ))
 newest_wins=0; newest_losses=0
 i=0
 if [[ -n "$candidate" ]]; then
-  printf '  %-10s %-20s %-8s %-14s %-14s %s\n' case ts verdict champion candidate result
+  printf '  %-10s %-20s %-8s %-16s %-16s %s\n' case ts verdict champion candidate result
 else
-  printf '  %-10s %-20s %-8s %-14s\n' case ts verdict champion
+  printf '  %-10s %-20s %-8s %-16s\n' case ts verdict champion
 fi
 while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel; do
   i=$((i + 1))
@@ -412,12 +421,12 @@ while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel; do
   a_score=$(score "$a_out" "$a_checks")
   champ_checks=$((champ_checks + a_checks))
   if [[ -z "$candidate" ]]; then
-    printf '  %-10s %-20s %-8s %-14s\n' "${id:0:10}" "$ts" "$verdict" "$a_score"
+    printf '  %-10s %-20s %-8s %-16s\n' "${id:0:10}" "$ts" "$verdict" "$a_score"
     continue
   fi
   b=$(arm_output "$candidate" "$candidate_sha" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")
   if [[ "$b" == "ERR" ]]; then
-    errors=$((errors + 1)); printf '  %-10s %-20s %-8s %-14s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "ERR (candidate)"; continue
+    errors=$((errors + 1)); printf '  %-10s %-20s %-8s %-16s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "ERR (candidate)"; continue
   fi
   b_out="${b%|*}"; b_checks="${b##*|}"
   b_score=$(score "$b_out" "$b_checks")
@@ -430,10 +439,10 @@ while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel; do
   else
     result=tie; ties=$((ties + 1))
   fi
-  printf '  %-10s %-20s %-8s %-14s %-14s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "$b_score" "$result"
+  printf '  %-10s %-20s %-8s %-16s %-16s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "$b_score" "$result"
 done < "$cases_tmp"
 echo
-echo "Scores are checks/dropped/invented/echoed/shape=total; lower is better."
+echo "Scores are checks/dropped/over/invented/echoed/shape=total; lower is better (over: supplied anchors the output carries that the shipped text does not)."
 
 if (( errors == n_cases )); then
   echo "Verdict: ERROR — every case failed to run; see $out_dir/*.err.txt"

@@ -45,6 +45,7 @@ ctx=$(cat)
 printf '%s :: %s\n' "$DELEGATE_PROMPTS_DIR $*" "$ctx" >> "${STUB_CALLS:-/dev/null}"
 case "$DELEGATE_PROMPTS_DIR" in
   *invent*) printf 'Fixed at src/main.js:412 for #2632 with 531 tests. See also #9999.\n' ;;
+  *over*)   printf 'Fixed at src/main.js:412 for #2632 with 531 tests. Ticket #777 covers it.\n' ;;
   *echo*)   printf '%s Fixed at src/main.js:412 for #2632 with 531 tests.\n' "$ctx" ;;
   *good*)   printf 'Fixed at src/main.js:412 for #2632 with 531 tests.\n' ;;
   *)        printf 'Fixed it.\n' ;;
@@ -121,6 +122,7 @@ write_recipe "$tmp/good" "CANDIDATE"
 write_recipe "$tmp/worse" "WORSE"
 write_recipe "$tmp/invent" "INVENT"
 write_recipe "$tmp/echo" "ECHO"
+write_recipe "$tmp/over" "OVER"
 write_recipe "$tmp/noted" "CHAMPION" "- 2026-09-19: a dated note, prose only"
 . "$REPO/scripts/lib/recipe.sh"
 champ_sha=$(recipe_template_sha "$tmp/champion/rp.md")
@@ -161,8 +163,8 @@ assert_eq "0" "$(calls)" \
   "champion outputs under the same template and model are the stored drafts: the wrapper is never called"
 # The supplied anchors are the path, the ref and three numbers (412 both
 # inside main.js:412 and alone, 2632, 531); the BAD draft carries none.
-assert_contains "0/5/0/0/0=5" "$out" "a rejected case scores the champion's five dropped anchors"
-assert_contains "0/0/0/0/0=0" "$out" "the kept case scores zero against itself"
+assert_contains "0/5/0/0/0/0=5" "$out" "a rejected case scores the champion's five dropped anchors"
+assert_contains "0/0/0/0/0/0=0" "$out" "the kept case scores zero against itself"
 assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$tmp/out/"*kept0001*.out.txt)" \
   "cache files are private (600)"
 
@@ -265,13 +267,27 @@ assert_contains $'--var who=alice\n --tier prose -- --tier is not a flag here ::
 seed "$tmp/data" 2 "$champ_sha"
 rm -rf "$tmp/out"
 out=$(run --recipe rp --candidate "$tmp/invent")
-assert_contains "0/0/2/0/0=2" "$out" "an invented ref scores under invented (the ref and its number)"
+assert_contains "0/0/0/2/0/0=2" "$out" "an invented ref scores under invented (the ref and its number)"
 assert_eq "1" "$(printf '%s\n' "$out" | grep -c ' LOSS$')" "the kept case is a LOSS when the candidate invents"
 assert_eq "2" "$(printf '%s\n' "$out" | grep -c ' WIN$')" "the rejected cases still win (2 defects against 5)"
 rm -rf "$tmp/out"
 out=$(run --recipe rp --candidate "$tmp/echo")
-assert_contains "0/0/0/1/0=1" "$out" "a piped sentence handed back scores under echoed"
+assert_contains "0/0/0/0/1/0=1" "$out" "a piped sentence handed back scores under echoed"
 assert_eq "1" "$(printf '%s\n' "$out" | grep -c ' LOSS$')" "the kept case is a LOSS when the candidate echoes what the shipped text did not"
+# A supplied anchor the shipped text does not carry is the facts handed
+# back in the model's own sentences; it scores under over, apart from
+# invented, and a kept case loses to it as it loses to an invention. The
+# anchor is supplied through the prompt so the stdin's five stay as they are.
+seed "$tmp/data" 2 "$champ_sha"
+for f in "$tmp/data/drafts/"*.inputs.json; do
+  printf '{"recipe":"rp","tier":"prose","stdin":"%s","vars":{"who":"alice"},"prompt":"see ticket #777"}' "$STDIN" > "$f"
+done
+rm -rf "$tmp/out"
+out=$(run --recipe rp --candidate "$tmp/over")
+assert_contains "0/0/2/0/0/0=2" "$out" "a supplied anchor the shipped text lacks scores under over (the ref and its number)"
+assert_eq "1" "$(printf '%s\n' "$out" | grep -c ' LOSS$')" "the kept case is a LOSS when the candidate carries a supplied anchor the draft did not"
+assert_eq "2" "$(printf '%s\n' "$out" | grep -c ' WIN$')" "the rejected cases still win (2 over against 5 dropped)"
+assert_eq "0" "$(printf '%s\n' "$out" | grep -c '0/0/0/2/0/0=2')" "an anchor the inputs supplied never counts as invented"
 
 # 10b. A case that fails to run is neither a win nor a loss, and its
 # presence makes the verdict inconclusive whatever the others say; a
