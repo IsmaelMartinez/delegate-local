@@ -1211,13 +1211,16 @@ fact_as_question_matches() {
 # mentions_in <text> — the @-mentions of a text, one per line, lowercased and
 # deduped. Fenced blocks and inline code spans are dropped first, so a
 # `@property` decorator or an `@Override` annotation inside a quoted snippet
-# is not a mention; a scoped package (`@scope/pkg`) is dropped by its
+# is not a mention (a fence that never closes is not a block, so its lines
+# are scanned after all, as truncated output often leaves one); a scoped package (`@scope/pkg`) is dropped by its
 # trailing slash; an email address never matches because its `@` is preceded
 # by a word character. The handle class is one bounded quantifier, so the
 # match is linear.
 mentions_in() {
   printf '%s\n' "$1" | tr -d '\r' \
-    | awk '/^[[:space:]]*```/ { fence = !fence; next } !fence' \
+    | awk '/^[[:space:]]*(```|~~~)/ { fence = !fence; buf = ""; next }
+           fence { buf = buf $0 "\n"; next } { print }
+           END { if (fence) printf "%s", buf }' \
     | sed 's/`[^`]*`//g' \
     | grep -oE '(^|[^A-Za-z0-9_./@-])@[A-Za-z0-9][A-Za-z0-9_-]{0,38}/?' \
     | grep -v '/$' \
@@ -1228,7 +1231,7 @@ mentions_in() {
 run_output_checks() {
 # The result and the counters (output, checks_*, capability_failed) are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio fact_questions caller_text allowed unbidden mention_tok
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio fact_questions caller_text allowed unbidden mention_tok recipient_seen caller_mentions
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -1610,18 +1613,32 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         if [[ -n "$cval" ]]; then
           checks_run=$((checks_run + 1))
           allowed=""
+          recipient_seen=""
+          caller_text=""
+          # The first value of a key passed twice is the one the template
+          # substituted. Every other --var is text the caller asked for word
+          # for word (a lead, an opener, a sign-off), so a mention inside it
+          # is the caller's, as no_fact_as_question treats caller questions.
           for _kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
             if [[ "${_kv%%=*}" == "$cval" ]]; then
-              allowed="${_kv#*=}"
+              if [[ -z "$recipient_seen" ]]; then
+                allowed="${_kv#*=}"
+                recipient_seen=1
+              fi
+            else
+              caller_text="${caller_text}${_kv#*=}
+"
             fi
           done
           # The caller writes the handle with or without the `@`; compare the
           # bare form, lowercased, as GitHub and GitLab resolve them.
           allowed=$(printf '%s' "$allowed" | tr -d '@[:space:]' | tr '[:upper:]' '[:lower:]')
+          caller_mentions=$'\n'$(mentions_in "$caller_text")$'\n'
           unbidden=""
           while IFS= read -r mention_tok; do
             [[ -z "$mention_tok" ]] && continue
             [[ -n "$allowed" && "$mention_tok" == "$allowed" ]] && continue
+            [[ "$caller_mentions" == *$'\n'"$mention_tok"$'\n'* ]] && continue
             unbidden="${unbidden:+$unbidden }@$mention_tok"
           done < <(mentions_in "$output")
           if [[ -n "$unbidden" ]]; then

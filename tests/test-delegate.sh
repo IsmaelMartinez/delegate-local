@@ -7104,6 +7104,10 @@ make_mock_curl_think "$tmp" 'The guard is a decorator:\n\n```python\n@property\n
 out=$(run_um)
 assert_check_clean "$out" "unbidden-mention: a decorator inside a fenced block is not a mention"
 : > "$metrics"
+make_mock_curl_think "$tmp" 'The guard is a decorator:\n\n~~~python\n@property\ndef x(self): ...\n~~~\n\nReported by tomgunning.'
+out=$(run_um)
+assert_check_clean "$out" "unbidden-mention: a decorator inside a tilde fence is not a mention"
+: > "$metrics"
 make_mock_curl_think "$tmp" 'The `@override` annotation is the one to copy.'
 out=$(run_um)
 assert_check_clean "$out" "unbidden-mention: an annotation in an inline code span is not a mention"
@@ -7115,6 +7119,46 @@ assert_check_clean "$out" "unbidden-mention: an email address is not a mention"
 make_mock_curl_think "$tmp" 'Pin @scope/pkg to the patched release before merging.'
 out=$(run_um)
 assert_check_clean "$out" "unbidden-mention: a scoped package is not a mention"
+
+# 53d2. A fence that never closes is not a block: truncated output often
+# leaves one, and a mention after it must still be seen.
+: > "$metrics"
+make_mock_curl_think "$tmp" 'Thanks for the report.\n\n```\nsee above\n@tomgunning, see above'
+out=$(run_um)
+assert_contains "check 'no_unbidden_mention' FAILED" "$out" \
+  "unbidden-mention: a mention after an unclosed fence is still caught"
+
+# 53d3. A key passed twice keeps its first value, the one the template
+# substituted, so that handle is the permitted one.
+: > "$metrics"
+make_mock_curl_think "$tmp" '@nneul, thanks for the report.'
+out=$(printf '%s\n' "$um_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe um --var recipient=nneul --var recipient=other prose "go" 2>&1 >/dev/null)
+assert_check_clean "$out" "unbidden-mention: a repeated recipient var permits its first value"
+
+# 53d4. A mention the caller supplied verbatim in another --var (a lead, an
+# opener, a sign-off) is the caller's; a bystander beside it is still not.
+{ printf -- '---\ntier: prose\ninputs:\n  stdin: string\n  recipient: string?\n  signoff: string?\nchecks:\n  no_unbidden_mention: recipient\n---\n'
+  printf '# um_lead\n\n## When to use\nn/a\n\n## Prompt template\n\n```\nReply using only the facts below.\n\n=== RECIPIENT ===\n{{recipient}}\n\n=== SIGNOFF ===\n{{signoff}}\n\n=== FACTS ===\n{{stdin}}\n```\n\n## Calibration notes\nn/a\n'; } > "$prompts/um_lead.md"
+run_um_lead() {
+  printf '%s\n' "$um_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe um_lead --var 'signoff=cc @IsmaelMartinez' prose "go" 2>&1 >/dev/null
+}
+: > "$metrics"
+make_mock_curl_think "$tmp" 'Thanks for the report. cc @IsmaelMartinez'
+out=$(run_um_lead)
+assert_check_clean "$out" "unbidden-mention: a mention the caller supplied in another var is permitted"
+: > "$metrics"
+make_mock_curl_think "$tmp" '@tomgunning, thanks for the report. cc @IsmaelMartinez'
+out=$(run_um_lead)
+assert_contains "check 'no_unbidden_mention' FAILED" "$out" \
+  "unbidden-mention: a caller-supplied mention does not excuse a bystander"
+assert_not_contains '@ismaelmartinez' "$out" \
+  "unbidden-mention: only the bystander is named, not the caller's handle"
 
 # 53e. Undeclared is off: a recipe that does not name the var never runs it.
 { printf -- '---\ntier: prose\nchecks:\n  no_padding_tail: true\n---\n'
