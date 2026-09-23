@@ -1096,7 +1096,7 @@ retry_constraint_for() {
       echo "no_context_echo: reproduce none of the supplied sentences as written; carry their paths, numbers and references inside sentences of your own." ;;
     max_context_ratio)
       # A copy ban says nothing about length, so this one says it out loud (#487).
-      echo "max_context_ratio: the answer runs about as long as the supplied facts; curate it to well under the facts' length, carrying every path, number and reference inside new sentences." ;;
+      echo "max_context_ratio: the answer runs about as long as the supplied facts; curate it to well under the facts' length, in sentences of your own." ;;
     *)
       echo "$name: the constraint of that name, stated above, was not met." ;;
   esac
@@ -1594,7 +1594,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             ctx_ratio=$(awk -v o="${#output}" -v c="${#context}" 'BEGIN { printf "%.2f", o / c }')
             if awk -v o="${#output}" -v c="${#context}" -v r="$cval" 'BEGIN { exit !(o / c >= r) }'; then
               echo "delegate: check 'max_context_ratio' FAILED — the answer is ${#output} chars against ${#context} chars of context (ratio $ctx_ratio >= $cval)" >&2
-              echo "  The draft runs about as long as its facts; curate them, well under the facts' length, carrying every anchor inside new sentences." >&2
+              echo "  The draft runs about as long as its facts; curate them, well under the facts' length, in sentences of your own." >&2
               checks_failed=$((checks_failed + 1))
               checks_failed_names="${checks_failed_names:+$checks_failed_names,}max_context_ratio"
               capability_failed=$((capability_failed + 1))

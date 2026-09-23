@@ -111,7 +111,7 @@ Correct: @<handle>, <opener, verbatim, if given> <verdict>.
 - `{{opener}}` — optional opening sentence placed verbatim after the recipient handle and before the verdict (e.g. `Thanks for the thorough bisect.`). The caller writes it; the model never invents gratitude, so a caller who wants the reply to thank the contributor MUST supply it here. Omit for none, and the verdict opens the reply with no thanks at all.
 - `{{recipient}}` — optional `@handle` to open with. Omit to address the reader as "you".
 - `{{signoff}}` — optional closer appended verbatim (e.g. `Thanks again!`). Omit for none.
-- `{{max_words}}` — optional word cap for the reply, sign-off excluded; 80 when omitted. Every caller measured on 2026-09-20 wrote its cap into the facts ("Under 60 words, thanks first, verdict first"), where the recipe reads it as a fact; this is the cap's slot.
+- `{{max_words}}` — optional word cap for the reply, sign-off excluded; 80 when omitted. It is an instruction in the prompt, not a check: `delegate.sh` counts no words, so the caller confirms it in the verify step below, and the ceiling the wrapper does enforce is the character-based `max_context_ratio`. Every caller measured on 2026-09-20 wrote its cap into the facts ("Under 60 words, thanks first, verdict first"), where the recipe reads it as a fact; this is the cap's slot.
 
 ## Invocation
 
