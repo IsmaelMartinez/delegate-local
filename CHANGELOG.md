@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.39.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.38.0...v0.39.0) (2026-09-23)
+
+
+### Features
+
+* add no_unbidden_mention check to the reply recipes ([#541](https://github.com/IsmaelMartinez/delegate-local/issues/541)) ([ea895d6](https://github.com/IsmaelMartinez/delegate-local/commit/ea895d6dbd29a3765dad33af61a789aa5debe541))
+* add usable-rate panels to the calibration dashboard ([#543](https://github.com/IsmaelMartinez/delegate-local/issues/543)) ([e5aa12d](https://github.com/IsmaelMartinez/delegate-local/commit/e5aa12d8722722c16de5901dfe6b4399300632c7))
+* narrow maintainer-review-reply to what was verified, under a cap ([#538](https://github.com/IsmaelMartinez/delegate-local/issues/538)) ([a5fa282](https://github.com/IsmaelMartinez/delegate-local/commit/a5fa2823ee1d935db5ffd15443a596d0f8ab9edf))
+* score supplied anchors carried past the shipped text in the replay ([#537](https://github.com/IsmaelMartinez/delegate-local/issues/537)) ([50faae1](https://github.com/IsmaelMartinez/delegate-local/commit/50faae1ca5a2148fbe89608d1d6ee58976386685))
+* sync estimated_tokens_avoided to Loki and add scaffold rate gauge ([#544](https://github.com/IsmaelMartinez/delegate-local/issues/544)) ([6c08620](https://github.com/IsmaelMartinez/delegate-local/commit/6c0862011f6ab6ac76ed44d08928c1b017d3a755))
+
+
+### Maintenance
+
+* **deps:** bump google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml ([#540](https://github.com/IsmaelMartinez/delegate-local/issues/540)) ([18a31ad](https://github.com/IsmaelMartinez/delegate-local/commit/18a31ad68a56b91673a12972b7ff7869f00df5a1))
+
 ## [0.38.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.37.0...v0.38.0) (2026-09-19)
 
 
