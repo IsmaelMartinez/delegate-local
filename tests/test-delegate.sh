@@ -7108,6 +7108,10 @@ make_mock_curl_think "$tmp" 'The guard is a decorator:\n\n~~~python\n@property\n
 out=$(run_um)
 assert_check_clean "$out" "unbidden-mention: a decorator inside a tilde fence is not a mention"
 : > "$metrics"
+make_mock_curl_think "$tmp" 'Quoted as sent:\n\n````markdown\n```python\n@property\n```\n@override\n````\n\nReported by tomgunning.'
+out=$(run_um)
+assert_check_clean "$out" "unbidden-mention: a nested fence does not close a longer one early"
+: > "$metrics"
 make_mock_curl_think "$tmp" 'The `@override` annotation is the one to copy.'
 out=$(run_um)
 assert_check_clean "$out" "unbidden-mention: an annotation in an inline code span is not a mention"

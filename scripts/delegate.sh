@@ -1211,15 +1211,23 @@ fact_as_question_matches() {
 # mentions_in <text> — the @-mentions of a text, one per line, lowercased and
 # deduped. Fenced blocks and inline code spans are dropped first, so a
 # `@property` decorator or an `@Override` annotation inside a quoted snippet
-# is not a mention (a fence that never closes is not a block, so its lines
-# are scanned after all, as truncated output often leaves one); a scoped package (`@scope/pkg`) is dropped by its
-# trailing slash; an email address never matches because its `@` is preceded
-# by a word character. The handle class is one bounded quantifier, so the
-# match is linear.
+# is not a mention. A fence closes, as in CommonMark, only on a bare run of
+# its own character at least as long as the one that opened it, so a
+# ```python line nested in a four-backtick block does not end the block; a
+# fence that never closes is not a block, so its lines are scanned after all,
+# as truncated output often leaves one. A scoped package (`@scope/pkg`) is
+# dropped by its trailing slash; an email address never matches because its
+# `@` is preceded by a word character. The handle class is one bounded
+# quantifier and the fence run is counted by a plain loop, so both are linear.
 mentions_in() {
   printf '%s\n' "$1" | tr -d '\r' \
-    | awk '/^[[:space:]]*(```|~~~)/ { fence = !fence; buf = ""; next }
-           fence { buf = buf $0 "\n"; next } { print }
+    | awk 'function run(s, c,   n) { n = 0; while (substr(s, n + 1, 1) == c) n++; return n }
+           { line = $0; sub(/^[[:space:]]*/, "", line); c = substr(line, 1, 1); n = 0
+             if (c == "`" || c == "~") n = run(line, c) }
+           !fence && n >= 3 { fence = 1; fc = c; fn = n; buf = ""; next }
+           fence && c == fc && n >= fn && substr(line, n + 1) ~ /^[[:space:]]*$/ { fence = 0; buf = ""; next }
+           fence { buf = buf $0 "\n"; next }
+           { print }
            END { if (fence) printf "%s", buf }' \
     | sed 's/`[^`]*`//g' \
     | grep -oE '(^|[^A-Za-z0-9_./@-])@[A-Za-z0-9][A-Za-z0-9_-]{0,38}/?' \
