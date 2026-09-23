@@ -111,7 +111,7 @@
       "id": 42,
       "type": "gauge",
       "title": "Usable rate",
-      "description": "Share of verdicts recorded as hit or scaffold: the draft was shipped as-is or edited into what shipped. The HIT rate beside it counts only the first; a scaffold is the common outcome, so this is the rate the self-improvement loop ranks recipes by (docs/self-improvement-loop.md).",
+      "description": "Share of verdict rows recorded as hit or scaffold: the draft was shipped as-is or edited into what shipped. The HIT rate beside it counts only the first. Like every panel here it counts raw verdict rows, so a revised verdict counts twice; self-improve.sh keeps only the latest verdict per delegation, so its usable rate can differ slightly.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
