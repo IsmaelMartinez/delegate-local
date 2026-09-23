@@ -78,7 +78,8 @@
               }
             ]
           },
-          "mappings": []
+          "mappings": [],
+          "noValue": "no verdicts"
         },
         "overrides": []
       },
@@ -101,7 +102,73 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
+          "expr": "(sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__range])) or 0 * sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
+          "queryType": "instant"
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "type": "gauge",
+      "title": "Usable rate",
+      "description": "Share of verdict rows recorded as hit or scaffold: the draft was shipped as-is or edited into what shipped. The HIT rate beside it counts only the first. Like every panel here it counts raw verdict rows, so a revised verdict counts twice; self-improve.sh keeps only the latest verdict per delegation, so its usable rate can differ slightly.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.6
+              },
+              {
+                "color": "green",
+                "value": 0.8
+              }
+            ]
+          },
+          "mappings": [],
+          "noValue": "no verdicts"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "(sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" or scaffold=\"true\" [$__range])) or 0 * sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
           "queryType": "instant"
         }
       ]
@@ -117,8 +184,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
-        "x": 4,
+        "w": 3,
+        "x": 8,
         "y": 0
       },
       "fieldConfig": {
@@ -178,8 +245,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
-        "x": 8,
+        "w": 3,
+        "x": 11,
         "y": 0
       },
       "fieldConfig": {
@@ -239,8 +306,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
-        "x": 12,
+        "w": 3,
+        "x": 14,
         "y": 0
       },
       "fieldConfig": {
@@ -300,8 +367,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
-        "x": 16,
+        "w": 3,
+        "x": 17,
         "y": 0
       },
       "fieldConfig": {
@@ -414,8 +481,8 @@
     {
       "id": 31,
       "type": "timeseries",
-      "title": "HIT rate trend",
-      "description": "Share of verdicts recorded as hit, per step.",
+      "title": "HIT and usable rate trend",
+      "description": "Share of verdicts recorded as hit, and as usable (hit or scaffold), per step.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -465,9 +532,20 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__auto])) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__auto]))",
+          "expr": "(sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" [$__auto])) or 0 * sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__auto]))) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "hit rate"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "(sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" or scaffold=\"true\" [$__auto])) or 0 * sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__auto]))) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "usable rate"
         }
       ]
     },
@@ -610,7 +688,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | recipe!=\"\" [$__auto])) / sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | recipe!=\"\" [$__auto]))",
+          "expr": "(sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | recipe!=\"\" [$__auto])) or 0 * sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | recipe!=\"\" [$__auto]))) / sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | recipe!=\"\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "{{recipe}}"
         }
@@ -671,7 +749,131 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\")) / sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))",
+          "expr": "(sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\")) or 0 * sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))) / sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))",
+          "queryType": "instant",
+          "legendFormat": "{{project}}"
+        }
+      ]
+    },
+    {
+      "id": 43,
+      "type": "timeseries",
+      "title": "Usable rate by recipe",
+      "description": "Per-recipe share of verdicts recorded as hit or scaffold. Read it beside HIT rate by recipe: a recipe high here and low there drafts well but is always edited.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "(sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" or scaffold=\"true\" | recipe!=\"\" [$__auto])) or 0 * sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | recipe!=\"\" [$__auto]))) / sum by (recipe) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | recipe!=\"\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{recipe}}"
+        }
+      ]
+    },
+    {
+      "id": 44,
+      "type": "bargauge",
+      "title": "Usable rate by project",
+      "description": "Per-repo share of verdicts recorded as hit or scaffold.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        },
+        "showUnfilled": true,
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "(sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" or scaffold=\"true\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\")) or 0 * sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))) / sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))",
           "queryType": "instant",
           "legendFormat": "{{project}}"
         }
@@ -690,7 +892,7 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 21
+        "y": 29
       },
       "options": {
         "showTime": true,
@@ -728,7 +930,7 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 21
+        "y": 29
       },
       "options": {
         "showTime": true,

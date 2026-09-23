@@ -177,6 +177,27 @@ if [[ -f "$CALIBRATION" ]]; then
   fi
 fi
 
+# 5e. Scaffold is the common verdict, so the calibration dashboard keeps a
+#     usable-rate panel (hit or scaffold) beside the hit-only ones; without it
+#     the largest verdict class shows up in no rate at all.
+if [[ -f "$CALIBRATION" ]]; then
+  usable_re='kept="true" or scaffold="true"'
+  for title in "Usable rate" "Usable rate by recipe" "Usable rate by project"; do
+    n=$(jq -r --arg t "$title" --arg re "$usable_re" '[.panels[] | select(.title == $t) | select((.targets // []) | length > 0 and all(.expr // "" | contains($re)))] | length' "$CALIBRATION" 2>/dev/null)
+    if [[ "$n" == "1" ]]; then
+      echo "  PASS  delegate-calibration.json: \"$title\" counts scaffold beside hit"; pass=$((pass+1))
+    else
+      echo "  FAIL  delegate-calibration.json: no \"$title\" panel whose queries all count scaffold as usable"; fail=$((fail+1))
+    fi
+  done
+  n=$(jq -r --arg re "$usable_re" '[.panels[] | select(.title | test("rate trend")) | .targets[]? | select(.legendFormat == "usable rate" and (.expr // "" | contains($re)))] | length' "$CALIBRATION" 2>/dev/null)
+  if [[ "$n" == "1" ]]; then
+    echo "  PASS  delegate-calibration.json: the rate trend carries a usable-rate series"; pass=$((pass+1))
+  else
+    echo "  FAIL  delegate-calibration.json: the rate trend has no usable-rate series counting scaffold"; fail=$((fail+1))
+  fi
+fi
+
 # 5d. The canary-failure panel keys on exit_status=3, the code delegate.sh
 #     writes for a canary stall; exit 2 is usage only and never reaches metrics.
 ERRORS="$DASHBOARDS/grafana/delegate-errors.json"
