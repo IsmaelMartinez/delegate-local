@@ -177,6 +177,18 @@ if [[ -f "$CALIBRATION" ]]; then
   fi
 fi
 
+# 5e. Scaffold is the common verdict, so the calibration dashboard keeps a
+#     usable-rate panel (hit or scaffold) beside the hit-only ones; without it
+#     the largest verdict class shows up in no rate at all.
+if [[ -f "$CALIBRATION" ]]; then
+  usable_panels=$(jq -r '[.panels[] | select((.targets // []) | map(.expr // "") | join(" ") | contains("kept=\"true\" or scaffold=\"true\""))] | length' "$CALIBRATION" 2>/dev/null)
+  if [[ "$usable_panels" -ge 1 ]]; then
+    echo "  PASS  delegate-calibration.json: usable-rate panel counts scaffold beside hit"; pass=$((pass+1))
+  else
+    echo "  FAIL  delegate-calibration.json: no panel counts scaffold as usable (kept=\"true\" or scaffold=\"true\")"; fail=$((fail+1))
+  fi
+fi
+
 # 5d. The canary-failure panel keys on exit_status=3, the code delegate.sh
 #     writes for a canary stall; exit 2 is usage only and never reaches metrics.
 ERRORS="$DASHBOARDS/grafana/delegate-errors.json"
