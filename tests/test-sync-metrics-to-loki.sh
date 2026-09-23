@@ -142,6 +142,21 @@ assert_eq "commit-message" "$(printf '%s' "$fb4b" | jq -r '.recipe // ""')" \
 assert_eq "" "$(printf '%s' "$fb4b" | jq -r '.estimated_tokens_avoided // ""')" \
   "T4c: but not the tokens, which its first verdict already carries"
 
+# --- T4d: a ts-only verdict and a later id-pinned one are the same delegation -
+# Keyed apart ("ts:" vs "id:"), both took the tokens; resolving the ts form to
+# the parent's span makes the id-pinned repeat a repeat.
+met5="$tmp/m5.jsonl"; state5="$tmp/state5"; body5="$tmp/body5.json"
+make_mock_curl "$tmp" "$body5"
+cat > "$met5" <<'EOF'
+{"ts":"2026-05-10T12:00:00Z","source":"delegate","tier":"prose","recipe":"commit-message","otel_span_id":"cccc","estimated_tokens_avoided":30,"exit_status":0}
+{"ts":"2026-05-10T12:01:00Z","source":"feedback","ref_ts":"2026-05-10T12:00:00Z","kept":true}
+{"ts":"2026-05-10T12:02:00Z","source":"feedback","ref_ts":"2026-05-10T12:00:00Z","ref_id":"cccc","kept":false,"scaffold":true}
+EOF
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  bash "$SCRIPT" --full --metrics-file "$met5" --state-file "$state5" --loki-url http://x >/dev/null 2>&1
+toks5=$(jq -r '[.streams[] | select(.stream.source=="feedback") | .values[][1] | fromjson | .estimated_tokens_avoided // empty] | join(",")' "$body5")
+assert_eq "30" "$toks5" "T4d: a ts-only verdict and an id-pinned repeat carry the tokens once between them"
+
 # --- T5: watermark idempotency ---------------------------------------------
 assert_eq "4" "$(cat "$state")" "T5: watermark set to row count"
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \

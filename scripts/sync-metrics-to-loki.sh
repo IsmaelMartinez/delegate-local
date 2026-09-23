@@ -100,14 +100,21 @@ parent_map=$(jq -sc '
 # recipe and tier. The tokens go only on the FIRST verdict row per delegation,
 # so the dashboard's tokens-by-verdict split counts each delegation once. The
 # latest verdict would be the better bucket, but a row already pushed cannot be
-# taken back when a later one arrives; the first is stable. Keyed as the
-# lookup is (ref_id, else ref_ts) and valued by a hash of the row, which keeps
-# the map small enough to pass as an argument.
+# taken back when a later one arrives; the first is stable. A verdict names its
+# delegation by ref_id or, before ref_id existed, by ref_ts, so both forms are
+# resolved to the parent's span first, as metrics-summary.sh does, or a
+# ts-only verdict and a later id-pinned one would each take the tokens. The
+# result is the set of first rows by hash, small enough to pass as an argument.
 first_verdict=$(jq -sc '
   def nshash: tojson | explode | reduce .[] as $c (0; ((. * 31) + $c) % 1000000000);
-  reduce (.[] | select((.source // "delegate") == "feedback" and (.ref_id != null or .ref_ts != null))) as $f
-    ({}; (if ($f.ref_id // "") != "" then "id:" + $f.ref_id else "ts:" + $f.ref_ts end) as $k
-         | if has($k) then . else .[$k] = ($f | nshash) end)
+  (reduce (.[] | select((.source // "delegate") == "delegate" and .ts != null and (.otel_span_id // "") != "")) as $r
+     ({}; .[$r.ts] = $r.otel_span_id)) as $span_at
+  | reduce (.[] | select((.source // "delegate") == "feedback" and (.ref_id != null or .ref_ts != null))) as $f
+      ({keys: {}, first: {}};
+       (if ($f.ref_id // "") != "" then $f.ref_id
+        else ($span_at[$f.ref_ts] // ("ts:" + $f.ref_ts)) end) as $k
+       | if .keys[$k] then . else .keys[$k] = true | .first[$f | nshash | tostring] = true end)
+  | .first
 ' "$metrics_file")
 
 # pipefail is on, so a torn final line (the sync racing an in-progress append)
@@ -124,8 +131,7 @@ payload=$(tail -n "+$start_line" "$metrics_file" \
         # never overwrites a field the row already has
         | ( if (.source // "delegate") == "feedback"
             then (($parents["id:" + (.ref_id // "")]) // (if .ref_ts != null then $parents["ts:" + .ref_ts] else null end)) as $p
-                 | (if (.ref_id // "") != "" then "id:" + .ref_id else "ts:" + (.ref_ts // "") end) as $k
-                 | ($first[$k] == nshash) as $is_first
+                 | ($first[nshash | tostring] == true) as $is_first
                  | if $p != null
                    then ($p | with_entries(select(.value != "" and (.key != "estimated_tokens_avoided" or $is_first)))) + .
                    else . end

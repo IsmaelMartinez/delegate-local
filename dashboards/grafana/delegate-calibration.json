@@ -1037,7 +1037,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | unwrap estimated_tokens_avoided [$__range]))",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | unwrap estimated_tokens_avoided | __error__=\"\" [$__range]))",
           "queryType": "instant",
           "legendFormat": "hit"
         },
@@ -1048,7 +1048,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | scaffold=\"true\" | unwrap estimated_tokens_avoided [$__range]))",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | scaffold=\"true\" | unwrap estimated_tokens_avoided | __error__=\"\" [$__range]))",
           "queryType": "instant",
           "legendFormat": "scaffold"
         },
@@ -1059,7 +1059,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" | scaffold!=\"true\" | unwrap estimated_tokens_avoided [$__range]))",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" | scaffold!=\"true\" | unwrap estimated_tokens_avoided | __error__=\"\" [$__range]))",
           "queryType": "instant",
           "legendFormat": "miss"
         }
@@ -1165,7 +1165,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | unwrap estimated_tokens_avoided [$__auto]))",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | unwrap estimated_tokens_avoided | __error__=\"\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "hit"
         },
@@ -1176,7 +1176,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | scaffold=\"true\" | unwrap estimated_tokens_avoided [$__auto]))",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | scaffold=\"true\" | unwrap estimated_tokens_avoided | __error__=\"\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "scaffold"
         },
@@ -1187,7 +1187,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" | scaffold!=\"true\" | unwrap estimated_tokens_avoided [$__auto]))",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" | scaffold!=\"true\" | unwrap estimated_tokens_avoided | __error__=\"\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "miss"
         }

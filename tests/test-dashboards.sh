@@ -34,6 +34,9 @@ boundary suggested_recipe delegated body_chars below_floor denied enforce_skippe
 
 is_known() {
   local needle="$1" f
+  # Loki's own label, set when a stage fails (`| __error__=""` drops those
+  # samples after an unwrap); it is not a JSONL field.
+  [[ "$needle" == "__error__" ]] && return 0
   for f in $KNOWN_FIELDS; do [[ "$f" == "$needle" ]] && return 0; done
   return 1
 }
