@@ -52,7 +52,7 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
+        "w": 3,
         "x": 0,
         "y": 0
       },
@@ -108,6 +108,64 @@
       ]
     },
     {
+      "id": 45,
+      "type": "gauge",
+      "title": "Scaffold rate",
+      "description": "Share of verdict rows recorded as scaffold: the draft was edited into what shipped rather than shipped as-is or thrown away. Neither high nor low is good on its own, so the gauge has one colour; read it beside HIT rate and Usable rate, which is the two added together.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 3,
+        "x": 3,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "noValue": "no verdicts"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "(sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | scaffold=\"true\" [$__range])) or 0 * sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))) / sum(count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" [$__range]))",
+          "queryType": "instant"
+        }
+      ]
+    },
+    {
       "id": 42,
       "type": "gauge",
       "title": "Usable rate",
@@ -118,8 +176,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
-        "x": 4,
+        "w": 3,
+        "x": 6,
         "y": 0
       },
       "fieldConfig": {
@@ -185,7 +243,7 @@
       "gridPos": {
         "h": 5,
         "w": 3,
-        "x": 8,
+        "x": 9,
         "y": 0
       },
       "fieldConfig": {
@@ -246,7 +304,7 @@
       "gridPos": {
         "h": 5,
         "w": 3,
-        "x": 11,
+        "x": 12,
         "y": 0
       },
       "fieldConfig": {
@@ -307,7 +365,7 @@
       "gridPos": {
         "h": 5,
         "w": 3,
-        "x": 14,
+        "x": 15,
         "y": 0
       },
       "fieldConfig": {
@@ -368,7 +426,7 @@
       "gridPos": {
         "h": 5,
         "w": 3,
-        "x": 17,
+        "x": 18,
         "y": 0
       },
       "fieldConfig": {
@@ -428,8 +486,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
-        "x": 20,
+        "w": 3,
+        "x": 21,
         "y": 0
       },
       "fieldConfig": {
@@ -880,6 +938,262 @@
       ]
     },
     {
+      "id": 46,
+      "type": "piechart",
+      "title": "Tokens avoided by verdict",
+      "description": "Tokens avoided by the delegations each verdict was recorded against: the sync copies the parent delegation's estimated_tokens_avoided onto its feedback row (matched by ref_id), because LogQL cannot join the two streams. It counts raw verdict rows, so a revised verdict counts its delegation twice; metrics-summary.sh prints the same split with the latest verdict per delegation, and is the figure to quote.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 29
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "hit"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "scaffold"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "miss"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        },
+        "pieType": "donut",
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value",
+            "percent"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | unwrap estimated_tokens_avoided [$__range]))",
+          "queryType": "instant",
+          "legendFormat": "hit"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | scaffold=\"true\" | unwrap estimated_tokens_avoided [$__range]))",
+          "queryType": "instant",
+          "legendFormat": "scaffold"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" | scaffold!=\"true\" | unwrap estimated_tokens_avoided [$__range]))",
+          "queryType": "instant",
+          "legendFormat": "miss"
+        }
+      ]
+    },
+    {
+      "id": 47,
+      "type": "timeseries",
+      "title": "Tokens avoided by verdict over time",
+      "description": "Tokens avoided by the delegations each verdict was recorded against: the sync copies the parent delegation's estimated_tokens_avoided onto its feedback row (matched by ref_id), because LogQL cannot join the two streams. It counts raw verdict rows, so a revised verdict counts its delegation twice; metrics-summary.sh prints the same split with the latest verdict per delegation, and is the figure to quote.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 29
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto"
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "hit"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "scaffold"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "miss"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | unwrap estimated_tokens_avoided [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "hit"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | scaffold=\"true\" | unwrap estimated_tokens_avoided [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "scaffold"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(sum_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"false\" | scaffold!=\"true\" | unwrap estimated_tokens_avoided [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "miss"
+        }
+      ]
+    },
+    {
       "id": 38,
       "type": "logs",
       "title": "Recent misses",
@@ -892,7 +1206,7 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 29
+        "y": 37
       },
       "options": {
         "showTime": true,
@@ -930,7 +1244,7 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 29
+        "y": 37
       },
       "options": {
         "showTime": true,

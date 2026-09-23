@@ -107,6 +107,26 @@ fb_recipe=$(printf '%s' "$fb_line" | jq -r '.recipe // ""')
 fb_tier=$(printf '%s' "$fb_line" | jq -r '.tier // ""')
 assert_eq "commit-message" "$fb_recipe" "T4: feedback enriched with parent recipe"
 assert_eq "prose" "$fb_tier" "T4: feedback enriched with parent tier"
+assert_eq "42" "$(printf '%s' "$fb_line" | jq -r '.estimated_tokens_avoided // ""')" \
+  "T4: feedback enriched with parent tokens (the tokens-by-verdict split)"
+
+# --- T4b: ref_id picks the right parent when two share a second --------------
+# The ts-keyed map handed a same-second sibling's recipe to a pinned verdict;
+# ref_id is the key two delegations cannot share.
+met4="$tmp/m4.jsonl"; state4="$tmp/state4"; body4="$tmp/body4.json"
+make_mock_curl "$tmp" "$body4"
+cat > "$met4" <<'EOF'
+{"ts":"2026-05-10T11:00:00Z","source":"delegate","tier":"prose","recipe":"commit-message","otel_span_id":"aaaa","estimated_tokens_avoided":10,"exit_status":0}
+{"ts":"2026-05-10T11:00:00Z","source":"delegate","tier":"prose","recipe":"pr-description","otel_span_id":"bbbb","estimated_tokens_avoided":20,"exit_status":0}
+{"ts":"2026-05-10T11:01:00Z","source":"feedback","ref_ts":"2026-05-10T11:00:00Z","ref_id":"aaaa","kept":false,"scaffold":true}
+EOF
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  bash "$SCRIPT" --full --metrics-file "$met4" --state-file "$state4" --loki-url http://x >/dev/null 2>&1
+fb4=$(jq -r '.streams[] | select(.stream.source=="feedback") | .values[0][1]' "$body4")
+assert_eq "commit-message" "$(printf '%s' "$fb4" | jq -r '.recipe // ""')" \
+  "T4b: a ref_id-pinned verdict takes its own parent's recipe, not a same-second sibling's"
+assert_eq "10" "$(printf '%s' "$fb4" | jq -r '.estimated_tokens_avoided // ""')" \
+  "T4b: and its own parent's tokens"
 
 # --- T5: watermark idempotency ---------------------------------------------
 assert_eq "4" "$(cat "$state")" "T5: watermark set to row count"

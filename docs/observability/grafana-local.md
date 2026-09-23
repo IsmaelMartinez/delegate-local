@@ -36,7 +36,16 @@ It reads `~/.local/share/delegate-local/metrics.jsonl` (override with `--metrics
 */5 * * * * /bin/bash /path/to/repo/scripts/sync-metrics-to-loki.sh >/dev/null 2>&1
 ```
 
-The sync also enriches each feedback row with its parent delegation's `recipe` and `tier` (joined by `ref_ts`), so the calibration dashboard can break HIT-rate down by recipe and tier across the whole history even though the feedback JSONL row itself stores only the verdict. Pass `--full` to ignore the watermark and re-push everything (Loki de-duplicates identical entries, so a full re-sync is harmless). Point it at a non-default Loki with `--loki-url`.
+The sync also enriches each feedback row with its parent delegation's `recipe`, `tier` and `estimated_tokens_avoided` (joined by `ref_id`, falling back to `ref_ts` for rows that pre-date it), so the calibration dashboard can break the verdict rates down by recipe and split tokens avoided into hit, scaffold and miss across the whole history, even though the feedback JSONL row itself stores only the verdict. Pass `--full` to ignore the watermark and re-push everything; Loki de-duplicates identical entries, so a full re-sync of unchanged rows is harmless. A change to the enrichment is not: each row's Loki timestamp carries a hash of the pushed line, so re-enriched feedback rows land beside the old ones instead of replacing them. After such a change, wipe Loki and rebuild it from the JSONL, which is its only source:
+
+```bash
+docker compose -f observability/docker-compose.yml rm -sf loki
+docker volume rm delegate-local-observability_loki-data
+docker compose -f observability/docker-compose.yml up -d loki
+bash scripts/sync-metrics-to-loki.sh --full
+```
+
+Point it at a non-default Loki with `--loki-url`.
 
 Why not just backfill Tempo? Tempo indexes blocks by ingestion time, so a span sent now with a three-week-old timestamp lands in a "now" block and is unreachable when you query that historical window — and its metrics generator only aggregates live traffic forward. Loki accepts the historical timestamps directly, which is why the analytics live there. The `delegate.sh` exporter still sends live spans to Tempo, so individual traces remain available for drill-down in Grafana Explore via the Tempo datasource.
 

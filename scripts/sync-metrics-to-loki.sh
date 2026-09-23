@@ -79,12 +79,21 @@ new_count=$((total_lines - watermark))
 # row: content-derived, not line-derived, so a row re-pushed at a different
 # file position dedups instead of duplicating (a line-number scheme doubled
 # the feedback rows once). Feedback rows are enriched with the parent's
-# recipe/tier from a map over the WHOLE file, since the parent may pre-date
-# the watermark. The map is keyed by ts, not ref_id, so two parents in one
-# second enrich from the same row; the source JSONL is left untouched.
+# recipe, tier and estimated_tokens_avoided from a map over the WHOLE file,
+# since the parent may pre-date the watermark; the tokens let the calibration
+# dashboard split tokens avoided by verdict, which LogQL cannot join. The map
+# is keyed by the parent's otel_span_id ("id:") and its ts ("ts:"), and a
+# feedback row looks up its ref_id first, so two parents in one second no
+# longer enrich from the same row; ref_ts is the fallback for rows that
+# pre-date ref_id. The source JSONL is left untouched. Enrichment feeds the
+# content hash below, so changing it re-stamps already-synced feedback rows:
+# wipe the Loki volume and re-sync with --full, or they are stored twice.
 parent_map=$(jq -sc '
   reduce (.[] | select((.source // "delegate") == "delegate" and .ts != null)) as $r
-    ({}; .[$r.ts] = {recipe: ($r.recipe // ""), tier: ($r.tier // "")} )
+    ({}; ({recipe: ($r.recipe // ""), tier: ($r.tier // "")}
+          + (if $r.estimated_tokens_avoided != null then {estimated_tokens_avoided: $r.estimated_tokens_avoided} else {} end)) as $p
+         | .["ts:" + $r.ts] = $p
+         | if ($r.otel_span_id // "") != "" then .["id:" + $r.otel_span_id] = $p else . end)
 ' "$metrics_file")
 
 # pipefail is on, so a torn final line (the sync racing an in-progress append)
@@ -99,8 +108,10 @@ payload=$(tail -n "+$start_line" "$metrics_file" \
       [ .[]
         | select(.ts != null and (.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")))
         # never overwrites a field the row already has
-        | ( if (.source // "delegate") == "feedback" and .ref_ts != null and ($parents[.ref_ts] != null)
-            then ($parents[.ref_ts] | with_entries(select(.value != ""))) + . else . end ) ]
+        | ( if (.source // "delegate") == "feedback"
+            then (($parents["id:" + (.ref_id // "")]) // (if .ref_ts != null then $parents["ts:" + .ref_ts] else null end)) as $p
+                 | if $p != null then ($p | with_entries(select(.value != ""))) + . else . end
+            else . end ) ]
       | group_by(.source // "delegate")
       | map({
           stream: {service: "delegate-local", source: (.[0].source // "delegate")},
