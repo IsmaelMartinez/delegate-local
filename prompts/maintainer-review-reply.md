@@ -14,6 +14,7 @@ checks:
   no_context_echo: true
   max_context_ratio: 0.8
   min_context_chars: 900
+  no_unbidden_mention: recipient
 ---
 # maintainer-review-reply
 
@@ -129,6 +130,7 @@ bash scripts/delegate.sh --recipe maintainer-review-reply \
 
 - "VERIFIED-NOT-DESCRIBED" and the LENGTH cap — the 2026-09-20 reading of the restatement failure, which two earlier prompt fixes had not moved. Measured on the 19 rejected drafts of this recipe with stored inputs in the window to 2026-09-20T10:16Z: the drafts carried 40-100% of the facts' anchors and the replies the maintainer shipped carried a median 6% (none above 35%), and every shipped reply was 36-120 words against drafts of 100-250. The drafts were obeying ANCHOR-PRESERVATION, which said EVERY anchor in the FACTS block must appear; the maintainer was rejecting the obedience, because the reader is the change's author and a reply that names the file it touches and the condition it inverts is a description of their own work. The rule was written on 2026-08-26 against nine drafts that compressed 7-9 KB of facts to under 500 characters, which is the length the maintainer ships; the LENGTH ("the FACTS block is the content, not a hint") and CURATION rules added on 2026-09-11 and 2026-09-14 asked for curation beside a rule that forbade it. All three are replaced: evidence is what was verified and what it showed, an anchor goes in only when the reader needs it to act or to check, and the cap is a number (`{{max_words}}`, 80 by default). The declared `max_context_ratio: 0.8` with `min_context_chars: 900` stays as the mechanical ceiling; the calibration note of the date has the figures.
 - "Never introduce an anchor that is absent from the FACTS block" — the symmetric failure: "invented a mechanic: claimed the corridor change stops bashers colliding with each other", and "misread the 531-test suite total as tests added by this PR". Selection without an invention ceiling just moves the error.
+- The declared `no_unbidden_mention: recipient` — the prose rule in item 1 of the order ("when it is empty there is no handle and no `@` at all, so address the reader as 'you'") did not hold: measured over the stored corpus, 42 of 82 rejected drafts of the two reply recipes open by `@`-mentioning somebody, every one of them on a call that passed no `recipient`, against 0 of the 81 replies that actually shipped. Two of them went out to `teams-for-linux` on 2026-09-22 naming the reporter of a *referenced* issue, a bystander whose name the piped facts carried, which is why the check tests the handle against the recipient var and not against the input: the name was in the input, and that is exactly what made it look permissible. A mention is the one draft defect that leaves the machine before the maintainer reads it, since posting notifies whoever it names.
 - "If an opener is given below, begin with it verbatim, then the verdict" plus "Never write thanks of your own" — the 2026-08-26 reasons were "opened by thanking and restating, gave no verdict" and "dropped the verdict and the thanks entirely", so the recipe forbade an opening thanks outright. By 2026-09-11, 39 of 97 rejections wanted exactly that thanks ("no thanks opener", "opened with the verdict instead of thanks"). The two are reconciled the way `signoff` already works: the caller supplies the opener verbatim, so the model never invents gratitude and never restates, and with no opener the verdict still comes first.
 - "Prose sentences and paragraphs. No bullet list, no numbered list" with the two-or-more exception — "emitted a numbered list despite an explicit no-list instruction", "rendered a single request as a numbered list" (twice the same day). The exception is scoped tightly so the fix does not simply invert the defect.
 - "Do NOT hedge a verdict the facts state plainly" — a verdict softened into a maybe reads as no verdict at all, and the reader then has to ask again.
@@ -388,3 +390,33 @@ and verdict lines are in the PR that carries this edit. Re-measure online
 once this template has thirty tracked rows: the per-template section of the
 bundle prints this hash beside `8f97253928bc`, and the number to watch is
 kept, which has been 0 on every read of this recipe since 2026-08-19.
+
+### 2026-09-22 — the reply @-mentioned people the caller had not addressed it to
+
+Two replies went out to `teams-for-linux` opening `@tomgunning` and
+`@dedalusMohantyMa`. Neither call passed `recipient`, and both names came
+from the piped facts, where they belonged to the reporter of a *referenced*
+issue rather than to the contributor being answered. The order block has
+said since #520 that an empty Recipient block means "no handle and no `@` at
+all, so address the reader as you"; prose did not hold it.
+
+Measured across the stored corpus of both reply recipes (every delegation
+with `inputs.json`, a verdict and a stored final): 42 of 82 rejected drafts
+carry an `@`-mention that is not the supplied recipient, every one of them on
+a call that supplied no recipient at all, against 0 of the 81 replies the
+maintainer actually posted. That gap is the whole case for a check: the
+model reaches for a handle when the caller names nobody, and the maintainer
+takes it out every time.
+
+So `no_unbidden_mention: recipient` is declared in the frontmatter. It fails
+on any mention that is not the recipient var's handle, and on every mention
+when that var is empty. It deliberately does NOT ask whether the handle
+appears in the input: in both live cases it did, which is precisely why the
+draft looked reasonable. It earns the #384 retry, unlike `no_context_echo`
+and `no_fact_as_question`, because deleting a mention is a change the second
+generation can actually make rather than a judgement it has already failed.
+
+Re-measure after roughly ten calls. The number to watch is whether
+`no_unbidden_mention` appears in `checks_failed_names` after the retry: if
+the second generation still carries the mention, the constraint sentence is
+not the lever and the mention should be stripped rather than regenerated.

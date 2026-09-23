@@ -1089,6 +1089,8 @@ retry_constraint_for() {
       echo "no_invented_refs: every issue or ticket identifier in a trailer must appear in the input you were given." ;;
     no_example_echo)
       echo "no_example_echo: do not reproduce any line of this prompt or of an example; write from the input." ;;
+    no_unbidden_mention)
+      echo "no_unbidden_mention: @-mention nobody except the recipient handle you were given; with none, address the reader as \"you\" and write no \"@\" at all." ;;
     no_context_echo)
       # Measures echo, not length; max_context_ratio owns the length rule (#487).
       echo "no_context_echo: reproduce none of the supplied sentences as written; carry their paths, numbers and references inside sentences of your own." ;;
@@ -1206,10 +1208,38 @@ fact_as_question_matches() {
   return 0
 }
 
+# mentions_in <text> — the @-mentions of a text, one per line, lowercased and
+# deduped. Fenced blocks and inline code spans are dropped first, so a
+# `@property` decorator or an `@Override` annotation inside a quoted snippet
+# is not a mention. A fence closes, as in CommonMark, only on a bare run of
+# its own character at least as long as the one that opened it, so a
+# ```python line nested in a four-backtick block does not end the block; a
+# fence that never closes is not a block, so its lines are scanned after all,
+# as truncated output often leaves one. A scoped package (`@scope/pkg`) is
+# dropped by its trailing slash; an email address never matches because its
+# `@` is preceded by a word character. The handle class is one bounded
+# quantifier and the fence run is counted by a plain loop, so both are linear.
+mentions_in() {
+  printf '%s\n' "$1" | tr -d '\r' \
+    | awk 'function run(s, c,   n) { n = 0; while (substr(s, n + 1, 1) == c) n++; return n }
+           { line = $0; sub(/^[[:space:]]*/, "", line); c = substr(line, 1, 1); n = 0
+             if (c == "`" || c == "~") n = run(line, c) }
+           !fence && n >= 3 { fence = 1; fc = c; fn = n; buf = ""; next }
+           fence && c == fc && n >= fn && substr(line, n + 1) ~ /^[[:space:]]*$/ { fence = 0; buf = ""; next }
+           fence { buf = buf $0 "\n"; next }
+           { print }
+           END { if (fence) printf "%s", buf }' \
+    | sed 's/`[^`]*`//g' \
+    | grep -oE '(^|[^A-Za-z0-9_./@-])@[A-Za-z0-9][A-Za-z0-9_-]{0,38}/?' \
+    | grep -v '/$' \
+    | sed 's/.*@//' \
+    | tr '[:upper:]' '[:lower:]' | sort -u
+}
+
 run_output_checks() {
 # The result and the counters (output, checks_*, capability_failed) are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio fact_questions caller_text
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio fact_questions caller_text allowed unbidden mention_tok recipient_seen caller_mentions
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -1569,6 +1599,65 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
               checks_failed_names="${checks_failed_names:+$checks_failed_names,}max_context_ratio"
               capability_failed=$((capability_failed + 1))
             fi
+          fi
+        fi
+        ;;
+      no_unbidden_mention)
+        # An @-mention of somebody the caller did not address the reply to.
+        # The value names the --var holding the recipient handle, as
+        # no_fact_as_question names the ask var; an empty or absent value
+        # means there is no recipient, and then any mention is unbidden.
+        # Measured 2026-09-22 on two maintainer-review-reply posts to
+        # teams-for-linux: neither call passed `recipient`, and both drafts
+        # opened by @-mentioning a bystander whose name the piped context
+        # carried (the reporter of a referenced issue). Grounding cannot see
+        # that, because the name IS in the input; what makes it wrong is that
+        # it is not the person being replied to. The recipes say it in prose
+        # already ("when it is empty there is no handle and no `@` at all, so
+        # address the reader as you"), which is what a check is for once
+        # prose has not held. A mention costs a real notification to someone
+        # who is not in the thread, so the unit is the handle and one is
+        # enough to fail.
+        if [[ -n "$cval" ]]; then
+          checks_run=$((checks_run + 1))
+          allowed=""
+          recipient_seen=""
+          caller_text=""
+          # The first value of a key passed twice is the one the template
+          # substituted. Every other --var is text the caller asked for word
+          # for word (a lead, an opener, a sign-off), so a mention inside it
+          # is the caller's, as no_fact_as_question treats caller questions.
+          for _kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
+            if [[ "${_kv%%=*}" == "$cval" ]]; then
+              if [[ -z "$recipient_seen" ]]; then
+                allowed="${_kv#*=}"
+                recipient_seen=1
+              fi
+            else
+              caller_text="${caller_text}${_kv#*=}
+"
+            fi
+          done
+          # The caller writes the handle with or without the `@`; compare the
+          # bare form, lowercased, as GitHub and GitLab resolve them.
+          allowed=$(printf '%s' "$allowed" | tr -d '@[:space:]' | tr '[:upper:]' '[:lower:]')
+          caller_mentions=$'\n'$(mentions_in "$caller_text")$'\n'
+          unbidden=""
+          while IFS= read -r mention_tok; do
+            [[ -z "$mention_tok" ]] && continue
+            [[ -n "$allowed" && "$mention_tok" == "$allowed" ]] && continue
+            [[ "$caller_mentions" == *$'\n'"$mention_tok"$'\n'* ]] && continue
+            unbidden="${unbidden:+$unbidden }@$mention_tok"
+          done < <(mentions_in "$output")
+          if [[ -n "$unbidden" ]]; then
+            if [[ -n "$allowed" ]]; then
+              echo "delegate: check 'no_unbidden_mention' FAILED — the answer mentions $unbidden; the only handle you supplied is @$allowed, and a mention notifies whoever it names" >&2
+            else
+              echo "delegate: check 'no_unbidden_mention' FAILED — the answer mentions $unbidden; you supplied no '$cval', so the reply addresses the reader as \"you\" and names nobody" >&2
+            fi
+            checks_failed=$((checks_failed + 1))
+            checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_unbidden_mention"
+            capability_failed=$((capability_failed + 1))
           fi
         fi
         ;;
