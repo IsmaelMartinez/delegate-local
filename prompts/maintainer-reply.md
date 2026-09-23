@@ -13,6 +13,7 @@ checks:
   no_context_echo: true
   max_context_ratio: 0.8
   no_fact_as_question: ask
+  no_unbidden_mention: recipient
 ---
 # maintainer-reply
 
@@ -449,3 +450,15 @@ NO-FACT-DROP exemption, and "applied, N passed" in the facts comes back as "I
 applied the fix", which reads as done in the PR. The issue's second goal, kept
 from 1% to 10% and usable from 47% to 65% over the next 30 tracked calls, is
 read with `metrics-summary.sh --days 30`.
+
+### 2026-09-22 — no @-mention the caller did not ask for
+
+`no_unbidden_mention: recipient` is declared here for the reason measured on
+`maintainer-review-reply` the same day and recorded in that recipe's notes:
+across both reply recipes, 42 of 82 rejected drafts carry an `@`-mention that
+is not the supplied recipient, every one on a call that supplied none, while
+0 of the 81 shipped replies carry one. The live failures were on the sibling
+recipe, but the shape is shared — same optional `recipient` input, same prose
+rule, same model — so the check is declared on both rather than waiting for
+this one to post its own. A mention is the one defect that notifies a real
+person before the maintainer sees the draft.
