@@ -128,6 +128,20 @@ assert_eq "commit-message" "$(printf '%s' "$fb4" | jq -r '.recipe // ""')" \
 assert_eq "10" "$(printf '%s' "$fb4" | jq -r '.estimated_tokens_avoided // ""')" \
   "T4b: and its own parent's tokens"
 
+# --- T4c: a repeat verdict takes the recipe but not the tokens again ---------
+# Summing tokens per feedback row would count a re-recorded delegation twice;
+# only its first verdict row carries them, including when the repeat arrives
+# in a later incremental run.
+printf '%s\n' '{"ts":"2026-05-10T11:02:00Z","source":"feedback","ref_ts":"2026-05-10T11:00:00Z","ref_id":"aaaa","kept":false,"scaffold":true,"final_file":"x.final.txt"}' >> "$met4"
+rm -f "$body4"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  bash "$SCRIPT" --metrics-file "$met4" --state-file "$state4" --loki-url http://x >/dev/null 2>&1
+fb4b=$(jq -r '.streams[] | select(.stream.source=="feedback") | .values[0][1]' "$body4")
+assert_eq "commit-message" "$(printf '%s' "$fb4b" | jq -r '.recipe // ""')" \
+  "T4c: a repeat verdict pushed later still takes its parent's recipe"
+assert_eq "" "$(printf '%s' "$fb4b" | jq -r '.estimated_tokens_avoided // ""')" \
+  "T4c: but not the tokens, which its first verdict already carries"
+
 # --- T5: watermark idempotency ---------------------------------------------
 assert_eq "4" "$(cat "$state")" "T5: watermark set to row count"
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \

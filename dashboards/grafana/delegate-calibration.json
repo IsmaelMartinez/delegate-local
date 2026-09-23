@@ -941,7 +941,7 @@
       "id": 46,
       "type": "piechart",
       "title": "Tokens avoided by verdict",
-      "description": "Tokens avoided by the delegations each verdict was recorded against: the sync copies the parent delegation's estimated_tokens_avoided onto its feedback row (matched by ref_id), because LogQL cannot join the two streams. It counts raw verdict rows, so a revised verdict counts its delegation twice; metrics-summary.sh prints the same split with the latest verdict per delegation, and is the figure to quote.",
+      "description": "Tokens avoided by the delegations each verdict was recorded against: the sync copies the parent delegation's estimated_tokens_avoided onto its FIRST feedback row (matched by ref_id), because LogQL cannot join the two streams, so each delegation is counted once. A verdict revised later keeps its tokens under the first verdict; metrics-summary.sh prints the same split with the latest verdict per delegation, and is the figure to quote.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -1069,7 +1069,7 @@
       "id": 47,
       "type": "timeseries",
       "title": "Tokens avoided by verdict over time",
-      "description": "Tokens avoided by the delegations each verdict was recorded against: the sync copies the parent delegation's estimated_tokens_avoided onto its feedback row (matched by ref_id), because LogQL cannot join the two streams. It counts raw verdict rows, so a revised verdict counts its delegation twice; metrics-summary.sh prints the same split with the latest verdict per delegation, and is the figure to quote.",
+      "description": "Tokens avoided by the delegations each verdict was recorded against: the sync copies the parent delegation's estimated_tokens_avoided onto its FIRST feedback row (matched by ref_id), because LogQL cannot join the two streams, so each delegation is counted once. A verdict revised later keeps its tokens under the first verdict; metrics-summary.sh prints the same split with the latest verdict per delegation, and is the figure to quote.",
       "datasource": {
         "type": "loki",
         "uid": "loki"

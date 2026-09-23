@@ -95,12 +95,26 @@ parent_map=$(jq -sc '
          | .["ts:" + $r.ts] = $p
          | if ($r.otel_span_id // "") != "" then .["id:" + $r.otel_span_id] = $p else . end)
 ' "$metrics_file")
+# A delegation can carry more than one verdict (a re-recorded one, or one
+# added later to attach --final), and every feedback row takes its parent's
+# recipe and tier. The tokens go only on the FIRST verdict row per delegation,
+# so the dashboard's tokens-by-verdict split counts each delegation once. The
+# latest verdict would be the better bucket, but a row already pushed cannot be
+# taken back when a later one arrives; the first is stable. Keyed as the
+# lookup is (ref_id, else ref_ts) and valued by a hash of the row, which keeps
+# the map small enough to pass as an argument.
+first_verdict=$(jq -sc '
+  def nshash: tojson | explode | reduce .[] as $c (0; ((. * 31) + $c) % 1000000000);
+  reduce (.[] | select((.source // "delegate") == "feedback" and (.ref_id != null or .ref_ts != null))) as $f
+    ({}; (if ($f.ref_id // "") != "" then "id:" + $f.ref_id else "ts:" + $f.ref_ts end) as $k
+         | if has($k) then . else .[$k] = ($f | nshash) end)
+' "$metrics_file")
 
 # pipefail is on, so a torn final line (the sync racing an in-progress append)
 # fails the slurp and the batch is retried WITHOUT advancing the watermark,
 # rather than pushing an empty payload and skipping every row.
 payload=$(tail -n "+$start_line" "$metrics_file" \
-  | jq -sc --argjson parents "$parent_map" '
+  | jq -sc --argjson parents "$parent_map" --argjson first "$first_verdict" '
       # Base 31 mod 1e9 keeps every intermediate under 2^53 so jq float64 math
       # is exact; enrichment runs BEFORE hashing so a feedback row hashes the
       # bytes that get pushed.
@@ -110,7 +124,11 @@ payload=$(tail -n "+$start_line" "$metrics_file" \
         # never overwrites a field the row already has
         | ( if (.source // "delegate") == "feedback"
             then (($parents["id:" + (.ref_id // "")]) // (if .ref_ts != null then $parents["ts:" + .ref_ts] else null end)) as $p
-                 | if $p != null then ($p | with_entries(select(.value != ""))) + . else . end
+                 | (if (.ref_id // "") != "" then "id:" + .ref_id else "ts:" + (.ref_ts // "") end) as $k
+                 | ($first[$k] == nshash) as $is_first
+                 | if $p != null
+                   then ($p | with_entries(select(.value != "" and (.key != "estimated_tokens_avoided" or $is_first)))) + .
+                   else . end
             else . end ) ]
       | group_by(.source // "delegate")
       | map({
