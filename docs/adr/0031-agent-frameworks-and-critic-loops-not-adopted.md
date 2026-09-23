@@ -126,9 +126,14 @@ on the row as `template_sha`. `scripts/replay-recipe.sh` reads the cases the
 corpus already holds (a delegation with its inputs, a verdict and the shipped
 text, the draft itself when the verdict was kept), re-renders them through
 `delegate.sh` under the live template and a candidate, scores each output
-with the bundle's own DROPPED and ECHOED measures plus the wrapper's failed
-checks, and prints ACCEPT, REJECT or INCONCLUSIVE from a sign test over
-per-case wins. `self-improve.sh` splits a recipe's outcomes by template hash,
+against the shipped text on seven columns (the wrapper's failed checks,
+supplied anchors dropped, supplied anchors carried past the shipped text,
+anchors invented, piped sentences echoed, a shape mismatch and a length
+flag; the third and the last were added on 2026-09-20 when the first gated
+pass found the restatement defect invisible to the other five and its cure
+charged as dropped), and prints ACCEPT, REJECT or INCONCLUSIVE from a sign
+test over per-case wins, with a rise in failed checks or length flags
+holding the verdict at INCONCLUSIVE. `self-improve.sh` splits a recipe's outcomes by template hash,
 which is the post-merge read and the revert signal. Nothing in the installed
 runtime changed shape: one request, at most one retry, no critic. The decision
 above stands for the runtime; this amendment is about how the loop measures

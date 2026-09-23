@@ -45,6 +45,9 @@ ctx=$(cat)
 printf '%s :: %s\n' "$DELEGATE_PROMPTS_DIR $*" "$ctx" >> "${STUB_CALLS:-/dev/null}"
 case "$DELEGATE_PROMPTS_DIR" in
   *invent*) printf 'Fixed at src/main.js:412 for #2632 with 531 tests. See also #9999.\n' ;;
+  *over*)   printf 'Fixed at src/main.js:412 for #2632 with 531 tests. Ticket #777 covers it.\n' ;;
+  *terse*)  printf 'Approved, thanks; the suite is green and this merges once the release train clears.\n' ;;
+  *tick*)   printf 'The `inLocale()` helper does it; 531 tests pass.\n' ;;
   *echo*)   printf '%s Fixed at src/main.js:412 for #2632 with 531 tests.\n' "$ctx" ;;
   *good*)   printf 'Fixed at src/main.js:412 for #2632 with 531 tests.\n' ;;
   *)        printf 'Fixed it.\n' ;;
@@ -69,14 +72,14 @@ EOF
 # and the pinned model the champion arm reads the stored draft and never
 # calls the wrapper.
 seed() {
-  local dir="$1" n_rejected="$2" sha="$3" model="${4:-stub-model}" i ts stem
+  local dir="$1" n_rejected="$2" sha="$3" model="${4:-stub-model}" rdraft="${5:-$BAD}" rfinal="${6:-$GOOD}" i ts stem
   mkdir -p "$dir/drafts"
   : > "$dir/m.jsonl"
   for i in $(seq 1 "$n_rejected"); do
     ts=$(printf '2026-09-%02dT10:00:00Z' "$i")
     stem=$(printf '2026%02dT100000Z-rej%05d' "$i" "$i")
-    printf '%s\n' "$BAD" > "$dir/drafts/$stem.draft.txt"
-    printf '%s\n' "$GOOD" > "$dir/drafts/$stem.final.txt"
+    printf '%s\n' "$rdraft" > "$dir/drafts/$stem.draft.txt"
+    printf '%s\n' "$rfinal" > "$dir/drafts/$stem.final.txt"
     printf '{"recipe":"rp","tier":"prose","stdin":"%s","vars":{"who":"alice"}}' "$STDIN" > "$dir/drafts/$stem.inputs.json"
     printf '{"ts":"%s","source":"delegate","recipe":"rp","model":"%s","exit_status":0,"otel_span_id":"rej%05d","draft_file":"%s.draft.txt","input_file":"%s.input.txt","inputs_file":"%s.inputs.json","template_sha":"%s","checks_failed":0}\n' \
       "$ts" "$model" "$i" "$stem" "$stem" "$stem" "$sha" >> "$dir/m.jsonl"
@@ -121,6 +124,9 @@ write_recipe "$tmp/good" "CANDIDATE"
 write_recipe "$tmp/worse" "WORSE"
 write_recipe "$tmp/invent" "INVENT"
 write_recipe "$tmp/echo" "ECHO"
+write_recipe "$tmp/over" "OVER"
+write_recipe "$tmp/terse" "TERSE"
+write_recipe "$tmp/tick" "TICK"
 write_recipe "$tmp/noted" "CHAMPION" "- 2026-09-19: a dated note, prose only"
 . "$REPO/scripts/lib/recipe.sh"
 champ_sha=$(recipe_template_sha "$tmp/champion/rp.md")
@@ -161,8 +167,8 @@ assert_eq "0" "$(calls)" \
   "champion outputs under the same template and model are the stored drafts: the wrapper is never called"
 # The supplied anchors are the path, the ref and three numbers (412 both
 # inside main.js:412 and alone, 2632, 531); the BAD draft carries none.
-assert_contains "0/5/0/0/0=5" "$out" "a rejected case scores the champion's five dropped anchors"
-assert_contains "0/0/0/0/0=0" "$out" "the kept case scores zero against itself"
+assert_contains "0/5/0/0/0/0/0=5" "$out" "a rejected case scores the champion's five dropped anchors (two words against eight is a quarter exactly, not under it)"
+assert_contains "0/0/0/0/0/0/0=0" "$out" "the kept case scores zero against itself"
 assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$tmp/out/"*kept0001*.out.txt)" \
   "cache files are private (600)"
 
@@ -265,13 +271,69 @@ assert_contains $'--var who=alice\n --tier prose -- --tier is not a flag here ::
 seed "$tmp/data" 2 "$champ_sha"
 rm -rf "$tmp/out"
 out=$(run --recipe rp --candidate "$tmp/invent")
-assert_contains "0/0/2/0/0=2" "$out" "an invented ref scores under invented (the ref and its number)"
+assert_contains "0/0/0/2/0/0/0=2" "$out" "an invented ref scores under invented (the ref and its number)"
 assert_eq "1" "$(printf '%s\n' "$out" | grep -c ' LOSS$')" "the kept case is a LOSS when the candidate invents"
 assert_eq "2" "$(printf '%s\n' "$out" | grep -c ' WIN$')" "the rejected cases still win (2 defects against 5)"
 rm -rf "$tmp/out"
 out=$(run --recipe rp --candidate "$tmp/echo")
-assert_contains "0/0/0/1/0=1" "$out" "a piped sentence handed back scores under echoed"
+assert_contains "0/0/0/0/1/0/0=1" "$out" "a piped sentence handed back scores under echoed"
 assert_eq "1" "$(printf '%s\n' "$out" | grep -c ' LOSS$')" "the kept case is a LOSS when the candidate echoes what the shipped text did not"
+# A supplied anchor the shipped text does not carry is the facts handed
+# back in the model's own sentences; it scores under over, apart from
+# invented, and a kept case loses to it as it loses to an invention. The
+# anchor is supplied through the prompt so the stdin's five stay as they are.
+seed "$tmp/data" 2 "$champ_sha"
+for f in "$tmp/data/drafts/"*.inputs.json; do
+  printf '{"recipe":"rp","tier":"prose","stdin":"%s","vars":{"who":"alice"},"prompt":"see ticket #777"}' "$STDIN" > "$f"
+done
+rm -rf "$tmp/out"
+out=$(run --recipe rp --candidate "$tmp/over")
+assert_contains "0/0/2/0/0/0/0=2" "$out" "a supplied anchor the shipped text lacks scores under over (the ref and its number)"
+assert_eq "1" "$(printf '%s\n' "$out" | grep -c ' LOSS$')" "the kept case is a LOSS when the candidate carries a supplied anchor the draft did not"
+assert_eq "2" "$(printf '%s\n' "$out" | grep -c ' WIN$')" "the rejected cases still win (2 over against 5 dropped)"
+assert_eq "0" "$(printf '%s\n' "$out" | grep -c "0/0/0/2/0/0/0=2")" "an anchor the inputs supplied never counts as invented"
+
+# 10c. The motivating corpus: stored drafts that restate every supplied
+# anchor against shipped replies that carry none. The champion's over is
+# what the other measures could not see. Over is unbounded and the finals
+# carry no anchor to drop, so an output that says nothing is at zero anchor
+# distance and wins every case; the length flag names it and a rise in
+# flags holds the verdict at INCONCLUSIVE, while a reply of the shipped
+# text's own length and no anchors clears the gate.
+RESTATED='You fixed it at src/main.js:412, closing #2632, and all 531 tests pass on the branch now.'
+TERSE_FINAL='Thanks for the quick turnaround, this is approved and I will merge it once the release train clears.'
+seed "$tmp/data" 8 "$champ_sha" stub-model "$RESTATED" "$TERSE_FINAL"
+rm -rf "$tmp/out"
+out=$(run --recipe rp --candidate "$tmp/worse")
+assert_contains "0/0/5/0/0/0/0=5" "$out" "a stored draft that restates five supplied anchors against an anchor-free reply scores them under over"
+assert_contains "Summary: n=9  wins=8  losses=1  ties=0" "$out" "an output that says nothing wins every rejected case on anchors (and loses the kept one)"
+assert_contains "Length flags: champion=0  candidate=8" "$out" "the length flag counts each content-free output"
+assert_contains "Verdict: INCONCLUSIVE" "$out" "eight wins by saying less do not clear the gate"
+assert_contains "length flags rose from 0 to 8" "$out" "the verdict names the rise in length flags"
+rm -rf "$tmp/out"
+out=$(run --recipe rp --candidate "$tmp/terse")
+assert_contains "Summary: n=9  wins=8  losses=1  ties=0" "$out" "a reply of the shipped length with no anchors wins the same eight"
+assert_contains "Length flags: champion=0  candidate=0" "$out" "and raises no length flag"
+assert_contains "Verdict: ACCEPT" "$out" "so it clears the gate where the content-free output did not"
+
+# 10d. A name the input wrote bare and the output backticked is one anchor:
+# salient extracts it from the output only, so it is neither in the
+# supplied set nor absent from the supplied text, and it has to be charged
+# under over rather than lost between over and invented.
+seed "$tmp/data" 1 "$champ_sha" stub-model "$BAD" "Fixed."
+printf '{"recipe":"rp","tier":"prose","stdin":"The helper inLocale() returns the code; 531 tests pass.","vars":{"who":"alice"}}' > "$tmp/data/drafts/202601T100000Z-rej00001.inputs.json"
+rm -rf "$tmp/out"
+out=$(run --recipe rp --candidate "$tmp/tick")
+assert_contains "0/0/2/0/0/0/1=3" "$out" "a backticked name the input wrote bare is charged under over beside the number (and the length flag, eight words against one)"
+
+# 10e. A kept case whose draft was cut at the byte cap has no usable
+# reference: it is skipped, not scored against a truncated draft.
+seed "$tmp/data" 1 "$champ_sha"
+printf '%s\n[truncated at 65536 bytes; the draft was longer]\n' "$GOOD" > "$tmp/data/drafts/20260930T100000Z-kept0001.draft.txt"
+rm -rf "$tmp/out"
+out=$(run --recipe rp --candidate "$tmp/good")
+assert_contains "kept0001 skipped: the kept draft was cut at the byte cap" "$out" "a kept case with a truncated draft is skipped and says why"
+assert_contains "Cases:     1 (kept=0 scaffold=0 rewrote=1" "$out" "the skipped kept case is not counted"
 
 # 10b. A case that fails to run is neither a win nor a loss, and its
 # presence makes the verdict inconclusive whatever the others say; a

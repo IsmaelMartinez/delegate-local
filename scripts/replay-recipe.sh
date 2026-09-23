@@ -15,8 +15,17 @@
 # (`inputs_file`), a verdict, and a reference for the shipped text: the
 # `final_file` a rejection stored, or the draft itself when the verdict was
 # kept. Kept cases are the regression guard — a candidate that changes an
-# output the agent shipped unedited has to answer for it, so every token the
-# output carries that the reference and the inputs do not counts against it.
+# output the agent shipped unedited has to answer for it, so every anchor
+# the output carries that the reference does not counts against it, whether
+# the inputs supplied it (`over`) or not (`invented`). The two are kept
+# apart because they name different defects: on 2026-09-20 six rejected
+# maintainer-review-reply drafts scored a perfect zero under the five
+# measures that then existed (checks, dropped, invented, echoed, shape)
+# while carrying 40-100% of the facts' anchors against shipped replies
+# carrying a median 6%, the restatement the maintainer had rejected them
+# for. `length` came with `over`, because an unbounded charge for carrying
+# anchors past an anchor-poor reference rewards an output that carries
+# nothing, and only its length says so.
 #
 # Usage:
 #   replay-recipe.sh --recipe NAME [--candidate DIR] [--champion DIR]
@@ -218,11 +227,16 @@ fi
 
 # A case whose files were pruned (retention) cannot be replayed, nor one
 # whose inputs are not valid JSON (an over-cap capture is not written, but a
-# hand-made seed can be anything).
+# hand-made seed can be anything), nor a kept case whose draft was cut at
+# the byte cap: the draft is its reference, and a cut reference charges
+# both arms for every anchor in the tail they legitimately carry.
 usable_tmp="$work_tmp/usable"
 while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel; do
   [[ -f "$draft" && -f "$final" && -f "$inputs" ]] || continue
   jq -e . "$inputs" >/dev/null 2>&1 || { echo "replay-recipe: $id skipped: $inputs is not valid JSON" >&2; continue; }
+  if [[ "$verdict" == kept ]] && grep -qF '[truncated at ' "$final"; then
+    echo "replay-recipe: $id skipped: the kept draft was cut at the byte cap, so it cannot be the reference" >&2; continue
+  fi
   printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$ts" "$verdict" "$draft" "$final" "$inputs" "$sha" "$checks" "$rmodel"
 done < "$cases_tmp" | head -n "$limit" > "$usable_tmp"
 mv "$usable_tmp" "$cases_tmp"
@@ -348,22 +362,39 @@ case_refs() { # <inputs.json> <final>
   fin_path="$2"
 }
 
-# score <output> <checks>: prints "c/d/i/e/s=total" where c is failed
+# score <output> <checks>: prints "c/d/o/i/e/s/l=total" where c is failed
 # checks, d the supplied anchors the shipped text carried and this output
-# dropped, i the anchors this output carries that neither the inputs nor the
-# shipped text do (the bundle's INVENTED), e the piped sentences this output
-# hands back beyond the ones the shipped text itself carries, s a shape
-# mismatch against the shipped text (list against prose, or one paragraph
-# against three or more). Symmetric on a kept case: any anchor the output
-# has over or under its reference counts.
+# dropped, o the supplied anchors this output carries that the shipped text
+# does not (the facts handed back in the model's own sentences: the
+# supplied subset of what the bundle lists as CUT or INVENTED, which no
+# other measure sees), i the anchors this output carries that neither the
+# inputs nor the shipped text do (the rest of the bundle's INVENTED), e the
+# piped sentences this output hands back beyond the ones the shipped text
+# itself carries, s a shape mismatch against the shipped text (list against
+# prose, or one paragraph against three or more), l a length mismatch (the
+# output under a quarter or over four times the shipped text's word count).
+# Symmetric on every case: an anchor the output has over or under its
+# reference counts, and on a kept case the reference is the draft. The
+# anchors the output carries past the reference are found once, whole-token
+# against the shipped text, and split by whether the inputs supplied them,
+# also whole-token, so a name the input wrote bare and the output backticked
+# is charged under o and not lost between the two. l is there because o is
+# unbounded and d is bounded by the reference's own anchors: against a
+# shipped reply carrying few anchors an output carrying none is at zero
+# anchor distance, and only its length says it said nothing.
 score() {
-  local out="$1" checks="$2" dropped invented echoed shape
+  local out="$1" checks="$2" dropped over invented echoed shape length past ow fw
   salient "$out" > "$work_tmp/out_sal"
   dropped=$(comm -12 "$work_tmp/sup_sal" "$work_tmp/fin_sal" | comm -23 - "$work_tmp/out_sal" | absent_from "$out" | grep -c '')
-  invented=$(comm -23 "$work_tmp/out_sal" "$work_tmp/sup_sal" | comm -23 - "$work_tmp/fin_sal" | absent_from "$work_tmp/supplied" | absent_from "$fin_path" | grep -c '')
+  comm -23 "$work_tmp/out_sal" "$work_tmp/fin_sal" | absent_from "$fin_path" > "$work_tmp/out_past"
+  past=$(grep -c '' "$work_tmp/out_past")
+  invented=$(absent_from "$work_tmp/supplied" < "$work_tmp/out_past" | grep -c '')
+  over=$(( past - invented ))
   echoed=$(sentences < "$out" | sort -u | comm -12 "$work_tmp/stdin_sent" - | comm -23 - "$work_tmp/fin_echo" | grep -c '')
   shape=$(shape_mismatch "$out" "$fin_path")
-  printf '%s/%s/%s/%s/%s=%s' "$checks" "$dropped" "$invented" "$echoed" "$shape" "$(( checks + dropped + invented + echoed + shape ))"
+  ow=$(wc -w < "$out" | tr -d ' '); fw=$(wc -w < "$fin_path" | tr -d ' ')
+  length=$(awk -v a="$ow" -v b="$fw" 'BEGIN { print ((a * 4 < b) || (a > b * 4)) ? 1 : 0 }')
+  printf '%s/%s/%s/%s/%s/%s/%s=%s' "$checks" "$dropped" "$over" "$invented" "$echoed" "$shape" "$length" "$(( checks + dropped + over + invented + echoed + shape + length ))"
 }
 
 # sign_p <wins> <losses>: one-sided exact sign test, P(X >= wins | n, 1/2).
@@ -392,14 +423,14 @@ echo "Cases:     $n_cases (kept=$kept_n scaffold=$scaffold_n rewrote=$rewrote_n;
 echo
 
 wins=0; losses=0; ties=0; errors=0
-champ_checks=0; cand_checks=0
+champ_checks=0; cand_checks=0; champ_len=0; cand_len=0
 newest_n=$(( (n_cases + 2) / 3 ))
 newest_wins=0; newest_losses=0
 i=0
 if [[ -n "$candidate" ]]; then
-  printf '  %-10s %-20s %-8s %-14s %-14s %s\n' case ts verdict champion candidate result
+  printf '  %-10s %-20s %-8s %-18s %-18s %s\n' case ts verdict champion candidate result
 else
-  printf '  %-10s %-20s %-8s %-14s\n' case ts verdict champion
+  printf '  %-10s %-20s %-8s %-18s\n' case ts verdict champion
 fi
 while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel; do
   i=$((i + 1))
@@ -411,17 +442,19 @@ while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel; do
   a_out="${a%|*}"; a_checks="${a##*|}"
   a_score=$(score "$a_out" "$a_checks")
   champ_checks=$((champ_checks + a_checks))
+  champ_len=$((champ_len + $(printf '%s' "${a_score%=*}" | cut -d/ -f7)))
   if [[ -z "$candidate" ]]; then
-    printf '  %-10s %-20s %-8s %-14s\n' "${id:0:10}" "$ts" "$verdict" "$a_score"
+    printf '  %-10s %-20s %-8s %-18s\n' "${id:0:10}" "$ts" "$verdict" "$a_score"
     continue
   fi
   b=$(arm_output "$candidate" "$candidate_sha" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")
   if [[ "$b" == "ERR" ]]; then
-    errors=$((errors + 1)); printf '  %-10s %-20s %-8s %-14s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "ERR (candidate)"; continue
+    errors=$((errors + 1)); printf '  %-10s %-20s %-8s %-18s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "ERR (candidate)"; continue
   fi
   b_out="${b%|*}"; b_checks="${b##*|}"
   b_score=$(score "$b_out" "$b_checks")
   cand_checks=$((cand_checks + b_checks))
+  cand_len=$((cand_len + $(printf '%s' "${b_score%=*}" | cut -d/ -f7)))
   a_total="${a_score##*=}"; b_total="${b_score##*=}"
   if (( b_total < a_total )); then
     result=WIN; wins=$((wins + 1)); (( i <= newest_n )) && newest_wins=$((newest_wins + 1))
@@ -430,23 +463,24 @@ while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel; do
   else
     result=tie; ties=$((ties + 1))
   fi
-  printf '  %-10s %-20s %-8s %-14s %-14s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "$b_score" "$result"
+  printf '  %-10s %-20s %-8s %-18s %-18s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "$b_score" "$result"
 done < "$cases_tmp"
 echo
-echo "Scores are checks/dropped/invented/echoed/shape=total; lower is better."
+echo "Scores are checks/dropped/over/invented/echoed/shape/length=total; lower is better (over: supplied anchors carried past the shipped text; length: under a quarter or over four times its words)."
 
 if (( errors == n_cases )); then
   echo "Verdict: ERROR — every case failed to run; see $out_dir/*.err.txt"
   exit 4
 fi
 if [[ -z "$candidate" ]]; then
-  echo "Summary: n=$n_cases  checks failed under the champion=$champ_checks  errors=$errors"
+  echo "Summary: n=$n_cases  checks failed under the champion=$champ_checks  length flags=$champ_len  errors=$errors"
   echo "Verdict: BASELINE — pass --candidate DIR to compare an edit."
   exit 0
 fi
 
 echo "Summary: n=$n_cases  wins=$wins  losses=$losses  ties=$ties  errors=$errors"
 echo "Checks failed: champion=$champ_checks  candidate=$cand_checks"
+echo "Length flags: champion=$champ_len  candidate=$cand_len"
 echo "Newest third ($newest_n cases): wins=$newest_wins  losses=$newest_losses"
 # A case that did not run is neither a win nor a loss, and a gate that
 # accepts on the cases that happened to run would pass a candidate that
@@ -458,10 +492,15 @@ fi
 if (( wins > losses )); then
   p=$(sign_p "$wins" "$losses")
   echo "Sign test: p=$p (one-sided, $wins wins to $losses)"
-  if awk -v p="$p" 'BEGIN { exit !(p < 0.05) }' && (( cand_checks <= champ_checks )); then
-    echo "Verdict: ACCEPT — the candidate wins $wins cases and loses $losses (p=$p) with no rise in failed checks."
+  # A rise in length flags blocks ACCEPT as a rise in failed checks does:
+  # over is unbounded, so against anchor-poor references a candidate that
+  # says nothing wins on anchors, and the length flag is what names it.
+  if awk -v p="$p" 'BEGIN { exit !(p < 0.05) }' && (( cand_checks <= champ_checks )) && (( cand_len <= champ_len )); then
+    echo "Verdict: ACCEPT — the candidate wins $wins cases and loses $losses (p=$p) with no rise in failed checks or length flags."
   elif (( cand_checks > champ_checks )); then
     echo "Verdict: INCONCLUSIVE — more wins than losses, but failed checks rose from $champ_checks to $cand_checks."
+  elif (( cand_len > champ_len )); then
+    echo "Verdict: INCONCLUSIVE — more wins than losses, but length flags rose from $champ_len to $cand_len: the candidate is winning on anchors by saying less."
   else
     echo "Verdict: INCONCLUSIVE — $wins wins to $losses is not yet significant (p=$p); wait for more cases or a wider edit."
   fi

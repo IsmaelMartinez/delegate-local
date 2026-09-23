@@ -164,13 +164,29 @@ so a stored case can be rendered again under another template.
 edited, sends both through `delegate.sh` (so the checks and the retry are
 production's, on the tier the case was made on), and scores each output the
 way the bundle scores a pair: the wrapper's failed checks, the supplied
-anchors the shipped text carried and the output dropped, the anchors the
-output carries that neither the inputs nor the shipped text do, the piped
-sentences the output hands back beyond those the shipped text itself
-carries, and a list-versus-prose mismatch. A kept delegation is a case too,
-with its draft as the reference, and the scoring is symmetric on it: an
-edit that disturbs an output the agent shipped unedited, by dropping or by
-adding, loses that case.
+anchors the shipped text carried and the output dropped, the supplied
+anchors the output carries that the shipped text does not (`over`: the
+facts handed back in the model's own sentences, the supplied subset of
+what the bundle lists as `CUT` or `INVENTED`, which nothing else
+measures), the anchors the output carries that neither the inputs nor the
+shipped text do, the piped sentences the output hands back beyond those
+the shipped text itself carries, a list-versus-prose mismatch, and a
+length flag for an output under a quarter or over four times the shipped
+text's word count. A kept delegation is a case too, with its draft as the
+reference, and the scoring is symmetric on it: an edit that disturbs an
+output the agent shipped unedited, by dropping or by adding, loses that
+case. `over` is there because the first pass to use the gate (2026-09-20)
+found six rejected `maintainer-review-reply` drafts scoring zero on the
+five measures that then existed: they carried 40-100% of the facts'
+anchors against shipped replies carrying a median 6%, echoed no sentence
+verbatim and matched the shape, and the maintainer had rejected all six
+for describing the contributor's own change back to them. Without it the
+gate could not see the reply recipes' dominant defect and charged its cure
+as `dropped`. The length flag came with it: `over` is unbounded and
+`dropped` is bounded by the reference's own anchors, so against
+anchor-poor replies an output that says nothing sits at zero anchor
+distance and wins every case, and a rise in length flags holds the
+verdict at INCONCLUSIVE exactly as a rise in failed checks does.
 
 The champion is the recipe as committed on `main`, read out of git into a
 temp dir, not the file in your checkout: you edit on a branch in this same
