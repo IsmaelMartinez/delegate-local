@@ -6662,7 +6662,7 @@ out=$(printf '%s\n' "$mcr_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --recipe mcr prose "go" 2>/dev/null)
 assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
   "context-ratio: a failed check costs exactly two dispatches"
-assert_contains "max_context_ratio: the answer runs about as long as the supplied facts; curate it to well under the facts' length, carrying every path, number and reference inside new sentences." "$(cat "$tmp/payload.2.json")" \
+assert_contains "max_context_ratio: the answer runs about as long as the supplied facts; curate it to well under the facts' length, in sentences of your own." "$(cat "$tmp/payload.2.json")" \
   "context-ratio: the second request carries the length constraint sentence"
 if [[ "$(cat "$tmp/payload.2.json")" == *"no_context_echo:"* ]]; then
   echo "  FAIL  context-ratio: the retry must not name a check that did not fail"; fail=$((fail+1))

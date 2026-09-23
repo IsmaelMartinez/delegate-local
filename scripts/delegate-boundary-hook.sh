@@ -431,7 +431,9 @@ classify_segment() { # blanked-segment raw-segment
     boundary="pr-review-comment"; recipe="pr-review-reply"; return 0
   fi
   # Which recipe this names depends on how much is posted: maintainer-reply
-  # caps its body at two sentences, maintainer-review-reply sizes by evidence.
+  # caps its body at two sentences, maintainer-review-reply carries a verdict
+  # with what was verified under a word cap (80 by default, raised with
+  # --var max_words=N for a longer post).
   # Pinning maintainer-reply unconditionally taught the wrong routing.
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+comment([[:space:]]|$)' <<<"$seg" \
      || grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+issue[[:space:]]+comment([[:space:]]|$)' <<<"$seg" \
