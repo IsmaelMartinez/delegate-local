@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.40.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.39.0...v0.40.0) (2026-09-24)
+
+
+### Features
+
+* set the pr-description paragraph count from the examples ([#535](https://github.com/IsmaelMartinez/delegate-local/issues/535)) ([0226b6d](https://github.com/IsmaelMartinez/delegate-local/commit/0226b6daf451ddc0e97cedfbdd01181e3af5756f))
+
+
+### Maintenance
+
+* **deps:** bump google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml ([#539](https://github.com/IsmaelMartinez/delegate-local/issues/539)) ([ec88e32](https://github.com/IsmaelMartinez/delegate-local/commit/ec88e32d3833befcfc7c6ed777721d22a8d8c45e))
+
 ## [0.39.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.38.0...v0.39.0) (2026-09-23)
 
 
