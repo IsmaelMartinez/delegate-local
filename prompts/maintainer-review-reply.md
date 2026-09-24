@@ -7,20 +7,22 @@ inputs:
   opener: string?
   recipient: string?
   signoff: string?
+  max_words: integer?
 checks:
   no_padding_tail: true
   no_single_item_list: true
   no_context_echo: true
   max_context_ratio: 0.8
   min_context_chars: 900
+  no_unbidden_mention: recipient
 ---
 # maintainer-review-reply
 
 ## When to use
 
-You are a maintainer replying to a contributor's PR or issue with a JUDGEMENT and the evidence behind it: the change is right, the change is wrong, this is not a regression, this blocker is real and that one is not. You already did the investigation, so the reply has to carry the anchors it rests on — file paths, line references, commit hashes, issue and PR numbers, measured counts — and then, when there is one, say what you want the contributor to do next; a clean approval has no ask and ends on the evidence.
+You are a maintainer replying to a contributor's PR or issue with a JUDGEMENT and the evidence behind it: the change is right, the change is wrong, this is not a regression, this blocker is real and that one is not. You already did the investigation; the reply carries the verdict, what was verified and what it showed, with the anchor or two the reader needs to act on it, and then, when there is one, what you want the contributor to do next; a clean approval has no ask and ends on the evidence. It is short (80 words unless the caller sets another cap) because the reader wrote the change and needs the judgement on it, not a description of it: the notes you verified it against are the input, not the reply.
 
-Distinct from the three adjacent reply recipes. `maintainer-reply.md` is the CLOSED short shape: one sentence of cause-or-praise, then one ask, capped at two sentences, for a diagnostic one-liner or a status comment. `pr-review-reply.md` carries the same evidence-shaped body in the PR *author's* voice, answering a reviewer under their own inline comment behind a fixed opener; the axis between that recipe and this one is role, not length. `summarise-issue.md` digests a thread rather than answering it. This recipe is for the case those three keep being asked to cover and cannot: a substantive reply whose length is set by how much evidence there is.
+Distinct from the three adjacent reply recipes. `maintainer-reply.md` is the CLOSED short shape: one sentence of cause-or-praise, then one ask, capped at two sentences, for a diagnostic one-liner or a status comment. `pr-review-reply.md` carries the same evidence-shaped body in the PR *author's* voice, answering a reviewer under their own inline comment behind a fixed opener; the axis between that recipe and this one is role, not length. `summarise-issue.md` digests a thread rather than answering it. This recipe is for the case those three keep being asked to cover and cannot: a verdict on a change with the evidence behind it, where the evidence is what the maintainer verified rather than a single cause.
 
 Not for: replies that argue a contentious design decision or push back on the reporter's premise (write those by hand, a model dilutes the maintainer's voice on contention), and not for a reply you have not investigated yet — the recipe reshapes evidence you already hold, it does not find any.
 
@@ -48,19 +50,18 @@ Draft a maintainer's reply to a contributor, using only the verified facts below
 
 Write it in this order:
 1. The opening, in this order and only this order: the recipient handle if one is given, written exactly as "@<handle>, " using the handle from the Recipient block below, then the opener verbatim if one is given, then the verdict in one sentence. The Recipient block below is empty unless the caller supplied a handle; when it is empty there is no handle and no "@" at all, so address the reader as "you". With no opener, the verdict is the first sentence. State the judgement given below plainly and up front. Never open by restating what the contributor said, and never open with a preamble of your own.
-2. The evidence for that verdict, in flowing prose sentences you write. This is the body of the reply and its length is set by how much evidence there is.
+2. The evidence for that verdict: what was verified about the change and what it showed, in one to three sentences you write. The reader wrote the change and knows what it does; do not tell it back to them.
 3. What you are asking the contributor to do next, derived from the ask topic below and phrased as a direct question or request to the reader in the second person. Never as an instruction about the reader ("ask them to ...", "they should ..."). If the ask block below is empty, there is no item 3: stop after the evidence and do not invent a next step for the contributor.
 4. If a sign-off is given below, end with it verbatim on its own line.
 
-ANCHOR-PRESERVATION — non-negotiable, and the reason this recipe exists:
-An anchor is any of these appearing in the FACTS block: a path or filename, a `backticked` span, a commit hash, an issue or PR number, a version, or a measured count. EVERY anchor in the FACTS block must appear in the reply, spelled exactly as the facts spell it, inside sentences you write. Preserve the anchors, never the sentences: do not copy a line of the FACTS block into the reply. The anchors are the evidence; a reply that states the verdict without them is worthless to the reader, who cannot check it, and a reply made of the FACTS block's own lines is the input handed back, which the reader already had.
-You may NOT introduce an anchor that is absent from the FACTS block. No invented file names, line numbers, versions, counts, or issue references. If you need one and it is not there, write around it.
+VERIFIED-NOT-DESCRIBED — non-negotiable, and the reason this recipe exists:
+The FACTS block is the maintainer's working notes, and most of it is not for the reader. It says what the change does, what was checked, what the checks showed and what is left; only the last three go into the reply. A sentence that tells the contributor what their own PR does (the file it touches, the condition it inverts, the guard it adds, who filed the issue it closes) is narration the reader already has, and a reply built from it is the notes handed back. An anchor (a path, a line number, a count, a version, a hash, an issue or PR number) goes in only when the reader needs it to act on the reply or to check a result: the line a fix belongs on, the count that went red and green, the version a key was removed in. Every other anchor in the FACTS stays out, however many there are, spelled exactly as the facts spell it when one does go in. Never introduce an anchor that is absent from the FACTS block: no invented file names, line numbers, versions, counts or references. If you need one and it is not there, write around it.
 
-LENGTH — read this before deciding how long the reply is:
-The FACTS block is the content of the reply, not a hint about it. Do not compress it to a sentence or two. Match the reply to the evidence: a handful of facts is a short paragraph, a dozen is two or three, and either way the reply runs well under the FACTS block's own length, because a sentence of yours that joins two facts and drops their framing is shorter than the two facts were. Brevity that drops an anchor is one failure; a reply the length of the FACTS block, built from its lines, is the other. Curate: order the facts by what supports the verdict, join the ones that belong together, and drop framing that was written for you rather than for the reader.
+LENGTH — a hard cap:
+The reply is at most the number of words in the Word cap block below, or 80 words when that block is empty, not counting the sign-off. The FACTS block is many times longer than the reply on purpose: it holds everything that was verified so that the two or three things worth saying are said correctly, and the rest stays with the maintainer. A reply near the cap on a clean approval has said too much.
 
 Rules:
-- CURATION: the reply carries the anchors (paths, line references, numbers, hashes, issue and PR numbers) and states the judgement; it does not carry the facts' sentences. On a fact list of more than a few lines it runs well under the facts' length: a reply as long as its facts has curated nothing, however its sentences are worded.
+- PARAGRAPHS: the opening with the verdict, the evidence, and the ask when there is one are separate short paragraphs, in that order; a one-sentence evidence may share the opening's paragraph. Never one paragraph carrying the evidence and the ask together.
 - Prose sentences and paragraphs. No bullet list, no numbered list, no headings, no markdown sections. The one exception: if the ask topic carries TWO OR MORE distinct asks (answering one does not answer the other), write those asks as a short numbered list at the end, one question per item, and keep everything above them as prose. A single ask is never a list.
 - If the trailing instruction asks for a different format, obey it; an explicit format instruction from the caller outranks the previous rule.
 - The recipient handle and the opener go where item 1 of the order puts them; nothing else precedes the verdict.
@@ -73,13 +74,17 @@ Rules:
 
 Shape skeleton. These are slots, not sentences: fill every angle bracket from the blocks below and never carry the bracket text through.
 
-Wrong: <restates what the contributor wrote>. <the FACTS lines copied in order>. <verdict buried at the end>.
-Correct: @<handle>, <opener, verbatim, if given> <verdict>. <evidence sentence of your own naming `<anchor>` and <anchor>>. <second evidence sentence>. <the ask, as a question, only when one is given>?
+Wrong: <what the contributor's own change does, told back to them>. <the FACTS lines in order>. <verdict buried at the end>.
+Correct: @<handle>, <opener, verbatim, if given> <verdict>.
+
+<what was verified and what it showed, naming the one `<anchor>` the reader needs to act on it>.
+
+<the ask, as a question, only when one is given>?
 
 === VERDICT (the judgement to lead with) ===
 {{verdict}}
 
-=== FACTS (verified; every anchor here must survive into the reply, inside your own sentences) ===
+=== FACTS (the maintainer's verified notes; the reply draws on them and does not repeat them) ===
 {{stdin}}
 
 === The ask (a topic, not an instruction; empty means there is none) ===
@@ -93,6 +98,9 @@ Correct: @<handle>, <opener, verbatim, if given> <verdict>. <evidence sentence o
 
 === Sign-off (verbatim, optional) ===
 {{signoff}}
+
+=== Word cap (optional; empty means 80 words) ===
+{{max_words}}
 ```
 
 ## Variables
@@ -103,6 +111,7 @@ Correct: @<handle>, <opener, verbatim, if given> <verdict>. <evidence sentence o
 - `{{opener}}` — optional opening sentence placed verbatim after the recipient handle and before the verdict (e.g. `Thanks for the thorough bisect.`). The caller writes it; the model never invents gratitude, so a caller who wants the reply to thank the contributor MUST supply it here. Omit for none, and the verdict opens the reply with no thanks at all.
 - `{{recipient}}` — optional `@handle` to open with. Omit to address the reader as "you".
 - `{{signoff}}` — optional closer appended verbatim (e.g. `Thanks again!`). Omit for none.
+- `{{max_words}}` — optional word cap for the reply, sign-off excluded; 80 when omitted. It is an instruction in the prompt, not a check: `delegate.sh` counts no words, so the caller confirms it in the verify step below, and the ceiling the wrapper does enforce is the character-based `max_context_ratio`. Every caller measured on 2026-09-20 wrote its cap into the facts ("Under 60 words, thanks first, verdict first"), where the recipe reads it as a fact; this is the cap's slot.
 
 ## Invocation
 
@@ -113,15 +122,15 @@ bash scripts/delegate.sh --recipe maintainer-review-reply \
   --var opener="Thanks for the thorough bisect." \
   --var recipient="nneul" \
   --var signoff="Thanks again!" \
+  --var max_words=80 \
   < facts.txt
 ```
 
 ## Anti-hallucination guards (each line addresses a recurring miss-mode)
 
-- "ANCHOR-PRESERVATION" — the dominant 2026-08-26 failure, measured across nine rejected `maintainer-reply` drafts on `pr-agent` and `teams-for-linux`: "dropped all verified specifics (file:line anchors, the 4-step pin-removal experiment and its exact outputs)", "dropped every measured fact from the context", "dropped the null-element finding and the thanks entirely". Inputs of 7-9 KB came back as 96 to 470 characters. Naming the anchor classes explicitly is what the generic "do not drop facts" phrasing failed to convey. Reworded 2026-09-11 so that preservation means the anchors inside new sentences and never the supplied sentences themselves: the original "the reply IS the evidence" line was read as licence to return the FACTS block wholesale (see the calibration note of that date), and `no_context_echo` now rejects a draft that copies two or more of its lines.
-- "You may NOT introduce an anchor that is absent from the FACTS block" — the symmetric failure: "invented a mechanic: claimed the corridor change stops bashers colliding with each other", and "misread the 531-test suite total as tests added by this PR". Preservation without an invention ceiling just moves the error.
-- "LENGTH — the FACTS block is the content, not a hint" — the prose tier treats a long input as something to summarise. Every adjacent recipe caps length; this one has to say the opposite out loud, or the model applies the cap it has seen everywhere else. The "built from its lines" clause and the "Curate" sentence were added 2026-09-11 because, said alone, "do not compress" had produced the mirror failure: a reply the same length as its input, made of the input.
-- "CURATION" plus the declared `max_context_ratio: 0.8` — the 2026-09-14 reading of the same failure after that rewording: the 16 rejected drafts in the window were still the size of their input (1172 characters out for 981 in, 557 for 560, 940 for 899), and the #384 retry, carrying "do not copy sentences of the supplied facts", came back the same size, because `no_context_echo` measures echo and its notice says nothing about length. The ceiling is a check rather than a prose rule: an unconditional "shorter than the FACTS block" was tried first and withdrawn in review, since it contradicted LENGTH, cannot be met on a three-line fact list once opener, verdict, anchors, ask and sign-off are all mandatory, and did not discriminate (three of the sixteen were already shorter and still echoing). The check fails when the output is at least 0.8 of the context by characters and the context is at least 900 characters (`min_context_chars`, raised from the 400 default on 2026-09-16 because 2 of the 5 shipped replies in the spike set, 789 characters on 832 of facts and 813 on 693, failed it), so a short fact list is exempt, and it carries its own retry constraint in `scripts/delegate.sh`.
+- "VERIFIED-NOT-DESCRIBED" and the LENGTH cap — the 2026-09-20 reading of the restatement failure, which two earlier prompt fixes had not moved. Measured on the 19 rejected drafts of this recipe with stored inputs in the window to 2026-09-20T10:16Z: the drafts carried 40-100% of the facts' anchors and the replies the maintainer shipped carried a median 6% (none above 35%), and every shipped reply was 36-120 words against drafts of 100-250. The drafts were obeying ANCHOR-PRESERVATION, which said EVERY anchor in the FACTS block must appear; the maintainer was rejecting the obedience, because the reader is the change's author and a reply that names the file it touches and the condition it inverts is a description of their own work. The rule was written on 2026-08-26 against nine drafts that compressed 7-9 KB of facts to under 500 characters, which is the length the maintainer ships; the LENGTH ("the FACTS block is the content, not a hint") and CURATION rules added on 2026-09-11 and 2026-09-14 asked for curation beside a rule that forbade it. All three are replaced: evidence is what was verified and what it showed, an anchor goes in only when the reader needs it to act or to check, and the cap is a number (`{{max_words}}`, 80 by default). The declared `max_context_ratio: 0.8` with `min_context_chars: 900` stays as the mechanical ceiling; the calibration note of the date has the figures.
+- "Never introduce an anchor that is absent from the FACTS block" — the symmetric failure: "invented a mechanic: claimed the corridor change stops bashers colliding with each other", and "misread the 531-test suite total as tests added by this PR". Selection without an invention ceiling just moves the error.
+- The declared `no_unbidden_mention: recipient` — the prose rule in item 1 of the order ("when it is empty there is no handle and no `@` at all, so address the reader as 'you'") did not hold: measured over the stored corpus, 42 of 82 rejected drafts of the two reply recipes open by `@`-mentioning somebody, every one of them on a call that passed no `recipient`, against 0 of the 81 replies that actually shipped. Two of them went out to `teams-for-linux` on 2026-09-22 naming the reporter of a *referenced* issue, a bystander whose name the piped facts carried, which is why the check tests the handle against the recipient var and not against the input: the name was in the input, and that is exactly what made it look permissible. A mention is the one draft defect that leaves the machine before the maintainer reads it, since posting notifies whoever it names.
 - "If an opener is given below, begin with it verbatim, then the verdict" plus "Never write thanks of your own" — the 2026-08-26 reasons were "opened by thanking and restating, gave no verdict" and "dropped the verdict and the thanks entirely", so the recipe forbade an opening thanks outright. By 2026-09-11, 39 of 97 rejections wanted exactly that thanks ("no thanks opener", "opened with the verdict instead of thanks"). The two are reconciled the way `signoff` already works: the caller supplies the opener verbatim, so the model never invents gratitude and never restates, and with no opener the verdict still comes first.
 - "Prose sentences and paragraphs. No bullet list, no numbered list" with the two-or-more exception — "emitted a numbered list despite an explicit no-list instruction", "rendered a single request as a numbered list" (twice the same day). The exception is scoped tightly so the fix does not simply invert the defect.
 - "Do NOT hedge a verdict the facts state plainly" — a verdict softened into a maybe reads as no verdict at all, and the reader then has to ask again.
@@ -132,14 +141,16 @@ bash scripts/delegate.sh --recipe maintainer-review-reply \
 For the invocation above (handle, opener and sign-off all supplied; the opener keeps its capital because it is the caller's sentence, verbatim):
 
 ```
-@nneul, Thanks for the thorough bisect. The rework is right and the blank window is not a regression from it. The flip is in the Electron 39 upgrade, specifically the GPU sandbox flag in `src/main.js:412`, which predates your change by two releases. I re-ran the suite on your branch with the flag forced back on and all 531 tests pass, so the failure you saw on CI is the flag and not the refactor.
+@nneul, Thanks for the thorough bisect. The rework is right and the blank window is not a regression from it.
+
+The flip is the GPU sandbox flag in `src/main.js:412`, which the Electron 39 upgrade changed two releases before your branch. With the flag forced back on, all 531 tests pass on your branch, so CI failed on the flag and not on the refactor.
 
 Could you add a regression test that covers the sandbox flag path before we merge?
 
 Thanks again!
 ```
 
-Verify before recording verdict: the opener (if any) and the sign-off (if any) are present verbatim and are the only gratitude in the reply; the verdict is the first sentence after them; every anchor from the facts appears, spelled as supplied, inside sentences the model wrote; no line of the facts is reproduced as written (that is what `no_context_echo` rejects); on a fact list of more than a few lines the reply runs well under the facts' length (`max_context_ratio` says so when it does not); no anchor appears that the facts did not supply.
+Verify before recording verdict: the opener (if any) and the sign-off (if any) are present verbatim and are the only gratitude in the reply; the verdict is the first sentence after them; the evidence says what was verified and what it showed, and nothing in it tells the contributor what their own change does; every anchor in the reply is one the reader needs and is spelled as the facts supplied it, and none appears that the facts did not supply; no line of the facts is reproduced as written (that is what `no_context_echo` rejects); the reply is within the word cap, and the evidence and the ask are separate paragraphs.
 
 ## Calibration notes
 
@@ -330,3 +341,82 @@ Re-measure after roughly ten calls. A row whose only failed check is
 `no_context_echo` should carry neither `retried` nor `retry_chars`, rows
 with `retried:true` should name another check beside it or none, and no
 stored `.final.txt` under 900 characters of facts should fail the ratio.
+
+### 2026-09-20 — the drafts were obeying ANCHOR-PRESERVATION and the maintainer was rejecting the obedience
+
+The first calibration pass with structured inputs (#534) read 52 rejections
+between 2026-09-19T21:13Z and 2026-09-20T10:16Z, every one with its draft,
+inputs and shipped text; 27 of them said the caller "shipped the
+pre-written form", and 22 that the draft "restated" the change back at its
+author. Seven-day figures: n=147, kept 0, scaffold 131, rewrote 16, usable
+89%; thirty-day, n=194 tracked, kept 0, usable 79%. The usable goal (60%) is
+met and the kept goal (10%) is at zero, and the reasons say why: every
+draft was an edit away from posting, and the edit was always the same one.
+
+Measured with `delegate.sh`'s own `fact_anchors` over the 19 rejected drafts
+of this recipe that had `inputs.json`, taking the piped facts' anchors minus
+any that the caller's own `--var` values carried: the drafts carried 40-100%
+of them (17 of the 19 with eight or more anchors in the facts sat at 0.38 or
+above), and the replies the maintainer shipped carried a median 6%, none
+above 0.35. The shipped replies ran 36 to 120 words; the drafts 100 to 250.
+Only 6 of the 28 reply-recipe rejections carried a failed check, so
+`no_context_echo` and `max_context_ratio` were seeing a minority: the drafts
+were not echoing sentences or matching the facts' length, they were
+describing the contributor's own PR back to them, in the model's sentences,
+with every anchor the recipe demanded. Four of the four facts blocks read in
+full ended with the caller's own spec ("Under 60 words, thanks first, verdict
+first, no em-dashes"), which the recipe reads as a fact and LENGTH overrode.
+
+So the rule was the defect. ANCHOR-PRESERVATION was written on 2026-08-26
+against nine drafts that compressed 7-9 KB of facts to under 500
+characters, and the replies the maintainer ships today are 225 to 787
+bytes: the recipe was tuned to a shape nobody posts. The two later prompt
+fixes (2026-09-11, 2026-09-14) added LENGTH and CURATION beside a rule that
+forbade curation, which is why neither moved the online read. Per
+`docs/self-improvement-loop.md` this is the third attempt on the defect and
+therefore not a rewording but a narrower task: the FACTS block is the
+maintainer's notes and the reply draws on it; evidence is what was verified
+and what it showed, never what the change does; an anchor goes in only when
+the reader needs it to act or to check; `{{max_words}}` is an optional input
+with an 80-word default and the LENGTH block states it as a cap; the
+verdict, the evidence and the ask are separate paragraphs (7 of the 28
+pairs carried a SHAPE line, draft one paragraph against three shipped). The
+frontmatter checks are unchanged so the replay compares templates and not
+check declarations; tightening `max_context_ratio` to the new length is the
+follow-up once the online read confirms.
+
+The offline gate is `replay-recipe.sh` (ADR 0031 as amended); its summary
+and verdict lines are in the PR that carries this edit. Re-measure online
+once this template has thirty tracked rows: the per-template section of the
+bundle prints this hash beside `8f97253928bc`, and the number to watch is
+kept, which has been 0 on every read of this recipe since 2026-08-19.
+
+### 2026-09-22 — the reply @-mentioned people the caller had not addressed it to
+
+Two replies went out to `teams-for-linux` opening `@tomgunning` and
+`@dedalusMohantyMa`. Neither call passed `recipient`, and both names came
+from the piped facts, where they belonged to the reporter of a *referenced*
+issue rather than to the contributor being answered. The order block has
+said since #520 that an empty Recipient block means "no handle and no `@` at
+all, so address the reader as you"; prose did not hold it.
+
+Measured across the stored corpus of both reply recipes (every delegation
+with `inputs.json`, a verdict and a stored final): 42 of 82 rejected drafts
+carry an `@`-mention that is not the supplied recipient, every one of them on
+a call that supplied no recipient at all, against 0 of the 81 replies the
+maintainer actually posted. That gap is the whole case for a check: the
+model reaches for a handle when the caller names nobody, and the maintainer
+takes it out every time.
+
+So `no_unbidden_mention: recipient` is declared in the frontmatter. It fails
+on any mention that is not the recipient var's handle, and on every mention
+when that var is empty. It deliberately does NOT ask whether the handle
+appears in the input: in both live cases it did, which is precisely why the
+draft looked reasonable. It earns the #384 retry, unlike `no_context_echo`
+and `no_fact_as_question`, because deleting a mention is a change the second
+generation can actually make rather than a judgement it has already failed.
+
+Re-measure after roughly ten calls. The number to watch is whether
+`no_unbidden_mention` appears in `checks_failed_names` after the retry: if
+the second generation still carries the mention, the constraint sentence is
+not the lever and the mention should be stripped rather than regenerated.

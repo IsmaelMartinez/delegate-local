@@ -34,6 +34,9 @@ boundary suggested_recipe delegated body_chars below_floor denied enforce_skippe
 
 is_known() {
   local needle="$1" f
+  # Loki's own label, set when a stage fails (`| __error__=""` drops those
+  # samples after an unwrap); it is not a JSONL field.
+  [[ "$needle" == "__error__" ]] && return 0
   for f in $KNOWN_FIELDS; do [[ "$f" == "$needle" ]] && return 0; done
   return 1
 }
@@ -175,6 +178,45 @@ if [[ -f "$CALIBRATION" ]]; then
   else
     echo "  FAIL  delegate-calibration.json: per-recipe adoption-rate panel legend uses sum (5955%-style step-sum inflation on a ratio)"; fail=$((fail+1))
   fi
+fi
+
+# 5e. Scaffold is the common verdict, so the calibration dashboard keeps a
+#     usable-rate panel (hit or scaffold) beside the hit-only ones; without it
+#     the largest verdict class shows up in no rate at all.
+if [[ -f "$CALIBRATION" ]]; then
+  usable_re='kept="true" or scaffold="true"'
+  for title in "Usable rate" "Usable rate by recipe" "Usable rate by project"; do
+    n=$(jq -r --arg t "$title" --arg re "$usable_re" '[.panels[] | select(.title == $t) | select((.targets // []) | length > 0 and all(.expr // "" | contains($re)))] | length' "$CALIBRATION" 2>/dev/null)
+    if [[ "$n" == "1" ]]; then
+      echo "  PASS  delegate-calibration.json: \"$title\" counts scaffold beside hit"; pass=$((pass+1))
+    else
+      echo "  FAIL  delegate-calibration.json: no \"$title\" panel whose queries all count scaffold as usable"; fail=$((fail+1))
+    fi
+  done
+  n=$(jq -r --arg re "$usable_re" '[.panels[] | select(.title | test("rate trend")) | .targets[]? | select(.legendFormat == "usable rate" and (.expr // "" | contains($re)))] | length' "$CALIBRATION" 2>/dev/null)
+  if [[ "$n" == "1" ]]; then
+    echo "  PASS  delegate-calibration.json: the rate trend carries a usable-rate series"; pass=$((pass+1))
+  else
+    echo "  FAIL  delegate-calibration.json: the rate trend has no usable-rate series counting scaffold"; fail=$((fail+1))
+  fi
+  # A scaffold-only rate gauge: its numerator is scaffold and never kept.
+  n=$(jq -r '[.panels[] | select(.title == "Scaffold rate" and .type == "gauge") | .targets[0].expr // "" | select(contains("scaffold=\"true\"") and (contains("kept=") | not))] | length' "$CALIBRATION" 2>/dev/null)
+  if [[ "$n" == "1" ]]; then
+    echo "  PASS  delegate-calibration.json: \"Scaffold rate\" gauge counts scaffold alone"; pass=$((pass+1))
+  else
+    echo "  FAIL  delegate-calibration.json: no \"Scaffold rate\" gauge whose numerator is scaffold alone"; fail=$((fail+1))
+  fi
+  # Tokens avoided by verdict: each panel sums the enriched feedback rows'
+  # tokens for all three verdicts, never the delegate stream (that is the
+  # gross figure the Overview already shows).
+  for title in "Tokens avoided by verdict" "Tokens avoided by verdict over time"; do
+    n=$(jq -r --arg t "$title" '[.panels[] | select(.title == $t) | [.targets[] | select((.expr | contains("source=\"feedback\"")) and (.expr | contains("unwrap estimated_tokens_avoided"))) | .legendFormat] | sort | select(. == ["hit","miss","scaffold"])] | length' "$CALIBRATION" 2>/dev/null)
+    if [[ "$n" == "1" ]]; then
+      echo "  PASS  delegate-calibration.json: \"$title\" splits feedback-row tokens into hit, scaffold and miss"; pass=$((pass+1))
+    else
+      echo "  FAIL  delegate-calibration.json: \"$title\" missing or not split into hit, scaffold and miss over feedback-row tokens"; fail=$((fail+1))
+    fi
+  done
 fi
 
 # 5d. The canary-failure panel keys on exit_status=3, the code delegate.sh

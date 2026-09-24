@@ -21,6 +21,11 @@ assert_contains() {
   if [[ "$haystack" == *"$needle"* ]]; then echo "  PASS  $name"; pass=$((pass+1))
   else echo "  FAIL  $name (missing '$needle')"; fail=$((fail+1)); fi
 }
+assert_not_contains() {
+  local needle="$1" haystack="$2" name="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then echo "  PASS  $name"; pass=$((pass+1))
+  else echo "  FAIL  $name (unexpectedly found '$needle')"; fail=$((fail+1)); fi
+}
 
 # Every mock curl answers GET {base}/models from this list: a mock that only
 # knew the dispatch call would fail to resolve a tier, or hang because the
@@ -1397,6 +1402,10 @@ metric_line=$(cat "$metrics")
 assert_contains '"exit_status":3' "$metric_line" "canary timeout: metrics row tagged status:3"
 assert_contains '"recipe":"canary-recipe"' "$metric_line" "canary timeout: metrics row carries recipe name"
 assert_contains '"model":"qwen3.6:35b-a3b"' "$metric_line" "canary timeout: metrics row carries resolved model"
+# A failed recipe row still names the template that was live.
+. "$REPO/scripts/lib/recipe.sh"
+assert_contains "\"template_sha\":\"$(recipe_template_sha "$prompts/canary-recipe.md")\"" "$metric_line" \
+  "canary timeout: metrics row carries template_sha"
 # Verdict nudge must NOT fire on a status:3 exit.
 if echo "$stderr_content" | grep -q "record verdict"; then
   echo "  FAIL  canary timeout: verdict nudge leaked"; fail=$((fail+1))
@@ -5345,6 +5354,143 @@ if [[ ! -e "$data/drafts/$old_stem.draft.txt" && ! -e "$data/drafts/$old_stem.in
 else
   echo "  FAIL  input-capture: retention left $(ls "$data/drafts" | grep -c "^$old_stem") expired file(s)"; fail=$((fail+1))
 fi
+# 41h. The structured inputs — piped stdin, every --var as passed, the
+# positional prompt — are stored as JSON under the same stem and named on the
+# row as inputs_file, and the row carries the template's content hash, so
+# replay-recipe.sh can render the same case under another template and the
+# outcomes before and after an edit can be told apart.
+rm -rf "$data"; mkdir -p "$data"
+cat > "$prompts/capvar.md" <<'EOF'
+---
+tier: prose
+inputs:
+  stdin: string
+  who: string
+  note: string?
+---
+# capvar
+
+## When to use
+n/a
+
+## Prompt template
+
+```
+To {{who}}:
+{{stdin}}
+Note: {{note}}
+```
+
+## Calibration notes
+n/a
+EOF
+make_mock_curl_think "$tmp" 'a draft'
+printf 'fact one about widget-7\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=alice --var "note=$(printf 'two\nlines')" prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+draft_name=$(printf '%s' "$row" | jq -r '.draft_file // ""')
+inputs_name=$(printf '%s' "$row" | jq -r '.inputs_file // ""')
+assert_eq "${draft_name%.draft.txt}.inputs.json" "$inputs_name" \
+  "inputs-capture: inputs_file shares the draft's stem"
+inputs_path="$data/drafts/$inputs_name"
+if [[ -n "$inputs_name" && -f "$inputs_path" ]]; then
+  echo "  PASS  inputs-capture: the inputs file exists on disk"; pass=$((pass+1))
+else
+  echo "  FAIL  inputs-capture: inputs file missing (inputs='$inputs_name')"; fail=$((fail+1))
+fi
+assert_eq "capvar" "$(jq -r '.recipe' "$inputs_path" 2>/dev/null)" "inputs-capture: file names the recipe"
+assert_eq "fact one about widget-7" "$(jq -r '.stdin' "$inputs_path" 2>/dev/null)" \
+  "inputs-capture: file holds the piped stdin"
+assert_eq "alice" "$(jq -r '.vars.who' "$inputs_path" 2>/dev/null)" "inputs-capture: file holds each --var by key"
+assert_eq $'two\nlines' "$(jq -r '.vars.note' "$inputs_path" 2>/dev/null)" \
+  "inputs-capture: a --var value keeps its newline"
+assert_eq "go" "$(jq -r '.prompt' "$inputs_path" 2>/dev/null)" "inputs-capture: file holds the positional prompt"
+assert_eq "prose" "$(jq -r '.tier' "$inputs_path" 2>/dev/null)" "inputs-capture: file holds the resolved tier"
+assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$inputs_path")" \
+  "inputs-capture: inputs file is private (600)"
+# The hash covers the frontmatter and the prompt block, the parts that shape
+# the output, and is computed by the helper both scripts share.
+. "$REPO/scripts/lib/recipe.sh"
+expected_sha=$(recipe_template_sha "$prompts/capvar.md")
+assert_eq "$expected_sha" "$(printf '%s' "$row" | jq -r '.template_sha // ""')" \
+  "template-sha: the row carries the 12-char hash of the recipe's frontmatter and prompt block"
+if [[ "$expected_sha" =~ ^[0-9a-f]{12}$ ]]; then
+  echo "  PASS  template-sha: the hash is 12 hex characters"; pass=$((pass+1))
+else
+  echo "  FAIL  template-sha: unexpected hash '$expected_sha'"; fail=$((fail+1))
+fi
+# A key passed twice keeps its first value in the inputs, because that is
+# the value the substitution used.
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=alice --var who=bob prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+dup_inputs="$data/drafts/$(printf '%s' "$row" | jq -r '.inputs_file // ""')"
+dup_input="$data/drafts/$(printf '%s' "$row" | jq -r '.input_file // ""')"
+assert_contains "To alice:" "$(cat "$dup_input" 2>/dev/null)" \
+  "inputs-capture: a --var passed twice is rendered with its first value"
+assert_eq "alice" "$(jq -r '.vars.who' "$dup_inputs" 2>/dev/null)" \
+  "inputs-capture: a --var passed twice is recorded with its first value"
+# A calibration note does not change the hash; an edit to the prompt block does.
+printf '\n- 2026-09-19: a dated note, prose only\n' >> "$prompts/capvar.md"
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=dora prose "go" >/dev/null 2>&1
+assert_eq "$expected_sha" "$(tail -1 "$metrics" | jq -r '.template_sha // ""')" \
+  "template-sha: a calibration-notes edit keeps the hash"
+sed -i.bak 's/^To {{who}}:$/Dear {{who}}:/' "$prompts/capvar.md" && rm -f "$prompts/capvar.md.bak"
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=erin prose "go" >/dev/null 2>&1
+edited_sha=$(tail -1 "$metrics" | jq -r '.template_sha // ""')
+if [[ -n "$edited_sha" && "$edited_sha" != "$expected_sha" ]]; then
+  echo "  PASS  template-sha: a prompt-block edit changes the hash"; pass=$((pass+1))
+else
+  echo "  FAIL  template-sha: prompt-block edit left the hash at '$edited_sha'"; fail=$((fail+1))
+fi
+# Over the byte cap the JSON is not written at all: a cut JSON is unreadable.
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_MAX_BYTES=40 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=frank prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+assert_eq "true" "$(printf '%s' "$row" | jq -r 'has("draft_file")')" \
+  "inputs-capture: over the cap the draft is still captured (truncated)"
+assert_eq "false" "$(printf '%s' "$row" | jq -r 'has("inputs_file")')" \
+  "inputs-capture: over the cap no inputs file is written and no field names one"
+# The draft alone can be switched off and the hash still lands: it is on
+# the row, not in a file.
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_DRAFT_CAPTURE=1 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=bob prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+assert_eq "false" "$(printf '%s' "$row" | jq -r 'has("inputs_file")')" \
+  "inputs-capture: DELEGATE_NO_DRAFT_CAPTURE=1 writes no inputs_file field"
+# Against the file as it now stands: the prompt-block edit above changed it.
+assert_eq "$(recipe_template_sha "$prompts/capvar.md")" "$(printf '%s' "$row" | jq -r '.template_sha // ""')" \
+  "template-sha: recorded even when the draft capture is off"
+# A bare call has no template to hash and no recipe to replay.
+printf 'bare piped context\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "go" >/dev/null 2>&1
+row=$(tail -1 "$metrics")
+assert_eq "false" "$(printf '%s' "$row" | jq -r 'has("inputs_file")')" \
+  "inputs-capture: a bare call writes no inputs_file field"
+assert_eq "false" "$(printf '%s' "$row" | jq -r 'has("template_sha")')" \
+  "template-sha: a bare call carries no template_sha"
+# Retention prunes the structured inputs with the draft they belong to.
+old_stem="20200101T000000Z-deadbeef"
+printf 'old' > "$data/drafts/$old_stem.draft.txt"
+printf '{}' > "$data/drafts/$old_stem.inputs.json"
+touch -t 202001010000 "$data/drafts/$old_stem.draft.txt" "$data/drafts/$old_stem.inputs.json"
+printf 'ctx\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_RETENTION_DAYS=1 \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe capvar --var who=carol prose "go" >/dev/null 2>&1
+if [[ ! -e "$data/drafts/$old_stem.draft.txt" && ! -e "$data/drafts/$old_stem.inputs.json" ]]; then
+  echo "  PASS  inputs-capture: retention removes the expired inputs file with its draft"; pass=$((pass+1))
+else
+  echo "  FAIL  inputs-capture: retention left $(ls "$data/drafts" | grep -c "^$old_stem") expired file(s)"; fail=$((fail+1))
+fi
 rm -rf "$tmp" "$data"
 
 # --- 42. body_max_words: the body is everything after the first blank line;
@@ -6516,7 +6662,7 @@ out=$(printf '%s\n' "$mcr_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --recipe mcr prose "go" 2>/dev/null)
 assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
   "context-ratio: a failed check costs exactly two dispatches"
-assert_contains "max_context_ratio: the answer runs about as long as the supplied facts; curate it to well under the facts' length, carrying every path, number and reference inside new sentences." "$(cat "$tmp/payload.2.json")" \
+assert_contains "max_context_ratio: the answer runs about as long as the supplied facts; curate it to well under the facts' length, in sentences of your own." "$(cat "$tmp/payload.2.json")" \
   "context-ratio: the second request carries the length constraint sentence"
 if [[ "$(cat "$tmp/payload.2.json")" == *"no_context_echo:"* ]]; then
   echo "  FAIL  context-ratio: the retry must not name a check that did not fail"; fail=$((fail+1))
@@ -6877,6 +7023,172 @@ else
 fi
 assert_eq 1 "$(printf '%s' "$input_body" | grep -c -F "$mr_lead")" \
   "lead: the lead appears exactly once in the stored input"
+rm -rf "$tmp"
+
+# --- 53. no_unbidden_mention: opt-in per recipe, the value names the --var
+# holding the recipient handle; fails on any @-mention that is not that
+# handle, and on every mention when no handle was supplied. Measured
+# 2026-09-22 over the stored corpus: 42 of 82 rejected reply drafts carry
+# one, 0 of 81 shipped replies do. ---
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+{ printf -- '---\ntier: prose\ninputs:\n  stdin: string\n  recipient: string?\nchecks:\n  no_unbidden_mention: recipient\n---\n'
+  printf '# um\n\n## When to use\nn/a\n\n## Prompt template\n\n```\nReply using only the facts below.\n\n=== RECIPIENT ===\n{{recipient}}\n\n=== FACTS ===\n{{stdin}}\n```\n\n## Calibration notes\nn/a\n'; } > "$prompts/um.md"
+um_facts=$'The crash is in src/main.js:412 and tomgunning reported it on the referenced issue.\nAll 531 tests pass on the branch.'
+run_um() {
+  # $1 = the recipient var value, passed only when non-empty.
+  local args=()
+  [[ -n "${1:-}" ]] && args=(--var "recipient=$1")
+  printf '%s\n' "$um_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe um ${args[@]+"${args[@]}"} prose "go" 2>&1 >/dev/null
+}
+
+# 53a. No recipient supplied: any mention is unbidden, even when the name is
+# in the piped facts (which is how both measured cases arose).
+: > "$metrics"
+make_mock_curl_think "$tmp" '@tomgunning, thanks for the report. The crash is at src/main.js:412 and all 531 tests pass.'
+out=$(run_um)
+assert_contains "check 'no_unbidden_mention' FAILED" "$out" \
+  "unbidden-mention: a mention with no recipient supplied is caught"
+assert_contains '@tomgunning' "$out" \
+  "unbidden-mention: the offending handle is named"
+assert_contains 'you supplied no' "$out" \
+  "unbidden-mention: the message says no recipient was supplied"
+row=$(tail -1 "$metrics")
+assert_contains '"checks_failed_names":["no_unbidden_mention"]' "$row" \
+  "unbidden-mention: named on the metrics row"
+assert_contains '"checks_run":2' "$row" \
+  "unbidden-mention: counted in checks_run beside the default echo check"
+
+# A negative case has to prove the check RAN and passed, not that the call
+# fell over before reaching it: a bare not-contains would pass on a recipe
+# whose generation failed, which is how an assertion passes for the wrong
+# reason. Every case below asserts the row's own counters too.
+assert_check_clean() { # $1 = stderr, $2 = name
+  assert_not_contains "no_unbidden_mention" "$1" "$2"
+  local r; r=$(tail -1 "$metrics")
+  assert_contains '"checks_run":2' "$r" "$2 (the check ran)"
+  assert_contains '"checks_failed":0' "$r" "$2 (and passed)"
+}
+
+# 53b. The supplied recipient may be mentioned, with or without the `@` in
+# the var, and nothing is flagged.
+: > "$metrics"
+make_mock_curl_think "$tmp" '@nneul, thanks for the report. The crash is at src/main.js:412.'
+out=$(run_um nneul)
+assert_check_clean "$out" "unbidden-mention: the supplied recipient may be mentioned"
+: > "$metrics"
+out=$(run_um '@nneul')
+assert_check_clean "$out" "unbidden-mention: the recipient var may carry its own @"
+: > "$metrics"
+make_mock_curl_think "$tmp" '@NNeul, thanks for the report.'
+out=$(run_um nneul)
+assert_check_clean "$out" "unbidden-mention: handles compare case-insensitively, as the forges resolve them"
+
+# 53c. A third party beside the recipient is still unbidden.
+: > "$metrics"
+make_mock_curl_think "$tmp" '@nneul, thanks. cc @tomgunning who filed the original.'
+out=$(run_um nneul)
+assert_contains "check 'no_unbidden_mention' FAILED" "$out" \
+  "unbidden-mention: a third party beside the recipient is caught"
+assert_contains 'the only handle you supplied is @nneul' "$out" \
+  "unbidden-mention: the message names the one permitted handle"
+
+# 53d. Not mentions: a decorator inside a fenced block or an inline code
+# span, an email address, a scoped package.
+: > "$metrics"
+make_mock_curl_think "$tmp" 'The guard is a decorator:\n\n```python\n@property\ndef x(self): ...\n```\n\nReported by tomgunning.'
+out=$(run_um)
+assert_check_clean "$out" "unbidden-mention: a decorator inside a fenced block is not a mention"
+: > "$metrics"
+make_mock_curl_think "$tmp" 'The guard is a decorator:\n\n~~~python\n@property\ndef x(self): ...\n~~~\n\nReported by tomgunning.'
+out=$(run_um)
+assert_check_clean "$out" "unbidden-mention: a decorator inside a tilde fence is not a mention"
+: > "$metrics"
+make_mock_curl_think "$tmp" 'Quoted as sent:\n\n````markdown\n```python\n@property\n```\n@override\n````\n\nReported by tomgunning.'
+out=$(run_um)
+assert_check_clean "$out" "unbidden-mention: a nested fence does not close a longer one early"
+: > "$metrics"
+make_mock_curl_think "$tmp" 'The `@override` annotation is the one to copy.'
+out=$(run_um)
+assert_check_clean "$out" "unbidden-mention: an annotation in an inline code span is not a mention"
+: > "$metrics"
+make_mock_curl_think "$tmp" 'Mail the report to releases@example.com when the branch lands.'
+out=$(run_um)
+assert_check_clean "$out" "unbidden-mention: an email address is not a mention"
+: > "$metrics"
+make_mock_curl_think "$tmp" 'Pin @scope/pkg to the patched release before merging.'
+out=$(run_um)
+assert_check_clean "$out" "unbidden-mention: a scoped package is not a mention"
+
+# 53d2. A fence that never closes is not a block: truncated output often
+# leaves one, and a mention after it must still be seen.
+: > "$metrics"
+make_mock_curl_think "$tmp" 'Thanks for the report.\n\n```\nsee above\n@tomgunning, see above'
+out=$(run_um)
+assert_contains "check 'no_unbidden_mention' FAILED" "$out" \
+  "unbidden-mention: a mention after an unclosed fence is still caught"
+
+# 53d3. A key passed twice keeps its first value, the one the template
+# substituted, so that handle is the permitted one.
+: > "$metrics"
+make_mock_curl_think "$tmp" '@nneul, thanks for the report.'
+out=$(printf '%s\n' "$um_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe um --var recipient=nneul --var recipient=other prose "go" 2>&1 >/dev/null)
+assert_check_clean "$out" "unbidden-mention: a repeated recipient var permits its first value"
+
+# 53d4. A mention the caller supplied verbatim in another --var (a lead, an
+# opener, a sign-off) is the caller's; a bystander beside it is still not.
+{ printf -- '---\ntier: prose\ninputs:\n  stdin: string\n  recipient: string?\n  signoff: string?\nchecks:\n  no_unbidden_mention: recipient\n---\n'
+  printf '# um_lead\n\n## When to use\nn/a\n\n## Prompt template\n\n```\nReply using only the facts below.\n\n=== RECIPIENT ===\n{{recipient}}\n\n=== SIGNOFF ===\n{{signoff}}\n\n=== FACTS ===\n{{stdin}}\n```\n\n## Calibration notes\nn/a\n'; } > "$prompts/um_lead.md"
+run_um_lead() {
+  printf '%s\n' "$um_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe um_lead --var 'signoff=cc @IsmaelMartinez' prose "go" 2>&1 >/dev/null
+}
+: > "$metrics"
+make_mock_curl_think "$tmp" 'Thanks for the report. cc @IsmaelMartinez'
+out=$(run_um_lead)
+assert_check_clean "$out" "unbidden-mention: a mention the caller supplied in another var is permitted"
+: > "$metrics"
+make_mock_curl_think "$tmp" '@tomgunning, thanks for the report. cc @IsmaelMartinez'
+out=$(run_um_lead)
+assert_contains "check 'no_unbidden_mention' FAILED" "$out" \
+  "unbidden-mention: a caller-supplied mention does not excuse a bystander"
+assert_not_contains '@ismaelmartinez' "$out" \
+  "unbidden-mention: only the bystander is named, not the caller's handle"
+
+# 53e. Undeclared is off: a recipe that does not name the var never runs it.
+{ printf -- '---\ntier: prose\nchecks:\n  no_padding_tail: true\n---\n'
+  printf '# um_off\n\n## When to use\nn/a\n\n## Prompt template\n\n```\nReply.\n\n{{stdin}}\n```\n\n## Calibration notes\nn/a\n'; } > "$prompts/um_off.md"
+: > "$metrics"
+make_mock_curl_think "$tmp" '@tomgunning, thanks for the report.'
+out=$(printf '%s\n' "$um_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe um_off prose "go" 2>&1 >/dev/null)
+assert_not_contains "no_unbidden_mention" "$out" \
+  "unbidden-mention: a recipe that does not declare it never runs it"
+
+# 53f. The retry carries the constraint, so the second generation is told
+# what to remove rather than being asked again.
+: > "$metrics"
+make_mock_curl_think "$tmp" '@tomgunning, thanks for the report.'
+out=$(printf '%s\n' "$um_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_NO_PREFLIGHT=1 \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe um prose "go" 2>&1 >/dev/null)
+assert_contains "regenerating once" "$out" \
+  "unbidden-mention: a failed mention check earns the one retry"
+row=$(tail -1 "$metrics")
+assert_contains '"retried":true' "$row" \
+  "unbidden-mention: the retry is recorded on the row"
 rm -rf "$tmp"
 
 echo

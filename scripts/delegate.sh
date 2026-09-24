@@ -230,20 +230,26 @@ capture_file() {
   chmod 600 "$path" 2>/dev/null || true
 }
 
-# capture_draft <draft> <ts> [<input>] — persist the generated draft beside
-# the metrics row that scores it and, when given, the rendered input the model
-# saw (#516), under one stem; echo the basenames for the row's `draft_file`
-# and `input_file`, tab-separated, the input absent when none was written.
-# With the shipped text from `delegate-feedback.sh --final` a MISS becomes a
-# (generated, shipped) pair the calibration loop can diff, and the input is
-# what that pair is scored against: which supplied anchors each half carried,
-# which supplied sentences the draft handed back. Local-only: the files sit
-# under DELEGATE_LOCAL_DATA_DIR and inherit the sensitivity of the piped
-# context; the input holds all of it. One cap, one retention, one opt-out
-# for both files: DELEGATE_NO_DRAFT_CAPTURE=1 writes neither, and both are
-# skipped when metrics are off.
+# capture_draft <draft> <ts> [<input>] [<inputs-json>] — persist the
+# generated draft beside the metrics row that scores it and, when given, the
+# rendered input the model saw (#516) and the structured inputs it was
+# rendered from, under one stem; echo the basenames for the row's
+# `draft_file`, `input_file` and `inputs_file`, tab-separated, each absent
+# when none was written. With the shipped text from `delegate-feedback.sh
+# --final` a MISS becomes a (generated, shipped) pair the calibration loop
+# can diff, and the input is what that pair is scored against: which
+# supplied anchors each half carried, which supplied sentences the draft
+# handed back. The structured inputs (the piped stdin, every --var, the
+# positional prompt) are what lets replay-recipe.sh render the same case
+# under an edited template: the rendered input cannot be un-rendered, and the
+# 2026-09-16 spike recovered only 42 of 135 cases from transcripts for want
+# of them. Local-only: the files sit under DELEGATE_LOCAL_DATA_DIR and
+# inherit the sensitivity of the piped context; both inputs hold all of it.
+# One cap, one retention, one opt-out for all three files:
+# DELEGATE_NO_DRAFT_CAPTURE=1 writes none, and all are skipped when metrics
+# are off.
 capture_draft() {
-  local text="$1" ts="$2" input="${3:-}" stem dir max names
+  local text="$1" ts="$2" input="${3:-}" inputs="${4:-}" stem dir max names
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 0
   [[ "${DELEGATE_NO_DRAFT_CAPTURE:-}" == "1" ]] && return 0
   [[ -n "$text" ]] || return 0
@@ -272,12 +278,19 @@ capture_draft() {
   if [[ -n "$input" ]] && capture_file "$input" "$dir/$stem.input.txt" "$max"; then
     names="$names"$'\t'"$stem.input.txt"
   fi
+  # The JSON is never truncated: a cut draft is still evidence, a cut JSON
+  # is unreadable, so over the cap it is simply not written and the row
+  # carries no inputs_file.
+  if [[ -n "$inputs" ]] && (( $(printf '%s' "$inputs" | wc -c | tr -d ' ') <= max )) \
+     && capture_file "$inputs" "$dir/$stem.inputs.json" "$max"; then
+    names="$names"$'\t'"$stem.inputs.json"
+  fi
   # Retention prune, inline so there is no cron dependency. 0 disables.
   # -mtime +N behaves the same on BSD and GNU find; '*.txt' takes drafts,
-  # inputs and finals together.
+  # inputs and finals together, '*.json' the structured inputs.
   local keep="${DELEGATE_DRAFT_RETENTION_DAYS:-14}"
   if [[ "$keep" =~ ^[0-9]+$ ]] && (( 10#$keep > 0 )); then
-    find "$dir" -type f -name '*.txt' -mtime "+$keep" -exec rm -f {} + 2>/dev/null || true
+    find "$dir" -type f \( -name '*.txt' -o -name '*.json' \) -mtime "+$keep" -exec rm -f {} + 2>/dev/null || true
   fi
   printf '%s' "$names"
 }
@@ -290,7 +303,8 @@ log_metric() {
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
     s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}" \
     checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}" checks_failed_names="${22:-}" \
-    draft_file="${23:-}" retried="${24:-}" retry_chars="${25:-}" input_file="${26:-}"
+    draft_file="${23:-}" retried="${24:-}" retry_chars="${25:-}" input_file="${26:-}" \
+    template_sha="${27:-}" inputs_file="${28:-}"
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$(( ochars + ${retry_chars:-0} ))")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -312,8 +326,10 @@ log_metric() {
     --arg crun "$checks_run" --arg cfail "$checks_failed" --arg cfix "$checks_autofixed" \
     --arg cnames "$checks_failed_names" --arg draft "$draft_file" --arg input "$input_file" \
     --arg retried "$retried" --arg retry_chars "$retry_chars" \
+    --arg tsha "$template_sha" --arg inputs "$inputs_file" \
     '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
      + (if $recipe != "" then {recipe:$recipe} else {} end)
+     + (if $tsha != "" then {template_sha:$tsha} else {} end)
      + (if $project != "" then {project:$project} else {} end)
      + (if $session != "" then {session:$session} else {} end)
      + (if $trace_id != "" then {otel_trace_id:$trace_id} else {} end)
@@ -326,6 +342,7 @@ log_metric() {
      + (if $cnames != "" then {checks_failed_names:($cnames|split(","))} else {} end)
      + (if $draft != "" then {draft_file:$draft} else {} end)
      + (if $input != "" then {input_file:$input} else {} end)
+     + (if $inputs != "" then {inputs_file:$inputs} else {} end)
      + (if $retried != "" then {retried:true, retry_chars:($retry_chars|tonumber)} else {} end)' \
     >> "$metrics_file" 2>/dev/null
 }
@@ -363,7 +380,11 @@ emit_failure() {
   fp=$(( ${#recipe_template} + ${#prompt} ))
   fc=${#context}
   ftoks=$(compute_tokens_local "$fp" "$fc" 0)
-  log_metric "$ts_start" "$tier" "$fmodel" "$fp" "$fc" 0 "$fdur" "$fstatus" "$recipe" 0 "$fdur" "$otel_trace_id" "$otel_span_id" "$fs_temp" "$fs_top_p" "$fs_top_k" "$fs_pp" "$delegate_project"
+  # A failed recipe row still names its template (arg 27), so a stall or a
+  # flaky refusal is attributed to the template that was live; the eight
+  # check and capture fields between are empty, as nothing was generated.
+  log_metric "$ts_start" "$tier" "$fmodel" "$fp" "$fc" 0 "$fdur" "$fstatus" "$recipe" 0 "$fdur" "$otel_trace_id" "$otel_span_id" "$fs_temp" "$fs_top_p" "$fs_top_k" "$fs_pp" "$delegate_project" \
+    "" "" "" "" "" "" "" "" "${template_sha:-}"
   emit_otel_span "$start_epoch_ms" "$fdur" "$fstatus" "$otel_trace_id" "$otel_span_id" "$fmodel" "$backend" "$tier" "$recipe" "$fp" "$fc" 0 0 "$fdur" "$ftoks" "${recipe_template}${prompt}" "$context" "" "$delegate_project"
 }
 
@@ -423,12 +444,20 @@ fi
 recipe_template=""
 recipe_had_stdin_marker=0
 declared_inputs_present=0
+template_sha=""
 if [[ -n "$recipe" ]]; then
   recipe_file="$prompts_dir/${recipe}.md"
   if [[ ! -f "$recipe_file" ]]; then
     echo "delegate: recipe '$recipe' not found at $recipe_file" >&2
     exit 2
   fi
+  # The template that produced this row, as a short content hash of the
+  # frontmatter and the prompt block (lib/recipe.sh), so the outcomes before
+  # and after a recipe edit can be told apart without git archaeology
+  # (replay-recipe.sh reads it, self-improve.sh splits on it) while a
+  # calibration note does not start a new bucket. Empty, and the field
+  # omitted, where shasum is missing.
+  template_sha=$(recipe_template_sha "$recipe_file")
 
   # Frontmatter `tier:` (#411); an explicit tier (positional or --tier) still
   # wins. Read by `recipe_tier` in lib/recipe.sh, shared with the boundary hook.
@@ -1060,12 +1089,14 @@ retry_constraint_for() {
       echo "no_invented_refs: every issue or ticket identifier in a trailer must appear in the input you were given." ;;
     no_example_echo)
       echo "no_example_echo: do not reproduce any line of this prompt or of an example; write from the input." ;;
+    no_unbidden_mention)
+      echo "no_unbidden_mention: @-mention nobody except the recipient handle you were given; with none, address the reader as \"you\" and write no \"@\" at all." ;;
     no_context_echo)
       # Measures echo, not length; max_context_ratio owns the length rule (#487).
       echo "no_context_echo: reproduce none of the supplied sentences as written; carry their paths, numbers and references inside sentences of your own." ;;
     max_context_ratio)
       # A copy ban says nothing about length, so this one says it out loud (#487).
-      echo "max_context_ratio: the answer runs about as long as the supplied facts; curate it to well under the facts' length, carrying every path, number and reference inside new sentences." ;;
+      echo "max_context_ratio: the answer runs about as long as the supplied facts; curate it to well under the facts' length, in sentences of your own." ;;
     *)
       echo "$name: the constraint of that name, stated above, was not met." ;;
   esac
@@ -1177,10 +1208,38 @@ fact_as_question_matches() {
   return 0
 }
 
+# mentions_in <text> — the @-mentions of a text, one per line, lowercased and
+# deduped. Fenced blocks and inline code spans are dropped first, so a
+# `@property` decorator or an `@Override` annotation inside a quoted snippet
+# is not a mention. A fence closes, as in CommonMark, only on a bare run of
+# its own character at least as long as the one that opened it, so a
+# ```python line nested in a four-backtick block does not end the block; a
+# fence that never closes is not a block, so its lines are scanned after all,
+# as truncated output often leaves one. A scoped package (`@scope/pkg`) is
+# dropped by its trailing slash; an email address never matches because its
+# `@` is preceded by a word character. The handle class is one bounded
+# quantifier and the fence run is counted by a plain loop, so both are linear.
+mentions_in() {
+  printf '%s\n' "$1" | tr -d '\r' \
+    | awk 'function run(s, c,   n) { n = 0; while (substr(s, n + 1, 1) == c) n++; return n }
+           { line = $0; sub(/^[[:space:]]*/, "", line); c = substr(line, 1, 1); n = 0
+             if (c == "`" || c == "~") n = run(line, c) }
+           !fence && n >= 3 { fence = 1; fc = c; fn = n; buf = ""; next }
+           fence && c == fc && n >= fn && substr(line, n + 1) ~ /^[[:space:]]*$/ { fence = 0; buf = ""; next }
+           fence { buf = buf $0 "\n"; next }
+           { print }
+           END { if (fence) printf "%s", buf }' \
+    | sed 's/`[^`]*`//g' \
+    | grep -oE '(^|[^A-Za-z0-9_./@-])@[A-Za-z0-9][A-Za-z0-9_-]{0,38}/?' \
+    | grep -v '/$' \
+    | sed 's/.*@//' \
+    | tr '[:upper:]' '[:lower:]' | sort -u
+}
+
 run_output_checks() {
 # The result and the counters (output, checks_*, capability_failed) are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio fact_questions caller_text
+local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio fact_questions caller_text allowed unbidden mention_tok recipient_seen caller_mentions
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -1535,11 +1594,70 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             ctx_ratio=$(awk -v o="${#output}" -v c="${#context}" 'BEGIN { printf "%.2f", o / c }')
             if awk -v o="${#output}" -v c="${#context}" -v r="$cval" 'BEGIN { exit !(o / c >= r) }'; then
               echo "delegate: check 'max_context_ratio' FAILED — the answer is ${#output} chars against ${#context} chars of context (ratio $ctx_ratio >= $cval)" >&2
-              echo "  The draft runs about as long as its facts; curate them, well under the facts' length, carrying every anchor inside new sentences." >&2
+              echo "  The draft runs about as long as its facts; curate them, well under the facts' length, in sentences of your own." >&2
               checks_failed=$((checks_failed + 1))
               checks_failed_names="${checks_failed_names:+$checks_failed_names,}max_context_ratio"
               capability_failed=$((capability_failed + 1))
             fi
+          fi
+        fi
+        ;;
+      no_unbidden_mention)
+        # An @-mention of somebody the caller did not address the reply to.
+        # The value names the --var holding the recipient handle, as
+        # no_fact_as_question names the ask var; an empty or absent value
+        # means there is no recipient, and then any mention is unbidden.
+        # Measured 2026-09-22 on two maintainer-review-reply posts to
+        # teams-for-linux: neither call passed `recipient`, and both drafts
+        # opened by @-mentioning a bystander whose name the piped context
+        # carried (the reporter of a referenced issue). Grounding cannot see
+        # that, because the name IS in the input; what makes it wrong is that
+        # it is not the person being replied to. The recipes say it in prose
+        # already ("when it is empty there is no handle and no `@` at all, so
+        # address the reader as you"), which is what a check is for once
+        # prose has not held. A mention costs a real notification to someone
+        # who is not in the thread, so the unit is the handle and one is
+        # enough to fail.
+        if [[ -n "$cval" ]]; then
+          checks_run=$((checks_run + 1))
+          allowed=""
+          recipient_seen=""
+          caller_text=""
+          # The first value of a key passed twice is the one the template
+          # substituted. Every other --var is text the caller asked for word
+          # for word (a lead, an opener, a sign-off), so a mention inside it
+          # is the caller's, as no_fact_as_question treats caller questions.
+          for _kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
+            if [[ "${_kv%%=*}" == "$cval" ]]; then
+              if [[ -z "$recipient_seen" ]]; then
+                allowed="${_kv#*=}"
+                recipient_seen=1
+              fi
+            else
+              caller_text="${caller_text}${_kv#*=}
+"
+            fi
+          done
+          # The caller writes the handle with or without the `@`; compare the
+          # bare form, lowercased, as GitHub and GitLab resolve them.
+          allowed=$(printf '%s' "$allowed" | tr -d '@[:space:]' | tr '[:upper:]' '[:lower:]')
+          caller_mentions=$'\n'$(mentions_in "$caller_text")$'\n'
+          unbidden=""
+          while IFS= read -r mention_tok; do
+            [[ -z "$mention_tok" ]] && continue
+            [[ -n "$allowed" && "$mention_tok" == "$allowed" ]] && continue
+            [[ "$caller_mentions" == *$'\n'"$mention_tok"$'\n'* ]] && continue
+            unbidden="${unbidden:+$unbidden }@$mention_tok"
+          done < <(mentions_in "$output")
+          if [[ -n "$unbidden" ]]; then
+            if [[ -n "$allowed" ]]; then
+              echo "delegate: check 'no_unbidden_mention' FAILED — the answer mentions $unbidden; the only handle you supplied is @$allowed, and a mention notifies whoever it names" >&2
+            else
+              echo "delegate: check 'no_unbidden_mention' FAILED — the answer mentions $unbidden; you supplied no '$cval', so the reply addresses the reader as \"you\" and names nobody" >&2
+            fi
+            checks_failed=$((checks_failed + 1))
+            checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_unbidden_mention"
+            capability_failed=$((capability_failed + 1))
           fi
         fi
         ;;
@@ -1671,17 +1789,37 @@ tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$(( output
 
 draft_file=""
 input_file=""
+inputs_file=""
 if (( status == 0 )); then
   # The rendered input is stored for recipe calls only (#516): a recipe is
   # what the pair calibrates, and a bare call's context has no recipe to be
   # scored against. After a retry $full_input carries the appended notice,
   # which is exactly the prompt that produced the draft stored beside it.
-  IFS=$'\t' read -r draft_file input_file <<<"$(capture_draft "$output" "$ts_start" "${recipe:+$full_input}")"
+  # The structured inputs go beside it as JSON — the piped stdin, every
+  # --var as passed, the resolved tier, the positional prompt when there was
+  # one — so replay-recipe.sh can render the same case under another
+  # template on the same tier. jq builds it from the flat key/value list
+  # because values carry newlines; a key passed twice keeps its first value,
+  # which is the one the substitution used (the second found no placeholder).
+  inputs_json=""
+  if [[ -n "$recipe" ]]; then
+    kv_flat=()
+    for kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
+      kv_flat+=("${kv%%=*}" "${kv#*=}")
+    done
+    inputs_json=$(jq -nc --arg recipe "$recipe" --arg stdin "$context" --arg prompt "$prompt" --arg tier "$tier" \
+      '{recipe:$recipe, tier:$tier, stdin:$stdin,
+        vars:(reduce ($ARGS.positional | [range(0; length; 2) as $i | {key: .[$i], value: .[$i+1]}] | .[]) as $kv
+                ({}; if has($kv.key) then . else . + {($kv.key): $kv.value} end))}
+       + (if $prompt != "" then {prompt:$prompt} else {} end)' \
+      --args ${kv_flat[@]+"${kv_flat[@]}"} 2>/dev/null)
+  fi
+  IFS=$'\t' read -r draft_file input_file inputs_file <<<"$(capture_draft "$output" "$ts_start" "${recipe:+$full_input}" "$inputs_json")"
 fi
 # row_written is what the meta line's ts/id and the verdict nudge are gated
 # on: they name the row this call wrote, so they are only true when one was.
 row_written=false
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}" "$input_file" && row_written=true
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}" "$input_file" "$template_sha" "$inputs_file" && row_written=true
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project" "${retry_chars:-}"
 
 # The stderr line SKILL.md teaches the assistant to read after every

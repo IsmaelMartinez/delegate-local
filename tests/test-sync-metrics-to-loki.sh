@@ -107,6 +107,55 @@ fb_recipe=$(printf '%s' "$fb_line" | jq -r '.recipe // ""')
 fb_tier=$(printf '%s' "$fb_line" | jq -r '.tier // ""')
 assert_eq "commit-message" "$fb_recipe" "T4: feedback enriched with parent recipe"
 assert_eq "prose" "$fb_tier" "T4: feedback enriched with parent tier"
+assert_eq "42" "$(printf '%s' "$fb_line" | jq -r '.estimated_tokens_avoided // ""')" \
+  "T4: feedback enriched with parent tokens (the tokens-by-verdict split)"
+
+# --- T4b: ref_id picks the right parent when two share a second --------------
+# The ts-keyed map handed a same-second sibling's recipe to a pinned verdict;
+# ref_id is the key two delegations cannot share.
+met4="$tmp/m4.jsonl"; state4="$tmp/state4"; body4="$tmp/body4.json"
+make_mock_curl "$tmp" "$body4"
+cat > "$met4" <<'EOF'
+{"ts":"2026-05-10T11:00:00Z","source":"delegate","tier":"prose","recipe":"commit-message","otel_span_id":"aaaa","estimated_tokens_avoided":10,"exit_status":0}
+{"ts":"2026-05-10T11:00:00Z","source":"delegate","tier":"prose","recipe":"pr-description","otel_span_id":"bbbb","estimated_tokens_avoided":20,"exit_status":0}
+{"ts":"2026-05-10T11:01:00Z","source":"feedback","ref_ts":"2026-05-10T11:00:00Z","ref_id":"aaaa","kept":false,"scaffold":true}
+EOF
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  bash "$SCRIPT" --full --metrics-file "$met4" --state-file "$state4" --loki-url http://x >/dev/null 2>&1
+fb4=$(jq -r '.streams[] | select(.stream.source=="feedback") | .values[0][1]' "$body4")
+assert_eq "commit-message" "$(printf '%s' "$fb4" | jq -r '.recipe // ""')" \
+  "T4b: a ref_id-pinned verdict takes its own parent's recipe, not a same-second sibling's"
+assert_eq "10" "$(printf '%s' "$fb4" | jq -r '.estimated_tokens_avoided // ""')" \
+  "T4b: and its own parent's tokens"
+
+# --- T4c: a repeat verdict takes the recipe but not the tokens again ---------
+# Summing tokens per feedback row would count a re-recorded delegation twice;
+# only its first verdict row carries them, including when the repeat arrives
+# in a later incremental run.
+printf '%s\n' '{"ts":"2026-05-10T11:02:00Z","source":"feedback","ref_ts":"2026-05-10T11:00:00Z","ref_id":"aaaa","kept":false,"scaffold":true,"final_file":"x.final.txt"}' >> "$met4"
+rm -f "$body4"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  bash "$SCRIPT" --metrics-file "$met4" --state-file "$state4" --loki-url http://x >/dev/null 2>&1
+fb4b=$(jq -r '.streams[] | select(.stream.source=="feedback") | .values[0][1]' "$body4")
+assert_eq "commit-message" "$(printf '%s' "$fb4b" | jq -r '.recipe // ""')" \
+  "T4c: a repeat verdict pushed later still takes its parent's recipe"
+assert_eq "" "$(printf '%s' "$fb4b" | jq -r '.estimated_tokens_avoided // ""')" \
+  "T4c: but not the tokens, which its first verdict already carries"
+
+# --- T4d: a ts-only verdict and a later id-pinned one are the same delegation -
+# Keyed apart ("ts:" vs "id:"), both took the tokens; resolving the ts form to
+# the parent's span makes the id-pinned repeat a repeat.
+met5="$tmp/m5.jsonl"; state5="$tmp/state5"; body5="$tmp/body5.json"
+make_mock_curl "$tmp" "$body5"
+cat > "$met5" <<'EOF'
+{"ts":"2026-05-10T12:00:00Z","source":"delegate","tier":"prose","recipe":"commit-message","otel_span_id":"cccc","estimated_tokens_avoided":30,"exit_status":0}
+{"ts":"2026-05-10T12:01:00Z","source":"feedback","ref_ts":"2026-05-10T12:00:00Z","kept":true}
+{"ts":"2026-05-10T12:02:00Z","source":"feedback","ref_ts":"2026-05-10T12:00:00Z","ref_id":"cccc","kept":false,"scaffold":true}
+EOF
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  bash "$SCRIPT" --full --metrics-file "$met5" --state-file "$state5" --loki-url http://x >/dev/null 2>&1
+toks5=$(jq -r '[.streams[] | select(.stream.source=="feedback") | .values[][1] | fromjson | .estimated_tokens_avoided // empty] | join(",")' "$body5")
+assert_eq "30" "$toks5" "T4d: a ts-only verdict and an id-pinned repeat carry the tokens once between them"
 
 # --- T5: watermark idempotency ---------------------------------------------
 assert_eq "4" "$(cat "$state")" "T5: watermark set to row count"
