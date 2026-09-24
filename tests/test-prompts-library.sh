@@ -338,6 +338,10 @@ assert_contains "NEVER tick a box that asserts a verification" "$pr_description_
   "pr-description.md prompt template bans the verification-asserting checked box"
 assert_contains "NEVER write a command's output, a pass/fail count, or a timing" "$pr_description_template" \
   "pr-description.md prompt template bans fabricated command output"
+assert_contains "PARAGRAPHS — the examples set the paragraph count, the Context does not" "$pr_description_template" \
+  "pr-description.md prompt template names the PARAGRAPHS directive"
+assert_contains "one for each distinct change the stats and the Context describe" "$pr_description_template" \
+  "pr-description.md prompt template splits paragraphs per change, not by the Context's shape"
 # The gather block fetches more than one example and strips the generated-by
 # footer: no_example_echo treats a line as convention only when more than one
 # exemplar carries it.
