@@ -125,7 +125,9 @@ if [[ "$cmd" =~ $_wrapper_re ]]; then
     fi
   fi
 fi
-grep -Eq 'git[[:space:]]+commit|gh[[:space:]]+(pr|issue|release|api)([[:space:]]|$)|glab[[:space:]]+(mr|issue)([[:space:]]|$)' <<<"$cmd" || exit 0
+# `git[[:space:]].*commit` admits global options (`git -C x commit`, #546);
+# classify_segment decides whether `commit` is really the subcommand.
+grep -Eq 'git[[:space:]].*commit|gh[[:space:]]+(pr|issue|release|api)([[:space:]]|$)|glab[[:space:]]+(mr|issue)([[:space:]]|$)' <<<"$cmd" || exit 0
 
 # --- build the classification surface -------------------------------------
 # Only the leading tokens of a shell segment can BE a command: matching the raw
@@ -386,10 +388,40 @@ read_posted_body() { # raw-segment
 # not reuse the number for pr-review-comment, a different distribution.
 long_body_chars="${DELEGATE_BOUNDARY_LONG_BODY_CHARS:-600}"
 
+# True when a `git` word in the blanked segment reaches `commit` across git's
+# global options only (`-C x`, `-c k=v`, `--git-dir[=]x`, `--work-tree[=]x`,
+# `--namespace[=]x`, `--no-pager` and other bare flags), #546. A token walk
+# rather than a regex: linear, and it can tell an option's argument from the
+# subcommand. A quoted argument is blanked away, so `commit` straight after
+# -C/-c is the subcommand (`-c commit` sets no valid key).
+git_commit_seg() { # blanked-segment
+  local -a w
+  local i=0 n t
+  read -r -a w <<<"$1"
+  n=${#w[@]}
+  while (( i < n )); do
+    t=${w[i]}; i=$((i + 1))
+    [[ "$t" == git || "$t" == *[^[:alnum:]_-]git ]] || continue
+    while (( i < n )); do
+      t=${w[i]}
+      case "$t" in
+        commit) return 0 ;;
+        -C|-c|--git-dir|--work-tree|--namespace)
+          i=$((i + 1))
+          (( i < n )) && [[ "${w[i]}" == commit ]] && return 0
+          i=$((i + 1)) ;;
+        -*) i=$((i + 1)) ;;
+        *) break ;;
+      esac
+    done
+  done
+  return 1
+}
+
 classify_segment() { # blanked-segment raw-segment
   local seg="$1" rawseg="$2"
   # Inline message (-m/-F) only; --amend reuses a message, no drafting moment.
-  if grep -Eq '(^|[^[:alnum:]_-])git[[:space:]]+commit([[:space:]]|$)' <<<"$seg" \
+  if git_commit_seg "$seg" \
      && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[mF]|--message|--file)' <<<"$seg" \
      && ! grep -Eq -- '--amend' <<<"$seg"; then
     boundary="git-commit"; recipe="commit-message"; return 0
@@ -983,7 +1015,9 @@ else
     lock-timeout)       tail="Another boundary hook held the metrics lock for over two seconds, so this call proceeds undrafted." ;;
     *)                  tail="Set DELEGATE_BOUNDARY_MODE=off to silence." ;;
   esac
+  # Context only, no permissionDecision: "allow" would skip the permission
+  # prompt for the whole call, including anything chained after it (#546).
   jq -nc --arg c "${reminder} ${tail}" \
-    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",additionalContext:$c}}'
+    '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$c}}'
 fi
 exit 0
