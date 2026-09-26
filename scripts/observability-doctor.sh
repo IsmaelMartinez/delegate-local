@@ -192,7 +192,7 @@ if [[ "$shipped_rows" != "n/a" && "$shipped_rows" != "0" && -n "$shipped_oldest"
     range_s=$(( now - oldest_epoch + 3600 ))
     count_body=$(curl -s -m 10 -G "${loki_url%/}/loki/api/v1/query" \
       --data-urlencode "query=sum(count_over_time({service=\"delegate-local\"}[${range_s}s]))" \
-      --data-urlencode "time=$now" 2>/dev/null || true)
+      --data-urlencode "time=${now}000000000" 2>/dev/null || true)
     loki_rows=$(printf '%s' "$count_body" | jq -r '
       if .status == "success" then ((.data.result[0].value[1] // "0") | tonumber | floor | tostring) else "n/a" end
     ' 2>/dev/null)

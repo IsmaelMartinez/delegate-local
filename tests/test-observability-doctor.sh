@@ -48,7 +48,13 @@ url=""
 for a in "\$@"; do case "\$a" in http://*|https://*) url="\$a";; esac; done
 case "\$url" in
   *query_range*) printf '%s' "\$DOCTOR_LOKI_BODY"; exit 0;;
-  */loki/api/v1/query) printf '%s' "\${DOCTOR_LOKI_COUNT_BODY:-}"; exit 0;;
+  # Loki reads an instant query's time as a nanosecond epoch: anything but a
+  # 19-digit time= answers as an error, so the count reads n/a.
+  */loki/api/v1/query)
+    t_ok=0
+    for a in "\$@"; do [[ "\$a" =~ ^time=[0-9]{19}\$ ]] && t_ok=1; done
+    if (( t_ok == 1 )); then printf '%s' "\${DOCTOR_LOKI_COUNT_BODY:-}"; else printf '%s' '{"status":"error"}'; fi
+    exit 0;;
   *loki*ready) if [[ -f "$sentinel" ]]; then echo -n 200; else echo -n "\${DOCTOR_READY_CODE:-200}"; fi; exit 0;;
   *tempo*ready) echo -n "\${DOCTOR_TEMPO_CODE:-200}"; exit 0;;
   *api/health*) echo -n "\${DOCTOR_GRAFANA_CODE:-200}"; exit 0;;
