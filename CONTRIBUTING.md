@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for taking the time to look. This repo is one Claude Code skill, two bash scripts of routing logic, and a validation pipeline. There is no build, no linter, and no package manager. The runtime is `bash` (3.2+ — macOS-shipped is fine), `jq`, `awk`, `perl`, and `curl` (used by `scripts/delegate.sh` against the backend HTTP API and by both scoring modes of the trigger eval — `--api` and `--local`).
+Thanks for taking the time to look. This repo is one Claude Code skill, two bash scripts of routing logic, and a validation pipeline. There is no build and no package manager; the one linter is ShellCheck, run as `shellcheck -S error` in CI. The runtime is `bash` (3.2+ — macOS-shipped is fine), `jq`, `awk`, `perl`, and `curl` (used by `scripts/delegate.sh` against the backend HTTP API and by both scoring modes of the trigger eval — `--api` and `--local`).
 
 ## What lives where
 

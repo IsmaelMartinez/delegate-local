@@ -97,7 +97,7 @@ Run the trigger eval against the live Anthropic API (requires `ANTHROPIC_API_KEY
 ANTHROPIC_API_KEY=… bash scripts/eval-skill-triggers.sh --api
 ```
 
-There is no build step, no linter, no package manager. Runtime deps are `bash` (3.2+ — macOS-shipped is fine), `jq`, `awk`, and `perl` (used in one validator because BSD grep on macOS lacks `-P`). `curl` is required by `scripts/delegate.sh` (Ollama HTTP API) and by both scoring modes of the trigger eval (`--api`, `--local`). Cross-platform portability is a real constraint: avoid associative arrays (bash 4-only), avoid `grep -P` (GNU-only), and prefer `perl -CSD` for unicode-aware regex.
+There is no build step and no package manager; the one linter is ShellCheck, run as `shellcheck -S error` over `scripts/`, `tests/` and `.claude/hooks/` as a CI gate. Runtime deps are `bash` (3.2+ — macOS-shipped is fine), `jq`, `awk`, and `perl` (used in one validator because BSD grep on macOS lacks `-P`). `curl` is required by `scripts/delegate.sh` (Ollama HTTP API) and by both scoring modes of the trigger eval (`--api`, `--local`). Cross-platform portability is a real constraint: avoid associative arrays (bash 4-only), avoid `grep -P` (GNU-only), and prefer `perl -CSD` for unicode-aware regex.
 
 Install for end users is `npx skills add IsmaelMartinez/delegate-local` (Vercel Labs' multi-agent CLI symlinks it into Claude Code, Codex, OpenCode, Cursor, Copilot, etc.) — see `README.md` for the manual `cp -r` fallback.
 
