@@ -72,7 +72,7 @@ gh run list --branch release-please--branches--main --limit 8 \
 gh api repos/IsmaelMartinez/delegate-local/actions/runs/<run-id>/approve -X POST
 ```
 
-0.32.0 was released this way on 2026-08-28 and merged with a plain `gh pr merge 463 --squash --delete-branch`. This is unrelated to the draft flag above: it delays a release rather than corrupting the next one. Removing the approval step entirely means either loosening the Actions approval policy — a security trade-off on a public repo — or giving release-please a PAT or GitHub App token so its PR is not bot-authored; that decision is tracked in #436.
+0.32.0 was released this way on 2026-08-28 and merged with a plain `gh pr merge 463 --squash --delete-branch`. This is unrelated to the draft flag above: it delays a release rather than corrupting the next one. Removing the approval step entirely means either loosening the Actions approval policy — a security trade-off on a public repo — or giving release-please a PAT or GitHub App token so its PR is not bot-authored. The App token was chosen (#549): `release-please.yml` mints one with `actions/create-github-app-token` whenever the repository variable `RELEASE_APP_ID` and secret `RELEASE_APP_PRIVATE_KEY` are set, and falls back to `GITHUB_TOKEN` (and so to the approval step above) while they are not.
 
 If a release PR is stale, re-run the `Release Please` workflow from the Actions tab; it has a `workflow_dispatch` trigger for exactly this, so there is no need to push a no-op commit to `main`.
 
