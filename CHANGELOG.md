@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.40.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.40.0...v0.40.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* boundary hook nudge emits context only and detects git global options ([#579](https://github.com/IsmaelMartinez/delegate-local/issues/579)) ([53252a9](https://github.com/IsmaelMartinez/delegate-local/commit/53252a9d3838f55a6529faa1dc4e00666230fd77)), closes [#546](https://github.com/IsmaelMartinez/delegate-local/issues/546)
+* send the delegate.sh request body from stdin as JSON ([#576](https://github.com/IsmaelMartinez/delegate-local/issues/576)) ([ea6767e](https://github.com/IsmaelMartinez/delegate-local/commit/ea6767ea51c7d41a03aa07cf4d5b1d18cb448a50))
+
+
+### Documentation
+
+* document the live-clone skill install on the maintainer machine ([#577](https://github.com/IsmaelMartinez/delegate-local/issues/577)) ([290db1b](https://github.com/IsmaelMartinez/delegate-local/commit/290db1bb30e452e71658f66f447afb695b089b55))
+
+
+### CI/CD
+
+* drop the retired GitHub Models gate and make CI check what it claims ([#578](https://github.com/IsmaelMartinez/delegate-local/issues/578)) ([b1fec6d](https://github.com/IsmaelMartinez/delegate-local/commit/b1fec6da003717d86f7a7128bb776d3f0607b876))
+* mint a GitHub App token for release-please ([#575](https://github.com/IsmaelMartinez/delegate-local/issues/575)) ([29b9e7b](https://github.com/IsmaelMartinez/delegate-local/commit/29b9e7b5a11ff4adb992af59cbba4522c4ce2fd2))
+
 ## [0.40.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.39.0...v0.40.0) (2026-09-24)
 
 
