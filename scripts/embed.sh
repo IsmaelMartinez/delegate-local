@@ -140,7 +140,7 @@ payload=$(jq -nc --arg m "$model" --arg t "$input_text" \
 body_file=$(mktemp)
 trap 'rm -f "$body_file"' EXIT
 curl -sS --fail --max-time "${DELEGATE_EMBED_TIMEOUT:-60}" --connect-timeout 5 \
-  -X POST "$resolved_base/embeddings" -d @- \
+  -X POST "$resolved_base/embeddings" -H 'Content-Type: application/json' --data-binary @- \
   -o "$body_file" <<< "$payload"
 status=$?
 

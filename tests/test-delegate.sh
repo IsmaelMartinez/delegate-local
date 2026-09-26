@@ -896,8 +896,24 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 2 "$EC" "DELEGATE_MAX_TOKENS=4k: exits 2"
-assert_contains "DELEGATE_MAX_TOKENS='4k' is not numeric" "$out" "DELEGATE_MAX_TOKENS=4k: validation message"
+assert_contains "DELEGATE_MAX_TOKENS='4k' is not a positive integer" "$out" "DELEGATE_MAX_TOKENS=4k: validation message"
 rm -rf "$tmp" "$metrics"
+
+# 12e1a. Numeric but not a positive JSON integer: strict providers reject
+# 4.0 and -1, and 04 is not valid JSON, so jq --argjson fails on it.
+for bad_mt in 4.0 -1 04; do
+  tmp=$(mktemp -d)
+  make_mock_curl_mlx_ok "$tmp"
+  metrics=$(mktemp)
+  EC=0
+  out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_MAX_TOKENS="$bad_mt" \
+    DELEGATE_METRICS_FILE="$metrics" \
+    bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+  assert_eq 2 "$EC" "DELEGATE_MAX_TOKENS=$bad_mt: exits 2"
+  assert_contains "DELEGATE_MAX_TOKENS='$bad_mt' is not a positive integer" "$out" "DELEGATE_MAX_TOKENS=$bad_mt: validation message"
+  rm -rf "$tmp" "$metrics"
+done
 
 # 12e2. A context above ARG_MAX (1 MiB on macOS, 128 KiB per argument on
 # Linux) reaches the provider intact, posted as JSON rather than the

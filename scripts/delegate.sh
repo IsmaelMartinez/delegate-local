@@ -46,7 +46,7 @@
 #                                       chat template
 #   DELEGATE_STRIP_THINK=1|0            strip a leading <think>...</think> trace;
 #                                       on by default for the reasoning tier
-#   DELEGATE_MAX_TOKENS=<int>           default 4096; non-numeric exits 2
+#   DELEGATE_MAX_TOKENS=<int>           default 4096; not a positive integer exits 2
 #   DELEGATE_TEMPERATURE / DELEGATE_TOP_P / DELEGATE_TOP_K / DELEGATE_PRESENCE_PENALTY
 #                                       sampler overrides (default greedy,
 #                                       temperature 0); non-numeric exits 2
@@ -886,9 +886,14 @@ if [[ -n "${DELEGATE_PRESENCE_PENALTY:-}" ]]; then
   metric_sampling_presence_penalty="$DELEGATE_PRESENCE_PENALTY"
 fi
 # Validated here, not at dispatch: `4k` made jq --argjson fail, and curl then
-# posted an empty body (#547). Not local: the dispatch-failure guidance reads it.
+# posted an empty body (#547). A positive integer with no leading zero, not
+# validate_numeric: strict providers reject 4.0 and -1, and 04 is not JSON.
+# Not local: the dispatch-failure guidance reads it.
 max_tokens="${DELEGATE_MAX_TOKENS:-4096}"
-validate_numeric "DELEGATE_MAX_TOKENS" "$max_tokens"
+if ! [[ "$max_tokens" =~ ^[1-9][0-9]*$ ]]; then
+  echo "delegate: DELEGATE_MAX_TOKENS='$max_tokens' is not a positive integer" >&2
+  exit 2
+fi
 
 # Pre-flight canary, recipe calls only (#110): a 1-token probe with a bounded
 # timeout on the same backend, model and think setting catches a stalled

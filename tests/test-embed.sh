@@ -325,6 +325,10 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 argv=$(cat "$argv_sniff" 2>/dev/null)
 assert_contains "--max-time 60" "$argv" "embed defaults to 60s"
 assert_contains "--connect-timeout 5" "$argv" "embed passes --connect-timeout"
+# JSON, not the form-urlencoded type `curl -d` sends (#547).
+assert_contains "Content-Type: application/json" "$argv" "embed POSTs with a JSON content type"
+assert_contains "--data-binary @-" "$argv" "embed posts the body with --data-binary"
+assert_not_contains " -d @-" "$argv" "embed does not use form-urlencoded -d"
 rm -rf "$tmp"
 
 # 19. DELEGATE_EMBED_TIMEOUT overrides the default.
