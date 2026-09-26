@@ -14,7 +14,8 @@
 #   DELEGATE_LOKI_URL        Loki base URL (default http://localhost:3100)
 #   DELEGATE_LOCAL_DATA_DIR  per-user data (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE    metrics JSONL (default <data dir>/metrics.jsonl)
-#   DELEGATE_LOKI_STATE      watermark file (default <metrics-file>.loki-sync)
+#   DELEGATE_LOKI_STATE      watermark file (default <metrics-file>.loki-sync;
+#                            --state-file wins over it)
 #   DELEGATE_LOKI_TIMEOUT    curl --max-time on the push (default 30)
 #
 # Exit: 0 on success (including "nothing new to push"), 2 on usage error,
@@ -23,7 +24,7 @@ set -uo pipefail
 
 loki_url="${DELEGATE_LOKI_URL:-http://localhost:3100}"
 metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
-state_file=""
+state_file="${DELEGATE_LOKI_STATE:-}"
 full=0
 dry_run=0
 

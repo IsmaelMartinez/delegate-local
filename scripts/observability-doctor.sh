@@ -9,7 +9,7 @@
 #
 # Usage:
 #   observability-doctor.sh [--fix] [--loki-url URL] [--metrics-file PATH]
-#                           [--compose-file PATH]
+#                           [--compose-file PATH] [--state-file PATH]
 #
 # Env (shared names with sync-metrics-to-loki.sh so one tuning applies to both):
 #   DELEGATE_LOKI_URL              Loki base URL. Default http://localhost:3100.
@@ -17,6 +17,8 @@
 #                               (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE          metrics JSONL. Default
 #                                  ~/.local/share/delegate-local/metrics.jsonl.
+#   DELEGATE_LOKI_STATE            the sync's watermark file. Default
+#                                  <metrics-file>.loki-sync; --state-file wins.
 #   DELEGATE_GRAFANA_URL           Grafana base URL. Default http://localhost:3001.
 #   DELEGATE_TEMPO_URL             Tempo query API.  Default http://localhost:3200.
 #   DELEGATE_COMPOSE_FILE          compose file. Default <repo>/observability/docker-compose.yml.
@@ -39,11 +41,12 @@ grafana_url="${DELEGATE_GRAFANA_URL:-http://localhost:3001}"
 tempo_url="${DELEGATE_TEMPO_URL:-http://localhost:3200}"
 compose_file="${DELEGATE_COMPOSE_FILE:-$REPO/observability/docker-compose.yml}"
 stale_seconds="${DELEGATE_DOCTOR_STALE_SECONDS:-1800}"
+state_file="${DELEGATE_LOKI_STATE:-}"
 fix=0
 
 usage() {
   cat >&2 <<'EOF'
-usage: observability-doctor.sh [--fix] [--loki-url URL] [--metrics-file PATH] [--compose-file PATH]
+usage: observability-doctor.sh [--fix] [--loki-url URL] [--metrics-file PATH] [--compose-file PATH] [--state-file PATH]
   Diagnoses the local Grafana/Tempo/Loki stack when the dashboards go blank.
   Read-only by default; --fix restarts Loki and re-runs the metrics sync when
   the Loki ring has flapped (the sleep/wake failure mode). Also compares Loki's
@@ -68,6 +71,10 @@ while (($# > 0)); do
       [[ $# -lt 2 || -z "${2:-}" ]] && { echo 'observability-doctor: --compose-file requires a path' >&2; exit 2; }
       compose_file="$2"; shift 2;;
     --compose-file=*) compose_file="${1#--compose-file=}"; shift;;
+    --state-file)
+      [[ $# -lt 2 || -z "${2:-}" ]] && { echo 'observability-doctor: --state-file requires a path' >&2; exit 2; }
+      state_file="$2"; shift 2;;
+    --state-file=*) state_file="${1#--state-file=}"; shift;;
     -h|--help) usage;;
     *) echo "observability-doctor: unknown arg '$1'" >&2; usage;;
   esac
@@ -162,7 +169,8 @@ fi
 # Skipped (n/a) while the query path is down, when the sync has never run on
 # this file, or when Loki gives no count; a sync racing this check can read
 # as a transient mismatch, so re-run before acting on one.
-state_file="${metrics_file%.jsonl}.loki-sync"
+# Resolved as the sync resolves it: --state-file, DELEGATE_LOKI_STATE, default.
+[[ -z "$state_file" ]] && state_file="${metrics_file%.jsonl}.loki-sync"
 ts_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 shipped_rows="n/a"
 loki_rows="n/a"
@@ -279,7 +287,7 @@ fi
 # The sync is best-effort; its stderr is let through and a failure warns
 # rather than claims "recovered".
 ready_code="$ready_after"
-if DELEGATE_LOKI_URL="$loki_url" DELEGATE_METRICS_FILE="$metrics_file" \
+if DELEGATE_LOKI_URL="$loki_url" DELEGATE_METRICS_FILE="$metrics_file" DELEGATE_LOKI_STATE="$state_file" \
      bash "$REPO/scripts/sync-metrics-to-loki.sh" >/dev/null; then
   echo "observability-doctor: recovered — Loki is ready again and the sync has re-run." >&2
 else

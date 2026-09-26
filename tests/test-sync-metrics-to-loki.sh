@@ -163,6 +163,17 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --metrics-file "$met" --state-file "$state" --loki-url http://x 2>&1)
 assert_contains "nothing new to push" "$out" "T5: second run is a no-op"
 
+# --- T5b: DELEGATE_LOKI_STATE names the watermark; --state-file beats it -----
+envstate="$tmp/env-state"; flagstate="$tmp/flag-state"
+rm -f "$envstate" "$flagstate" "$tmp/m.loki-sync"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOKI_STATE="$envstate" \
+  bash "$SCRIPT" --full --metrics-file "$met" --loki-url http://x >/dev/null 2>&1
+assert_eq "4" "$(cat "$envstate" 2>/dev/null)" "T5b: DELEGATE_LOKI_STATE is where the watermark is written"
+[[ -f "$tmp/m.loki-sync" ]] && { echo "  FAIL  T5b: the default path must not be used when the env is set"; fail=$((fail+1)); } || { echo "  PASS  T5b: default path untouched when the env is set"; pass=$((pass+1)); }
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOKI_STATE="$envstate" \
+  bash "$SCRIPT" --full --metrics-file "$met" --state-file "$flagstate" --loki-url http://x >/dev/null 2>&1
+assert_eq "4" "$(cat "$flagstate" 2>/dev/null)" "T5b: --state-file wins over DELEGATE_LOKI_STATE"
+
 # --- T6: a malformed line in the middle is skipped and counted, not fatal ----
 # The parent map used to slurp the whole file, so one bad line anywhere failed
 # every run and the watermark never moved. The good rows must push exactly as

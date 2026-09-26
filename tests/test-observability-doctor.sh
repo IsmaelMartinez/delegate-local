@@ -117,7 +117,19 @@ S_COUNT_BODY=""
 run_doctor
 assert_eq "0" "$LAST_EC" "T1d: no count answer -> check skipped, not failed"
 assert_contains "loki_rows=n/a" "$LAST_OUT" "T1d: summary says the count is unknown"
-rm -f "$tmp/m.loki-sync"
+# The watermark path resolves as the sync's does: --state-file, then
+# DELEGATE_LOKI_STATE, then <metrics>.loki-sync.
+mv "$tmp/m.loki-sync" "$tmp/elsewhere"
+S_COUNT_BODY=$(count_body 1)
+run_doctor --state-file "$tmp/elsewhere"
+assert_contains "loki_rows=1 shipped_rows=1" "$LAST_OUT" "T1d: --state-file names the watermark"
+LAST_OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_LOKI_URL=http://loki DELEGATE_GRAFANA_URL=http://grafana DELEGATE_TEMPO_URL=http://tempo \
+  DOCTOR_RUNNING="$S_RUNNING" DOCTOR_LOGS="$S_LOGS" DOCTOR_LOKI_BODY="$S_LOKI_BODY" DOCTOR_READY_CODE="$S_READY" \
+  DOCTOR_LOKI_COUNT_BODY="$S_COUNT_BODY" DELEGATE_LOKI_STATE="$tmp/elsewhere" \
+  bash "$SCRIPT" --metrics-file "$met" --compose-file "$tmp/compose.yml" 2>&1)
+assert_contains "loki_rows=1 shipped_rows=1" "$LAST_OUT" "T1d: DELEGATE_LOKI_STATE names the watermark"
+rm -f "$tmp/elsewhere"
 S_COUNT_BODY=$(count_body 7)
 run_doctor
 assert_contains "shipped_rows=n/a" "$LAST_OUT" "T1d: no sync watermark -> check skipped"
