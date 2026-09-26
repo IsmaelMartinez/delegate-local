@@ -155,7 +155,7 @@ read went.
 1. Decide on a deeper recipe prune. The reset kept every recipe with real usage
    or a SKILL.md trigger; a further cut to the ~10-recipe high-usage head is
    available if the maintainer wants the library leaner still.
-2. Re-verify the install on a genuinely clean machine (not the dev symlink) and
+2. Re-verify the install on a genuinely clean machine (not the maintainer's live clone) and
    keep the install path covered as the headline trust surface.
 3. Sweep the few in-code comments in `delegate.sh` that still reference the
    removed escalate gate.

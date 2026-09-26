@@ -220,9 +220,10 @@ fix, and the PR should say so.
 
 ## Apply it
 
-Work on a branch, never on `main`. This checkout is symlinked in as the
-installed skill on both Claude profiles, so whatever branch it sits on is the
-code every session on this machine runs.
+Work on a branch, never on `main`. The installed skill on both Claude profiles
+is the separate live clone at `~/.local/share/delegate-local-live`, not this
+checkout, so a merged fix reaches other sessions only after
+`git -C ~/.local/share/delegate-local-live pull --ff-only`.
 
 Every recipe edit gets a dated entry in that recipe's `## Calibration notes`
 saying what was observed, how many times, and what changed. That section is
