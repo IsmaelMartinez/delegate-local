@@ -46,7 +46,7 @@
 #                                       chat template
 #   DELEGATE_STRIP_THINK=1|0            strip a leading <think>...</think> trace;
 #                                       on by default for the reasoning tier
-#   DELEGATE_MAX_TOKENS=<int>           default 4096
+#   DELEGATE_MAX_TOKENS=<int>           default 4096; not a positive integer exits 2
 #   DELEGATE_TEMPERATURE / DELEGATE_TOP_P / DELEGATE_TOP_K / DELEGATE_PRESENCE_PENALTY
 #                                       sampler overrides (default greedy,
 #                                       temperature 0); non-numeric exits 2
@@ -65,6 +65,10 @@
 # non-zero with a metrics row still written; OTLP export never changes the exit.
 
 set -uo pipefail
+# bash 5.2 turns patsub_replacement on, where `&` in a ${t//pat/rep} replacement
+# means the matched text: a --var value of `R&D` rendered as `R{{lead}}D`
+# (#547). bash 3.2 has no such option, hence the guard.
+shopt -u patsub_replacement 2>/dev/null || true
 
 usage() {
   echo 'usage: delegate.sh [--recipe NAME [--var key=value ...]] [--project NAME] [--tier NAME] <tier> ["<prompt>"]' >&2
@@ -881,6 +885,15 @@ if [[ -n "${DELEGATE_PRESENCE_PENALTY:-}" ]]; then
   sampling_presence_penalty="$DELEGATE_PRESENCE_PENALTY"
   metric_sampling_presence_penalty="$DELEGATE_PRESENCE_PENALTY"
 fi
+# Validated here, not at dispatch: `4k` made jq --argjson fail, and curl then
+# posted an empty body (#547). A positive integer with no leading zero, not
+# validate_numeric: strict providers reject 4.0 and -1, and 04 is not JSON.
+# Not local: the dispatch-failure guidance reads it.
+max_tokens="${DELEGATE_MAX_TOKENS:-4096}"
+if ! [[ "$max_tokens" =~ ^[1-9][0-9]*$ ]]; then
+  echo "delegate: DELEGATE_MAX_TOKENS='$max_tokens' is not a positive integer" >&2
+  exit 2
+fi
 
 # Pre-flight canary, recipe calls only (#110): a 1-token probe with a bounded
 # timeout on the same backend, model and think setting catches a stalled
@@ -894,7 +907,8 @@ if [[ -n "$recipe" ]] \
   canary_payload=$(jq -nc --arg m "$model" --argjson et "$think" \
     '{model:$m, messages:[{role:"user", content:"hi"}], stream:false, temperature:0, max_tokens:1, chat_template_kwargs:{enable_thinking:$et}}')
   canary_url="$resolved_base/chat/completions"
-  curl -sS --fail --max-time "$preflight_timeout" -X POST "$canary_url" -d @- >/dev/null 2>&1 <<< "$canary_payload"
+  curl -sS --fail --max-time "$preflight_timeout" -X POST "$canary_url" \
+    -H 'Content-Type: application/json' --data-binary @- >/dev/null 2>&1 <<< "$canary_payload"
   canary_status=$?
   if (( canary_status != 0 )); then
     emit_failure 3 "$model" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty"
@@ -961,6 +975,8 @@ trap 'rm -f "$body_file"' EXIT
 # curl's exit-code range (max 99) so it is never read as a transport failure;
 # it shows in the metrics row as exit_status:100.
 EMPTY_RESPONSE_STATUS=100
+# The request body could not be built (jq failed), so nothing was sent.
+EMPTY_PAYLOAD_STATUS=101
 # Initialised here because the script runs under `set -u`.
 empty_finish_reason=""
 
@@ -975,23 +991,32 @@ request_timeout="${DELEGATE_REQUEST_TIMEOUT:-600}"
 # the chat template and instruction-tuned models emit whitespace until
 # max_tokens. enable_thinking is passed so `content` carries the answer, not
 # the reasoning trace.
-max_tokens="${DELEGATE_MAX_TOKENS:-4096}"
 # The payload carries only the sampler keys the caller opted into; with none
-# it is the bare {temperature:0} greedy shape.
-payload=$(jq -nc --arg m "$_model" --arg p "$full_input" --argjson mt "$max_tokens" --argjson et "$think" \
+# it is the bare {temperature:0} greedy shape. The input goes in on stdin
+# (-Rs), never as an --arg: above ARG_MAX (1 MiB on macOS, 128 KiB per
+# argument on Linux) jq cannot start and the body came out empty (#547).
+payload=$(printf '%s' "$full_input" | jq -Rsc --arg m "$_model" --argjson mt "$max_tokens" --argjson et "$think" \
   --argjson temp "$sampling_temperature" \
   --arg top_p "$sampling_top_p" --arg top_k "$sampling_top_k" --arg pp "$sampling_presence_penalty" \
-  '{model:$m, messages:[{role:"user", content:$p}], stream:false, temperature:$temp, max_tokens:$mt, chat_template_kwargs:{enable_thinking:$et}}
+  '{model:$m, messages:[{role:"user", content:.}], stream:false, temperature:$temp, max_tokens:$mt, chat_template_kwargs:{enable_thinking:$et}}
     + (if $top_p != "" then {top_p:($top_p|tonumber)} else {} end)
     + (if $top_k != "" then {top_k:($top_k|tonumber)} else {} end)
     + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end)')
 # resolved_base already had one trailing slash stripped by pick-model.sh, so
 # the join cannot double up.
 chat_url="$resolved_base/chat/completions"
-ttfb_s=$(curl -sS --fail --max-time "$request_timeout" --connect-timeout 5 \
-  -X POST "$chat_url" -d @- \
-  -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
-status=$?
+ttfb_s=""
+if [[ -z "$payload" ]]; then
+  # Never POST a 0-byte body: the provider's refusal read as a daemon fault.
+  status=$EMPTY_PAYLOAD_STATUS
+else
+  # --data-binary sends the bytes as-is with the JSON type; -d would label
+  # them application/x-www-form-urlencoded.
+  ttfb_s=$(curl -sS --fail --max-time "$request_timeout" --connect-timeout 5 \
+    -X POST "$chat_url" -H 'Content-Type: application/json' --data-binary @- \
+    -o "$body_file" -w "%{time_starttransfer}" <<< "$payload")
+  status=$?
+fi
 if [[ "$status" -eq 0 ]]; then
   output=$(jq -r '.choices[0].message.content // ""' < "$body_file")
   # Empty content on a well-formed response is a failure, not a short answer:
@@ -1032,6 +1057,12 @@ if (( status == EMPTY_RESPONSE_STATUS )); then
       echo "         - raise DELEGATE_MAX_TOKENS (currently $max_tokens)"
       echo "         - or route this tier to a provider that honours enable_thinking"
     fi
+    echo "         still broken? file a bug: https://github.com/${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}/issues/new?template=bug_report.md"
+  } >&2
+elif (( status == EMPTY_PAYLOAD_STATUS )); then
+  {
+    echo "delegate: request payload is empty, nothing was sent — model=\"$model\" tier=\"$tier\" backend=\"$backend\""
+    echo "         jq could not build the chat request (its error, if any, is above); check that jq is installed and working"
     echo "         still broken? file a bug: https://github.com/${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}/issues/new?template=bug_report.md"
   } >&2
 elif (( status != 0 )); then
@@ -1807,8 +1838,9 @@ if (( status == 0 )); then
     for kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
       kv_flat+=("${kv%%=*}" "${kv#*=}")
     done
-    inputs_json=$(jq -nc --arg recipe "$recipe" --arg stdin "$context" --arg prompt "$prompt" --arg tier "$tier" \
-      '{recipe:$recipe, tier:$tier, stdin:$stdin,
+    # The piped context goes in on stdin, as for the chat payload (#547).
+    inputs_json=$(printf '%s' "$context" | jq -Rsc --arg recipe "$recipe" --arg prompt "$prompt" --arg tier "$tier" \
+      '{recipe:$recipe, tier:$tier, stdin:.,
         vars:(reduce ($ARGS.positional | [range(0; length; 2) as $i | {key: .[$i], value: .[$i+1]}] | .[]) as $kv
                 ({}; if has($kv.key) then . else . + {($kv.key): $kv.value} end))}
        + (if $prompt != "" then {prompt:$prompt} else {} end)' \
