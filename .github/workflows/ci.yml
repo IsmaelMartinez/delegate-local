@@ -6,29 +6,36 @@ on:
   push:
     branches: [main]
 
+# A new push to a PR supersedes the run in flight; each push to main gets a
+# group of its own (its sha), so none is cancelled or held behind another.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 jobs:
-  validate:
-    name: validate skill
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      models: read
+  gates:
+    name: gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Need history vs the base ref so the trigger-eval step can decide
-          # whether SKILL.md or evals/eval-set.json actually changed and skip
-          # the GitHub Models call when they did not. fetch-depth: 0 grabs
+          # whether SKILL.md or evals/ actually changed. fetch-depth: 0 grabs
           # full history; the alternative (--depth=1 + git fetch base) is
           # fiddlier on push events where there's no PR base.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Verify required tools
         run: |
           jq --version
           perl --version | head -2
           bash --version | head -1
-          python3 --version
+          shellcheck --version | head -2
 
       - name: Validate frontmatter
         run: bash scripts/validate-frontmatter.sh SKILL.md
@@ -36,134 +43,88 @@ jobs:
       - name: Validate content
         run: bash scripts/validate-skill-content.sh SKILL.md
 
-      - name: Unit tests (pick-model + audit-models)
-        run: bash tests/run-tests.sh
-
-      - name: Validate-frontmatter tests
-        run: bash tests/test-validate-frontmatter.sh
-
-      - name: Validate-content tests
-        run: bash tests/test-validate-content.sh
-
-      - name: Delegate.sh tests
-        run: bash tests/test-delegate.sh
-
-      - name: Project-name resolution tests
-        run: bash tests/test-project-name.sh
-
-      - name: User-data path tests
-        run: bash tests/test-paths.sh
-
-      - name: Embed.sh tests
-        run: bash tests/test-embed.sh
-
-      - name: Semantic-search.sh tests
-        run: bash tests/test-semantic-search.sh
-
-      - name: Metrics-summary tests
-        run: bash tests/test-metrics-summary.sh
-
-      - name: Delegate-feedback tests
-        run: bash tests/test-delegate-feedback.sh
-
-      - name: Backfill-otel tests
-        run: bash tests/test-backfill-otel.sh
-
-      - name: Sync-metrics-to-loki tests
-        run: bash tests/test-sync-metrics-to-loki.sh
-
-      - name: Observability-doctor tests
-        run: bash tests/test-observability-doctor.sh
-
-      - name: Dashboards tests
-        run: bash tests/test-dashboards.sh
-
-      - name: Prompts-library tests
-        run: bash tests/test-prompts-library.sh
-
-      - name: Install pytest
-        # The two suites below assert on real pytest runs, not mocks.
-        run: python3 -m pip install --quiet pytest
-
-      - name: Patch oracle
-        run: bash tests/test-apply-and-test.sh
-
-      - name: fix-with-test fixture integrity
-        run: bash tests/test-fix-with-test-fixtures.sh
-
-      - name: Eval-skill-triggers tests
-        run: bash tests/test-eval-skill-triggers.sh
-
-      - name: Onboard tests
-        run: bash tests/test-onboard.sh
-
-      - name: Boundary-hook tests
-        run: bash tests/test-delegate-boundary-hook.sh
-
-      - name: Verdict stop-hook tests
-        run: bash tests/test-delegate-verdict-stop-hook.sh
-
-      - name: Quality-report tests
-        run: bash tests/test-quality-report.sh
-
-      - name: Quality-trend tests
-        run: bash tests/test-quality-trend.sh
-
-      - name: Self-improve tests
-        run: bash tests/test-self-improve.sh
-      - name: replay-recipe unit tests
-        run: bash tests/test-replay-recipe.sh
-
       - name: Eval-set shape
         run: bash scripts/eval-skill-triggers.sh
 
-      - name: Trigger eval (GitHub Models)
-        # Advisory, not blocking: a transport-error / quota hit doesn't fail
-        # the job. Batched scoring (PR #66) collapsed 23 requests/run to 1,
-        # but the safety net stays since one bad call still shouldn't stall
-        # CI when retry-after was the original silent-hang failure mode.
-        continue-on-error: true
+      - name: Shellcheck (errors only)
+        # .shellcheckrc sets the shell and source path.
+        run: find scripts tests .claude/hooks -name '*.sh' -print0 | xargs -0 shellcheck -S error
+
+      - name: Trigger eval (Anthropic API)
+        # Blocking: when it runs and cannot produce a score, the job fails.
         timeout-minutes: 5
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Compare against the PR base (pull_request events) or the previous
-          # commit on the branch (push events). github.event.before is the
-          # SHA before the push; on the very first push to a branch it can
-          # be all-zeros, in which case the diff falls through to running
-          # the gate (safer default than skipping on an unknown base).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The PR base (pull_request) or the previous tip (push). On the first
+          # push to a branch github.event.before is all zeros, and the gate
+          # runs rather than skipping on an unknown base.
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          # Skip the GitHub Models call entirely when neither the trigger-eval
-          # input (evals/eval-set.json) nor the trigger surface (SKILL.md) has
-          # changed since the base commit. Most PRs (docs, scripts, tests,
-          # ROADMAP, ADRs) don't touch either, so the gate skips the API call
-          # and stays well inside the 150 RPD free-tier bucket even with
-          # heavy iteration. SKILL.md is matched whole — body-only edits are
-          # rare and re-running the gate when one slips through costs nothing
-          # post-batching.
           if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
-            if git diff --quiet "$BASE_SHA" -- SKILL.md evals/eval-set.json; then
-              echo "SKILL.md and evals/eval-set.json unchanged vs $BASE_SHA — skipping GitHub Models trigger eval"
+            if git diff --quiet "$BASE_SHA" -- SKILL.md evals/; then
+              echo "SKILL.md and evals/ unchanged vs $BASE_SHA; trigger eval not needed"
               exit 0
             fi
           fi
-          bash scripts/eval-skill-triggers.sh --github-models
-
-      - name: Trigger eval (Anthropic API, opt-in)
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "ANTHROPIC_API_KEY not configured; skipping API-mode trigger eval"
+            echo "::notice title=Trigger eval skipped::SKILL.md or evals/ changed but the ANTHROPIC_API_KEY repo secret is not set; run 'bash scripts/eval-skill-triggers.sh --local' before merging"
             exit 0
           fi
-          # Same skip-when-unchanged guard as the GitHub Models step — the
-          # trigger surface is identical so the gate is identical.
-          if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
-            if git diff --quiet "$BASE_SHA" -- SKILL.md evals/eval-set.json; then
-              echo "SKILL.md and evals/eval-set.json unchanged vs $BASE_SHA — skipping Anthropic trigger eval"
-              exit 0
-            fi
-          fi
           bash scripts/eval-skill-triggers.sh --api
+
+  tests:
+    name: tests (${{ matrix.shard }}/2)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pytest
+        # test-apply-and-test.sh and test-fix-with-test-fixtures.sh assert on
+        # real pytest runs, not mocks.
+        run: python3 -m pip install --quiet pytest
+
+      - name: Run this shard's test files
+        # Every tests/test-*.sh plus tests/run-tests.sh, largest first and dealt
+        # round-robin across the shards, so a new test file runs without
+        # editing this workflow. A failing file does not stop the others.
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          i=0; failed=""
+          for f in $(ls -S tests/test-*.sh tests/run-tests.sh); do
+            i=$((i + 1))
+            [ $(( (i - 1) % 2 + 1 )) -eq "$SHARD" ] || continue
+            echo "::group::$f"
+            start=$SECONDS
+            if bash "$f"; then status=ok; else status=FAIL; failed="$failed $f"; fi
+            echo "::endgroup::"
+            echo "$status $f ($((SECONDS - start))s)"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::failing test files:$failed"
+            exit 1
+          fi
+
+  validate:
+    # The required status check on main; it passes only when every gate and
+    # every test shard passed.
+    name: validate skill
+    if: always()
+    needs: [gates, tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require gates and tests
+        env:
+          GATES: ${{ needs.gates.result }}
+          TESTS: ${{ needs.tests.result }}
+        run: |
+          echo "gates=$GATES tests=$TESTS"
+          [ "$GATES" = success ] && [ "$TESTS" = success ]
