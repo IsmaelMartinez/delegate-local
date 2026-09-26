@@ -194,6 +194,14 @@ if [[ -z "$recipe" ]] && { [[ -z "$tier" ]] || [[ -z "$prompt" ]]; }; then
   usage; exit 2
 fi
 
+# A flag the parser does not know lands in the tier slot; refused here, before
+# any metrics row, since the corpus once recorded tier:"--file" (#550).
+if [[ "$tier" == -* ]]; then
+  echo "delegate: '$tier' is not a flag delegate.sh knows, so it cannot be the positional tier." >&2
+  echo "         the tier is positional: delegate.sh [options] <tier> [\"<prompt>\"] — or pass --tier NAME." >&2
+  usage; exit 2
+fi
+
 metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 # Which base URL wins is not known until the tier is resolved (a provider can
 # be reachable yet hold no model for it); this placeholder label only reaches
@@ -308,7 +316,7 @@ log_metric() {
     s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}" \
     checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}" checks_failed_names="${22:-}" \
     draft_file="${23:-}" retried="${24:-}" retry_chars="${25:-}" input_file="${26:-}" \
-    template_sha="${27:-}" inputs_file="${28:-}"
+    template_sha="${27:-}" inputs_file="${28:-}" retry_failed="${29:-}"
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$(( ochars + ${retry_chars:-0} ))")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -330,7 +338,7 @@ log_metric() {
     --arg crun "$checks_run" --arg cfail "$checks_failed" --arg cfix "$checks_autofixed" \
     --arg cnames "$checks_failed_names" --arg draft "$draft_file" --arg input "$input_file" \
     --arg retried "$retried" --arg retry_chars "$retry_chars" \
-    --arg tsha "$template_sha" --arg inputs "$inputs_file" \
+    --arg tsha "$template_sha" --arg inputs "$inputs_file" --arg retry_failed "$retry_failed" \
     '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
      + (if $recipe != "" then {recipe:$recipe} else {} end)
      + (if $tsha != "" then {template_sha:$tsha} else {} end)
@@ -347,7 +355,8 @@ log_metric() {
      + (if $draft != "" then {draft_file:$draft} else {} end)
      + (if $input != "" then {input_file:$input} else {} end)
      + (if $inputs != "" then {inputs_file:$inputs} else {} end)
-     + (if $retried != "" then {retried:true, retry_chars:($retry_chars|tonumber)} else {} end)' \
+     + (if $retried != "" then {retried:true, retry_chars:($retry_chars|tonumber)} else {} end)
+     + (if $retry_failed != "" then {retry_failed:true} else {} end)' \
     >> "$metrics_file" 2>/dev/null
 }
 
@@ -381,7 +390,7 @@ emit_failure() {
   local fend fdur fp fc ftoks
   fend=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
   fdur=$((fend - start_epoch_ms))
-  fp=$(( ${#recipe_template} + ${#prompt} ))
+  fp=$(( recipe_template_chars + ${#prompt} ))
   fc=${#context}
   ftoks=$(compute_tokens_local "$fp" "$fc" 0)
   # A failed recipe row still names its template (arg 27), so a stall or a
@@ -446,6 +455,8 @@ fi
 
 # Resolve recipe template (if any) and substitute {{key}} placeholders.
 recipe_template=""
+# The template's own length, without the context {{stdin}} folds into it.
+recipe_template_chars=0
 recipe_had_stdin_marker=0
 declared_inputs_present=0
 template_sha=""
@@ -711,6 +722,11 @@ if [[ -n "$recipe" ]]; then
     done
   fi
 
+  # prompt_chars is measured here, before {{stdin}} folds the context in:
+  # context_chars already counts it, and measuring after the substitution
+  # counted it twice in estimated_tokens_avoided (#550).
+  recipe_template_no_ctx="${recipe_template//\{\{stdin\}\}/}"
+  recipe_template_chars=${#recipe_template_no_ctx}
   # {{stdin}} is the implicit placeholder for the piped context.
   if grep -qx '{{stdin}}' <<<"$required_placeholders"; then
     recipe_had_stdin_marker=1
@@ -764,12 +780,7 @@ if [[ $pick_rc -ne 0 ]]; then
     emit_failure 2 "(none)"
     {
       echo "delegate: ${pick_msg:-unknown tier: $tier}"
-      if [[ "$tier" == -* ]]; then
-        echo "         '$tier' is not a flag delegate.sh knows, so it was read as the positional tier."
-        echo "         the tier is positional: delegate.sh [options] <tier> [\"<prompt>\"] — or pass --tier $tier."
-      else
-        echo "         '$tier' is not a tier — pick one from the valid list above."
-      fi
+      echo "         '$tier' is not a tier — pick one from the valid list above."
       echo "         tiers name the TASK, not the model size: there is no small/fast/medium/light/standard tier."
       echo "         prose = commit messages, PR descriptions, replies, summaries; code = code drafts;"
       echo "         long-context = big logs and many-file diffs; reasoning = genuine multi-step reasoning."
@@ -1758,6 +1769,7 @@ rejected_output_chars=${#output}
 run_output_checks 2>"$checks_stderr"
 
 retried=""
+retry_failed=""
 # no_fact_as_question never earns the retry (#513): the spike's validator arm
 # cleared 3 of 13 on a second generation, so the row records it and the
 # caller decides. It is dropped from the trigger and from the notice; the
@@ -1782,6 +1794,11 @@ if (( status == 0 )) && [[ -n "$retry_names" ]] \
   # Appended to the SAME templated prompt: a fresh, differently worded prompt
   # would have failures that could not be attributed to the recipe.
   retry_input_before=${#full_input}
+  # Kept so a retry that fails to dispatch returns this draft (#550).
+  first_output="$output" first_full_input="$full_input" first_checks_stderr=$(cat "$checks_stderr")
+  first_checks_run=$checks_run first_checks_failed=$checks_failed
+  first_checks_autofixed=$checks_autofixed first_checks_failed_names=$checks_failed_names
+  first_capability_failed=$capability_failed
   full_input="${full_input}
 
 Your previous answer was REJECTED. It broke these constraints:
@@ -1792,7 +1809,24 @@ ${retry_notice}Write the answer again, in full, obeying every rule above. Output
   ttfb_prev="${ttfb_s:-0}"
   dispatch_to_model "$model"
   ttfb_s=$(awk -v a="${ttfb_prev:-0}" -v b="${ttfb_s:-0}" 'BEGIN { printf "%.6f", a + b }')
-  run_output_checks
+  if (( status == 0 )); then
+    run_output_checks
+  else
+    # A failed dispatch (transport error, empty answer) is no reason to throw
+    # away a usable draft: return the first generation with its own status,
+    # check results and input, and mark the row. The rejected generation is
+    # now the output, so retry_chars keeps only the notice.
+    echo "delegate: the retry failed (status $status); the first draft is returned, with the check failures below." >&2
+    [[ -n "$first_checks_stderr" ]] && printf '%s\n' "$first_checks_stderr" >&2
+    retry_failed="true"
+    status=0
+    output="$first_output"
+    full_input="$first_full_input"
+    retry_chars=$(( retry_chars - rejected_output_chars ))
+    checks_run=$first_checks_run checks_failed=$first_checks_failed
+    checks_autofixed=$first_checks_autofixed checks_failed_names=$first_checks_failed_names
+    capability_failed=$first_capability_failed
+  fi
 else
   cat "$checks_stderr" >&2
 fi
@@ -1813,7 +1847,7 @@ fi
 generation_ms=$((duration_ms - queue_wait_ms))
 
 # Both surfaces route through compute_tokens_local so they cannot drift.
-prompt_chars=$(( ${#recipe_template} + ${#prompt} ))
+prompt_chars=$(( recipe_template_chars + ${#prompt} ))
 context_chars=${#context}
 output_chars=${#output}
 tokens_local=$(compute_tokens_local "$prompt_chars" "$context_chars" "$(( output_chars + ${retry_chars:-0} ))")
@@ -1851,7 +1885,7 @@ fi
 # row_written is what the meta line's ts/id and the verdict nudge are gated
 # on: they name the row this call wrote, so they are only true when one was.
 row_written=false
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}" "$input_file" "$template_sha" "$inputs_file" && row_written=true
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}" "$input_file" "$template_sha" "$inputs_file" "$retry_failed" && row_written=true
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project" "${retry_chars:-}"
 
 # The stderr line SKILL.md teaches the assistant to read after every
