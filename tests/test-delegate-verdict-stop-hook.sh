@@ -60,6 +60,7 @@ run_hook "s2" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
 assert_eq 0 "$ec" "T2: untracked delegation → exit 0"
 jq -e . "$tmp/out" >/dev/null 2>&1 && { pass=$((pass+1)); echo "  PASS  T2: output is valid JSON"; } || { fail=$((fail+1)); echo "  FAIL  T2: output is not valid JSON"; }
 assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T2: decision is block"
+assert_contains "verdict sweep: 1 delegation(s) from this session" "$(jq -r .reason "$tmp/out")" "T2: reason counts this session's delegations"
 assert_contains "$NOW" "$(jq -r .reason "$tmp/out")" "T2: reason names the untracked ts"
 assert_contains "commit-message" "$(jq -r .reason "$tmp/out")" "T2: reason names the recipe"
 [[ -f "$tmp/.verdict-stop-markers/s2" ]] && { pass=$((pass+1)); echo "  PASS  T2: session marker written on inject"; } || { fail=$((fail+1)); echo "  FAIL  T2: session marker not written"; }

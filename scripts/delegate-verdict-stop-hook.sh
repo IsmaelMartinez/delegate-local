@@ -55,21 +55,28 @@ marker="$marker_dir/$session_id"
 cutoff_iso=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time - $ARGV[0]*3600))' "$window_hours" 2>/dev/null) || exit 0
 [[ -z "$cutoff_iso" ]] && exit 0
 
-rows=$(jq -rs --arg cutoff "$cutoff_iso" --arg sid "$session_id" '
-  def src: .source // "delegate";
-  def in_scope: (.session // "") == $sid;
+# jq reads only the lines that can matter (#551), not the whole shared file
+# on every Stop: the lines naming this session, and the feedback lines,
+# since a feedback row carries ref_id/ref_ts and no session. Both grep -F
+# filters over-match on purpose and jq applies the exact tests; the lines
+# stream straight into jq, as a bash variable costs more than the jq it
+# saves. A file with no line naming the session is the cheap exit. A
+# corrupt line among those read fails open, never wedges.
+grep -qF -- "$session_id" "$metrics_file" 2>/dev/null || exit 0
+rows=$(jq -rn --arg cutoff "$cutoff_iso" --arg sid "$session_id" \
+    --slurpfile all <(grep -F '"feedback"' "$metrics_file" 2>/dev/null) '
   def fbkey: if (.ref_id // "") != "" then "id:" + .ref_id else "ts:" + .ref_ts end;
-  (reduce (.[] | select(src == "feedback" and (.ref_id != null or .ref_ts != null))) as $f ({}; .[$f | fbkey] = true)) as $fb
+  (reduce ($all[] | select(.source == "feedback" and (.ref_id != null or .ref_ts != null))) as $f ({}; .[$f | fbkey] = true)) as $fb
   | def tracked: $fb["id:" + (.otel_span_id // "")] // $fb["ts:" + .ts] // false;
-  map(select(src == "delegate"
-        and (.ts != null)
-        and ((.exit_status // 0) == 0)
-        and in_scope
-        and (.ts >= $cutoff)
-        and (tracked | not)))
-  | .[]
+  inputs
+  | select((.source // "delegate") == "delegate"
+      and (.ts != null)
+      and ((.exit_status // 0) == 0)
+      and (.session // "") == $sid
+      and (.ts >= $cutoff)
+      and (tracked | not))
   | [(.otel_span_id // "-"), .ts, (.recipe // "(bare/no-recipe)"), (.tier // "-")] | @tsv
-' "$metrics_file" 2>/dev/null) || exit 0   # corrupt file → fail open, never wedge
+' < <(grep -F -- "$session_id" "$metrics_file" 2>/dev/null) 2>/dev/null) || exit 0
 
 # Cheap common path: nothing to verdict. No marker written, so a later Stop
 # after a fresh delegation in this session can still surface it.
@@ -96,7 +103,7 @@ batch=$(printf '%s\n' "$rows" | awk -F'\t' 'NF>=2 && $2!="" {
 # copied as printed (`a | b | c` ran as a pipeline); the note after each is a
 # shell comment so a whole-line copy still runs.
 reason=$(cat <<EOF
-delegate-local verdict sweep:${count} delegation(s) from this session produced output but carry no verdict. Before you stop, record for each one whether you USED the delegated output as-is (hit), edited it and shipped it (scaffold), or rewrote/discarded it (miss) — a fact about what you did. scaffold and miss need a reason, and --final <path|-> naming what you shipped instead:
+delegate-local verdict sweep: ${count} delegation(s) from this session produced output but carry no verdict. Before you stop, record for each one whether you USED the delegated output as-is (hit), edited it and shipped it (scaffold), or rewrote/discarded it (miss) — a fact about what you did. scaffold and miss need a reason, and --final <path|-> naming what you shipped instead:
 
 ${batch}
 
