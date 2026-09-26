@@ -527,6 +527,45 @@ assert_eq 0 "$EC" "--recipe with multiline --var: exits 0"
 assert_contains 'line1\nline2 with $special' "$(cat "$sniff")" "--recipe: multiline value preserved"
 rm -rf "$tmp" "$metrics"
 
+# 13a. `&` in a --var value or the piped context is literal (#547). bash 5.2
+# turns on patsub_replacement, where `&` in a ${t//pat/rep} replacement means
+# the matched text, so `R&D` rendered as `R{{lead}}D`. macOS bash 3.2 has no
+# such option, so on it this passes with or without the fix.
+tmp=$(mktemp -d)
+sniff="$tmp/payload.json"
+make_mock_curl_ok "$tmp" "$sniff"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/amp.md" <<'EOF'
+# amp
+
+## When to use
+Test.
+
+## Prompt template
+
+```
+LEAD: {{lead}}
+CTX: {{stdin}}
+```
+
+## Calibration notes
+n/a
+EOF
+EC=0
+out=$(printf '%s' 'x&y && z\&w' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_NO_PREFLIGHT=1 \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe amp --var 'lead=R&D && a\&b' prose "tail" 2>&1) || EC=$?
+assert_eq 0 "$EC" "--var with '&': exits 0"
+rendered=$(jq -r '.messages[0].content' "$sniff" 2>/dev/null)
+expected='LEAD: R&D && a\&b
+CTX: x&y && z\&w
+
+tail'
+assert_eq "$expected" "$rendered" "--var and stdin with '&': rendered literally"
+rm -rf "$tmp" "$metrics"
+
 # 14. --var without '=' is rejected.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
@@ -844,6 +883,87 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "DELEGATE_MAX_TOKENS override: exits 0"
 assert_contains '"max_tokens":16384' "$(cat "$payload_sniff")" "DELEGATE_MAX_TOKENS override flows into payload"
+rm -rf "$tmp" "$metrics"
+
+# 12e1. A non-numeric DELEGATE_MAX_TOKENS is refused up front (#547): `4k`
+# used to make jq --argjson fail and curl post an empty body.
+tmp=$(mktemp -d)
+make_mock_curl_mlx_ok "$tmp"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_MAX_TOKENS=4k \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "DELEGATE_MAX_TOKENS=4k: exits 2"
+assert_contains "DELEGATE_MAX_TOKENS='4k' is not a positive integer" "$out" "DELEGATE_MAX_TOKENS=4k: validation message"
+rm -rf "$tmp" "$metrics"
+
+# 12e1a. Numeric but not a positive JSON integer: strict providers reject
+# 4.0 and -1, and 04 is not valid JSON, so jq --argjson fails on it.
+for bad_mt in 4.0 -1 04; do
+  tmp=$(mktemp -d)
+  make_mock_curl_mlx_ok "$tmp"
+  metrics=$(mktemp)
+  EC=0
+  out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_MAX_TOKENS="$bad_mt" \
+    DELEGATE_METRICS_FILE="$metrics" \
+    bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+  assert_eq 2 "$EC" "DELEGATE_MAX_TOKENS=$bad_mt: exits 2"
+  assert_contains "DELEGATE_MAX_TOKENS='$bad_mt' is not a positive integer" "$out" "DELEGATE_MAX_TOKENS=$bad_mt: validation message"
+  rm -rf "$tmp" "$metrics"
+done
+
+# 12e2. A context above ARG_MAX (1 MiB on macOS, 128 KiB per argument on
+# Linux) reaches the provider intact, posted as JSON rather than the
+# form-urlencoded type `curl -d` sends (#547).
+tmp=$(mktemp -d)
+payload_sniff="$tmp/payload.json"
+argv_sniff="$tmp/argv.txt"
+make_mock_curl_mlx_ok "$tmp" "$payload_sniff" "$argv_sniff"
+metrics=$(mktemp)
+big_ctx="$tmp/big.txt"
+head -c 1153434 /dev/zero | tr '\0' 'a' > "$big_ctx"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" <"$big_ctx" 2>&1) || EC=$?
+assert_eq 0 "$EC" "1.1 MB context: exits 0"
+# context + blank-line join + the 9-char prompt.
+got_bytes=$(jq -j '.messages[0].content' "$payload_sniff" 2>/dev/null | wc -c | tr -d ' ')
+assert_eq 1153445 "$got_bytes" "1.1 MB context: payload content byte count intact"
+argv=$(cat "$argv_sniff")
+assert_contains "Content-Type: application/json" "$argv" "dispatch: JSON content type header"
+assert_contains "--data-binary @-" "$argv" "dispatch: body posted with --data-binary"
+assert_not_contains " -d @-" "$argv" "dispatch: no form-urlencoded -d"
+rm -rf "$tmp" "$metrics"
+
+# 12e3. An empty payload is refused before dispatch with its own message and
+# a failure row, never posted as a 0-byte body that reads as a daemon problem.
+# A jq shim fails only on the chat-payload build.
+tmp=$(mktemp -d)
+argv_sniff="$tmp/argv.txt"
+make_mock_curl_mlx_ok "$tmp" "/dev/null" "$argv_sniff"
+real_jq=$(PATH="$SAFE_PATH" command -v jq)
+cat > "$tmp/jq" <<EOF
+#!/usr/bin/env bash
+for _a in "\$@"; do
+  case "\$_a" in *'max_tokens:\$mt'*) exit 5 ;; esac
+done
+exec "$real_jq" "\$@"
+EOF
+chmod +x "$tmp/jq"
+metrics=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 101 "$EC" "empty payload: exits 101"
+assert_contains "request payload is empty" "$out" "empty payload: names the cause"
+assert_not_contains "check the provider daemon" "$out" "empty payload: no daemon hint"
+assert_eq "" "$(cat "$argv_sniff" 2>/dev/null)" "empty payload: nothing dispatched"
+assert_contains '"exit_status":101' "$(cat "$metrics")" "empty payload: failure row written"
 rm -rf "$tmp" "$metrics"
 
 # 12f. DELEGATE_THINK=true on MLX flips chat_template_kwargs.enable_thinking.

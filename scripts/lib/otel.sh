@@ -144,6 +144,11 @@ emit_otel_span() {
   local tokens_avoided="${15}" prompt_text="${16:-}" context_text="${17:-}"
   local output_text="${18:-}" project="${19:-}" retry_chars="${20:-}"
   local include_content="${DELEGATE_OTEL_INCLUDE_CONTENT:-0}"
+  # Content reaches jq's argv only when it is exported: a context above
+  # ARG_MAX would otherwise stop jq from starting at all (#547).
+  if [[ "$include_content" != "1" ]]; then
+    prompt_text="" context_text="" output_text=""
+  fi
 
   # OTLP/JSON encodes int64 as JSON strings (proto3 mapping), so the ns
   # values are built as strings; bash arithmetic is signed 64-bit on every
