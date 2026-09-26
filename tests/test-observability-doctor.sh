@@ -48,6 +48,7 @@ url=""
 for a in "\$@"; do case "\$a" in http://*|https://*) url="\$a";; esac; done
 case "\$url" in
   *query_range*) printf '%s' "\$DOCTOR_LOKI_BODY"; exit 0;;
+  */loki/api/v1/query) printf '%s' "\${DOCTOR_LOKI_COUNT_BODY:-}"; exit 0;;
   *loki*ready) if [[ -f "$sentinel" ]]; then echo -n 200; else echo -n "\${DOCTOR_READY_CODE:-200}"; fi; exit 0;;
   *tempo*ready) echo -n "\${DOCTOR_TEMPO_CODE:-200}"; exit 0;;
   *api/health*) echo -n "\${DOCTOR_GRAFANA_CODE:-200}"; exit 0;;
@@ -70,6 +71,7 @@ run_doctor() {
   LAST_OUT=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
     DELEGATE_LOKI_URL=http://loki DELEGATE_GRAFANA_URL=http://grafana DELEGATE_TEMPO_URL=http://tempo \
     DOCTOR_RUNNING="$S_RUNNING" DOCTOR_LOGS="$S_LOGS" DOCTOR_LOKI_BODY="$S_LOKI_BODY" DOCTOR_READY_CODE="$S_READY" \
+    DOCTOR_LOKI_COUNT_BODY="${S_COUNT_BODY:-}" \
     bash "$SCRIPT" --metrics-file "$met" --compose-file "$tmp/compose.yml" "$@" 2>&1) || ec=$?
   LAST_EC="$ec"
 }
@@ -82,6 +84,45 @@ run_doctor
 assert_eq "0" "$LAST_EC" "T1: healthy -> exit 0"
 assert_contains "verdict=healthy" "$LAST_OUT" "T1: summary verdict healthy"
 assert_absent "ring flap detected" "$LAST_OUT" "T1: no false flap alarm"
+
+# --- T1b-T1d: cardinality — Loki's row count against what the sync shipped ---
+# A dedup-key change once left every pre-change row stored twice while the
+# freshness check read healthy. The sync's watermark says how many lines it
+# shipped; the malformed line and the exact duplicate in that range are not
+# rows Loki can hold, so 2 is the expected count.
+count_body() { printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[%s,"%s"]}]}}' "$now" "$1"; }
+row_a="{\"ts\":\"$(iso_ago 120)\",\"source\":\"delegate\",\"recipe\":\"commit-message\",\"tier\":\"prose\"}"
+row_b="{\"ts\":\"$(iso_ago 60)\",\"source\":\"feedback\",\"kept\":true}"
+printf '%s\n%s\n%s\n%s\n' "$row_a" '{"ts":"broken' "$row_a" "$row_b" > "$met"
+echo 4 > "$tmp/m.loki-sync"
+S_COUNT_BODY=$(count_body 2)
+run_doctor
+assert_eq "0" "$LAST_EC" "T1b: Loki holds exactly the shipped rows -> exit 0"
+assert_contains "loki_rows=2 shipped_rows=2" "$LAST_OUT" "T1b: summary carries both counts"
+assert_contains "verdict=healthy" "$LAST_OUT" "T1b: verdict healthy"
+
+S_COUNT_BODY=$(count_body 4)
+run_doctor
+assert_eq "1" "$LAST_EC" "T1c: Loki holds more rows than were shipped -> exit 1"
+assert_contains "verdict=cardinality-mismatch" "$LAST_OUT" "T1c: verdict names the mismatch"
+assert_contains "loki_rows=4 shipped_rows=2" "$LAST_OUT" "T1c: summary carries both counts"
+assert_contains "docker volume rm" "$LAST_OUT" "T1c: an over-count names the wipe-and-resync recovery"
+# Old history doubling is not recent, so an idle file must still be checked.
+printf '%s\n' "{\"ts\":\"$(iso_ago 10800)\",\"source\":\"delegate\"}" > "$met"
+echo 1 > "$tmp/m.loki-sync"
+run_doctor
+assert_contains "verdict=cardinality-mismatch" "$LAST_OUT" "T1c: the check runs on an idle file too"
+
+S_COUNT_BODY=""
+run_doctor
+assert_eq "0" "$LAST_EC" "T1d: no count answer -> check skipped, not failed"
+assert_contains "loki_rows=n/a" "$LAST_OUT" "T1d: summary says the count is unknown"
+rm -f "$tmp/m.loki-sync"
+S_COUNT_BODY=$(count_body 7)
+run_doctor
+assert_contains "shipped_rows=n/a" "$LAST_OUT" "T1d: no sync watermark -> check skipped"
+assert_eq "0" "$LAST_EC" "T1d: and the run is not failed for it"
+S_COUNT_BODY=""
 
 # --- T2: genuine idleness — no recent rows, Loki ready -> exit 0, no restart --
 printf '%s\n' "{\"ts\":\"$(iso_ago 10800)\",\"source\":\"delegate\",\"recipe\":\"commit-message\",\"tier\":\"prose\"}" > "$met"
