@@ -936,6 +936,20 @@ out=$(bash "$SCRIPT" --file "$hc/metrics.jsonl" 2>&1)
 assert_contains "hook-captured=2" "$out" "hook-captured: a base final from --final never counts, a posted one does"
 rm -rf "$hc"
 
+# The --final that wrote the base file can sit before a --since window whose
+# .final.2 rejection is inside it; provenance is read from the whole file.
+hc=$(mktemp -d)
+mkdir "$hc/drafts"
+printf 'shipped\n' > "$hc/drafts/sH.final.txt"
+cat > "$hc/metrics.jsonl" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"otel_span_id":"h1","draft_file":"sH.draft.txt"}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","ref_id":"h1","kept":false,"final_file":"sH.final.txt"}
+{"ts":"2026-07-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","ref_id":"h1","kept":false,"final_file":"sH.final.2.txt"}
+EOF
+out=$(bash "$SCRIPT" --file "$hc/metrics.jsonl" --since 2026-06-15 2>&1)
+assert_contains "hook-captured=0" "$out" "hook-captured: a --final before the window still marks its base file hand-written"
+rm -rf "$hc"
+
 # Silent with nothing to report, so a file of clean hits prints as before.
 cp3=$(mktemp)
 cat > "$cp3" <<'EOF'

@@ -259,7 +259,7 @@ if (( n_feedback > 0 )); then
          | {id: (.otel_span_id // ""), ts: (.ts // ""), stem: (.draft_file | sub("\\.draft\\.txt$"; ""))}] as $rows
     | (reduce ($rows[] | select(.id != "")) as $r ({}; .[$r.id] = $r.stem)) as $by_id
     | (reduce $rows[] as $r ({}; .[$r.ts] += [$r.stem])) as $by_ts
-    | (reduce (.[] | select(src == "feedback" and .final_source != "posted"
+    | (reduce ($all[] | select(src == "feedback" and .final_source != "posted"
                             and ((.final_file // "") | test("\\.final\\.txt$"))
                             and ((.final_file // "") | test("\\.final\\.[0-9]+\\.txt$") | not)))
          as $f ({}; .[$f | stem_of_final] = true)) as $by_hand
@@ -271,7 +271,7 @@ if (( n_feedback > 0 )); then
        else empty end) as $stem
     | select($by_hand[$stem] != true)
     | $stem
-  ' "$metrics_file")
+  ' --slurpfile all "$display_file" "$metrics_file")
   jq -rs --argjson show_scaffold "$show_scaffold" --argjson hook_captured "$hook_captured" '
     def src: .source // "delegate";
     # fbv checks scaffold first because it also carries kept:false; verdict
