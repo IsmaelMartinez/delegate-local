@@ -891,6 +891,51 @@ out=$(DELEGATE_METRICS_FILE="$hc/metrics.jsonl" bash "$SCRIPT" 2>&1)
 assert_contains "hook-captured=2" "$out" "captured pairs: the drafts dir follows DELEGATE_METRICS_FILE"
 rm -rf "$hc"
 
+# The stem comes from the verdict's own final_file first; a ts-only legacy
+# verdict on a second two delegations share names neither, so it is skipped
+# rather than handed to whichever row the join saw last.
+hc=$(mktemp -d)
+mkdir "$hc/drafts"
+printf 'shipped\n' > "$hc/drafts/sX.final.txt"
+cat > "$hc/metrics.jsonl" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"draft_file":"sX.draft.txt"}
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"draft_file":"sY.draft.txt"}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":false,"final_file":"sX.final.2.txt"}
+EOF
+out=$(bash "$SCRIPT" --file "$hc/metrics.jsonl" 2>&1)
+assert_contains "hook-captured=1" "$out" "hook-captured: the stem is read off final_file before the ts join"
+rm -rf "$hc"
+
+hc=$(mktemp -d)
+mkdir "$hc/drafts"
+printf 'shipped\n' > "$hc/drafts/sQ.final.txt"
+cat > "$hc/metrics.jsonl" <<'EOF'
+{"ts":"2026-06-01T09:01:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"draft_file":"sP.draft.txt"}
+{"ts":"2026-06-01T09:01:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"draft_file":"sQ.draft.txt"}
+{"ts":"2026-06-01T10:01:00Z","source":"feedback","ref_ts":"2026-06-01T09:01:00Z","kept":false}
+EOF
+out=$(bash "$SCRIPT" --file "$hc/metrics.jsonl" 2>&1)
+assert_contains "hook-captured=0" "$out" "hook-captured: an ambiguous ts-only verdict is skipped, not guessed"
+rm -rf "$hc"
+
+# A base final that an explicit --final wrote stays out even when a later
+# verdict on the same delegation stored .final.2; one recorded as "posted"
+# was the hook's and counts for every rejection on it.
+hc=$(mktemp -d)
+mkdir "$hc/drafts"
+for s in sH sK; do printf 'shipped\n' > "$hc/drafts/$s.final.txt"; done
+cat > "$hc/metrics.jsonl" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"otel_span_id":"h1","draft_file":"sH.draft.txt"}
+{"ts":"2026-06-01T09:01:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"otel_span_id":"k1","draft_file":"sK.draft.txt"}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","ref_id":"h1","kept":false,"final_file":"sH.final.txt"}
+{"ts":"2026-06-01T10:01:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","ref_id":"h1","kept":false,"final_file":"sH.final.2.txt"}
+{"ts":"2026-06-01T10:02:00Z","source":"feedback","ref_ts":"2026-06-01T09:01:00Z","ref_id":"k1","kept":false,"final_file":"sK.final.txt","final_source":"posted"}
+{"ts":"2026-06-01T10:03:00Z","source":"feedback","ref_ts":"2026-06-01T09:01:00Z","ref_id":"k1","kept":false,"final_file":"sK.final.2.txt"}
+EOF
+out=$(bash "$SCRIPT" --file "$hc/metrics.jsonl" 2>&1)
+assert_contains "hook-captured=2" "$out" "hook-captured: a base final from --final never counts, a posted one does"
+rm -rf "$hc"
+
 # Silent with nothing to report, so a file of clean hits prints as before.
 cp3=$(mktemp)
 cat > "$cp3" <<'EOF'

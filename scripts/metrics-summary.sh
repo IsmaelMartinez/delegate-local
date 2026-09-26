@@ -242,25 +242,35 @@ if (( n_feedback > 0 )); then
   # Hook capture measured on disk (#552): a rejection counts when its draft's
   # <stem>.final.txt sits in the drafts dir beside the metrics file (where
   # delegate.sh, the boundary hook and delegate-feedback.sh all put it) and
-  # that verdict did not write the file itself: a --final names that exact
-  # file without final_source:"posted" only when no final existed yet, since
-  # the hook never overwrites and a later --final lands as <stem>.final.2.txt.
-  # jq emits "<stem> self|other" so the tab-free fields survive bash read.
+  # the hook wrote it. The stem is read off the verdict's own final_file,
+  # else its ref_id, else its ref_ts only when one delegate row holds that
+  # second (a shared second is skipped, not guessed). The hook never
+  # overwrites, so a base <stem>.final.txt that any verdict names without
+  # final_source:"posted" was written by an explicit --final, and that stem
+  # never counts, whatever later verdicts stored as <stem>.final.2.txt.
   drafts_dir="$(dirname "$display_file")/drafts"
   hook_captured=0
-  while read -r stem wrote; do
-    [[ -f "$drafts_dir/$stem.final.txt" && "$wrote" != "self" ]] && hook_captured=$((hook_captured + 1))
+  while read -r stem; do
+    [[ -f "$drafts_dir/$stem.final.txt" ]] && hook_captured=$((hook_captured + 1))
   done < <(jq -rs '
     def src: .source // "delegate";
-    (reduce (.[] | select(src == "delegate" and (.draft_file // "") != "")) as $r ({};
-       (if ($r.otel_span_id // "") != "" then .["id:" + $r.otel_span_id] = $r.draft_file else . end)
-       | .["ts:" + ($r.ts // "")] = $r.draft_file)) as $dm
+    def stem_of_final: (.final_file // "") | sub("\\.final(\\.[0-9]+)?\\.txt$"; "");
+    [.[] | select(src == "delegate" and (.draft_file // "") != "")
+         | {id: (.otel_span_id // ""), ts: (.ts // ""), stem: (.draft_file | sub("\\.draft\\.txt$"; ""))}] as $rows
+    | (reduce ($rows[] | select(.id != "")) as $r ({}; .[$r.id] = $r.stem)) as $by_id
+    | (reduce $rows[] as $r ({}; .[$r.ts] += [$r.stem])) as $by_ts
+    | (reduce (.[] | select(src == "feedback" and .final_source != "posted"
+                            and ((.final_file // "") | test("\\.final\\.txt$"))
+                            and ((.final_file // "") | test("\\.final\\.[0-9]+\\.txt$") | not)))
+         as $f ({}; .[$f | stem_of_final] = true)) as $by_hand
     | .[]
     | select(src == "feedback" and (.kept // false) == false)
-    | ($dm["id:" + (.ref_id // "")] // $dm["ts:" + (.ref_ts // "")]) as $d
-    | select($d != null)
-    | ($d | sub("\\.draft\\.txt$"; "")) as $stem
-    | "\($stem) \(if .final_file == ($stem + ".final.txt") and .final_source != "posted" then "self" else "other" end)"
+    | (if (.final_file // "") != "" then stem_of_final
+       elif $by_id[.ref_id // ""] != null then $by_id[.ref_id]
+       elif ($by_ts[.ref_ts // ""] // [] | length) == 1 then $by_ts[.ref_ts][0]
+       else empty end) as $stem
+    | select($by_hand[$stem] != true)
+    | $stem
   ' "$metrics_file")
   jq -rs --argjson show_scaffold "$show_scaffold" --argjson hook_captured "$hook_captured" '
     def src: .source // "delegate";
