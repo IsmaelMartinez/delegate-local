@@ -54,32 +54,52 @@ assert_contains "prose" "$out" "fixture: prose tier appears"
 assert_contains "reasoning" "$out" "fixture: reasoning tier appears"
 assert_contains "qwen3.6:35b-a3b" "$out" "fixture: top model appears"
 assert_contains "phi4-reasoning:plus" "$out" "fixture: second model appears"
-# Lines without a source field count as delegate for backward compatibility.
-assert_contains "delegate=4" "$out" "fixture: source-less entries count as delegate"
-assert_contains "experiment=0" "$out" "fixture: no experiment entries here"
 rm -f "$fixture"
 
-# 4. Mixed-source fixture: delegate + experiment lines together. Verify the
-# summary splits them out and shows per-session rollup for experiment rows.
+# 4. Mixed-source fixture (#552): feedback and opportunity rows are not calls,
+# so they stay out of "Total invocations" and "Top models", and a session id
+# on a delegate row is not an experiment (no script writes one any more).
 mixed=$(mktemp)
 cat > "$mixed" <<'EOF'
-{"ts":"2026-05-04T08:00:00Z","source":"delegate","tier":"prose","model":"qwen3.6:35b-a3b","prompt_chars":40,"context_chars":160,"output_chars":200,"duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":100}
-{"ts":"2026-05-04T09:00:00Z","source":"experiment","session":"2026-05-04-code-delegation-probe","model":"deepseek-r1:32b","prompt_tokens":500,"eval_tokens":80,"duration_ms":4500,"output_bytes":349,"exit_status":0,"estimated_tokens_avoided":580}
-{"ts":"2026-05-04T09:05:00Z","source":"experiment","session":"2026-05-04-code-delegation-probe","model":"qwen3-coder-next:latest","prompt_tokens":500,"eval_tokens":60,"duration_ms":3100,"output_bytes":302,"exit_status":0,"estimated_tokens_avoided":560}
+{"ts":"2026-05-04T08:00:00Z","source":"delegate","tier":"prose","model":"qwen3.6:35b-a3b","session":"s-1","duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-04T08:05:00Z","tier":"prose","model":"qwen3.6:35b-a3b","session":"s-1","duration_ms":4300,"exit_status":0,"estimated_tokens_avoided":140}
+{"ts":"2026-05-04T09:00:00Z","source":"feedback","ref_ts":"2026-05-04T08:00:00Z","kept":true,"session":"s-1"}
+{"ts":"2026-05-04T09:01:00Z","source":"opportunity","boundary":"git-commit","delegated":true,"session":"s-1"}
+{"ts":"2026-05-04T09:02:00Z","source":"opportunity","boundary":"git-commit","delegated":false,"session":"s-1"}
+{"ts":"2026-05-04T09:03:00Z","source":"opportunity","boundary":"git-commit","delegated":false,"session":"s-1"}
 EOF
 
 EC=0
 out=$(bash "$SCRIPT" --file "$mixed" 2>&1) || EC=$?
 assert_eq 0 "$EC" "mixed: exits 0"
-assert_contains "Total invocations:   3" "$out" "mixed: total count"
-assert_contains "delegate=1" "$out" "mixed: one delegate entry"
-assert_contains "experiment=2" "$out" "mixed: two experiment entries"
-assert_contains "Tokens avoided (≈):  1240" "$out" "mixed: tokens avoided sum across sources"
+assert_contains "Total invocations:   2  (not counted: feedback=1, opportunity=3)" "$out" "mixed: only call rows are invocations"
+assert_contains "Tokens avoided (≈):  240" "$out" "mixed: tokens avoided sums call rows"
 assert_contains "Per-source:" "$out" "mixed: per-source header present"
-assert_contains "Per-session (experiment):" "$out" "mixed: per-session header present"
-assert_contains "2026-05-04-code-delegation-probe" "$out" "mixed: session label appears"
 assert_contains "Per-tier (delegate):" "$out" "mixed: per-tier header present for delegate rows"
+top=$(printf '%s\n' "$out" | sed -n '/^Top models:/,$p')
+assert_eq "Top models:
+  2  qwen3.6:35b-a3b" "$top" "mixed: Top models lists call rows only, no null from opportunity rows"
+case "$out" in
+  *"Per-session"*|*"experiment="*) assert_eq "absent" "present" "mixed: no experiment or per-session section" ;;
+  *)                               assert_eq "absent" "absent"  "mixed: no experiment or per-session section" ;;
+esac
 rm -f "$mixed"
+
+# 4b. Percentiles (#552): index floor(n*p/100) clamped to n-1. The old clamp
+# compared the index with `length` of a NUMBER (its absolute value), so it
+# always fired and p95 came back one element low.
+p95fx=$(mktemp)
+for ms in 100 200 300 400 500 600 700 800 900 1000 1100 1200 1300 1400 1500 1600 1700 1800 1900 99999; do
+  printf '{"ts":"2026-05-04T08:00:00Z","source":"delegate","backend":"mlx","tier":"prose","model":"m","duration_ms":%s,"exit_status":0,"estimated_tokens_avoided":1}\n' "$ms"
+done > "$p95fx"
+printf '%s\n' '{"ts":"2026-05-04T08:00:00Z","source":"delegate","backend":"ollama","tier":"code","model":"m","duration_ms":200,"exit_status":0,"estimated_tokens_avoided":1}' \
+  '{"ts":"2026-05-04T08:00:00Z","source":"delegate","backend":"ollama","tier":"code","model":"m","duration_ms":100,"exit_status":0,"estimated_tokens_avoided":1}' >> "$p95fx"
+out=$(bash "$SCRIPT" --file "$p95fx" 2>&1)
+assert_contains "prose           n=20  p50=1100ms  p95=99999ms" "$out" "percentile: per-tier p95 reaches the top element at n=20"
+assert_contains "code            n=2  p50=200ms  p95=200ms" "$out" "percentile: per-tier p95 at n=2 is the larger element"
+assert_contains "mlx         n=20  tokens≈20  p50=1100ms  p95=99999ms" "$out" "percentile: per-backend p95 uses the same definition"
+assert_contains "delegate      n=22  tokens≈22  p50=1000ms  p95=1900ms" "$out" "percentile: per-source p95 at n=22"
+rm -f "$p95fx"
 
 # 5. Feedback rollup: a miss (kept:false) is counted, not dropped by jq's
 # `//` treating false as absent.
@@ -97,7 +117,7 @@ EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$fb" 2>&1) || EC=$?
 assert_eq 0 "$EC" "feedback: exits 0"
-assert_contains "delegate=4" "$out" "feedback: 4 delegate invocations counted"
+assert_contains "Total invocations:   4  (not counted: feedback=3, opportunity=0)" "$out" "feedback: 4 delegate invocations counted"
 assert_contains "Delegation feedback (hit/miss):" "$out" "feedback: section header"
 assert_contains "prose" "$out" "feedback: prose row appears"
 assert_contains "reasoning" "$out" "feedback: reasoning row appears"
@@ -303,7 +323,7 @@ EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$opp" 2>&1) || EC=$?
 assert_eq 0 "$EC" "trigger-rate: exits 0"
-assert_contains "delegate=1" "$out" "trigger-rate: only the delegate row counts as an invocation"
+assert_contains "Total invocations:   1  (not counted: feedback=0, opportunity=3)" "$out" "trigger-rate: only the delegate row counts as an invocation"
 assert_contains "Errors (non-zero):   0" "$out" "trigger-rate: opportunity rows not miscounted as errors"
 assert_contains "Trigger rate (commit/PR/release/comment boundaries):" "$out" "trigger-rate: section header present"
 assert_contains "alpha" "$out" "trigger-rate: alpha project listed"
@@ -664,16 +684,14 @@ cat > "$decomp" <<'EOF'
 {"ts":"2026-04-29T08:02:00Z","source":"delegate","tier":"prose","exit_status":0,"estimated_tokens_avoided":300}
 {"ts":"2026-04-29T08:03:00Z","source":"delegate","tier":"prose","exit_status":0,"estimated_tokens_avoided":400}
 {"ts":"2026-04-29T08:04:00Z","source":"delegate","tier":"prose","exit_status":3,"estimated_tokens_avoided":77}
-{"ts":"2026-04-29T08:05:00Z","source":"experiment","session":"s1","estimated_tokens_avoided":55}
 {"ts":"2026-04-29T09:00:00Z","source":"feedback","ref_ts":"2026-04-29T08:00:00Z","kept":true,"verdict_source":"agent"}
 {"ts":"2026-04-29T09:01:00Z","source":"feedback","ref_ts":"2026-04-29T08:01:00Z","kept":false,"verdict_source":"agent"}
 {"ts":"2026-04-29T09:02:00Z","source":"feedback","ref_ts":"2026-04-29T08:02:00Z","kept":false,"scaffold":true,"verdict_source":"agent"}
 {"ts":"2026-04-29T09:03:00Z","source":"feedback","ref_ts":"2026-04-29T08:03:00Z","kept":true}
 EOF
 out=$(bash "$SCRIPT" --file "$decomp" 2>&1)
-# The sub-lines (55 + 77 + 1900) reconcile to the headline exactly.
-assert_contains "Tokens avoided (≈):  2032" "$out" "decomposition: headline is unchanged and still cross-source"
-assert_contains "excluded: experiment rows       tokens≈55  n=1" "$out" "decomposition: experiment rows excluded"
+# The sub-lines (77 + 1900) reconcile to the headline exactly.
+assert_contains "Tokens avoided (≈):  1977" "$out" "decomposition: headline is unchanged and still cross-source"
 assert_contains "excluded: failed delegations    tokens≈77  n=1" "$out" "decomposition: failed calls excluded"
 assert_contains "successful delegations          tokens≈1900  n=4" "$out" "decomposition: successful subtotal"
 # One tier: the tagged and the untagged hit land in the same bucket.
@@ -733,7 +751,7 @@ cat > "$shift_fx" <<'EOF'
 {"ts":"2026-06-01T09:01:00Z","source":"delegate","recipe":"commit-message","tier":"prose","exit_status":0}
 EOF
 out=$(bash "$SCRIPT" --file "$shift_fx" 2>&1)
-assert_contains "Total invocations:   2  (delegate=2, experiment=0)" "$out" "null tokens: source counts do not shift"
+assert_contains "Total invocations:   2  (not counted: feedback=0, opportunity=0)" "$out" "null tokens: source counts do not shift"
 assert_contains "Errors (non-zero):   0" "$out" "null tokens: error count does not shift"
 assert_contains "Tokens avoided (≈):  0" "$out" "null tokens: prints 0, not empty"
 rm -f "$shift_fx"
@@ -816,8 +834,8 @@ assert_contains "Recipe delegations (calibration signal): n=2  hits=2  misses=0 
   "ref_id join: a legacy ref_ts-only verdict on a shared second still reaches both siblings"
 rm -f "$sib2"
 
-# Captured-pair coverage (#461) splits hook-inferred finals from hand-supplied
-# ones: `inferred=0` is what a hook capture that never fires looks like.
+# Captured-pair coverage (#461) splits verdicts that adopted the hook's final
+# (final_source:"posted") from ones whose caller passed --final.
 cp=$(mktemp)
 cat > "$cp" <<'EOF'
 {"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0}
@@ -834,7 +852,7 @@ assert_contains "Captured pairs (rejections with the shipped text stored): n=2/3
   "captured pairs: inferred and hand-supplied are counted apart, and a kept row is not a rejection"
 rm -f "$cp"
 
-# Every final hand-supplied reads as inferred=0, a claim about the hook.
+# Every final hand-supplied reads as inferred=0: nothing was adopted.
 cp2=$(mktemp)
 cat > "$cp2" <<'EOF'
 {"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0}
@@ -844,6 +862,93 @@ out=$(bash "$SCRIPT" --file "$cp2" 2>&1)
 assert_contains "n=1/1  inferred=0  by-hand=1" "$out" \
   "captured pairs: a corpus with no hook capture reports inferred=0"
 rm -f "$cp2"
+
+# inferred= counts adoption, not capture (#552): once callers pass --final the
+# hook's <stem>.final.txt is never adopted, so inferred=0 while the hook still
+# writes every credited post. hook-captured= reads the drafts dir beside the
+# metrics file: a rejection counts when its draft's <stem>.final.txt exists and
+# was not written by that verdict's own --final (final_file equal to the name
+# and not "posted"; the hook never overwrites, a later --final gets .final.2).
+hc=$(mktemp -d)
+mkdir "$hc/drafts"
+for s in sA sB sC sE; do printf 'shipped\n' > "$hc/drafts/$s.final.txt"; done
+cat > "$hc/metrics.jsonl" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"otel_span_id":"a1","draft_file":"sA.draft.txt"}
+{"ts":"2026-06-01T09:01:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"otel_span_id":"b1","draft_file":"sB.draft.txt"}
+{"ts":"2026-06-01T09:02:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"otel_span_id":"c1","draft_file":"sC.draft.txt"}
+{"ts":"2026-06-01T09:03:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"draft_file":"sD.draft.txt"}
+{"ts":"2026-06-01T09:04:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"otel_span_id":"e1","draft_file":"sE.draft.txt"}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","ref_id":"a1","kept":false,"final_file":"sA.final.2.txt"}
+{"ts":"2026-06-01T10:01:00Z","source":"feedback","ref_ts":"2026-06-01T09:01:00Z","ref_id":"b1","kept":false,"final_file":"sB.final.txt","final_source":"posted"}
+{"ts":"2026-06-01T10:02:00Z","source":"feedback","ref_ts":"2026-06-01T09:02:00Z","ref_id":"c1","kept":false,"final_file":"sC.final.txt"}
+{"ts":"2026-06-01T10:03:00Z","source":"feedback","ref_ts":"2026-06-01T09:03:00Z","kept":false}
+{"ts":"2026-06-01T10:04:00Z","source":"feedback","ref_ts":"2026-06-01T09:04:00Z","ref_id":"e1","kept":true}
+EOF
+out=$(bash "$SCRIPT" --file "$hc/metrics.jsonl" 2>&1)
+assert_contains "n=3/4  inferred=1  by-hand=2  hook-captured=2" "$out" \
+  "captured pairs: hook-captured counts hook finals on disk, not the verdict's own --final or a kept row"
+out=$(DELEGATE_METRICS_FILE="$hc/metrics.jsonl" bash "$SCRIPT" 2>&1)
+assert_contains "hook-captured=2" "$out" "captured pairs: the drafts dir follows DELEGATE_METRICS_FILE"
+rm -rf "$hc"
+
+# The stem comes from the verdict's own final_file first; a ts-only legacy
+# verdict on a second two delegations share names neither, so it is skipped
+# rather than handed to whichever row the join saw last.
+hc=$(mktemp -d)
+mkdir "$hc/drafts"
+printf 'shipped\n' > "$hc/drafts/sX.final.txt"
+cat > "$hc/metrics.jsonl" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"draft_file":"sX.draft.txt"}
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"draft_file":"sY.draft.txt"}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":false,"final_file":"sX.final.2.txt"}
+EOF
+out=$(bash "$SCRIPT" --file "$hc/metrics.jsonl" 2>&1)
+assert_contains "hook-captured=1" "$out" "hook-captured: the stem is read off final_file before the ts join"
+rm -rf "$hc"
+
+hc=$(mktemp -d)
+mkdir "$hc/drafts"
+printf 'shipped\n' > "$hc/drafts/sQ.final.txt"
+cat > "$hc/metrics.jsonl" <<'EOF'
+{"ts":"2026-06-01T09:01:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"draft_file":"sP.draft.txt"}
+{"ts":"2026-06-01T09:01:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"draft_file":"sQ.draft.txt"}
+{"ts":"2026-06-01T10:01:00Z","source":"feedback","ref_ts":"2026-06-01T09:01:00Z","kept":false}
+EOF
+out=$(bash "$SCRIPT" --file "$hc/metrics.jsonl" 2>&1)
+assert_contains "hook-captured=0" "$out" "hook-captured: an ambiguous ts-only verdict is skipped, not guessed"
+rm -rf "$hc"
+
+# A base final that an explicit --final wrote stays out even when a later
+# verdict on the same delegation stored .final.2; one recorded as "posted"
+# was the hook's and counts for every rejection on it.
+hc=$(mktemp -d)
+mkdir "$hc/drafts"
+for s in sH sK; do printf 'shipped\n' > "$hc/drafts/$s.final.txt"; done
+cat > "$hc/metrics.jsonl" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"otel_span_id":"h1","draft_file":"sH.draft.txt"}
+{"ts":"2026-06-01T09:01:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"otel_span_id":"k1","draft_file":"sK.draft.txt"}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","ref_id":"h1","kept":false,"final_file":"sH.final.txt"}
+{"ts":"2026-06-01T10:01:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","ref_id":"h1","kept":false,"final_file":"sH.final.2.txt"}
+{"ts":"2026-06-01T10:02:00Z","source":"feedback","ref_ts":"2026-06-01T09:01:00Z","ref_id":"k1","kept":false,"final_file":"sK.final.txt","final_source":"posted"}
+{"ts":"2026-06-01T10:03:00Z","source":"feedback","ref_ts":"2026-06-01T09:01:00Z","ref_id":"k1","kept":false,"final_file":"sK.final.2.txt"}
+EOF
+out=$(bash "$SCRIPT" --file "$hc/metrics.jsonl" 2>&1)
+assert_contains "hook-captured=2" "$out" "hook-captured: a base final from --final never counts, a posted one does"
+rm -rf "$hc"
+
+# The --final that wrote the base file can sit before a --since window whose
+# .final.2 rejection is inside it; provenance is read from the whole file.
+hc=$(mktemp -d)
+mkdir "$hc/drafts"
+printf 'shipped\n' > "$hc/drafts/sH.final.txt"
+cat > "$hc/metrics.jsonl" <<'EOF'
+{"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","exit_status":0,"otel_span_id":"h1","draft_file":"sH.draft.txt"}
+{"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","ref_id":"h1","kept":false,"final_file":"sH.final.txt"}
+{"ts":"2026-07-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","ref_id":"h1","kept":false,"final_file":"sH.final.2.txt"}
+EOF
+out=$(bash "$SCRIPT" --file "$hc/metrics.jsonl" --since 2026-06-15 2>&1)
+assert_contains "hook-captured=0" "$out" "hook-captured: a --final before the window still marks its base file hand-written"
+rm -rf "$hc"
 
 # Silent with nothing to report, so a file of clean hits prints as before.
 cp3=$(mktemp)

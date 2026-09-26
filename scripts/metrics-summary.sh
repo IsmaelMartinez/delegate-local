@@ -88,29 +88,30 @@ fi
 
 # One jq pass for the headline and the existence checks. Feedback events are
 # excluded from token / latency / model rollups.
-IFS=$'\t' read -r ts_first ts_last total_avoided errors n_delegate n_experiment n_tier n_session n_feedback < <(jq -rs '
+IFS=$'\t' read -r ts_first ts_last total_avoided errors n_call n_tier n_feedback n_opp < <(jq -rs '
   def src: .source // "delegate";
   def call: select(src != "feedback" and src != "opportunity");
   [
-    (map(call) | min_by(.ts) | .ts),
-    (map(call) | max_by(.ts) | .ts),
+    # `// "-"` for the same reason as below: a file of feedback or
+    # opportunity rows only has no call row to take a ts from.
+    ((map(call) | min_by(.ts) | .ts) // "-"),
+    ((map(call) | max_by(.ts) | .ts) // "-"),
     # `// 0` matters: add over an all-null list is null, @tsv renders it as an
     # EMPTY field, and tab is IFS whitespace, so bash read would shift every
     # later column left.
     ((map(call | .estimated_tokens_avoided) | add) // 0),
     (map(call | select(.exit_status != 0)) | length),
-    (map(call | select(src == "delegate")) | length),
-    (map(call | select(src == "experiment")) | length),
+    (map(call) | length),
     (map(call | select(.tier != null)) | length),
-    (map(call | select(.session != null)) | length),
-    (map(select(src == "feedback")) | length)
+    (map(select(src == "feedback")) | length),
+    (map(select(src == "opportunity")) | length)
   ] | @tsv' "$metrics_file")
 
 echo "=== delegate-local metrics ==="
 echo "File:                $display_file"
 (( window_active )) && echo "Window:              since $cutoff_iso  ($total of $orig_total rows)"
 echo "Time range:          $ts_first  →  $ts_last"
-echo "Total invocations:   $total  (delegate=$n_delegate, experiment=$n_experiment)"
+echo "Total invocations:   $n_call  (not counted: feedback=$n_feedback, opportunity=$n_opp)"
 echo "Errors (non-zero):   $errors"
 echo "Tokens avoided (≈):  $total_avoided"
 
@@ -143,9 +144,7 @@ jq -rs '
     if $d > 0 then ((($n * 1000 / $d) | round) as $t | "\($t / 10 | floor).\($t % 10)")
     else "0.0" end;
   '"$verdict_join"'
-  (map(select(src == "experiment")) | map(.estimated_tokens_avoided // 0) | add // 0) as $exp_tok
-  | (map(select(src == "experiment")) | length) as $exp_n
-  | (map(select(src == "delegate"))) as $dl
+  (map(select(src == "delegate"))) as $dl
   | ($dl | map(select((.exit_status // 0) != 0))) as $bad
   | ($dl | map(select((.exit_status // 0) == 0))
         | map({t: (.estimated_tokens_avoided // 0), v: (verdict // "none")})) as $ok
@@ -158,8 +157,7 @@ jq -rs '
      | map(. as [$label, $key]
            | (bucket($key)) as $b
            | "    \($label + (" " * (18 - ($label | length))))tokens≈\($b | map(.t) | add // 0)  \(pct(($b | map(.t) | add // 0); $ok_tok))%  n=\($b | length)")) as $lines
-  | ([ (if $exp_n > 0 then "  excluded: experiment rows       tokens≈\($exp_tok)  n=\($exp_n)" else empty end),
-       (if ($bad | length) > 0 then "  excluded: failed delegations    tokens≈\($bad | map(.estimated_tokens_avoided // 0) | add // 0)  n=\($bad | length)" else empty end),
+  | ([ (if ($bad | length) > 0 then "  excluded: failed delegations    tokens≈\($bad | map(.estimated_tokens_avoided // 0) | add // 0)  n=\($bad | length)" else empty end),
        "  successful delegations          tokens≈\($ok_tok)  n=\($ok | length)"
      ] + (if ($ok | length) > 0 then $lines else [] end))
   | .[]
@@ -168,17 +166,24 @@ echo
 
 # Feedback and opportunity events have no duration / token cost and are
 # reported in their own sections.
+#
+# One percentile for every latency column (#552): over a sorted array, index
+# floor(n*p/100) clamped to n-1, n bound before indexing. The inline form it
+# replaces clamped against `length` of the index, a number, whose length is
+# its absolute value, so the clamp always fired and p95 came back one low.
+pct_def='def pct($p): sort | length as $n | if $n == 0 then null else .[[($n * $p / 100 | floor), $n - 1] | min] end;'
 echo "Per-source:"
 jq -rs '
   def src: .source // "delegate";
+  '"$pct_def"'
   map(select(src != "feedback" and src != "opportunity"))
   | group_by(src)
   | map({
       source: (.[0] | src),
       n: length,
       tokens: (map(.estimated_tokens_avoided) | add),
-      p50: ((sort_by(.duration_ms) | .[(length / 2 | floor)] | .duration_ms)),
-      p95: ((sort_by(.duration_ms) | .[((length * 95 / 100) | floor) | if . >= length then length - 1 else . end] | .duration_ms))
+      p50: (map(.duration_ms) | pct(50)),
+      p95: (map(.duration_ms) | pct(95))
     })
   | sort_by(-.n)
   | .[]
@@ -197,14 +202,15 @@ n_backends=$(jq -rs '
 if (( n_backends > 1 )); then
   echo "Per-backend (delegate):"
   jq -rs '
+    '"$pct_def"'
     map(select((.source // "delegate") == "delegate"))
     | group_by(.backend // "ollama")
     | map({
         backend: (.[0].backend // "ollama"),
         n: length,
         tokens: (map(.estimated_tokens_avoided // 0) | add),
-        p50: ((sort_by(.duration_ms) | .[(length / 2 | floor)] | .duration_ms // 0)),
-        p95: ((sort_by(.duration_ms) | .[((length * 95 / 100) | floor) | if . >= length then length - 1 else . end] | .duration_ms // 0))
+        p50: (map(.duration_ms) | pct(50) // 0),
+        p95: (map(.duration_ms) | pct(95) // 0)
       })
     | sort_by(-.n)
     | .[]
@@ -233,7 +239,40 @@ if (( n_feedback > 0 )); then
   else
     echo "Delegation feedback (hit/miss):"
   fi
-  jq -rs --argjson show_scaffold "$show_scaffold" '
+  # Hook capture measured on disk (#552): a rejection counts when its draft's
+  # <stem>.final.txt sits in the drafts dir beside the metrics file (where
+  # delegate.sh, the boundary hook and delegate-feedback.sh all put it) and
+  # the hook wrote it. The stem is read off the verdict's own final_file,
+  # else its ref_id, else its ref_ts only when one delegate row holds that
+  # second (a shared second is skipped, not guessed). The hook never
+  # overwrites, so a base <stem>.final.txt that any verdict names without
+  # final_source:"posted" was written by an explicit --final, and that stem
+  # never counts, whatever later verdicts stored as <stem>.final.2.txt.
+  drafts_dir="$(dirname "$display_file")/drafts"
+  hook_captured=0
+  while read -r stem; do
+    [[ -f "$drafts_dir/$stem.final.txt" ]] && hook_captured=$((hook_captured + 1))
+  done < <(jq -rs '
+    def src: .source // "delegate";
+    def stem_of_final: (.final_file // "") | sub("\\.final(\\.[0-9]+)?\\.txt$"; "");
+    [.[] | select(src == "delegate" and (.draft_file // "") != "")
+         | {id: (.otel_span_id // ""), ts: (.ts // ""), stem: (.draft_file | sub("\\.draft\\.txt$"; ""))}] as $rows
+    | (reduce ($rows[] | select(.id != "")) as $r ({}; .[$r.id] = $r.stem)) as $by_id
+    | (reduce $rows[] as $r ({}; .[$r.ts] += [$r.stem])) as $by_ts
+    | (reduce ($all[] | select(src == "feedback" and .final_source != "posted"
+                            and ((.final_file // "") | test("\\.final\\.txt$"))
+                            and ((.final_file // "") | test("\\.final\\.[0-9]+\\.txt$") | not)))
+         as $f ({}; .[$f | stem_of_final] = true)) as $by_hand
+    | .[]
+    | select(src == "feedback" and (.kept // false) == false)
+    | (if (.final_file // "") != "" then stem_of_final
+       elif $by_id[.ref_id // ""] != null then $by_id[.ref_id]
+       elif ($by_ts[.ref_ts // ""] // [] | length) == 1 then $by_ts[.ref_ts][0]
+       else empty end) as $stem
+    | select($by_hand[$stem] != true)
+    | $stem
+  ' --slurpfile all "$display_file" "$metrics_file")
+  jq -rs --argjson show_scaffold "$show_scaffold" --argjson hook_captured "$hook_captured" '
     def src: .source // "delegate";
     # fbv checks scaffold first because it also carries kept:false; verdict
     # looks a delegate row up by otel_span_id, then ts.
@@ -245,15 +284,16 @@ if (( n_feedback > 0 )); then
     | ($raw | length) as $wn
     | "  Recipe delegations (calibration signal): n=\($rn)  hits=\($rx|map(select(.v=="hit"))|length)  misses=\($rx|map(select(.v=="miss"))|length)" + (if $show_scaffold then "  scaffold=\($rx|map(select(.v=="scaffold"))|length)" else "" end) + "  untracked=\($rx|map(select(.v==null))|length)" + (if $rn > 0 then "  coverage=\((($rx|map(select(.v!=null))|length) * 100 / $rn) | floor)%" else "" end),
       ($rx | group_by(.tier) | map({tier:.[0].tier, n:length, hits:(map(select(.v=="hit"))|length), misses:(map(select(.v=="miss"))|length), scaffold:(map(select(.v=="scaffold"))|length), untracked:(map(select(.v==null))|length)}) | sort_by(-.n) | .[] | "    \(.tier | . + (" " * (14 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + "  untracked=\(.untracked)"),
-      # Captured-pair coverage: `--final` needs the caller to remember, the
-      # boundary hook infers from a credited post (final_source:"posted"),
-      # and `inferred=0` is what a hook capture that never fires looks like,
-      # where an absent field looks like no reply traffic at all. Counted over
-      # feedback ROWS: a delegation can carry more than one verdict.
+      # Captured-pair coverage, counted over feedback ROWS (a delegation can
+      # carry more than one verdict). inferred= is adoption: the verdict took
+      # the final the hook wrote, as no --final was passed (final_source:"posted").
+      # by-hand= is an explicit --final. Callers now pass --final, so inferred
+      # stays near 0 while the hook keeps capturing; hook-captured= is that
+      # capture, read from the drafts dir above, and 0 there is the failure.
       (([.[] | select(src == "feedback" and (.kept // false) == false)]) as $rej
        | ($rej | map(select((.final_file // "") != ""))) as $cap
        | if ($rej | length) > 0 then
-           "  Captured pairs (rejections with the shipped text stored): n=\($cap|length)/\($rej|length)  inferred=\($cap|map(select(.final_source == "posted"))|length)  by-hand=\($cap|map(select(.final_source != "posted"))|length)"
+           "  Captured pairs (rejections with the shipped text stored): n=\($cap|length)/\($rej|length)  inferred=\($cap|map(select(.final_source == "posted"))|length)  by-hand=\($cap|map(select(.final_source != "posted"))|length)  hook-captured=\($hook_captured)"
          else empty end),
       (if $wn > 0 then "  Raw / no-recipe (verdicts optional — experiments, audits, ad-hoc): n=\($wn)  tracked=\($raw|map(select(.v!=null))|length)  untracked=\($raw|map(select(.v==null))|length)" else empty end)
   ' "$metrics_file"
@@ -274,6 +314,7 @@ if (( n_projects > 1 )); then
   echo "Per-project (delegate):"
   jq -rs --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
+    '"$pct_def"'
     '"$verdict_join"'
     map(select(src == "delegate" and (.exit_status // 0) == 0) | {ts, project: (.project // ""), duration_ms, v: verdict})
     | group_by(.project)
@@ -284,7 +325,7 @@ if (( n_projects > 1 )); then
         misses: (map(select(.v == "miss")) | length),
         scaffold: (map(select(.v == "scaffold")) | length),
         untracked: (map(select(.v == null)) | length),
-        p50: ((sort_by(.duration_ms) | .[(length / 2 | floor)] | .duration_ms // 0))
+        p50: (map(.duration_ms) | pct(50) // 0)
       })
     | sort_by((.project == ""), -.n)
     | .[]
@@ -330,7 +371,6 @@ fi
 # since the retry is the row that counts; a denial never retried stays a miss.
 # The footer names the floor and window in force for this shell, read with the
 # hook's own guards, because the rows carry the verdict, not the threshold.
-n_opp=$(jq -rs 'map(select((.source // "") == "opportunity")) | length' "$metrics_file")
 if (( n_opp > 0 )); then
   echo "Trigger rate (commit/PR/release/comment boundaries):"
   floor_override=""
@@ -379,17 +419,17 @@ if (( n_opp > 0 )); then
   echo
 fi
 
-# Per-tier (delegate entries only have tier; experiment entries have session).
 if (( n_tier > 0 )); then
   echo "Per-tier (delegate):"
   jq -rs '
+    '"$pct_def"'
     map(select((.source // "delegate") != "feedback" and .tier != null))
     | group_by(.tier)
     | map({
         tier: .[0].tier,
         n: length,
-        p50: ((sort_by(.duration_ms) | .[(length / 2 | floor)] | .duration_ms)),
-        p95: ((sort_by(.duration_ms) | .[((length * 95 / 100) | floor) | if . >= length then length - 1 else . end] | .duration_ms))
+        p50: (map(.duration_ms) | pct(50)),
+        p95: (map(.duration_ms) | pct(95))
       })
     | sort_by(-.n)
     | .[]
@@ -398,22 +438,9 @@ if (( n_tier > 0 )); then
   echo
 fi
 
-if (( n_session > 0 )); then
-  echo "Per-session (experiment):"
-  jq -rs '
-    map(select(.session != null))
-    | group_by(.session)
-    | map({session: .[0].session, n: length, ms: (map(.duration_ms) | add)})
-    | sort_by(-.n)
-    | .[]
-    | "  n=\(.n)  total=\(.ms)ms  \(.session)"
-  ' "$metrics_file"
-  echo
-fi
-
 echo "Top models:"
 jq -rs '
-  map(select((.source // "delegate") != "feedback"))
+  map(select((.source // "delegate") | . != "feedback" and . != "opportunity"))
   | group_by(.model)
   | map({model: .[0].model, n: length})
   | sort_by(-.n)
