@@ -31,6 +31,14 @@ for cat in sec_disable sec_permissive cred_exfil obfusc_b64 obfusc_unicode tool_
   assert_contains "$upper" "$out" "$cat fixture mentions $upper"
 done
 
+# 8a. Unicode tag characters (U+E0000-E007F, ASCII smuggling) and the BOM
+# (U+FEFF) are invisible too and must flag as OBFUSC_UNICODE (#557).
+for variant in tag bom; do
+  out=$(ALLOW_FILE="$EMPTY_ALLOW" bash "$SCRIPT" "$FIX/content-obfusc_unicode_$variant.md" 2>&1); ec=$?
+  assert_exit 1 "$ec" "obfusc_unicode_$variant fixture exits 1"
+  assert_contains "OBFUSC_UNICODE" "$out" "obfusc_unicode_$variant fixture mentions OBFUSC_UNICODE"
+done
+
 # 9. Real SKILL.md must pass with the actual repo allowlist.
 out=$(bash "$SCRIPT" "$REPO/SKILL.md" 2>&1); ec=$?
 assert_exit 0 "$ec" "real SKILL.md passes"

@@ -754,6 +754,43 @@ line=$(cat "$metrics")
 assert_contains '"prompt_chars":12' "$line" "--recipe metric: prompt_chars includes template length"
 rm -rf "$tmp" "$metrics"
 
+# 17b. A {{stdin}} recipe folds the context into the template; prompt_chars
+# counts only the template around it, so estimated_tokens_avoided does not
+# count the context twice (#550).
+tmp=$(mktemp -d)
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/wrap.md" <<'EOF'
+# wrap
+
+## When to use
+Test.
+
+## Prompt template
+
+```
+PRE {{stdin}} POST
+```
+
+## Calibration notes
+n/a
+EOF
+EC=0
+head -c 4000 /dev/zero | tr '\0' 'x' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" DELEGATE_NO_PREFLIGHT=1 \
+  DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe wrap prose >/dev/null 2>&1 || EC=$?
+assert_eq 0 "$EC" "{{stdin}} metric: exits 0"
+line=$(cat "$metrics")
+# "PRE  POST" is 9 chars; the 4000 piped chars are context_chars only.
+assert_eq "9|4000" "$(printf '%s' "$line" | jq -r '"\(.prompt_chars)|\(.context_chars)"')" \
+  "{{stdin}} metric: prompt_chars excludes the substituted context"
+assert_eq "$(( (9 + 4000 + $(printf '%s' "$line" | jq -r '.output_chars')) / 4 ))" \
+  "$(printf '%s' "$line" | jq -r '.estimated_tokens_avoided')" \
+  "{{stdin}} metric: estimated_tokens_avoided counts the context once"
+rm -rf "$tmp" "$metrics"
+
 # 12. MLX: dispatches to /v1/chat/completions, parses
 # .choices[0].message.content, and tags the metrics line with backend:"mlx".
 make_mock_curl_mlx_ok() {
@@ -4826,18 +4863,22 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOCAL_NO_METRICS=1 \
 assert_eq 2 "$EC" "--tier without a value -> exit 2"
 rm -rf "$tmp"
 
-# An unrecognised flag in the tier slot is diagnosed as a flag, not an
-# invented tier; the metrics row still records it, which is what surfaced the bug.
-tmp=$(mktemp -d); metrics=$(mktemp)
-make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
-  bash "$SCRIPT" --file "Summarise" </dev/null 2>&1) || EC=$?
-assert_eq 2 "$EC" "an unknown flag in the tier slot -> exit 2"
-assert_contains "is not a flag delegate.sh knows" "$out" "unknown flag is diagnosed as a flag, not a tier"
-assert_contains "--tier --file" "$out" "unknown flag names --tier as the alternative"
-assert_contains '"tier":"--file"' "$(cat "$metrics")" "unknown flag still writes its metrics row"
-rm -rf "$tmp" "$metrics"
+# An unrecognised flag in the tier slot is a usage error, diagnosed as a flag
+# and refused before any row is written: the corpus once recorded
+# tier:"--file" (#550).
+for bad_args in '--file|Summarise' '--file|x|prose|Summarise'; do
+  tmp=$(mktemp -d); metrics=$(mktemp)
+  make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+  IFS='|' read -r -a bad_argv <<< "$bad_args"
+  EC=0
+  out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
+    bash "$SCRIPT" "${bad_argv[@]}" </dev/null 2>&1) || EC=$?
+  assert_eq 2 "$EC" "an unknown flag in the tier slot -> exit 2 ($bad_args)"
+  assert_contains "is not a flag delegate.sh knows" "$out" "unknown flag is diagnosed as a flag, not a tier ($bad_args)"
+  assert_contains "--tier NAME" "$out" "unknown flag names --tier as the alternative ($bad_args)"
+  assert_eq 0 "$(wc -c < "$metrics" | tr -d ' ')" "unknown flag writes no metrics row ($bad_args)"
+  rm -rf "$tmp" "$metrics"
+done
 
 # A dash-leading prompt works without `--`: it is the second positional and
 # never reaches the option parser.
@@ -6054,7 +6095,9 @@ make_mock_curl_seq() {
   # Answers dispatches from a queue of canned contents, counting each in $2
   # (discovery is answered first and not counted) and saving the payload as
   # "$dir/payload.<n>.json". The last content repeats once the queue is
-  # spent, so an unbounded retry shows as a count, not a hang.
+  # spent, so an unbounded retry shows as a count, not a hang. A queue entry
+  # of __FAIL__ makes that dispatch exit 28 with no body (a transport
+  # failure); __EMPTY__ answers with empty content.
   local dir="$1" counter="$2"; shift 2
   local q="$dir/queue"; : > "$q"
   local c
@@ -6080,6 +6123,8 @@ n=\$(wc -l < "$counter" | tr -d ' ')
 cat > "$dir/payload.\$n.json"
 line=\$(sed -n "\${n}p" "$q")
 [[ -z "\$line" ]] && line=\$(tail -n 1 "$q")
+if [[ "\$line" == "__FAIL__" ]]; then echo "curl: (28) Operation timed out" >&2; exit 28; fi
+[[ "\$line" == "__EMPTY__" ]] && line=""
 body="{\"choices\":[{\"message\":{\"content\":\"\$line\"},\"finish_reason\":\"stop\"}]}"
 if [[ -n "\$out_file" ]]; then
   printf '%s' "\$body" > "\$out_file"
@@ -6153,6 +6198,45 @@ if [[ "$(tail -1 "$metrics")" == *'"retried"'* ]]; then
   echo "  FAIL  retry: a call that was not retried must carry no retried field"; fail=$((fail+1))
 else
   echo "  PASS  retry: a call that was not retried carries no retried field"; pass=$((pass+1))
+fi
+
+# 47e-f. A retry that fails to dispatch keeps the first draft (#550): the
+# caller gets the rejected-but-usable generation, told why, and the row
+# describes that draft, not an empty failure.
+for rt_fail in __FAIL__ __EMPTY__; do
+  : > "$metrics"
+  make_mock_curl_seq "$tmp" "$counter" 'this subject line is far too long\n\nbody' "$rt_fail"
+  EC=0
+  out=$(run_rt 2>"$tmp/rt.err") || EC=$?
+  assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
+    "retry-failed ($rt_fail): the retry was attempted"
+  assert_eq 0 "$EC" "retry-failed ($rt_fail): exits 0 with the first draft"
+  assert_contains "this subject line is far too long" "$out" \
+    "retry-failed ($rt_fail): the first draft is printed on stdout"
+  assert_contains "first draft is returned" "$(cat "$tmp/rt.err")" \
+    "retry-failed ($rt_fail): stderr says the retry failed and the first draft is returned"
+  assert_contains "check 'subject_max' FAILED" "$(cat "$tmp/rt.err")" \
+    "retry-failed ($rt_fail): the first draft's check failure is reported"
+  row=$(tail -1 "$metrics")
+  assert_eq "true|true|0|subject_max" \
+    "$(printf '%s' "$row" | jq -r '[.retry_failed, .retried, .exit_status, (.checks_failed_names|join(","))] | map(tostring) | join("|")')" \
+    "retry-failed ($rt_fail): row carries retry_failed, status 0 and the first draft's checks"
+  assert_eq "${#out}" "$(printf '%s' "$row" | jq -r '.output_chars')" \
+    "retry-failed ($rt_fail): output_chars measures the draft returned"
+  assert_eq "$(printf '%s' "$row" | jq -r '((.prompt_chars + .context_chars + .output_chars + .retry_chars) / 4 | floor)')" \
+    "$(printf '%s' "$row" | jq -r '.estimated_tokens_avoided')" \
+    "retry-failed ($rt_fail): the row still reproduces its own token count"
+  rt_input="$(dirname "$metrics")/drafts/$(printf '%s' "$row" | jq -r '.input_file')"
+  assert_not_contains "REJECTED" "$(cat "$rt_input" 2>/dev/null || echo REJECTED-missing)" \
+    "retry-failed ($rt_fail): the stored input is the prompt that produced the returned draft"
+done
+: > "$metrics"
+make_mock_curl_seq "$tmp" "$counter" 'this subject line is far too long\n\nbody' 'short one\n\nbody'
+run_rt >/dev/null 2>&1
+if [[ "$(tail -1 "$metrics")" == *'"retry_failed"'* ]]; then
+  echo "  FAIL  retry: a retry that dispatched must carry no retry_failed field"; fail=$((fail+1))
+else
+  echo "  PASS  retry: a retry that dispatched carries no retry_failed field"; pass=$((pass+1))
 fi
 
 # 47e-i. The rejected generation and the notice ride retry_chars rather than
