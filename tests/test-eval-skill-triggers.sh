@@ -76,15 +76,15 @@ write_classifier_helper() {
   cat > "$dir/build-verdicts.sh" <<'EOF'
 #!/usr/bin/env bash
 # Reads request body on stdin, classifier rule as $1. Prints verdicts JSON.
-# Uses jq to walk the body shape (ollama, anthropic, github_models all carry
+# Uses jq to walk the body shape (ollama, anthropic and chat-completions carry
 # the user payload as a JSON-encoded string in a different field; we sniff
-# all three and union the ids found).
+# each and take the first found).
 rule="$1"
 body=$(cat)
 # Extract the user payload (a JSON-encoded array of {id, query}) from any of:
 #   ollama:        .prompt
 #   anthropic:     .messages[0].content
-#   github_models: .messages[1].content (user role, system is at [0])
+#   chat-completions: .messages[1].content (user role, system is at [0])
 # Fall back to scanning all messages when shapes vary.
 payload=$(jq -r '
   .prompt //
@@ -127,8 +127,11 @@ make_mock_curl_batched() {
 #!/usr/bin/env bash
 body=""
 url=""
+out="" wfmt=""
 while [[ \$# -gt 0 ]]; do
   case "\$1" in
+    -o) out="\$2"; shift 2 ;;
+    -w) wfmt="\$2"; shift 2 ;;
     -d) body="\$2"; shift 2 ;;
     http*) url="\$1"; shift ;;
     *)  shift ;;
@@ -145,41 +148,27 @@ esac
 printf '%s\n' "\$body" >> "${sniff}"
 verdicts=\$(printf '%s' "\$body" | "${helper}" "${rule}")
 # Wrap as the model's answer inside the chat-completions envelope.
-jq -nc --arg r "\$verdicts" '{choices:[{message:{content:\$r},finish_reason:"stop"}]}'
+jq -nc --arg r "\$verdicts" '{choices:[{message:{content:\$r},finish_reason:"stop"}]}' > "\${out:-/dev/stdout}"
+if [[ -n "\$wfmt" ]]; then printf 200; fi
 EOF
       ;;
     anthropic)
       cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
 body=""
+out="" wfmt=""
 while [[ \$# -gt 0 ]]; do
   case "\$1" in
+    -o) out="\$2"; shift 2 ;;
+    -w) wfmt="\$2"; shift 2 ;;
     -d) body="\$2"; shift 2 ;;
     *)  shift ;;
   esac
 done
 printf '%s\n' "\$body" >> "${sniff}"
 verdicts=\$(printf '%s' "\$body" | "${helper}" "${rule}")
-jq -nc --arg t "\$verdicts" '{content:[{text:\$t}]}'
-EOF
-      ;;
-    github_models)
-      cat > "$dir/curl" <<EOF
-#!/usr/bin/env bash
-body="" out_file="" headers_file=""
-while [[ \$# -gt 0 ]]; do
-  case "\$1" in
-    -o) out_file="\$2"; shift 2 ;;
-    -D) headers_file="\$2"; shift 2 ;;
-    -d) body="\$2"; shift 2 ;;
-    *)  shift ;;
-  esac
-done
-printf '%s\n' "\$body" >> "${sniff}"
-verdicts=\$(printf '%s' "\$body" | "${helper}" "${rule}")
-jq -nc --arg c "\$verdicts" '{choices:[{message:{content:\$c}}]}' > "\$out_file"
-: > "\$headers_file"
-printf '200'
+jq -nc --arg t "\$verdicts" '{content:[{text:\$t}]}' > "\${out:-/dev/stdout}"
+if [[ -n "\$wfmt" ]]; then printf 200; fi
 EOF
       ;;
   esac
@@ -200,6 +189,33 @@ for a in "$@"; do
 done
 echo "curl: connection refused" >&2
 exit 7
+EOF
+  chmod +x "$dir/curl"
+}
+
+# Mock curl whose scoring call answers with HTTP status $2 and body $3.
+# Serves discovery like make_mock_curl_fail; honours -o / -w as real curl
+# does, and exits 22 on a non-2xx under -f.
+make_mock_curl_status() {
+  local dir="$1" code="$2" body="$3"
+  printf '%s' "$body" > "$dir/mock-body"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+out="" wfmt="" fail_flag=0
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    */models) printf '%s' '{"object":"list","data":[{"id":"mock-model"},{"id":"mock-model:latest"}]}'; exit 0 ;;
+    -o) out="\$2"; shift 2 ;;
+    -w) wfmt="\$2"; shift 2 ;;
+    -d|-H|--max-time) shift 2 ;;
+    -*f*) [[ "\$1" != --* ]] && fail_flag=1; shift ;;
+    *) shift ;;
+  esac
+done
+if [[ "${code}" != 2* && \$fail_flag == 1 ]]; then echo "curl: (22) The requested URL returned error: ${code}" >&2; exit 22; fi
+if [[ -n "\$out" ]]; then cat "${dir}/mock-body" > "\$out"; else cat "${dir}/mock-body"; fi
+[[ -n "\$wfmt" ]] && printf '%s' "${code}"
+exit 0
 EOF
   chmod +x "$dir/curl"
 }
@@ -332,6 +348,8 @@ assert_contains '"role":"system"' "$first_body" "--local body: system message ca
 assert_contains '"response_format":{"type":"json_object"}' "$first_body" "--local body: JSON mode requested"
 assert_contains '"temperature":0' "$first_body" "--local body: temperature:0"
 assert_contains '"stream":false' "$first_body" "--local body: stream:false"
+# Output budget for 16 queries is 16*30=480.
+assert_contains '"max_tokens":480' "$first_body" "--local body: max_tokens scaled to total*30"
 assert_contains "delegate-local" "$first_body" "--local body: skill description leaks through"
 assert_contains "summarise this log" "$first_body" "--local body: query in prompt"
 assert_contains '\"id\":\"p01\"' "$first_body" "--local body: ids in batched payload"
@@ -380,6 +398,43 @@ url_line=$(head -1 "$tmp/url-sniff.txt")
 assert_contains "https://api.anthropic.com/v1/messages" "$url_line" "--api: hits Anthropic URL"
 rm -rf "$tmp"
 
+# 11b. --api non-200: the status and the start of the body are printed, not
+# discarded, so a CI failure names its cause (#548).
+tmp=$(mktemp -d)
+make_eval_set "$tmp"
+make_skill "$tmp"
+make_mock_curl_status "$tmp" 401 '{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}'
+EC=0
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" ANTHROPIC_API_KEY=sk-bad bash "$SCRIPT" --api --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 2 "$EC" "--api HTTP 401 -> exit 2"
+assert_contains "anthropic HTTP 401" "$out" "--api HTTP 401 -> status printed"
+assert_contains "invalid x-api-key" "$out" "--api HTTP 401 -> body printed"
+rm -rf "$tmp"
+
+# 11c. --api 200 whose body is not the expected JSON (the retired GitHub
+# Models host answered every request with 200 text/plain `OK`) is a failure
+# with the body shown, never an empty score.
+tmp=$(mktemp -d)
+make_eval_set "$tmp"
+make_skill "$tmp"
+make_mock_curl_status "$tmp" 200 'OK'
+EC=0
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" ANTHROPIC_API_KEY=sk-test bash "$SCRIPT" --api --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 2 "$EC" "--api HTTP 200 plain-text body -> exit 2"
+assert_contains "anthropic HTTP 200 but the body is not the expected JSON: OK" "$out" "--api HTTP 200 plain-text body -> body shown"
+rm -rf "$tmp"
+
+# 11d. --local non-200 goes through the same reporting.
+tmp=$(mktemp -d)
+make_eval_set "$tmp"
+make_skill "$tmp"
+make_mock_curl_status "$tmp" 500 'model runner crashed'
+EC=0
+out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 2 "$EC" "--local HTTP 500 -> exit 2"
+assert_contains "local HTTP 500: model runner crashed" "$out" "--local HTTP 500 -> status and body printed"
+rm -rf "$tmp"
+
 # 12. --local [model] arg parsing: model captured even when followed by other flags.
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
@@ -392,162 +447,12 @@ assert_eq 0 "$EC" "--local with later --skill flag -> exits 0"
 assert_contains "model=explicit-model:99b" "$out" "--local: explicit model parsed despite trailing flags"
 rm -rf "$tmp"
 
-# 13. --github-models with no GITHUB_TOKEN -> exit 2.
-tmp=$(mktemp -d)
-make_eval_set "$tmp"
-make_skill "$tmp"
-EC=0
-out=$(cd "$tmp" && env -i PATH="$SAFE_PATH" bash "$SCRIPT" --github-models --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
-assert_eq 2 "$EC" "--github-models without token -> exit 2"
-assert_contains "GITHUB_TOKEN not set" "$out" "--github-models without token -> error message"
-rm -rf "$tmp"
-
-# 14. --github-models with explicit model and a perfect mock curl -> 1.000 / 1.000 pass.
-tmp=$(mktemp -d)
-make_eval_set "$tmp"
-make_skill "$tmp"
-sniff="$tmp/sniff.txt"
-make_mock_curl_batched "$tmp" "$sniff" github_models perfect
-EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test bash "$SCRIPT" --github-models openai/gpt-4o-mini --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
-assert_eq 0 "$EC" "--github-models perfect mock -> exits 0"
-assert_contains "scoring: backend=github_models model=openai/gpt-4o-mini" "$out" "--github-models: model header"
-assert_contains "recall=1.000 negative-precision=1.000" "$out" "--github-models perfect: 1.000/1.000"
-assert_contains "OK trigger evals (github_models)" "$out" "--github-models: OK message"
-calls=$(wc -l < "$sniff" | tr -d ' ')
-assert_eq 1 "$calls" "--github-models: exactly one batched call (was $calls)"
-rm -rf "$tmp"
-
-# 15. --github-models default model is openai/gpt-4o-mini.
-tmp=$(mktemp -d)
-make_eval_set "$tmp"
-make_skill "$tmp"
-sniff="$tmp/sniff.txt"
-make_mock_curl_batched "$tmp" "$sniff" github_models perfect
-EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test bash "$SCRIPT" --github-models --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
-assert_eq 0 "$EC" "--github-models default -> exits 0"
-assert_contains "model=openai/gpt-4o-mini" "$out" "--github-models default: openai/gpt-4o-mini"
-rm -rf "$tmp"
-
-# 16. --github-models request body shape: model, messages array (system+user), temperature, max_tokens scaled, response_format JSON.
-tmp=$(mktemp -d)
-make_eval_set "$tmp"
-make_skill "$tmp"
-sniff="$tmp/sniff.txt"
-make_mock_curl_batched "$tmp" "$sniff" github_models perfect
-EC=0
-(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test bash "$SCRIPT" --github-models test-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || EC=$?
-first_body=$(head -1 "$sniff")
-assert_contains '"model":"test-model"' "$first_body" "--github-models body: model field"
-assert_contains '"role":"system"' "$first_body" "--github-models body: system role in messages"
-assert_contains '"role":"user"' "$first_body" "--github-models body: user role in messages"
-assert_contains '"temperature":0' "$first_body" "--github-models body: temperature:0"
-# Output budget for 16 queries is 16*30=480.
-assert_contains '"max_tokens":480' "$first_body" "--github-models body: max_tokens scaled to total*30"
-assert_contains '"response_format":{"type":"json_object"}' "$first_body" "--github-models body: JSON output mode"
-assert_contains "summarise this log" "$first_body" "--github-models body: query in user message"
-rm -rf "$tmp"
-
-# 17. --github-models honours GITHUB_MODELS_HOST override.
-tmp=$(mktemp -d)
-make_eval_set "$tmp"
-make_skill "$tmp"
-write_classifier_helper "$tmp"
-helper="$tmp/build-verdicts.sh"
-url_sniff_file="$tmp/url-sniff.txt"
-: > "$url_sniff_file"
-cat > "$tmp/curl" <<EOF
-#!/usr/bin/env bash
-url="" out_file="" headers_file="" body=""
-while [[ \$# -gt 0 ]]; do
-  case "\$1" in
-    -o) out_file="\$2"; shift 2 ;;
-    -D) headers_file="\$2"; shift 2 ;;
-    -d) body="\$2"; shift 2 ;;
-    http*) url="\$1"; shift ;;
-    *) shift ;;
-  esac
-done
-echo "URL=\$url" >> "$url_sniff_file"
-verdicts=\$(printf '%s' "\$body" | "$helper" all-trigger)
-jq -nc --arg c "\$verdicts" '{choices:[{message:{content:\$c}}]}' > "\$out_file"
-: > "\$headers_file"
-printf '200'
-EOF
-chmod +x "$tmp/curl"
-(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test GITHUB_MODELS_HOST=https://other.host:8080 bash "$SCRIPT" --github-models test-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || true
-url_line=$(head -1 "$url_sniff_file" 2>/dev/null)
-assert_contains "https://other.host:8080/inference/chat/completions" "$url_line" "--github-models: GITHUB_MODELS_HOST override honoured"
-rm -rf "$tmp"
-
-# 18. --github-models retry-after handling: 429 once, then 200 -> succeeds. Counter goes to 2 (one retry + the one batched call).
-tmp=$(mktemp -d)
-make_eval_set "$tmp"
-make_skill "$tmp"
-write_classifier_helper "$tmp"
-helper="$tmp/build-verdicts.sh"
-counter="$tmp/call-counter"
-echo 0 > "$counter"
-cat > "$tmp/curl" <<EOF
-#!/usr/bin/env bash
-out_file="" headers_file="" body=""
-while [[ \$# -gt 0 ]]; do
-  case "\$1" in
-    -o) out_file="\$2"; shift 2 ;;
-    -D) headers_file="\$2"; shift 2 ;;
-    -d) body="\$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-n=\$(cat "$counter")
-echo \$((n+1)) > "$counter"
-if [[ "\$n" == "0" ]]; then
-  : > "\$out_file"
-  printf 'HTTP/2 429\r\nretry-after: 1\r\n\r\n' > "\$headers_file"
-  printf '429'
-else
-  verdicts=\$(printf '%s' "\$body" | "$helper" all-trigger)
-  jq -nc --arg c "\$verdicts" '{choices:[{message:{content:\$c}}]}' > "\$out_file"
-  : > "\$headers_file"
-  printf '200'
-fi
-EOF
-chmod +x "$tmp/curl"
-EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test bash "$SCRIPT" --github-models test-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
-assert_contains "scoring: backend=github_models" "$out" "--github-models 429-then-200: reached scoring"
-final_count=$(cat "$counter")
-[[ "$final_count" -eq "2" ]] && pass=$((pass+1)) && echo "  PASS  --github-models 429: retried (counter == 2 = 1 retry + 1 batched call)" || { fail=$((fail+1)); echo "  FAIL  --github-models 429: counter=$final_count expected 2"; }
-rm -rf "$tmp"
-
-# 19. --github-models with bad flag arrangement still parses model.
-tmp=$(mktemp -d)
-make_eval_set "$tmp"
-make_skill "$tmp"
-sniff="$tmp/sniff.txt"
-make_mock_curl_batched "$tmp" "$sniff" github_models perfect
-EC=0
-out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" GITHUB_TOKEN=ghs_test bash "$SCRIPT" --github-models special/model:v9 --skill SKILL.md --eval-set eval-set.json 2>&1) || EC=$?
-assert_eq 0 "$EC" "--github-models with later --skill flag -> exits 0"
-assert_contains "model=special/model:v9" "$out" "--github-models: explicit model parsed despite trailing flags"
-rm -rf "$tmp"
-
 # 20. Parse-error path: model emits non-JSON garbage -> exit 2.
 tmp=$(mktemp -d)
 make_eval_set "$tmp"
 make_skill "$tmp"
-cat > "$tmp/curl" <<'EOF'
-#!/usr/bin/env bash
-for _a in "$@"; do
-  case "$_a" in
-    */models) printf '%s' '{"object":"list","data":[{"id":"mock-model"},{"id":"mock-model:latest"}]}'; exit 0 ;;
-  esac
-done
 # Return a response with no JSON object at all.
-printf '%s' '{"choices":[{"message":{"content":"sorry, I cannot help with that."}}]}'
-EOF
-chmod +x "$tmp/curl"
+make_mock_curl_status "$tmp" 200 '{"choices":[{"message":{"content":"sorry, I cannot help with that."}}]}'
 EC=0
 out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 assert_eq 2 "$EC" "--local non-JSON response -> exit 2"
@@ -568,8 +473,11 @@ for _a in "\$@"; do
   esac
 done
 body=""
+out="" wfmt=""
 while [[ \$# -gt 0 ]]; do
   case "\$1" in
+    -o) out="\$2"; shift 2 ;;
+    -w) wfmt="\$2"; shift 2 ;;
     -d) body="\$2"; shift 2 ;;
     *)  shift ;;
   esac
@@ -578,7 +486,8 @@ verdicts=\$(printf '%s' "\$body" | "$helper" perfect)
 fenced="\\\`\\\`\\\`json
 \${verdicts}
 \\\`\\\`\\\`"
-jq -nc --arg r "\$fenced" '{choices:[{message:{content:\$r}}]}'
+jq -nc --arg r "\$fenced" '{choices:[{message:{content:\$r}}]}' > "\${out:-/dev/stdout}"
+if [[ -n "\$wfmt" ]]; then printf 200; fi
 EOF
 chmod +x "$tmp/curl"
 EC=0
@@ -593,16 +502,7 @@ make_eval_set "$tmp"
 make_skill "$tmp"
 # Return only the first 8 (positives); the 8 negatives have no verdict and
 # count as fp (NOTRIGGER expected, no verdict received).
-cat > "$tmp/curl" <<'EOF'
-#!/usr/bin/env bash
-for _a in "$@"; do
-  case "$_a" in
-    */models) printf '%s' '{"object":"list","data":[{"id":"mock-model"},{"id":"mock-model:latest"}]}'; exit 0 ;;
-  esac
-done
-printf '%s' '{"choices":[{"message":{"content":"{\"verdicts\":[{\"id\":\"p01\",\"verdict\":\"TRIGGER\"},{\"id\":\"p02\",\"verdict\":\"TRIGGER\"},{\"id\":\"p03\",\"verdict\":\"TRIGGER\"},{\"id\":\"p04\",\"verdict\":\"TRIGGER\"},{\"id\":\"p05\",\"verdict\":\"TRIGGER\"},{\"id\":\"p06\",\"verdict\":\"TRIGGER\"},{\"id\":\"p07\",\"verdict\":\"TRIGGER\"},{\"id\":\"p08\",\"verdict\":\"TRIGGER\"}]}"}}]}'
-EOF
-chmod +x "$tmp/curl"
+make_mock_curl_status "$tmp" 200 '{"choices":[{"message":{"content":"{\"verdicts\":[{\"id\":\"p01\",\"verdict\":\"TRIGGER\"},{\"id\":\"p02\",\"verdict\":\"TRIGGER\"},{\"id\":\"p03\",\"verdict\":\"TRIGGER\"},{\"id\":\"p04\",\"verdict\":\"TRIGGER\"},{\"id\":\"p05\",\"verdict\":\"TRIGGER\"},{\"id\":\"p06\",\"verdict\":\"TRIGGER\"},{\"id\":\"p07\",\"verdict\":\"TRIGGER\"},{\"id\":\"p08\",\"verdict\":\"TRIGGER\"}]}"}}]}'
 EC=0
 out=$(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 # 8 positives correctly TRIGGER (recall=1.0), 8 negatives missing → counted as fp (neg-precision=0).

@@ -2927,6 +2927,9 @@ EOF
 chmod +x "$tmp/curl"
 prompts="$tmp/prompts"
 mkdir -p "$prompts"
+# The body line "RECIPE BODY" only starts with the delimiter; bash does not end
+# the heredoc there, shellcheck's parser thinks it does.
+# shellcheck disable=SC1122
 cat > "$prompts/otel-recipe.md" <<'RECIPE'
 # otel-recipe
 

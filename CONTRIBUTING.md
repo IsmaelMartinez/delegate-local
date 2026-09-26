@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for taking the time to look. This repo is one Claude Code skill, two bash scripts of routing logic, and a validation pipeline. There is no build, no linter, and no package manager. The runtime is `bash` (3.2+ — macOS-shipped is fine), `jq`, `awk`, `perl`, and `curl` (used by `scripts/delegate.sh` against the backend HTTP API and by all three scoring modes of the trigger eval — `--api`, `--local`, `--github-models`).
+Thanks for taking the time to look. This repo is one Claude Code skill, two bash scripts of routing logic, and a validation pipeline. There is no build and no package manager; the one linter is ShellCheck, run as `shellcheck -S error` in CI. The runtime is `bash` (3.2+ — macOS-shipped is fine), `jq`, `awk`, `perl`, and `curl` (used by `scripts/delegate.sh` against the backend HTTP API and by both scoring modes of the trigger eval — `--api` and `--local`).
 
 ## What lives where
 
@@ -27,7 +27,7 @@ bash scripts/eval-skill-triggers.sh   # shape check (no model call)
 bash tests/run-tests.sh
 ```
 
-Each kept script has its own per-script test file under `tests/` (`test-delegate.sh`, `test-delegate-feedback.sh`, `test-metrics-summary.sh`, `test-prompts-library.sh`, `test-eval-skill-triggers.sh`, `test-onboard.sh`, `test-project-name.sh`, and the two validator tests). The authoritative list of gates is [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — run the `tests/test-*.sh` step that matches the script you touched, and run the full set before opening the PR to match CI.
+Each kept script has its own per-script test file under `tests/` (`test-delegate.sh`, `test-delegate-feedback.sh`, `test-metrics-summary.sh`, `test-prompts-library.sh`, `test-eval-skill-triggers.sh`, `test-onboard.sh`, `test-project-name.sh`, and the two validator tests). The authoritative list of gates is [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which runs every `tests/test-*.sh` file it finds — run the one that matches the script you touched, and run the full set before opening the PR to match CI.
 
 If you edit the `description` field in `SKILL.md` frontmatter, run the trigger eval against a real model before opening the PR:
 
@@ -35,7 +35,7 @@ If you edit the `description` field in `SKILL.md` frontmatter, run the trigger e
 bash scripts/eval-skill-triggers.sh --local
 ```
 
-This is free, runs locally in 10–30 seconds, and dogfoods the project's own routing. CI runs the same gate against GitHub Models on every PR, so a regression there will fail the build. The threshold is recall ≥ 0.9 and negative-precision ≥ 0.9 against `evals/eval-set.json`.
+This is free, runs locally in 10–30 seconds, and dogfoods the project's own routing. CI runs the same gate against the Anthropic API (`--api`) on any PR that changes `SKILL.md` or `evals/`, so a regression there will fail the build. The threshold is recall ≥ 0.9 and negative-precision ≥ 0.9 against `evals/eval-set.json`.
 
 A post-edit hook at `.claude/hooks/post-edit-validate.sh` runs the frontmatter and content checks automatically when you save through Claude Code. It does not run the trigger-accuracy gate — run that yourself before merge.
 
@@ -45,7 +45,7 @@ The `URL_EXTERNAL` content check applies to `SKILL.md` only; contributor docs un
 
 Conventional-commit prefixes (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`) are required by the release-please pipeline that drives versioning and CHANGELOG generation. Keep commit and PR messages concise. Reference an issue or roadmap item when the change is non-trivial.
 
-PRs run frontmatter validation, the content scan, the unit suite, and the trigger eval against GitHub Models. All must pass. The trigger eval uses the auto-provisioned `GITHUB_TOKEN` so there is no secret to configure.
+PRs run frontmatter validation, the content scan, `shellcheck -S error`, the unit suite, and, when `SKILL.md` or `evals/` changed, the trigger eval against the Anthropic API. All must pass. The trigger eval needs the `ANTHROPIC_API_KEY` repo secret; without it the step prints a notice and skips.
 
 ## Releasing
 

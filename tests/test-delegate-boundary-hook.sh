@@ -1367,16 +1367,14 @@ assert_eq pr-review-body "$(jq -r .boundary <<<"$(last_row)")" "enforce: pr-revi
 assert_eq true "$(jq -r '.denied // false' <<<"$(last_row)")" "enforce: pr-review-body --body-file row carries denied:true"
 
 # 61. pr-create stays on warn: its recipe is not proven.
-for spec in \
-  "pr-create|gh pr create --title t --body \"$body300\""; do
-  b="${spec%%|*}"; c="${spec#*|}"
-  : > "$METRICS"; rm -f "$MOCKDIR/probed"
-  out=$(payload "$c" "$tmpcwd" | dflt bash "$HOOK")
-  assert_nudge "$out" "warn: $b is only warned by default"
-  assert_contains '"additionalContext"' "$out" "warn: $b reminder is non-blocking"
-  assert_eq false "$(jq 'has("denied")' <<<"$(last_row)")" "warn: $b row carries no denied field"
-  assert_eq "absent" "$([[ -e "$MOCKDIR/probed" ]] && echo present || echo absent)" "warn: $b did not probe the provider"
-done
+spec="pr-create|gh pr create --title t --body \"$body300\""
+b="${spec%%|*}"; c="${spec#*|}"
+: > "$METRICS"; rm -f "$MOCKDIR/probed"
+out=$(payload "$c" "$tmpcwd" | dflt bash "$HOOK")
+assert_nudge "$out" "warn: $b is only warned by default"
+assert_contains '"additionalContext"' "$out" "warn: $b reminder is non-blocking"
+assert_eq false "$(jq 'has("denied")' <<<"$(last_row)")" "warn: $b row carries no denied field"
+assert_eq "absent" "$([[ -e "$MOCKDIR/probed" ]] && echo present || echo absent)" "warn: $b did not probe the provider"
 
 # 62. DELEGATE_BOUNDARY_MODE=warn/off win over the set, =enforce means every
 # boundary; DELEGATE_BOUNDARY_ENFORCE is the comma-separated set, empty is none.

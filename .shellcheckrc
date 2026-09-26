@@ -1,0 +1,5 @@
+# CI runs `shellcheck -S error` over scripts/, tests/ and .claude/hooks/
+# (.github/workflows/ci.yml). Every script targets bash 3.2+.
+shell=bash
+# Let `source` directives resolve relative to the sourcing script.
+source-path=SCRIPTDIR
