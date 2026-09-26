@@ -74,6 +74,11 @@ nrows() { local n; n=$(grep -c . "$METRICS" 2>/dev/null) || true; echo "${n:-0}"
 # The reminder text whichever channel carried it (warn: additionalContext,
 # deny: permissionDecisionReason), so text tests do not pin the channel.
 hook_msg() { jq -r '.hookSpecificOutput | .additionalContext // .permissionDecisionReason // empty' <<<"$1"; }
+# A reminder that decides nothing (#546): "allow" would skip the permission
+# prompt for the whole call, including anything chained after the boundary.
+assert_nudge() { # out name
+  assert_eq "true false" "$(jq -r '.hookSpecificOutput | "\(has("additionalContext")) \(has("permissionDecision"))"' <<<"$1" 2>/dev/null)" "$2"
+}
 
 # 1. Non-boundary command: silent, no row.
 : > "$METRICS"
@@ -157,6 +162,11 @@ out=$(payload 'gh pr create --title t --body b' "$tmpcwd" | DELEGATE_METRICS_FIL
 assert_eq pr-create "$(jq -r .boundary <<<"$(last_row)")" "pr-create: boundary"
 assert_eq pr-description "$(jq -r .suggested_recipe <<<"$(last_row)")" "pr-create: recipe"
 assert_contains 'pr-description' "$out" "pr-create: nudge names recipe"
+# 6a. #546: the default-mode nudge carries context only. A permissionDecision
+# of "allow" would approve the whole call, including what is chained after it.
+: > "$METRICS"
+out=$(payload 'gh pr create --title t --body b && rm -rf x' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_nudge "$out" "pr-create && rm -rf: additionalContext and no permissionDecision (#546)"
 
 # 7. glab mr create -> also pr-create.
 : > "$METRICS"
@@ -268,6 +278,28 @@ assert_eq 0 "$(nrows)" "gh api fetch: no row (read-only, not a boundary)"
 payload 'git commit -am "fix: thing"' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq git-commit "$(jq -r .boundary <<<"$(last_row)")" "combined -am flag: detected as git-commit boundary"
 
+# 8b-bis. #546: git's global options between `git` and `commit` still make a
+# commit boundary; a quoted -C path is blanked, so `commit` follows -C directly.
+for c in \
+  'git -C /tmp/x commit -m "fix: thing"' \
+  'git -c user.name=x commit -m "fix: thing"' \
+  'git -C "/tmp/my dir" commit -m "fix: thing"' \
+  'git --git-dir=/tmp/x/.git --work-tree=/tmp/x commit -m "fix: thing"' \
+  'git --no-pager -C /tmp/x -c a.b=c commit -m "fix: thing"'; do
+  : > "$METRICS"
+  payload "$c" "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+  assert_eq git-commit "$(jq -r .boundary <<<"$(last_row)")" "global options: $c writes a git-commit row"
+done
+# ...but not a different subcommand behind them, nor a config value naming commit.
+for c in \
+  'git -C /tmp/x log --grep commit -m' \
+  'git -c commit.gpgsign=false log -m' \
+  'git -C /tmp/x commit --amend --no-edit'; do
+  : > "$METRICS"
+  payload "$c" "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+  assert_eq 0 "$(nrows)" "global options: $c is not a boundary"
+done
+
 # 9. git commit --amend --no-edit: reuses a message, not a boundary.
 : > "$METRICS"
 ec=0
@@ -293,7 +325,7 @@ assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "off: row still written"
 : > "$METRICS"
 out=$(payload 'git commit -m x' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" DELEGATE_LOCAL_NO_METRICS=1 bash "$HOOK")
 assert_contains 'commit-message' "$(hook_msg "$out")" "no-metrics: still nudges"
-assert_contains '"permissionDecision":"allow"' "$out" "no-metrics: never denies (no credit could be recorded)"
+assert_nudge "$out" "no-metrics: never denies (no credit could be recorded)"
 assert_eq 0 "$(nrows)" "no-metrics: no row written"
 
 # 13. Custom window: a 5-minute-old delegation misses a 1-minute window. The
@@ -1340,7 +1372,7 @@ for spec in \
   b="${spec%%|*}"; c="${spec#*|}"
   : > "$METRICS"; rm -f "$MOCKDIR/probed"
   out=$(payload "$c" "$tmpcwd" | dflt bash "$HOOK")
-  assert_contains '"permissionDecision":"allow"' "$out" "warn: $b is only warned by default"
+  assert_nudge "$out" "warn: $b is only warned by default"
   assert_contains '"additionalContext"' "$out" "warn: $b reminder is non-blocking"
   assert_eq false "$(jq 'has("denied")' <<<"$(last_row)")" "warn: $b row carries no denied field"
   assert_eq "absent" "$([[ -e "$MOCKDIR/probed" ]] && echo present || echo absent)" "warn: $b did not probe the provider"
@@ -1350,7 +1382,7 @@ done
 # boundary; DELEGATE_BOUNDARY_ENFORCE is the comma-separated set, empty is none.
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=warn dflt bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "override: MODE=warn downgrades an enforced boundary to a reminder"
+assert_nudge "$out" "override: MODE=warn downgrades an enforced boundary to a reminder"
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=off dflt bash "$HOOK")
 assert_eq "" "$out" "override: MODE=off silences an enforced boundary"
@@ -1363,13 +1395,13 @@ out=$(payload "gh pr create --title t --body \"$body300\"" "$tmpcwd" | DELEGATE_
 assert_contains '"permissionDecision":"deny"' "$out" "override: ENFORCE=pr-create denies pr-create"
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_ENFORCE=pr-create dflt bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "override: ENFORCE=pr-create leaves git-commit on warn"
+assert_nudge "$out" "override: ENFORCE=pr-create leaves git-commit on warn"
 : > "$METRICS"
 out=$(payload "gh pr review 12 --comment --body \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_ENFORCE=git-commit dflt bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "override: ENFORCE=git-commit restores warn for pr-review-body"
+assert_nudge "$out" "override: ENFORCE=git-commit restores warn for pr-review-body"
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_ENFORCE= dflt bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "override: ENFORCE= (empty) enforces nothing"
+assert_nudge "$out" "override: ENFORCE= (empty) enforces nothing"
 : > "$METRICS"
 out=$(payload "gh pr comment 12 --body \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_ENFORCE="git-commit, comment-reply" dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "override: ENFORCE tolerates a space after the comma"
@@ -1378,7 +1410,7 @@ assert_contains '"permissionDecision":"deny"' "$out" "override: ENFORCE tolerate
 # row says so.
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | down bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "no provider: an enforced boundary is not denied"
+assert_nudge "$out" "no provider: an enforced boundary is not denied"
 assert_contains 'commit-message' "$(hook_msg "$out")" "no provider: the reminder still fires"
 assert_contains 'No local provider answered' "$(hook_msg "$out")" "no provider: the reminder says why the call proceeds"
 assert_eq no-provider "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "no provider: row records enforce_skipped=no-provider"
@@ -1386,7 +1418,7 @@ assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "no provider: row is stil
 assert_eq false "$(jq 'has("denied")' <<<"$(last_row)")" "no provider: row carries no denied field"
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=enforce down bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "no provider: explicit MODE=enforce fails open too"
+assert_nudge "$out" "no provider: explicit MODE=enforce fails open too"
 # A credited post never probes.
 : > "$METRICS"; seed_delegation "$proj" commit-message; rm -f "$MOCKDIR/probed"
 payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK" >/dev/null
@@ -1549,14 +1581,14 @@ seed_attempt() { # session recipe [ts] [exit_status] -- a delegate row that did 
 # Two denials and a delegation after them (credited nowhere: wrong project) open the cap.
 : > "$METRICS"; seed_denied sess-A git-commit; seed_denied sess-A git-commit; seed_attempt sess-A commit-message
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "retry cap: two denials plus a delegation since -> the third attempt is not denied"
+assert_nudge "$out" "retry cap: two denials plus a delegation since -> the third attempt is not denied"
 assert_eq retry-cap "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "retry cap: the row records enforce_skipped=retry-cap"
 assert_eq false "$(jq 'has("denied")' <<<"$(last_row)")" "retry cap: the row is not a denial"
 assert_contains 'twice' "$(hook_msg "$out")" "retry cap: the reminder says why the call proceeds"
 # A failed delegation (canary stall, exit 3) is still an attempt.
 : > "$METRICS"; seed_denied sess-A git-commit; seed_denied sess-A git-commit; seed_attempt sess-A commit-message "$nowts" 3
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "retry cap: a delegation that failed (exit 3) still counts as the attempt"
+assert_nudge "$out" "retry cap: a delegation that failed (exit 3) still counts as the attempt"
 # Two denials and NOTHING delegated: the third, fourth and fifth stay denied.
 : > "$METRICS"
 for i in 1 2 3 4 5; do
@@ -1566,7 +1598,7 @@ done
 assert_eq 0 "$(jq -r 'select(.enforce_skipped == "retry-cap") | 1' "$METRICS" | wc -l | tr -d ' ')" "retry cap: no fall-open row was written for the plain retries"
 # A delegation BEFORE the streak began is not the attempt the streak asks for.
 : > "$METRICS"
-seed_attempt sess-A commit-message "$(jq -rn --argjson now "$(date -u +%s)" '($now - 120) | todateiso8601')"
+seed_attempt sess-A commit-message "$(jq -rn --arg now "$nowts" '($now | fromdateiso8601) - 120 | todateiso8601')"
 seed_denied sess-A git-commit; seed_denied sess-A git-commit
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "retry cap: a delegation from before the streak does not open it"
@@ -1576,7 +1608,7 @@ out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "retry cap: a same-second delegation appended BEFORE the first denial does not open the cap"
 : > "$METRICS"; seed_denied sess-A git-commit; seed_attempt sess-A commit-message; seed_denied sess-A git-commit
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "retry cap: a same-second delegation appended AFTER the first denial opens it"
+assert_nudge "$out" "retry cap: a same-second delegation appended AFTER the first denial opens it"
 # Another session's delegation does not count for this one.
 : > "$METRICS"; seed_denied sess-A git-commit; seed_denied sess-A git-commit; seed_attempt sess-B commit-message
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
@@ -1605,7 +1637,7 @@ assert_contains '"permissionDecision":"deny"' "$out" "retry cap: denials outside
 # Metrics unwritable: a directory where the file should be.
 unwritable=$(mktemp -d)
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$unwritable" bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "metrics unwritable: the boundary is not denied"
+assert_nudge "$out" "metrics unwritable: the boundary is not denied"
 assert_contains 'metrics' "$(hook_msg "$out")" "metrics unwritable: the reminder says the row could not be written"
 rmdir "$unwritable"
 
@@ -1615,10 +1647,10 @@ out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=Of
 assert_eq "" "$out" "mode: Off is off"
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=WARN dflt bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "mode: WARN is warn"
+assert_nudge "$out" "mode: WARN is warn"
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=0 dflt bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "mode: an unknown value (0) is warn, not enforce"
+assert_nudge "$out" "mode: an unknown value (0) is warn, not enforce"
 : > "$METRICS"
 out=$(payload "gh pr create --title t --body \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_MODE=Enforce dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "mode: Enforce is enforce"
@@ -1630,7 +1662,7 @@ sed 's/qwen3.6:35b-a3b-q8_0/nomic-embed-text/' "$MOCKDIR/curl" > "$MOCKDIR2/curl
 nomodel() { PATH="$MOCKDIR2:${PATH#$MOCKDIR:}" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "$@"; }
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | nomodel bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "no model: fails open"
+assert_nudge "$out" "no model: fails open"
 assert_eq no-model "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "no model: the row says no-model, not no-provider"
 assert_contains 'no model for the prose tier' "$(hook_msg "$out")" "no model: the reminder names the tier that has no model"
 rm -rf "$MOCKDIR2"
@@ -1638,7 +1670,7 @@ badtier=$(mktemp -d)
 sed 's/^tier: prose$/tier: bogus/' "$REPO/prompts/commit-message.md" > "$badtier/commit-message.md"
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_PROMPTS_DIR="$badtier" dflt bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "bad tier: fails open"
+assert_nudge "$out" "bad tier: fails open"
 assert_eq bad-tier "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "bad tier: the row says bad-tier"
 assert_contains "'bogus'" "$(hook_msg "$out")" "bad tier: the reminder names the tier the recipe declares"
 # The tier is read the way delegate.sh reads it: trailing whitespace is not a different tier.
@@ -1689,7 +1721,7 @@ assert_eq "absent" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock
 mkdir -p "$lockdir"; printf '%s' "$(date -u +%s)" > "$lockdir/ts"; printf 'someone-else' > "$lockdir/owner"
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
-assert_contains '"permissionDecision":"allow"' "$out" "lock: an unobtainable lock fails open"
+assert_nudge "$out" "lock: an unobtainable lock fails open"
 assert_eq lock-timeout "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "lock: ...recording enforce_skipped=lock-timeout"
 assert_eq "present" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock: a live lock is not removed by a non-owner"
 assert_eq "someone-else" "$(cat "$lockdir/owner" 2>/dev/null)" "lock: ...and its owner file is untouched"
