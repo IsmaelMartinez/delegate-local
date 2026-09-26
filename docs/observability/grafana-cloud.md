@@ -88,10 +88,9 @@ The exporter only emits spans for new delegations going forward. If your `metric
 bash scripts/backfill-otel.sh                       # post every pre-exporter row
 bash scripts/backfill-otel.sh --since 2026-05-01T00:00:00Z  # only since a date
 bash scripts/backfill-otel.sh --dry-run             # preview without POSTing
-bash scripts/backfill-otel.sh --update-jsonl        # also write the IDs back
 ```
 
-Row-level idempotent: any row that was already exported live (carries `otel_trace_id` in the JSONL) is skipped, and rows that pre-date the exporter get deterministic trace and span IDs derived from `sha256(ts|source)` and `sha1(ts|source)`. Re-running the backfill — or resuming an interrupted run — collides in Tempo's OTel ID space and produces no duplicate spans. `--update-jsonl` writes the computed IDs back into the JSONL so subsequent runs skip via the live-exported path (mutates the metrics file atomically via tempfile-and-rename); it's opt-in because mutating the metrics file is a more invasive operation than the default read-only backfill.
+Row-level idempotent: any row that was already exported live (carries `otel_trace_id` in the JSONL) is skipped, and rows that pre-date the exporter get deterministic trace and span IDs derived from `sha256(ts|source)` and `sha1(ts|source)`. Re-running the backfill — or resuming an interrupted run — collides in Tempo's OTel ID space and produces no duplicate spans. The backfill never writes to the metrics file.
 
 ## See also
 

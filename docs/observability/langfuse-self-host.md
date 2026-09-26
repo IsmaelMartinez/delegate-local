@@ -87,7 +87,6 @@ The exporter only emits spans for new delegations going forward. If your `metric
 bash scripts/backfill-otel.sh                       # post every pre-exporter row
 bash scripts/backfill-otel.sh --since 2026-05-01T00:00:00Z  # only since a date
 bash scripts/backfill-otel.sh --dry-run             # preview without POSTing
-bash scripts/backfill-otel.sh --update-jsonl        # also write the IDs back
 ```
 
 Row-level idempotent: any row that was already exported live (carries `otel_trace_id` in the JSONL) is skipped, and rows that pre-date the exporter get deterministic trace and span IDs derived from `sha256(ts|source)` and `sha1(ts|source)`. Re-running the backfill — or resuming an interrupted run — collides in Langfuse's OTel ID space and produces no duplicate traces. The feedback rows in the JSONL are exported as feedback-spans linked to the parent delegation's deterministic IDs, so Langfuse's `scores` view also populates from the historical HIT/MISS verdicts.

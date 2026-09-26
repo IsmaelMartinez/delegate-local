@@ -233,6 +233,24 @@ fb_reason=$(echo "$fb_body" | jq -r '
 assert_eq "had to rewrite" "$fb_reason" "T5b: feedback reason emitted when DELEGATE_OTEL_INCLUDE_CONTENT=1"
 rm -rf "$tmp"
 
+# T5c. A scaffold verdict (kept:false, scaffold:true) exports as `scaffold`,
+# the word delegate-feedback.sh emits live, not as `miss`.
+tmp=$(mktemp -d)
+bodies="$tmp/bodies"
+make_mock_curl "$tmp" "$bodies" "$tmp/invocations" "ok"
+cat > "$tmp/m.jsonl" <<'EOF'
+{"ts":"2026-05-22T10:01:00Z","source":"feedback","ref_ts":"2026-05-22T10:00:00Z","kept":false,"scaffold":true,"reason":"edited"}
+EOF
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
+  bash "$SCRIPT" --metrics-file "$tmp/m.jsonl" >/dev/null 2>&1
+fb_verdict=$(jq -r '
+  .resourceSpans[0].scopeSpans[0].spans[0].attributes
+  | map(select(.key == "delegate.feedback.verdict"))
+  | .[0].value.stringValue' "$bodies/1.json" 2>/dev/null)
+assert_eq "scaffold" "$fb_verdict" "T5c: a scaffold verdict backfills as 'scaffold', not 'miss'"
+rm -rf "$tmp"
+
 # ---------------------------------------------------------------------------
 # 6. Idempotency: ids are a pure function of (ts, source), so two runs agree.
 # ---------------------------------------------------------------------------
@@ -304,50 +322,6 @@ out=$(env -i PATH="$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --since "2026-05-22" --metrics-file "$tmp/m.jsonl" 2>&1) || EC=$?
 assert_eq 2 "$EC" "T7b: malformed --since → exit 2"
 assert_contains "ISO 8601" "$out" "T7b: error names the expected format"
-rm -rf "$tmp"
-
-# ---------------------------------------------------------------------------
-# 8. --update-jsonl: after backfill, the JSONL rows have otel_trace_id /
-#    otel_span_id appended; a subsequent backfill skips them via the
-#    live-exported path.
-# ---------------------------------------------------------------------------
-tmp=$(mktemp -d)
-bodies1="$tmp/bodies-run1"
-bodies2="$tmp/bodies-run2"
-invocations="$tmp/invocations"; : > "$invocations"
-make_mock_curl "$tmp" "$bodies1" "$invocations" "ok"
-cat > "$tmp/m.jsonl" <<'EOF'
-{"ts":"2026-05-22T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b","prompt_chars":80,"context_chars":100,"output_chars":50,"duration_ms":5000,"queue_wait_ms":100,"generation_ms":4900,"exit_status":0,"estimated_tokens_avoided":40}
-{"ts":"2026-05-22T10:01:00Z","source":"feedback","ref_ts":"2026-05-22T10:00:00Z","kept":true,"reason":"used"}
-EOF
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
-  bash "$SCRIPT" --update-jsonl --metrics-file "$tmp/m.jsonl" 2>&1) || EC=$?
-assert_eq 0 "$EC" "T8: --update-jsonl first run → exits 0"
-# Verify the JSONL was updated: the delegate row now carries
-# otel_trace_id / otel_span_id; the feedback row is unchanged.
-delegate_line=$(grep -F '"source":"delegate"' "$tmp/m.jsonl" | head -1)
-assert_contains '"otel_trace_id":' "$delegate_line" "T8: delegate row got otel_trace_id written back"
-assert_contains '"otel_span_id":' "$delegate_line" "T8: delegate row got otel_span_id written back"
-# IDs in the row match the deterministic derivation.
-expected_trace=$(perl -MDigest::SHA=sha256_hex -e 'print substr(sha256_hex("2026-05-22T10:00:00Z|delegate"), 0, 32)')
-written_trace=$(echo "$delegate_line" | jq -r '.otel_trace_id')
-assert_eq "$expected_trace" "$written_trace" "T8: written trace_id is the deterministic one"
-# Feedback row stays as-is (no otel_trace_id field).
-feedback_line=$(grep -F '"source":"feedback"' "$tmp/m.jsonl" | head -1)
-assert_not_contains 'otel_trace_id' "$feedback_line" "T8: feedback row not mutated (recomputed each run)"
-# Second run: delegate row should SKIP via the live-exported path.
-make_mock_curl "$tmp" "$bodies2" "$invocations" "ok"
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_OTEL_ENDPOINT="https://otlp.example.com/v1/traces" \
-  bash "$SCRIPT" --metrics-file "$tmp/m.jsonl" 2>&1) || EC=$?
-assert_eq 0 "$EC" "T8: second run after --update-jsonl → exits 0"
-assert_contains "SKIP ts=2026-05-22T10:00:00Z" "$out" "T8: second run SKIPs the updated delegate row"
-# Only one POST this time (the feedback span; the delegate row was skipped).
-run2_curl_count=$(ls "$bodies2" 2>/dev/null | grep -c '\.json$') || run2_curl_count=0
-assert_eq 1 "$run2_curl_count" "T8: second run only posts the feedback span (delegate skipped)"
 rm -rf "$tmp"
 
 # ---------------------------------------------------------------------------

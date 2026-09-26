@@ -8,15 +8,11 @@
 #
 # Usage:
 #   backfill-otel.sh [--since <iso8601>] [--dry-run] [--metrics-file PATH]
-#                    [--update-jsonl]
 #
 # Flags:
 #   --since <iso8601>     only rows with ts >= iso (UTC, Z suffix)
 #   --dry-run             print one line per row, no HTTP calls
 #   --metrics-file PATH   override the metrics JSONL location
-#   --update-jsonl        after a successful POST, write the computed IDs back
-#                         to the row (atomic tempfile-and-rename) so later
-#                         runs take the SKIP path; off by default
 #
 # Env:
 #   DELEGATE_OTEL_ENDPOINT      required unless --dry-run
@@ -39,7 +35,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat >&2 <<'EOF'
-usage: backfill-otel.sh [--since <iso8601>] [--dry-run] [--metrics-file PATH] [--update-jsonl]
+usage: backfill-otel.sh [--since <iso8601>] [--dry-run] [--metrics-file PATH]
   Walks the delegate metrics JSONL and POSTs one OTLP span per row to
   DELEGATE_OTEL_ENDPOINT. Idempotent at row level — re-runs produce no
   duplicate spans at the collector. See script header for full env reference.
@@ -50,7 +46,6 @@ EOF
 since_iso=""
 dry_run=0
 metrics_file_override=""
-update_jsonl=0
 while (($# > 0)); do
   case "$1" in
     --since)
@@ -66,7 +61,6 @@ while (($# > 0)); do
       fi
       metrics_file_override="$2"; shift 2;;
     --metrics-file=*) metrics_file_override="${1#--metrics-file=}"; shift;;
-    --update-jsonl) update_jsonl=1; shift;;
     -h|--help) usage;;
     *) echo "backfill-otel: unknown arg '$1'" >&2; usage;;
   esac
@@ -108,16 +102,9 @@ sent_count=0
 skipped_count=0
 errored_count=0
 
-# --update-jsonl tuples, applied in one rewrite after the loop: a script
-# killed mid-emit leaves the JSONL untouched, and the next run re-derives
-# the same IDs.
-updates_tsv=""
-
 # Per-row results travel via globals: bash 3.2 has no clean multi-value return.
 ROW_RESULT=""
 ROW_KIND=""
-ROW_TRACE=""
-ROW_SPAN=""
 
 # emit_delegate_row <row_json>
 #   Process one source:"delegate" row. Skip if otel_trace_id present
@@ -180,8 +167,6 @@ emit_delegate_row() {
     return 0
   }
   IFS=$'\t' read -r trace_id span_id <<< "$ids"
-  ROW_TRACE="$trace_id"
-  ROW_SPAN="$span_id"
 
   # Second precision is all the JSONL retains; good enough for history.
   local start_ms
@@ -210,7 +195,7 @@ emit_delegate_row() {
 #   collector dedups a re-emit.
 emit_feedback_row() {
   local row="$1"
-  local fb_ts ref_ts kept reason verdict project verdict_source
+  local fb_ts ref_ts kept scaffold reason verdict project verdict_source
   ROW_KIND="feedback"
 
   # Same one-call, 0x1F-separated extraction as emit_delegate_row; an empty
@@ -220,19 +205,24 @@ emit_feedback_row() {
     .ts // "",
     .ref_ts // "",
     (.kept // false | tostring),
+    (.scaffold // false | tostring),
     .reason // "",
     .project // "",
     (.verdict_source // "agent")
   ] | join("\u001f")' <<< "$row")
-  IFS=$'\x1f' read -r fb_ts ref_ts kept reason project verdict_source <<< "$fields"
+  IFS=$'\x1f' read -r fb_ts ref_ts kept scaffold reason project verdict_source <<< "$fields"
 
   if [[ -z "$fb_ts" ]]; then
     ROW_RESULT="ERROR malformed feedback row (no ts)"
     return 0
   fi
 
+  # The same three words delegate-feedback.sh emits live: a scaffold is
+  # kept:false but was useful, so it is not a miss.
   if [[ "$kept" == "true" ]]; then
     verdict="hit"
+  elif [[ "$scaffold" == "true" ]]; then
+    verdict="scaffold"
   else
     verdict="miss"
   fi
@@ -244,8 +234,6 @@ emit_feedback_row() {
     return 0
   }
   IFS=$'\t' read -r fb_trace fb_span <<< "$fb_ids"
-  ROW_TRACE="$fb_trace"
-  ROW_SPAN="$fb_span"
 
   # Parent IDs: live ones when the parent has them, else the same derivation
   # the delegate-row path uses.
@@ -308,8 +296,6 @@ while IFS=$'\t' read -r source ts row; do
 
   ROW_RESULT=""
   ROW_KIND=""
-  ROW_TRACE=""
-  ROW_SPAN=""
 
   case "$source" in
     delegate) emit_delegate_row "$row" ;;
@@ -325,11 +311,6 @@ while IFS=$'\t' read -r source ts row; do
     OK)
       sent_count=$((sent_count + 1))
       echo "OK ts=$ts ($ROW_KIND)" >&2
-      # Only just-exported delegate rows are written back; feedback IDs are
-      # recomputed from (ts, source) on every run.
-      if (( update_jsonl == 1 )) && [[ "$ROW_KIND" == "delegate" && -n "$ROW_TRACE" && -n "$ROW_SPAN" ]]; then
-        updates_tsv="${updates_tsv}${ts}"$'\t'"${ROW_TRACE}"$'\t'"${ROW_SPAN}"$'\n'
-      fi
       ;;
     SKIP)
       skipped_count=$((skipped_count + 1))
@@ -349,69 +330,6 @@ done < <(jq -rc --arg since "$since_iso" '
   else [(.source // "delegate"), (.ts // ""), tojson] | @tsv
   end
 ' "$metrics_file")
-
-# --update-jsonl rewrite: a tempfile in the same directory so the rename is
-# one inode swap, in a single perl pass. Keys are spliced before the closing
-# brace, which relies on the row being flat `jq -nc` output; any other line
-# passes through verbatim. Concurrent appends are not coordinated: the
-# second writer wins per `mv` semantics, accepted at workstation scale.
-if (( update_jsonl == 1 && sent_count > 0 )); then
-  tmp_out=$(mktemp "${metrics_file}.backfill.XXXXXX") || {
-    echo "backfill-otel: could not create tempfile for --update-jsonl" >&2
-    echo "backfill: $total_rows rows, $sent_count sent, $skipped_count skipped, $errored_count errored" >&2
-    exit 0
-  }
-
-  # updates_tsv arrives as a file (process substitution); the metrics file
-  # and the output path are positional.
-  perl -e '
-    use strict; use warnings;
-    my $updates_path = shift @ARGV;
-    my $metrics_path = shift @ARGV;
-    my $out_path = shift @ARGV;
-    # ts -> "trace\tspan" hash from the updates file (ts alone: same-second
-    # rows take the same pair).
-    my %updates;
-    open(my $uh, "<", $updates_path) or die "open updates: $!";
-    while (my $line = <$uh>) {
-      chomp $line;
-      next unless length $line;
-      my ($ts, $trace, $span) = split /\t/, $line, 3;
-      next unless defined $trace && defined $span;
-      $updates{$ts} = qq{"otel_trace_id":"$trace","otel_span_id":"$span"};
-    }
-    close $uh;
-    # One regex per line, never a JSON parse, which relies on the flat
-    # jq -nc shape delegate.sh writes.
-    open(my $ih, "<", $metrics_path) or die "open metrics: $!";
-    open(my $oh, ">", $out_path) or die "open out: $!";
-    while (my $line = <$ih>) {
-      # Preserve blank lines exactly.
-      if ($line =~ /^\s*$/) { print $oh $line; next; }
-      # Not a delegate row, or already carrying otel_trace_id: pass through.
-      if ($line =~ /"source":"feedback"/ || $line =~ /"source":"experiment"/) {
-        print $oh $line; next;
-      }
-      if ($line =~ /"otel_trace_id":/) { print $oh $line; next; }
-      if ($line =~ /"ts":"([^"]+)"/) {
-        my $ts = $1;
-        if (exists $updates{$ts}) {
-          # Splice before the final brace, keeping the trailing newline.
-          my $injected = $updates{$ts};
-          if ($line =~ s/\}(\s*)$/,${injected}\}$1/) {
-            print $oh $line;
-            next;
-          }
-        }
-      }
-      # Fall-through: pass through unchanged.
-      print $oh $line;
-    }
-    close $ih;
-    close $oh;
-  ' <(printf '%s' "$updates_tsv") "$metrics_file" "$tmp_out"
-  mv "$tmp_out" "$metrics_file"
-fi
 
 echo "backfill: $total_rows rows, $sent_count sent, $skipped_count skipped, $errored_count errored" >&2
 exit 0
