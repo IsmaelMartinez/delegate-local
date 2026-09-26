@@ -54,7 +54,10 @@ command -v jq   >/dev/null || { echo "sync-metrics-to-loki: jq not on PATH" >&2;
 command -v curl >/dev/null || { echo "sync-metrics-to-loki: curl not on PATH" >&2; exit 1; }
 [[ -z "$state_file" ]] && state_file="${metrics_file%.jsonl}.loki-sync"
 
-total_lines=$(grep -c '' "$metrics_file" 2>/dev/null || echo 0)
+# Complete lines only: wc -l counts newlines, so a torn final line (the sync
+# racing an in-progress append) stays past the watermark and is picked up on
+# the next run once its newline lands.
+total_lines=$(wc -l < "$metrics_file" | tr -d ' ')
 
 watermark=0
 if (( full == 0 )) && [[ -f "$state_file" ]]; then
@@ -88,13 +91,15 @@ new_count=$((total_lines - watermark))
 # pre-date ref_id. The source JSONL is left untouched. Enrichment feeds the
 # content hash below, so changing it re-stamps already-synced feedback rows:
 # wipe the Loki volume and re-sync with --full, or they are stored twice.
-parent_map=$(jq -sc '
+# Every pass reads the file line by line through `fromjson?`, never a slurp,
+# so one malformed line anywhere is skipped instead of failing every run.
+parent_map=$(jq -Rn '[inputs | fromjson?]' "$metrics_file" | jq -c '
   reduce (.[] | select((.source // "delegate") == "delegate" and .ts != null)) as $r
     ({}; ({recipe: ($r.recipe // ""), tier: ($r.tier // "")}
           + (if $r.estimated_tokens_avoided != null then {estimated_tokens_avoided: $r.estimated_tokens_avoided} else {} end)) as $p
          | .["ts:" + $r.ts] = $p
          | if ($r.otel_span_id // "") != "" then .["id:" + $r.otel_span_id] = $p else . end)
-' "$metrics_file")
+')
 # A delegation can carry more than one verdict (a re-recorded one, or one
 # added later to attach --final), and every feedback row takes its parent's
 # recipe and tier. The tokens go only on the FIRST verdict row per delegation,
@@ -105,7 +110,7 @@ parent_map=$(jq -sc '
 # resolved to the parent's span first, as metrics-summary.sh does, or a
 # ts-only verdict and a later id-pinned one would each take the tokens. The
 # result is the set of first rows by hash, small enough to pass as an argument.
-first_verdict=$(jq -sc '
+first_verdict=$(jq -Rn '[inputs | fromjson?]' "$metrics_file" | jq -c '
   def nshash: tojson | explode | reduce .[] as $c (0; ((. * 31) + $c) % 1000000000);
   (reduce (.[] | select((.source // "delegate") == "delegate" and .ts != null and (.otel_span_id // "") != "")) as $r
      ({}; .[$r.ts] = $r.otel_span_id)) as $span_at
@@ -115,13 +120,16 @@ first_verdict=$(jq -sc '
         else ($span_at[$f.ref_ts] // ("ts:" + $f.ref_ts)) end) as $k
        | if .keys[$k] then . else .keys[$k] = true | .first[$f | nshash | tostring] = true end)
   | .first
-' "$metrics_file")
+')
 
-# pipefail is on, so a torn final line (the sync racing an in-progress append)
-# fails the slurp and the batch is retried WITHOUT advancing the watermark,
-# rather than pushing an empty payload and skipping every row.
-payload=$(tail -n "+$start_line" "$metrics_file" \
-  | jq -sc --argjson parents "$parent_map" --argjson first "$first_verdict" '
+# Malformed lines in the batch are skipped and counted, and the watermark
+# still moves past them: a line that is not JSON now never will be.
+bad_lines=$(sed -n "${start_line},${total_lines}p" "$metrics_file" \
+  | jq -Rn '[inputs | select(test("\\S") and ((fromjson? | true) // false) == false)] | length')
+(( bad_lines > 0 )) && echo "sync-metrics-to-loki: skipped $bad_lines malformed line(s) in lines $start_line..$total_lines" >&2
+payload=$(sed -n "${start_line},${total_lines}p" "$metrics_file" \
+  | jq -Rn '[inputs | fromjson?]' \
+  | jq -c --argjson parents "$parent_map" --argjson first "$first_verdict" '
       # Base 31 mod 1e9 keeps every intermediate under 2^53 so jq float64 math
       # is exact; enrichment runs BEFORE hashing so a feedback row hashes the
       # bytes that get pushed.
@@ -149,7 +157,7 @@ payload=$(tail -n "+$start_line" "$metrics_file" \
     ')
 jq_status=$?
 if (( jq_status != 0 )); then
-  echo "sync-metrics-to-loki: failed to build push payload (a malformed or partial row in lines $start_line..$total_lines?) — watermark left at $watermark, re-run to retry" >&2
+  echo "sync-metrics-to-loki: failed to build push payload for lines $start_line..$total_lines — watermark left at $watermark, re-run to retry" >&2
   exit 1
 fi
 
