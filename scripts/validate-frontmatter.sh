@@ -58,6 +58,16 @@ else
   done
 fi
 $name_matches_dir || fail "name '$name' does not match directory '$dir_name'"
-(( ${#desc} <= 4096 )) || fail "description exceeds 4096 chars (${#desc})"
+# Claude Code truncates description + when_to_use at 1,536 characters in the
+# skill listing, so anything past it never reaches the model; the Agent Skills
+# spec caps description at 1,024, which other agents enforce. perl counts
+# characters whatever the locale, where ${#desc} counts bytes under LC_ALL=C.
+when=$(awk '/^when_to_use:/{sub(/^when_to_use: */,""); print; while(getline && /^[[:space:]]+/) print}' <<<"$fm")
+listing_len=$(printf '%s%s' "$desc" "$when" | perl -CSD -0777 -ne 'print length')
+(( listing_len <= 1536 )) || fail "description + when_to_use exceeds the 1536-char listing cap ($listing_len)"
+if (( listing_len > 1024 )); then
+  echo "::warning file=$skill::description + when_to_use is $listing_len chars, above the Agent Skills spec's 1024" >&2
+  echo "validate-frontmatter: warning: description + when_to_use is $listing_len chars, above the Agent Skills spec's 1024" >&2
+fi
 
 echo "OK $skill"

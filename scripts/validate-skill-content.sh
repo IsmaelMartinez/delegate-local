@@ -86,11 +86,12 @@ for entry in "${CATEGORIES[@]}"; do
   done < <(grep -nEi "$pat" "$file" 2>/dev/null || true)
 done
 
-# OBFUSC_UNICODE: zero-width / bidi / tag chars; perl because macOS BSD grep lacks -P.
+# OBFUSC_UNICODE: zero-width / bidi / invisible-operator chars, the BOM, and the
+# Unicode tag block (ASCII smuggling); perl because macOS BSD grep lacks -P.
 while IFS=: read -r line_no content; do
   [[ -z "$line_no" ]] && continue
   report_hit "OBFUSC_UNICODE" "$line_no" "$content"
-done < <(perl -CSD -ne 'print "$.:$_" if /[\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{206F}]/' "$file" 2>/dev/null || true)
+done < <(perl -CSD -ne 'print "$.:$_" if /[\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{206F}\x{FEFF}\x{E0000}-\x{E007F}]/' "$file" 2>/dev/null || true)
 
 # CONFLICT_MARKER: unresolved git merge markers.
 while IFS=: read -r line_no content; do
