@@ -237,7 +237,8 @@ emit_otel_span() {
 # A feedback-as-linked-span (ADR 0007): NEW trace, NEW span, `links` pointing
 # at the parent delegation when its IDs are known, and the parent IDs
 # duplicated as plain attributes for backends that do not render links.
-# verdict_source is metadata and always travels; the dashboards filter on it.
+# verdict_source is metadata and always travels; no dashboard filters on it
+# (every verdict is the agent's since ADR 0030), but the span keeps it.
 emit_otel_feedback_span() {
   [[ -z "${DELEGATE_OTEL_ENDPOINT:-}" ]] && return 0
   local fb_ts="$1" verdict="$2" reason="$3" parent_trace_id="$4"

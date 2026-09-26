@@ -163,18 +163,58 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" --metrics-file "$met" --state-file "$state" --loki-url http://x 2>&1)
 assert_contains "nothing new to push" "$out" "T5: second run is a no-op"
 
-# --- T6: a malformed/partial row aborts WITHOUT advancing the watermark -----
-# (a torn final line from the sync racing an in-progress delegate.sh append
-# must be retried, not silently skipped past).
+# --- T5b: DELEGATE_LOKI_STATE names the watermark; --state-file beats it -----
+envstate="$tmp/env-state"; flagstate="$tmp/flag-state"
+rm -f "$envstate" "$flagstate" "$tmp/m.loki-sync"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOKI_STATE="$envstate" \
+  bash "$SCRIPT" --full --metrics-file "$met" --loki-url http://x >/dev/null 2>&1
+assert_eq "4" "$(cat "$envstate" 2>/dev/null)" "T5b: DELEGATE_LOKI_STATE is where the watermark is written"
+[[ -f "$tmp/m.loki-sync" ]] && { echo "  FAIL  T5b: the default path must not be used when the env is set"; fail=$((fail+1)); } || { echo "  PASS  T5b: default path untouched when the env is set"; pass=$((pass+1)); }
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_LOKI_STATE="$envstate" \
+  bash "$SCRIPT" --full --metrics-file "$met" --state-file "$flagstate" --loki-url http://x >/dev/null 2>&1
+assert_eq "4" "$(cat "$flagstate" 2>/dev/null)" "T5b: --state-file wins over DELEGATE_LOKI_STATE"
+
+# --- T6: a malformed line in the middle is skipped and counted, not fatal ----
+# The parent map used to slurp the whole file, so one bad line anywhere failed
+# every run and the watermark never moved. The good rows must push exactly as
+# they would with the bad line absent.
 met2="$tmp/m2.jsonl"; state2="$tmp/state2"; body2="$tmp/body2.json"
+met2c="$tmp/m2c.jsonl"; state2c="$tmp/state2c"; body2c="$tmp/body2c.json"
+good6a='{"ts":"2026-05-10T10:00:00Z","source":"delegate","tier":"prose","recipe":"commit-message","otel_span_id":"s6","estimated_tokens_avoided":6,"project":"r"}'
+good6b='{"ts":"2026-05-10T10:00:02Z","source":"feedback","ref_ts":"2026-05-10T10:00:00Z","ref_id":"s6","kept":true,"project":"r"}'
+printf '%s\n%s\n%s\n' "$good6a" '{"ts":"2026-05-10T10:00:01Z","source":"delegate"' "$good6b" > "$met2"
+printf '%s\n%s\n' "$good6a" "$good6b" > "$met2c"
+make_mock_curl "$tmp" "$body2c"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  bash "$SCRIPT" --full --metrics-file "$met2c" --state-file "$state2c" --loki-url http://x >/dev/null 2>&1
 make_mock_curl "$tmp" "$body2"
-printf '%s\n' '{"ts":"2026-05-10T10:00:00Z","source":"delegate","tier":"prose","project":"r"}' >  "$met2"
-printf '%s\n' '{"ts":"2026-05-10T10:00:01Z","source":"delegate"'                                 >> "$met2"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  bash "$SCRIPT" --full --metrics-file "$met2" --state-file "$state2" --loki-url http://x 2>&1) || EC=$?
+assert_eq "0" "$EC" "T6: a malformed middle line does not fail the run"
+assert_contains "skipped 1 malformed line" "$out" "T6: the skipped line is counted on stderr"
+assert_eq "3" "$(cat "$state2" 2>/dev/null)" "T6: watermark advances past the malformed line"
+assert_eq "$(cat "$body2c" 2>/dev/null)" "$(cat "$body2" 2>/dev/null)" \
+  "T6: good rows push byte-identical to a file without the bad line"
+
+# --- T6b: a torn final line (no newline yet) is held back, not skipped past --
+# The sync racing an in-progress delegate.sh append sees a partial last line;
+# it must be retried on the next run once the append completes.
+met6b="$tmp/m6b.jsonl"; state6b="$tmp/state6b"; body6b="$tmp/body6b.json"
+make_mock_curl "$tmp" "$body6b"
+printf '%s\n' "$good6a" > "$met6b"
+printf '%s' '{"ts":"2026-05-10T10:00:01Z","source":"delegate"' >> "$met6b"
 EC=0
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  bash "$SCRIPT" --full --metrics-file "$met2" --state-file "$state2" --loki-url http://x >/dev/null 2>&1 || EC=$?
-assert_eq "1" "$EC" "T6: malformed row -> exit 1"
-if [[ -f "$state2" ]]; then echo "  FAIL  T6: watermark must NOT advance on a malformed batch"; fail=$((fail+1)); else echo "  PASS  T6: watermark not advanced on a malformed batch"; pass=$((pass+1)); fi
+  bash "$SCRIPT" --full --metrics-file "$met6b" --state-file "$state6b" --loki-url http://x >/dev/null 2>&1 || EC=$?
+assert_eq "0" "$EC" "T6b: a torn final line does not fail the run"
+assert_eq "1" "$(cat "$state6b" 2>/dev/null)" "T6b: watermark stops before the torn final line"
+printf '%s\n' ',"tier":"code"}' >> "$met6b"
+rm -f "$body6b"
+env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  bash "$SCRIPT" --metrics-file "$met6b" --state-file "$state6b" --loki-url http://x >/dev/null 2>&1
+assert_eq "code" "$(jq -r '.streams[].values[][1] | fromjson | .tier' "$body6b" 2>/dev/null)" \
+  "T6b: the completed line is pushed on the next run"
 
 # --- T7: valid rows with no usable ts are skipped (advance, no push) --------
 met3="$tmp/m3.jsonl"; state3="$tmp/state3"; body3="$tmp/body3.json"
