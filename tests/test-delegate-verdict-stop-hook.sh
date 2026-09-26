@@ -60,6 +60,7 @@ run_hook "s2" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
 assert_eq 0 "$ec" "T2: untracked delegation → exit 0"
 jq -e . "$tmp/out" >/dev/null 2>&1 && { pass=$((pass+1)); echo "  PASS  T2: output is valid JSON"; } || { fail=$((fail+1)); echo "  FAIL  T2: output is not valid JSON"; }
 assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T2: decision is block"
+assert_contains "verdict sweep: 1 delegation(s) from this session" "$(jq -r .reason "$tmp/out")" "T2: reason counts this session's delegations"
 assert_contains "$NOW" "$(jq -r .reason "$tmp/out")" "T2: reason names the untracked ts"
 assert_contains "commit-message" "$(jq -r .reason "$tmp/out")" "T2: reason names the recipe"
 [[ -f "$tmp/.verdict-stop-markers/s2" ]] && { pass=$((pass+1)); echo "  PASS  T2: session marker written on inject"; } || { fail=$((fail+1)); echo "  FAIL  T2: session marker not written"; }
@@ -171,12 +172,33 @@ run_hook "s7b" "$tmp" "$tmp/m.jsonl" "$tmp/out"
 assert_empty "$(cat "$tmp/out")" "T7b: a recorded agent verdict drops the delegation from the next scan"
 rm -rf "$tmp"
 
-# --- T8. Per-project scoping: a delegation in another project is not surfaced --
-tmp=$(mk_tmp_repo)  # cwd → project = basename(tmp); the row carries a different project
-printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"some-other-repo","session":"s8"}\n' "$NOW" > "$tmp/m.jsonl"
+# --- T8. The session scopes the sweep, not the project (#551): a delegation
+# this session made under another project (`--project other`, as the
+# boundary nudge prints after `cd other &&`) is listed beside the cwd's one;
+# the marker would otherwise hide it for good. A verdict on the other-project
+# row, whose feedback row carries no session field, still tracks it --------
+tmp=$(mk_tmp_repo); proj=$(basename "$tmp")
+{
+  printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s","session":"s8","otel_span_id":"bbbb000000000001"}\n' "$NOW" "$proj"
+  printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","tier":"prose","model":"q","exit_status":0,"project":"some-other-repo","session":"s8","otel_span_id":"bbbb000000000002"}\n' "$NOW"
+  printf '{"ts":"%s","source":"delegate","recipe":"pr-description","tier":"prose","model":"q","exit_status":0,"project":"some-other-repo","session":"s8","otel_span_id":"bbbb000000000003"}\n' "$NOW"
+  printf '{"ts":"%s","source":"feedback","ref_ts":"%s","ref_id":"bbbb000000000003","kept":true,"verdict_source":"agent","project":"some-other-repo"}\n' "$NOW" "$NOW"
+  printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"some-other-repo","session":"someone-else","otel_span_id":"bbbb000000000004"}\n' "$NOW"
+} > "$tmp/m.jsonl"
 run_hook "s8" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
-assert_eq 0 "$ec" "T8: other-project delegation → exit 0"
-assert_empty "$(cat "$tmp/out")" "T8: other-project delegation not surfaced"
+assert_eq 0 "$ec" "T8: cross-project session → exit 0"
+reason=$(jq -r .reason "$tmp/out" 2>/dev/null)
+assert_contains "2 delegation(s)" "$reason" "T8: both unverdicted rows of this session are listed"
+assert_contains "--id bbbb000000000001" "$reason" "T8: the cwd project's row is listed"
+assert_contains "--id bbbb000000000002" "$reason" "T8: this session's row under another project is listed"
+case "$reason" in
+  *"bbbb000000000003"*) echo "  FAIL  T8: a verdicted other-project row is not re-listed"; fail=$((fail+1));;
+  *) echo "  PASS  T8: a verdicted other-project row is not re-listed"; pass=$((pass+1));;
+esac
+case "$reason" in
+  *"bbbb000000000004"*) echo "  FAIL  T8: another session's other-project row is not listed"; fail=$((fail+1));;
+  *) echo "  PASS  T8: another session's other-project row is not listed"; pass=$((pass+1));;
+esac
 rm -rf "$tmp"
 
 # --- T9. Failed delegation (exit_status != 0) is not surfaced --------------
@@ -221,15 +243,14 @@ assert_empty "$out" "T13: no session_id → no inject (guardless re-inject would
 [[ -d "$tmp/.verdict-stop-markers" ]] && { fail=$((fail+1)); echo "  FAIL  T13: no marker dir should be created without a session_id"; } || { pass=$((pass+1)); echo "  PASS  T13: no marker written without a session_id"; }
 rm -rf "$tmp"
 
-# --- T14. A cwd outside any git repository derives no project (#476): a row
-# under the folder basename is not this cwd's, a projectless row is, but
-# only one this session wrote (#479); a projectless row with no session is
-# left alone, and the reason must not print an empty project name ----------
+# --- T14. From a cwd outside any git repository a projectless row is listed
+# when this session wrote it (#479); a row with no session is left alone
+# whatever its project, and the reason must not print an empty project name --
 tmp=$(mktemp -d); proj=$(basename "$tmp")
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"%s"}\n' "$NOW" "$proj" > "$tmp/m.jsonl"
 run_hook "s14" "$tmp" "$tmp/m.jsonl" "$tmp/out"; ec=$?
 assert_eq 0 "$ec" "T14: non-repo cwd → exit 0"
-assert_empty "$(cat "$tmp/out")" "T14: non-repo cwd does not derive the folder basename as the project"
+assert_empty "$(cat "$tmp/out")" "T14: a row under the folder basename with no session is not listed"
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"session":"s14b"}\n' "$NOW" > "$tmp/m.jsonl"
 run_hook "s14b" "$tmp" "$tmp/m.jsonl" "$tmp/out"
 assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T14: non-repo cwd surfaces this session's projectless delegation"
@@ -289,11 +310,12 @@ run_hook "s17b" "$tmp" "$tmp/m.jsonl" "$tmp/out"
 assert_empty "$(cat "$tmp/out")" "T17: a legacy ref_ts-only verdict still tracks every row of its second"
 rm -rf "$tmp"
 
-# --- T15. DELEGATE_PROJECT wins, as it does for delegate.sh and feedback -----
+# --- T15. The project does not scope the scan (#551): DELEGATE_PROJECT naming
+# a different project does not hide this session's row ----------------------
 tmp=$(mk_tmp_repo)
 printf '{"ts":"%s","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","exit_status":0,"project":"explicit-name","session":"s15"}\n' "$NOW" > "$tmp/m.jsonl"
-run_hook "s15" "$tmp" "$tmp/m.jsonl" "$tmp/out" DELEGATE_PROJECT=explicit-name
-assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T15: DELEGATE_PROJECT scopes the scan"
+run_hook "s15" "$tmp" "$tmp/m.jsonl" "$tmp/out" DELEGATE_PROJECT=another-name
+assert_eq "block" "$(jq -r .decision "$tmp/out" 2>/dev/null)" "T15: DELEGATE_PROJECT does not scope the scan"
 rm -rf "$tmp"
 
 echo
