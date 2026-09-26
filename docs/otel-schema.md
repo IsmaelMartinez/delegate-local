@@ -111,13 +111,13 @@ These carry arbitrary user text and only travel when the operator explicitly opt
 
 | Attribute | Type | Source | Reference | Example |
 |-----------|------|--------|-----------|---------|
-| `delegate.prompt` | string | `recipe_template` + `prompt` arg (`prompt_chars` excludes any `{{stdin}}` context folded in) | private, gated | `Draft a git commit message from the staged diff …` |
+| `delegate.prompt` | string | `recipe_template` + `prompt` arg (`prompt_chars` excludes any `{{stdin}}` context folded in, from 2026-09-26, #550) | private, gated | `Draft a git commit message from the staged diff …` |
 | `delegate.context` | string | piped stdin (matches `context_chars`) | private, gated | `diff --git a/scripts/delegate.sh …` |
 | `delegate.output` | string | model response (matches `output_chars`) | private, gated | `feat: privacy redaction default for OTel exporter` |
 
 Notes on each:
 
-- `delegate.prompt` is the prompt the model sees — the recipe template (when `--recipe` is used) concatenated with the trailing prompt argument. The char count for this field is `delegate.prompt_chars`, which since #550 leaves out the context a `{{stdin}}` template folds in, because `delegate.context_chars` already counts it and counting it in both inflated `estimated_tokens_avoided`.
+- `delegate.prompt` is the prompt the model sees — the recipe template (when `--recipe` is used) concatenated with the trailing prompt argument. The char count for this field is `delegate.prompt_chars`, which on rows written from 2026-09-26 (#550, released in the next version after v0.40.1) leaves out the context a `{{stdin}}` template folds in, because `delegate.context_chars` already counts it and counting it in both inflated `estimated_tokens_avoided`.
 - `delegate.context` is the piped stdin content. The char count is `delegate.context_chars`. When `{{stdin}}` is used inside a recipe template, the content is duplicated into `delegate.prompt`'s post-substitution form; the raw stdin is still emitted here for completeness.
 - `delegate.output` is the model's response text (the bytes that landed on stdout for the caller). The char count is `delegate.output_chars`.
 - Empty-content omission: when `DELEGATE_OTEL_INCLUDE_CONTENT=1` is set but any individual content field has an empty value (no piped stdin, failure span before the model responded, etc.), that specific attribute is omitted from the payload rather than emitted as `stringValue: ""`. This matches the `delegate.recipe` convention so consumers can rely on attribute presence as a meaningful signal that content exists. The char-count metadata still shows `0` so size telemetry remains continuous across the empty/non-empty boundary.
