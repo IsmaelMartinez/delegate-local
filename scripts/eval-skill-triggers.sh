@@ -8,21 +8,17 @@
 #                     pick-model.sh code, since trigger eval is closed-form
 #                     binary classification. The thresholds in the eval set
 #                     are the calibration target, not the chosen model.
-#   --github-models [model]:
-#                     one GitHub Models call (free up to the rate-limit tier);
-#                     defaults to openai/gpt-4o-mini. Auth via GITHUB_TOKEN,
-#                     auto-provisioned in Actions under `permissions: models:
-#                     read`; locally `GITHUB_TOKEN=$(gh auth token)`.
 #
-# One batched call per run, not one per query, so a day of CI iteration stays
-# under the GitHub Models 150 RPD free tier (#62). All modes use the SKILL.md
-# frontmatter description as the trigger surface and the same thresholds.
+# One batched call per run, not one per query (#62). Both modes use the
+# SKILL.md frontmatter description as the trigger surface and the same
+# thresholds. A non-200 answer, or a 200 whose body is not the expected JSON,
+# prints the status and the start of the body and exits 2: no score is never
+# reported as a pass.
 #
-# Usage:  eval-skill-triggers.sh [--api | --local [model] | --github-models [model]] [--eval-set path] [--skill path]
+# Usage:  eval-skill-triggers.sh [--api | --local [model]] [--eval-set path] [--skill path]
 # Env:    ANTHROPIC_API_KEY (required for --api)
 #         DELEGATE_BASE_URL (optional for --local; pick-model.sh owns the default)
-#         GITHUB_TOKEN      (required for --github-models)
-# Exit:   0 pass, 1 threshold breach / shape error, 2 usage / config / parse error.
+# Exit:   0 pass, 1 threshold breach / shape error, 2 usage / config / parse / transport error.
 
 set -uo pipefail
 
@@ -30,7 +26,6 @@ mode="shape"
 backend=""
 local_model=""
 local_base=""
-github_model=""
 eval_set="evals/eval-set.json"
 skill="SKILL.md"
 
@@ -42,13 +37,9 @@ while [[ $# -gt 0 ]]; do
       # Optional model name; a following --flag is not one.
       if [[ $# -gt 0 && "$1" != --* ]]; then local_model="$1"; shift; fi
       ;;
-    --github-models)
-      mode="api"; backend="github_models"; shift
-      if [[ $# -gt 0 && "$1" != --* ]]; then github_model="$1"; shift; fi
-      ;;
     --eval-set) eval_set="$2"; shift 2 ;;
     --skill) skill="$2"; shift 2 ;;
-    *) echo "usage: eval-skill-triggers.sh [--api | --local [model] | --github-models [model]] [--eval-set path] [--skill path]" >&2; exit 2 ;;
+    *) echo "usage: eval-skill-triggers.sh [--api | --local [model]] [--eval-set path] [--skill path]" >&2; exit 2 ;;
   esac
 done
 
@@ -73,11 +64,11 @@ echo "shape: total=$total positive=$pos negative=$neg diagnostic=$diagnostic mis
 (( missing_fields == 0 )) || { echo "FAIL: $missing_fields queries missing fields" >&2; exit 1; }
 
 if [[ "$mode" == "shape" ]]; then
-  echo "OK shape mode (run with --api, --local, or --github-models for trigger-accuracy check)"
+  echo "OK shape mode (run with --api or --local for trigger-accuracy check)"
   exit 0
 fi
 
-# Scoring mode (Anthropic, a local provider, or GitHub Models).
+# Scoring mode (Anthropic or a local provider).
 command -v curl >/dev/null || { echo "curl not on PATH" >&2; exit 2; }
 
 # The frontmatter description is the trigger surface; indented continuation
@@ -119,10 +110,6 @@ case "$backend" in
       scoring_model="${_resolved#*	}"
     fi
     ;;
-  github_models)
-    [[ -n "${GITHUB_TOKEN:-}" ]] || { echo "GITHUB_TOKEN not set (run with GITHUB_TOKEN=\$(gh auth token) or in a workflow with permissions: models: read)" >&2; exit 2; }
-    scoring_model="${github_model:-openai/gpt-4o-mini}"
-    ;;
 esac
 
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -132,7 +119,7 @@ results_file="$results_dir/$run_id-$backend.jsonl"
 : > "$results_file"
 
 # Output token budget: ~30 tokens per verdict (id + JSON syntax) is generous.
-# Cap at 4000 to stay inside the GitHub Models free-tier 4000-out limit.
+# Capped at 4000.
 out_budget=$(( total * 30 ))
 (( out_budget > 4000 )) && out_budget=4000
 
@@ -148,28 +135,52 @@ $description"
 # Build the user message: a JSON array of {id, query} objects from the eval set.
 user_payload=$(jq -c '[.queries[] | {id, query}]' "$eval_set")
 
-# Run the single batched scoring call. Returns the raw JSON verdicts text on
-# stdout. Exits non-zero on transport error.
+# POST a JSON payload and print the response body on stdout. Anything short of
+# an HTTP 200 carrying a JSON object is a failure that names its cause on
+# stderr: curl's own error, or the status plus the first 300 chars of the body.
+# Discarding those is how a retired endpoint answering 200 text/plain `OK`
+# went unnoticed for eight weeks (#548).
+post_json() {
+  local url="$1" payload="$2" max_time="$3"; shift 3
+  local body_file http_code body
+  body_file=$(mktemp)
+  if ! http_code=$(curl -sS --max-time "$max_time" -o "$body_file" -w '%{http_code}' "$url" \
+      -H "content-type: application/json" "$@" -d "$payload"); then
+    rm -f "$body_file"
+    echo "$backend transport error: curl failed before an HTTP status" >&2
+    return 1
+  fi
+  body=$(cat "$body_file"); rm -f "$body_file"
+  if [[ "$http_code" != "200" ]]; then
+    printf '%s HTTP %s: %s\n' "$backend" "$http_code" "${body:0:300}" >&2
+    return 1
+  fi
+  if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$body"; then
+    printf '%s HTTP 200 but the body is not the expected JSON: %s\n' "$backend" "${body:0:300}" >&2
+    return 1
+  fi
+  printf '%s' "$body"
+}
+
+# Run the single batched scoring call. Returns the model's answer text on
+# stdout; returns non-zero, with the cause on stderr, when there is none.
 score_batch() {
+  local payload resp text
   case "$backend" in
     anthropic)
-      local payload resp
       payload=$(jq -nc --arg model "$scoring_model" --arg sys "$system_prompt" --arg user "$user_payload" --argjson max "$out_budget" '{
         model: $model, max_tokens: $max,
         system: $sys,
         messages: [{role:"user", content:$user}]
       }')
-      resp=$(curl -fsS --max-time 60 https://api.anthropic.com/v1/messages \
+      resp=$(post_json https://api.anthropic.com/v1/messages "$payload" 60 \
         -H "x-api-key: $ANTHROPIC_API_KEY" \
-        -H "anthropic-version: 2023-06-01" \
-        -H "content-type: application/json" \
-        -d "$payload" 2>/dev/null) || return 1
-      jq -r '.content[0].text // empty' <<<"$resp"
+        -H "anthropic-version: 2023-06-01") || return 1
+      text=$(jq -r '.content[0].text // empty' <<<"$resp")
       ;;
     local)
-      local payload resp
-      # Same chat-completions envelope as the github_models arm, so the local
-      # gate is not wired to one daemon's native API.
+      # One chat-completions envelope, so the local gate is not wired to one
+      # daemon's native API.
       payload=$(jq -nc --arg model "$scoring_model" --arg sys "$system_prompt" --arg user "$user_payload" --argjson max "$out_budget" '{
         model: $model,
         messages: [{role:"system", content:$sys}, {role:"user", content:$user}],
@@ -178,58 +189,20 @@ score_batch() {
         response_format: {type: "json_object"},
         stream: false
       }')
-      resp=$(curl -fsS --max-time 120 "$local_base/chat/completions" \
-        -H "content-type: application/json" \
-        -d "$payload" 2>/dev/null) || return 1
-      jq -r '.choices[0].message.content // empty' <<<"$resp"
-      ;;
-    github_models)
-      local host="${GITHUB_MODELS_HOST:-https://models.github.ai}"
-      local payload resp http_code retry_after attempt=0
-      payload=$(jq -nc --arg model "$scoring_model" --arg sys "$system_prompt" --arg user "$user_payload" --argjson max "$out_budget" '{
-        model: $model,
-        messages: [{role:"system", content:$sys}, {role:"user", content:$user}],
-        temperature: 0,
-        max_tokens: $max,
-        response_format: {type: "json_object"}
-      }')
-      # The retry loop recovers from a transient 429; --max-time bounds each
-      # attempt so a long Retry-After never silently stalls CI (#62).
-      while (( attempt < 3 )); do
-        local headers_file body_file
-        headers_file=$(mktemp); body_file=$(mktemp)
-        http_code=$(curl -sS --max-time 60 -o "$body_file" -D "$headers_file" -w '%{http_code}' \
-          "$host/inference/chat/completions" \
-          -H "Authorization: Bearer $GITHUB_TOKEN" \
-          -H "Content-Type: application/json" \
-          -d "$payload" 2>/dev/null) || { rm -f "$headers_file" "$body_file"; return 1; }
-        if [[ "$http_code" == "429" ]]; then
-          retry_after=$(awk 'tolower($1) == "retry-after:" { gsub(/[^0-9]/, "", $2); print $2; exit }' "$headers_file")
-          rm -f "$headers_file" "$body_file"
-          [[ -z "$retry_after" || "$retry_after" -eq 0 ]] && retry_after=20
-          # Capped so a multi-hour Retry-After (daily bucket reset) cannot stall CI.
-          (( retry_after > 60 )) && retry_after=60
-          sleep "$retry_after"
-          attempt=$((attempt + 1))
-          continue
-        fi
-        if [[ "$http_code" != "200" ]]; then
-          rm -f "$headers_file" "$body_file"
-          return 1
-        fi
-        resp=$(cat "$body_file")
-        rm -f "$headers_file" "$body_file"
-        jq -r '.choices[0].message.content // empty' <<<"$resp"
-        return 0
-      done
-      return 1
+      resp=$(post_json "$local_base/chat/completions" "$payload" 120) || return 1
+      text=$(jq -r '.choices[0].message.content // empty' <<<"$resp")
       ;;
   esac
+  if [[ -z "$text" ]]; then
+    printf '%s HTTP 200 but the body is not the expected JSON: %s\n' "$backend" "${resp:0:300}" >&2
+    return 1
+  fi
+  printf '%s\n' "$text"
 }
 
 echo "scoring: backend=$backend model=$scoring_model"
 
-raw=$(score_batch) || { echo "$backend transport error" >&2; exit 2; }
+raw=$(score_batch) || { echo "FAIL: $backend scoring call produced no score" >&2; exit 2; }
 
 # Strip any code fences the model might emit despite the no-fences instruction.
 raw=${raw//\`\`\`json/}
