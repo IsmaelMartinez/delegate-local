@@ -179,7 +179,7 @@ it, and the migration then reports success having copied nothing.
 
 The maintainer's own machine now points both profiles' skill symlinks at a
 separate clone of `origin/main` rather than the dev checkout, updated after
-each merge with `git pull --ff-only`; `CLAUDE.md` describes the arrangement.
+each merge with `git -C ~/.local/share/delegate-local-live pull --ff-only`; `CLAUDE.md` describes the arrangement.
 
 
 ## Forking / adopting this skill
