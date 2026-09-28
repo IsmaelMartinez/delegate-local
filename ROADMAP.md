@@ -179,7 +179,9 @@ The working method is the same for every batch:
 
 - The session coordinates. Each issue goes to its own worktree agent on
   branch `w<wave>/<issue>-<slug>`, with a failing test first, and at most five
-  PRs are in flight.
+  PRs are in flight. Issues that edit the same files run one after another
+  rather than in parallel; the paragraphs they share in CLAUDE.md are the
+  usual conflict.
 - Branches are never stacked. Commit and PR text is delegated through the
   live skill's recipes, and verdicts are recorded with `--id` and `--final`.
 - The coordinator runs the Copilot review loop on each PR, replies to every
@@ -187,8 +189,9 @@ The working method is the same for every batch:
   never merges on its own.
 - After merges it pulls the live clone
   (`git -C ~/.local/share/delegate-local-live pull --ff-only`), smoke-tests the
-  hooks, and ticks the epic. Release PRs merge with `--admin` until the App
-  exists.
+  hooks, and ticks the epic. Release PRs follow CONTRIBUTING.md "Releasing":
+  on the `GITHUB_TOKEN` fallback the maintainer approves the held runs, and
+  the App removes that step.
 
 ## Where we're going (next, priority-ordered)
 
