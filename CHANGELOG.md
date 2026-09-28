@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.40.2](https://github.com/IsmaelMartinez/delegate-local/compare/v0.40.1...v0.40.2) (2026-09-26)
+
+
+### Bug Fixes
+
+* correct metrics-summary p95, call counts and capture measure ([#583](https://github.com/IsmaelMartinez/delegate-local/issues/583)) ([0292c31](https://github.com/IsmaelMartinez/delegate-local/commit/0292c3184d33fb3b3df1afc67e0bd8590fae2acc))
+* fit SKILL.md description in the 1,536-char listing cap and catch tag chars ([#581](https://github.com/IsmaelMartinez/delegate-local/issues/581)) ([728a338](https://github.com/IsmaelMartinez/delegate-local/commit/728a33853fe7b462c0e878c515d331cf77b23880)), closes [#557](https://github.com/IsmaelMartinez/delegate-local/issues/557)
+* keep the first draft when the retry fails; honest token and tier accounting ([#585](https://github.com/IsmaelMartinez/delegate-local/issues/585)) ([02ffe95](https://github.com/IsmaelMartinez/delegate-local/commit/02ffe95c17169dd9ba5df465a28b429604749e54))
+* Loki sync survives bad rows, doctor checks cardinality, backfill maps scaffold ([#584](https://github.com/IsmaelMartinez/delegate-local/issues/584)) ([1c7b48a](https://github.com/IsmaelMartinez/delegate-local/commit/1c7b48ad330630ddfdedaeef1f78fdcfb415726c))
+* sweep the session's delegations across projects and pre-filter the Stop hook scan ([#582](https://github.com/IsmaelMartinez/delegate-local/issues/582)) ([9236c01](https://github.com/IsmaelMartinez/delegate-local/commit/9236c01c3840f1fe77d9d8db4f0d0939cda865d4))
+
 ## [0.40.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.40.0...v0.40.1) (2026-09-26)
 
 
