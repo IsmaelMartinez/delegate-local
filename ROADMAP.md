@@ -150,11 +150,53 @@ The milestone is done when a full cycle has happened at least once: an edit
 accepted by replay, merged, and read online at thirty rows, whichever way that
 read went.
 
+## Active work: the Lean and correct plan (epic #574)
+
+This is the resume point. When a session is asked to "continue with what we
+were doing", it starts here. The plan is epic #574 in the "Lean and correct"
+milestone: a review-driven simplify-and-fix plan in five waves, whose issue
+body holds the batch checklist and the open decisions. The epic, not this
+file, is the source of truth for status, so read it first with
+`gh issue view 574`.
+
+As of 2026-09-28, wave 1 and batch 2a are merged and released (v0.40.1,
+v0.40.2). The next work, in order, is batch 2c from the 2026-09-27 recipe deep
+dive and then batch 2b. #587 (the boundary hook stores the wrong shipped text)
+comes first because it blocks #553, and #588 (ritual-delegation tags) comes
+next. #553 follows, then #558. #554, #555, #589 and #590 can run beside them.
+Waves 3 to 5 follow as the epic lists them. No recipe wording edits until #587
+and #588 have landed: five replayed candidates earned no ACCEPT, and the
+evidence is on #573 and the batch 2c issues.
+
+Two decisions are open on the epic: D8, whether the hook keeps forcing a
+delegation before posting text that is already written, and D9, narrowing
+recipe scopes once #588 gives honest rates. The maintainer still has two
+manual steps: create the release GitHub App (the `RELEASE_APP_ID` variable and
+the `RELEASE_APP_PRIVATE_KEY` secret, #549) and add the `ANTHROPIC_API_KEY`
+secret for the CI trigger eval.
+
+The working method is the same for every batch:
+
+- The session coordinates. Each issue goes to its own worktree agent on
+  branch `w<wave>/<issue>-<slug>`, with a failing test first, and at most five
+  PRs are in flight. Issues that edit the same files run one after another
+  rather than in parallel; the paragraphs they share in CLAUDE.md are the
+  usual conflict.
+- Branches are never stacked. Commit and PR text is delegated through the
+  live skill's recipes, and verdicts are recorded with `--id` and `--final`.
+- The coordinator runs the Copilot review loop on each PR, replies to every
+  comment, resolves the threads, and asks the maintainer to merge each PR. It
+  never merges on its own.
+- After merges it pulls the live clone
+  (`git -C ~/.local/share/delegate-local-live pull --ff-only`), smoke-tests the
+  hooks, and ticks the epic. Release PRs follow CONTRIBUTING.md "Releasing":
+  on the `GITHUB_TOKEN` fallback the maintainer approves the held runs, and
+  the App removes that step.
+
 ## Where we're going (next, priority-ordered)
 
-1. Decide on a deeper recipe prune. The reset kept every recipe with real usage
-   or a SKILL.md trigger; a further cut to the ~10-recipe high-usage head is
-   available if the maintainer wants the library leaner still.
+1. Finish the Lean and correct plan above (epic #574). It absorbs the older
+   items here: the deeper recipe prune is #568.
 2. Re-verify the install on a genuinely clean machine (not the maintainer's live clone) and
    keep the install path covered as the headline trust surface.
 3. Sweep the few in-code comments in `delegate.sh` that still reference the
