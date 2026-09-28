@@ -131,7 +131,7 @@ The validation pipeline is the gate every PR has to clear. Three scripts, `shell
 
 When reasoning about whether work belongs in this skill, the discriminator is the local-brain insight: local models are strong summarisers and weak agents. If a task needs multi-step reasoning, repo-wide context, or tool-calling, it does not belong here even if the surface looks textual. The "out of scope" section of `ROADMAP.md` enumerates the boundaries; honour them when adding capabilities.
 
-`ROADMAP.md` is the authoritative project plan: what the skill is, where it stands after the 2026-06-19 lean-core reset, and the priority-ordered next steps. Consult it before non-trivial work and honour its "out of scope" boundary.
+`ROADMAP.md` is the authoritative project plan: what the skill is, where it stands after the 2026-06-19 lean-core reset, and the priority-ordered next steps. Consult it before non-trivial work and honour its "out of scope" boundary. When asked to continue earlier work, start from its "Active work" section, which names the tracking epic, the next issues in order and the working method.
 
 Not everything absent from `main` was never built. Commit `22395b2` ("chore: archive research/observability machinery out of main") deleted 406 files, and two of the things it took were working tooling that had to be recovered later: the verdict scripts, restored in PR #416, and `scripts/apply-and-test.sh` with its 44-assertion suite, restored in PR #419. Before writing a new helper, check `git show --numstat --format="" 22395b2 | grep -F '<name>'`.
 
