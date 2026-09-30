@@ -359,10 +359,14 @@ _posted_body_scan() {
 # SUCCEEDED, not that the text is non-empty: `--body ""` records body_chars:0
 # (under any floor), where no body flag, an unreadable file or unresolved
 # shell records nothing and is enforced.
-body_text="" body_chars="" body_measurable=false body_read=false
+# `body_file` is the absolute path of a file-backed body, set whether or not
+# the file exists yet: the command itself may write it, so its text is only
+# the shipped text once the call has run (#587), and the confirm hook reads
+# it then. Here it is read for the length checks only.
+body_text="" body_chars="" body_measurable=false body_read=false body_file=""
 read_posted_body() { # raw-segment
   local out first kind flag path
-  body_text="" body_chars="" body_measurable=false body_read=true
+  body_text="" body_chars="" body_measurable=false body_read=true body_file=""
   # The trailing X survives command-substitution newline stripping.
   out=$(_posted_body_scan "$1"; printf X); out=${out%X}
   first=${out%%$'\n'*}
@@ -371,6 +375,10 @@ read_posted_body() { # raw-segment
     path=$(resolve_env_prefix "$flag")
     # A leading `cd <path> &&` moves relative paths again.
     [[ -n "$path" && "$path" != /* && -n "$cd_path" ]] && path="$cd_path/$path"
+    # `-` is stdin, and an unresolved `$`/backtick names no file.
+    if [[ -n "$path" && "$path" != "-" && "$path" != *'$'* && "$path" != *'`'* ]]; then
+      if [[ "$path" == /* ]]; then body_file="$path"; else body_file="$PWD/$path"; fi
+    fi
     [[ -n "$path" && -f "$path" && -r "$path" ]] || return 0
     body_text=$(head -c 65536 < "$path" 2>/dev/null; printf X); body_text=${body_text%X}
     body_measurable=true
@@ -580,7 +588,7 @@ now_epoch=$(date -u +%s)
 # corpus, and the confirmation is what spends a credit for good.
 pending_dir="$(dirname "$metrics_file")/.boundary-pending"
 reuse_window=300
-reused=false pending="" pending_epoch="" pending_project="" pending_draft="" pending_captured=false
+reused=false pending="" pending_epoch="" pending_project="" pending_draft="" pending_captured=false pending_drafts=""
 
 # --- is this enough text to be drafting? (#483) ----------------------------
 # `body_chars` is a count, never the text, recorded only when the body is
@@ -672,7 +680,7 @@ if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
 fi
 
 delegated=false
-credit_draft=""
+credit_draft="" unspent_drafts=""
 denied_streak=0 streak_attempted=no
 if [[ -f "$metrics_file" ]]; then
   # Only the recent tail can fall inside the window. 2000 lines, not 500:
@@ -749,13 +757,16 @@ if [[ -f "$metrics_file" ]]; then
        | select(.r | (.recipe // "") as $x | $recipes | index($x) != null)
        | ((.r.ts | fromdateiso8601?) // 0) as $e
        | select($e > $sk.since or ($e == $sk.since and .i > $sk.since_idx)) ] | length > 0) as $attempted
-    # Credit count, the draft this post spends, the streak, and whether the
-    # session delegated since it began. The draft is oldest-unspent-first,
-    # because that is the order a sweep posts in.
-    | "\($d | length)\u001f\($d[0].draft_file // "")\u001f\($sk.n)\u001f\(if $sk.n > 0 and $attempted then "yes" else "no" end)"' 2>/dev/null) || recent_out=""
+    # Credit count, the unspent drafts oldest first (the ones this post can
+    # be the shipped form of), the streak, and whether the session delegated
+    # since it began. Credits are spent oldest first, but the post is filed
+    # under the draft its text matches (#587): a draft rejected and
+    # regenerated is never posted, and oldest-first then filed every later
+    # post of the session one delegation early.
+    | "\($d | length)\u001f\([$d[] | .draft_file // empty | strings] | join(","))\u001f\($sk.n)\u001f\(if $sk.n > 0 and $attempted then "yes" else "no" end)"' 2>/dev/null) || recent_out=""
   # Unit separator, not tab: tab is IFS whitespace, so an empty middle field
-  # would collapse and shift the streak into credit_draft.
-  IFS=$'\x1f' read -r recent credit_draft denied_streak streak_attempted <<<"$recent_out"
+  # would collapse and shift the streak into the draft list.
+  IFS=$'\x1f' read -r recent unspent_drafts denied_streak streak_attempted <<<"$recent_out"
   [[ "${recent:-0}" =~ ^-?[0-9]+$ ]] || recent=0
   [[ "${denied_streak:-0}" =~ ^[0-9]+$ ]] || denied_streak=0
   [[ "${streak_attempted:-no}" == "yes" ]] || streak_attempted=no
@@ -783,21 +794,37 @@ if [[ -f "$metrics_file" ]]; then
   [[ -n "$session_id" ]] && pending="$pending_dir/$session_id.$boundary.${pending_key:--}"
   if [[ -n "$pending" && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" \
         && -f "$pending_dir/$session_id.seen" && -f "$pending" ]]; then
-    IFS=$'\x1f' read -r pending_epoch pending_project pending_draft pending_captured < <(jq -r '[(.epoch // 0 | tostring), (.project // ""), (.draft // ""), (.captured // false | tostring)] | join("\u001f")' "$pending" 2>/dev/null) || pending_epoch=""
+    IFS=$'\x1f' read -r pending_epoch pending_project pending_draft pending_captured pending_drafts < <(jq -r '[(.epoch // 0 | tostring), (.project // ""), (.draft // ""), (.captured // false | tostring), ((.drafts // []) | map(strings) | join(","))] | join("\u001f")' "$pending" 2>/dev/null) || pending_epoch=""
     if [[ "${pending_epoch:-}" =~ ^[0-9]+$ && "${pending_project:-}" == "$project" ]] \
        && (( now_epoch - pending_epoch <= reuse_window )); then
-      reused=true; credit_draft="${pending_draft:-}"
+      # The retry is the post the marker was for, so it chooses among the
+      # drafts that post could have been, and keeps the one it was filed under.
+      reused=true; credit_draft="${pending_draft:-}"; unspent_drafts="${pending_drafts:-$credit_draft}"
     fi
   fi
-  # `credit_draft` comes from the JSONL file (or the marker written from it)
-  # and becomes part of a path this hook WRITES to, so it is untrusted: a bare
-  # *.draft.txt filename only.
-  case "$credit_draft" in
-    *.draft.txt) [[ "$credit_draft" == */* || "$credit_draft" == .* ]] && credit_draft="" ;;
-    *) credit_draft="" ;;
-  esac
   [[ "$reused" == "true" || "${recent:-0}" -gt 0 ]] && delegated=true
 fi
+
+# A draft name comes from the JSONL file (or the marker written from it) and
+# becomes part of a path the hooks WRITE to, so it is untrusted: a bare
+# *.draft.txt filename only.
+safe_draft() { # name -> name, or nothing
+  case "$1" in
+    */*|.*) ;;
+    *.draft.txt) printf '%s' "$1" ;;
+  esac
+}
+[[ -n "$credit_draft" ]] && credit_draft=$(safe_draft "$credit_draft")
+drafts_dir="$(dirname "$metrics_file")/drafts"
+# The drafts this post can still be filed under: safe names whose stem holds
+# no final yet, since a final is never overwritten (a verdict's --final or an
+# earlier post already paired it). Oldest first, as the lookup emits them.
+candidates=()
+IFS=',' read -r -a _cand_raw <<<"${unspent_drafts:-}"
+for _c in ${_cand_raw[@]+"${_cand_raw[@]}"}; do
+  _c=$(safe_draft "$_c")
+  [[ -n "$_c" && ! -e "$drafts_dir/${_c%.draft.txt}.final.txt" ]] && candidates+=("$_c")
+done
 
 # --- record the opportunity (the trigger-rate sensor) ---------------------
 # One row per boundary; no command or message text. `project` and `session`
@@ -844,9 +871,17 @@ write_pending() {
   [[ "$reused" == "true" ]] && epoch="$pending_epoch"
   mkdir -p "$pending_dir" 2>/dev/null || return 0
   chmod 700 "$pending_dir" 2>/dev/null || true
+  # `drafts` are the ones this post may be filed under and `body_file` the
+  # file the confirm hook reads the shipped text from (#587); both are
+  # carried to a retry so it chooses among the same drafts.
+  local drafts_csv
+  drafts_csv=$(IFS=,; printf '%s' "${candidates[*]-}")
   jq -nc --arg id "$tool_use_id" --argjson epoch "$epoch" --arg project "$project" \
      --arg draft "$credit_draft" --argjson captured "$final_captured" \
-    '{id:$id, epoch:$epoch, project:$project, draft:$draft, captured:$captured}' > "$pending" 2>/dev/null \
+     --arg drafts "$drafts_csv" --arg body_file "$body_file" \
+    '{id:$id, epoch:$epoch, project:$project, draft:$draft, captured:$captured,
+      drafts:($drafts | split(",") | map(select(. != "")))}
+     + (if $body_file != "" then {body_file:$body_file} else {} end)' > "$pending" 2>/dev/null \
     || rm -f "$pending" 2>/dev/null
   # Opportunistic prune; -mtime/-delete work on BSD and GNU find. The .seen
   # files are on a week's retention, not a day's: a session older than a
@@ -865,19 +900,33 @@ if [[ "$delegated" == "true" ]]; then
   # --- store the posted body as the shipped half of the pair (ADR 0029) -----
   # A reply posted inline has no file for `delegate-feedback.sh --final` to
   # name; a credited post IS its delegation's shipped form, stored under the
-  # draft's own stem. Never overwritten: the `set -C` on the write is the
-  # guarantee, the `-e` check only skips the work. The capture is PRE-post,
-  # so a post that then fails leaves a final for text that never shipped.
-  # One exception (#497): on a reused credit the marker proves the earlier
-  # attempt never ran, so a final THIS HOOK wrote for it (`captured` on the
-  # marker; a verdict's explicit --final is never marked) is replaced by what
-  # the retry sends, when that is measurable. The last measurable attempt is
-  # the text a confirmation then stands behind.
+  # stem of the unspent draft its text overlaps most (#587), the oldest on a
+  # tie. Never overwritten: the `set -C` on the write is the guarantee, the
+  # `-e` check only skips the work. An inline body is captured here, PRE-post,
+  # so a post that then fails leaves a final for text that never shipped. A
+  # body FILE is not: one call that writes the file and posts it would store
+  # what the file held before, the previous post's text, so the marker names
+  # the file and the drafts and the confirm hook captures it once the call
+  # has succeeded. One exception (#497): on a reused credit the marker proves
+  # the earlier attempt never ran, so a final THIS HOOK wrote for it
+  # (`captured` on the marker; a verdict's explicit --final is never marked)
+  # is replaced by what the retry sends, when that is measurable. The last
+  # measurable attempt is the text a confirmation then stands behind.
   final_captured=false
   [[ "$reused" == "true" && "$pending_captured" == "true" ]] && final_captured=true
-  if [[ "$delegated" == "true" && -n "${credit_draft:-}" \
+  if [[ -z "$body_file" && -z "$credit_draft" && -n "$body_text" ]] && (( ${#candidates[@]} > 0 )); then
+    if (( ${#candidates[@]} == 1 )); then
+      credit_draft="${candidates[0]}"
+    elif [[ -n "$script_dir" && -f "$script_dir/lib/pair-score.sh" ]]; then
+      # shellcheck source=lib/pair-score.sh
+      . "$script_dir/lib/pair-score.sh"
+      credit_draft=$(best_draft <(printf '%s' "$body_text") "$drafts_dir" "${candidates[@]}")
+    else
+      credit_draft="${candidates[0]}"
+    fi
+  fi
+  if [[ "$delegated" == "true" && -z "$body_file" && -n "${credit_draft:-}" \
         && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
-    drafts_dir="$(dirname "$metrics_file")/drafts"
     final_path="$drafts_dir/${credit_draft%.draft.txt}.final.txt"
     if [[ -n "$body_text" ]] && [[ ! -e "$final_path" || "$final_captured" == "true" ]]; then
       if mkdir -p "$drafts_dir" 2>/dev/null; then

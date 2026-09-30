@@ -1736,6 +1736,48 @@ assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_source")')" \
   "adopt: nothing captured means no final_source"
 rm -rf "$tmp"
 
+# #587: a hook final that shares next to no vocabulary with this delegation's
+# own draft was filed under the wrong stem (a rejected draft that was never
+# posted shifts every later capture one delegation early): not adopted.
+adopt_setup
+printf 'The sandbox flag in the launcher script is the cause of the blank window, not your distribution.\n' \
+  > "$tmp/drafts/20260827T100000Z-aaaa1111.draft.txt"
+printf 'Pruning the lock directory now removes stale pending markers left by crashed sessions.\n' \
+  > "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt"
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id dddddddddddddddd miss "rewrote the whole reply" 2>&1)
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "feedback" "$(printf '%s' "$last" | jq -r '.source')" "unrelated hook final: the verdict is still recorded"
+assert_eq "false" "$(printf '%s' "$last" | jq -r 'has("final_file")')" \
+  "unrelated hook final: a posted final with no overlap with its own draft is not adopted"
+assert_contains "not adopted" "$out" "unrelated hook final: the caller is told why"
+# ...while a rewrite of the same reply still is.
+printf 'The sandbox flag in the launcher is what blanks the window; your distribution is fine.\n' \
+  > "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id dddddddddddddddd miss "rewrote the whole reply" >/dev/null 2>&1
+assert_eq "20260827T100000Z-aaaa1111.final.txt" "$(tail -1 "$tmp/m.jsonl" | jq -r '.final_file // ""')" \
+  "related hook final: a rewrite of the same reply is adopted"
+rm -rf "$tmp"
+
+# #587: an empty --final is refused outright: no verdict, no final file.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+before=$(grep -c '' "$tmp/m.jsonl")
+EC=0
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --final - miss "reason" </dev/null 2>&1) || EC=$?
+assert_eq 2 "$EC" "--final - with empty stdin: refused with exit 2"
+assert_contains "empty" "$out" "--final - with empty stdin: the refusal says the final is empty"
+assert_eq 0 "$(ls "$tmp/drafts" 2>/dev/null | grep -c 'final')" "--final - with empty stdin: no final file is left behind"
+assert_eq "$before" "$(grep -c '' "$tmp/m.jsonl")" "--final - with empty stdin: no verdict row is written"
+: > "$tmp/empty.txt"
+EC=0
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --final "$tmp/empty.txt" miss "reason" >/dev/null 2>&1 || EC=$?
+assert_eq 2 "$EC" "--final <empty file>: refused with exit 2"
+assert_eq 0 "$(ls "$tmp/drafts" 2>/dev/null | grep -c 'final')" "--final <empty file>: no final file is left behind"
+rm -rf "$tmp"
+
 # draft_file is untrusted input that becomes part of a written path; a
 # rejected value falls through to the ts-derived stem.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"

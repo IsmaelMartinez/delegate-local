@@ -230,9 +230,16 @@ fi
 # hand-made seed can be anything), nor a kept case whose draft was cut at
 # the byte cap: the draft is its reference, and a cut reference charges
 # both arms for every anchor in the tail they legitimately carry.
+# Nor one whose final `self-improve.sh --quarantine` listed as suspect
+# (#587): it is not the shipped text of this draft, so it cannot score one.
 usable_tmp="$work_tmp/usable"
+suspect_file="$(dirname "$metrics_file")/suspect-finals.tsv"
 while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel; do
   [[ -f "$draft" && -f "$final" && -f "$inputs" ]] || continue
+  if [[ "$verdict" != kept ]]; then
+    qreason=$(suspect_reason "$suspect_file" "$(basename "$final")")
+    [[ -z "$qreason" ]] || { echo "replay-recipe: $id skipped: its final is quarantined ($qreason)" >&2; continue; }
+  fi
   jq -e . "$inputs" >/dev/null 2>&1 || { echo "replay-recipe: $id skipped: $inputs is not valid JSON" >&2; continue; }
   if [[ "$verdict" == kept ]] && grep -qF '[truncated at ' "$final"; then
     echo "replay-recipe: $id skipped: the kept draft was cut at the byte cap, so it cannot be the reference" >&2; continue

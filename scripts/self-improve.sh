@@ -13,7 +13,15 @@
 #
 # Usage:
 #   self-improve.sh [--file PATH] [--peek] [--min-delegations N] [--days N]
+#   self-improve.sh --quarantine [--peek] [--file PATH]
 #
+#   --quarantine       scan the stored finals and list the suspect ones in
+#                      suspect-finals.tsv beside the metrics file (#587): an
+#                      empty final, one byte-identical to an earlier stem's,
+#                      or one closer to a neighbouring draft (same recipe and
+#                      session) than its own. The bundle and replay-recipe.sh
+#                      skip the listed pairs; nothing is deleted. With --peek
+#                      the list is printed and no sidecar is written.
 #   --peek             report without advancing the watermark
 #   --min-delegations  new delegations needed before there is anything to
 #                      report (default 1)
@@ -32,6 +40,7 @@ set -uo pipefail
 metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 state_file="${DELEGATE_SELF_IMPROVE_STATE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/self-improve.state}"
 peek=0
+quarantine=0
 min_delegations=1
 window_days=7
 
@@ -40,6 +49,7 @@ while (($# > 0)); do
     --file) metrics_file="${2:?--file requires a path}"; shift 2;;
     --file=*) metrics_file="${1#--file=}"; shift;;
     --peek) peek=1; shift;;
+    --quarantine) quarantine=1; shift;;
     --min-delegations) min_delegations="${2:?--min-delegations requires a number}"; shift 2;;
     --min-delegations=*) min_delegations="${1#--min-delegations=}"; shift;;
     --days) window_days="${2:?--days requires a number}"; shift 2;;
@@ -58,8 +68,97 @@ case "$min_delegations" in ''|*[!0-9]*) echo "self-improve: --min-delegations mu
 case "$window_days" in ''|*[!0-9]*) echo "self-improve: --days must be a number" >&2; exit 2;; esac
 
 drafts_dir="$(dirname "$metrics_file")/drafts"
+suspect_file="$(dirname "$metrics_file")/suspect-finals.tsv"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
+
+# The feedback-to-delegation join (`parent_join`, interpolated into every jq
+# program below) and the pair scorers (`salient`, `list_markers`,
+# `sentences`, `word_overlap`) are shared with replay-recipe.sh, so a
+# rejection's DROPPED list and a replay's dropped count are one measurement.
+# shellcheck source=lib/pair-score.sh
+. "$script_dir/lib/pair-score.sh"
+
+# ---------------------------------------------------------------------------
+# --quarantine (#587): the finals that are not the shipped text of their own
+# draft. Three signatures, first match wins: `empty` (no visible character),
+# `duplicate` (byte-identical to a final of an earlier stem: a body file
+# read before the command rewrote it holds the previous post), `neighbour`
+# (its words overlap the draft of the delegation before or after it, same
+# recipe and session, or project where no session was recorded, more than
+# its own draft: a post filed one delegation early). The writer column says
+# who stored it: `verdict` for a numbered final or one a verdict passed with
+# --final, `hook` for one the boundary hook captured. Read-only on the
+# drafts; the sidecar is the only thing written, and not under --peek.
+# ---------------------------------------------------------------------------
+if (( quarantine == 1 )); then
+  q_tmp=$(mktemp -d)
+  trap 'rm -rf "$q_tmp"' EXIT
+  [[ -d "$drafts_dir" ]] || { echo "self-improve: no drafts directory at $drafts_dir" >&2; exit 2; }
+  # draft<TAB>previous<TAB>next, one line per delegation that stored a draft.
+  jq -rs '
+    [ to_entries[] | .value + {idx: .key}
+      | select((.source // "delegate") == "delegate" and ((.draft_file // "") | test("^[^./][^/]*\\.draft\\.txt$"))) ]
+    | group_by([(.recipe // ""), (.session // .project // "")])
+    | map(sort_by(.ts, .idx) | [.[].draft_file])
+    | .[] | . as $g
+    | range(0; length) as $i
+    | [$g[$i], (if $i > 0 then $g[$i - 1] else "" end), ($g[$i + 1] // "")] | join("\t")
+  ' "$metrics_file" 2>/dev/null > "$q_tmp/neighbours"
+  # Bare finals a verdict wrote with --final (never relabelled as posted).
+  jq -r 'select(.source == "feedback" and (.final_file // "") != "" and (.final_source // "") != "posted") | .final_file' \
+    "$metrics_file" 2>/dev/null | sort -u > "$q_tmp/vouched"
+  (cd "$drafts_dir" && ls) 2>/dev/null | grep -E '\.final(\.[0-9]+)?\.txt$' | sort > "$q_tmp/finals"
+  : > "$q_tmp/suspect"
+  # Byte-identical finals: the first stem (stems open with their UTC time)
+  # keeps its final, every later stem's copy is suspect. Empty ones are
+  # flagged on their own and never count as the original.
+  while IFS= read -r f; do
+    if grep -q '[^[:space:]]' "$drafts_dir/$f" 2>/dev/null; then
+      printf '%s %s\n' "$(cksum < "$drafts_dir/$f" | tr -s ' ' '-')" "$f"
+    else
+      printf '%s\tempty\n' "$f" >> "$q_tmp/suspect"
+    fi
+  done < "$q_tmp/finals" > "$q_tmp/sums"
+  awk '{ stem = $2; sub(/\.final(\.[0-9]+)?\.txt$/, "", stem)
+         if (($1) in first) { if (first[$1] != stem) printf "%s\tduplicate\n", $2 }
+         else first[$1] = stem }' "$q_tmp/sums" >> "$q_tmp/suspect"
+  while IFS= read -r f; do
+    cut -f1 "$q_tmp/suspect" | grep -Fxq -- "$f" && continue
+    stem="${f%.txt}"; stem="${stem%.final*}"
+    IFS=$'\t' read -r own prev next < <(awk -F '\t' -v d="$stem.draft.txt" '$1 == d { print; exit }' "$q_tmp/neighbours")
+    [[ -n "${own:-}" && -f "$drafts_dir/$own" ]] || continue
+    args=("$drafts_dir/$own")
+    [[ -n "${prev:-}" ]] && args+=("$drafts_dir/$prev")
+    [[ -n "${next:-}" ]] && args+=("$drafts_dir/$next")
+    (( ${#args[@]} > 1 )) || continue
+    scores=$(word_overlap "$drafts_dir/$f" "${args[@]}" | tr '\n' ' ')
+    # The final's own draft is the first score; `-` is unreadable or empty.
+    # A final sharing a fifth or more of its words with its own draft is
+    # kept whatever a neighbour scores: on the 2026-09-30 corpus every such
+    # case was a regenerated draft of the same text beside it, while the
+    # shifted posts shared 0-12% with the draft they were filed under.
+    if awk -v s="$scores" 'BEGIN { n = split(s, a, " "); if (a[1] == "-" || a[1] + 0 >= 20) exit 1
+         for (i = 2; i <= n; i++) if (a[i] != "-" && a[i] + 0 > a[1] + 0) exit 0; exit 1 }'; then
+      printf '%s\tneighbour\n' "$f" >> "$q_tmp/suspect"
+    fi
+  done < "$q_tmp/finals"
+  sort -o "$q_tmp/suspect" "$q_tmp/suspect"
+  awk -F '\t' 'NR == FNR { v[$1] = 1; next }
+       { w = ($1 ~ /\.final\.[0-9]+\.txt$/ || ($1 in v)) ? "verdict" : "hook"; printf "%s\t%s\t%s\n", $1, $2, w }' \
+    "$q_tmp/vouched" "$q_tmp/suspect" > "$q_tmp/listed"
+  cat "$q_tmp/listed"
+  awk -F '\t' -v total="$(grep -c '' "$q_tmp/finals")" '
+    { n++; r[$2]++; w[$3]++ }
+    END { printf "suspect finals: %d of %d  (empty=%d duplicate=%d neighbour=%d; hook-written=%d verdict-written=%d)\n",
+            n, total, r["empty"], r["duplicate"], r["neighbour"], w["hook"], w["verdict"] }' "$q_tmp/listed"
+  if (( peek == 0 )); then
+    cp "$q_tmp/listed" "$suspect_file.tmp" && mv "$suspect_file.tmp" "$suspect_file" \
+      && echo "written: $suspect_file" \
+      || { echo "self-improve: could not write $suspect_file" >&2; exit 2; }
+  fi
+  exit 0
+fi
 
 # An absent watermark (first run, or a reset corpus) means everything is new.
 prev_ts=""
@@ -90,13 +189,6 @@ echo "Metrics:    $metrics_file"
 echo "Watermark:  ${prev_ts:-(none — first run, reporting the whole corpus)}"
 echo "Newest row: $newest_ts"
 echo "New delegations since watermark: $new_count"
-
-# The feedback-to-delegation join (`parent_join`, interpolated into every jq
-# program below) and the pair scorers (`salient`, `list_markers`,
-# `sentences`) are shared with replay-recipe.sh, so a rejection's DROPPED
-# list and a replay's dropped count are one measurement.
-# shellcheck source=lib/pair-score.sh
-. "$script_dir/lib/pair-score.sh"
 
 # A ref_ts-only verdict on a second shared by several delegations cannot say
 # which it scored; say so rather than report a guess. Captured pairs are
@@ -293,11 +385,18 @@ jq -rs --arg prev "$prev_ts" '
     else
       ipath=""
     fi
-    if [[ -n "$final" && -f "$drafts_dir/$final" ]]; then
+    # A final `--quarantine` listed is not this draft's shipped text (#587),
+    # so a diff against it would teach the loop something false.
+    qreason=""
+    [[ -n "$final" ]] && qreason=$(suspect_reason "$suspect_file" "$final")
+    if [[ -n "$qreason" ]]; then
+      echo "    final:  $drafts_dir/$final (quarantined ($qreason): not this draft's shipped text, not diffed)"
+    elif [[ -n "$final" && -f "$drafts_dir/$final" ]]; then
       fpath="$drafts_dir/$final"
       fbytes=$(wc -c < "$fpath" | tr -d ' ')
-      # A final the hook inferred was captured BEFORE the post, so it is what
-      # was about to go out rather than what demonstrably did.
+      # An inline body the hook inferred was captured BEFORE the post, so it
+      # is what was about to go out rather than what demonstrably did; a
+      # body file is captured after the call succeeded (#587).
       if [[ "$fsrc" == "posted" ]]; then
         echo "    final:  $fpath ($fbytes bytes, captured from the post)"
       else
