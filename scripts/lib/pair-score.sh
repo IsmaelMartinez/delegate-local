@@ -62,6 +62,73 @@ absent_from() {
   ' "$1"
 }
 
+# word_overlap <text> <candidate>... — how much of its vocabulary each
+# candidate file shares with <text>: the Jaccard index of the two word sets
+# as a whole percent, one line per candidate in argument order, `-` for a
+# candidate that cannot be read or when either set is empty. A word is the
+# unit content_words uses in delegate.sh, lowercased letters and hyphens of
+# four or more starting with a letter, minus the same function words, so
+# "could" and "that" do not pair two unrelated texts. It pairs a shipped text with
+# the draft it came from (#587): the boundary hooks file a post under the
+# unspent draft it overlaps most, delegate-feedback.sh refuses to adopt a
+# posted final that shares next to nothing with its own draft, and the
+# suspect-finals scan flags a final closer to a neighbour's draft than its
+# own. One perl for all candidates; the pattern is a single class, linear.
+word_overlap() {
+  perl -e '
+    my %stop = map { $_ => 1 } qw(could would should shall will have does been
+      were being that this these those what which when where whether your yours
+      them they their there here each both same other another such some many
+      much most more very else itself yourself with from into onto upon about
+      over once only also then than while until before after because since
+      though although make made know want need like able sure must might please
+      just still);
+    sub words {
+      my $f = shift; my %w;
+      open(my $fh, "<", $f) or return undef;
+      local $/; my $t = lc(<$fh> // ""); close $fh;
+      while ($t =~ /(?<![a-z-])([a-z][a-z-]{3,})(?![a-z-])/g) { $w{$1} = 1 unless $stop{$1} }
+      return \%w;
+    }
+    my $base = words(shift) || {};
+    my $nb = scalar keys %$base;
+    for my $c (@ARGV) {
+      my $w = words($c);
+      if (!$w || !$nb || !%$w) { print "-\n"; next }
+      my $i = grep { $base->{$_} } keys %$w;
+      my $u = $nb + scalar(keys %$w) - $i;
+      printf "%d\n", $i * 100 / $u;
+    }
+  ' "$@"
+}
+
+# best_draft <text> <drafts dir> <draft name>... — the draft <text> was the
+# shipped form of: the one it overlaps most, the first (oldest) on a tie or
+# when no draft can be read. Prints nothing when given no draft.
+best_draft() {
+  local text="$1" dir="$2" best="" best_s=-1 s i=0
+  shift 2
+  (( $# > 0 )) || return 0
+  local -a paths=()
+  for s in "$@"; do paths+=("$dir/$s"); done
+  while IFS= read -r s; do
+    i=$((i + 1))
+    [[ "$s" =~ ^[0-9]+$ ]] || s=-1
+    if (( s > best_s )) || [[ -z "$best" ]]; then best="${!i}"; best_s=$s; fi
+  done < <(word_overlap "$text" "${paths[@]}")
+  printf '%s' "${best:-$1}"
+}
+
+# suspect_reason <sidecar> <final name> — why the final is quarantined, from
+# the suspect-finals sidecar `self-improve.sh --quarantine` writes beside
+# the metrics file (#587); nothing when it is not listed or there is no
+# sidecar. A listed final is not the shipped text of its draft, so neither
+# the bundle nor the replay scores it; the file itself is kept.
+suspect_reason() {
+  [[ -f "$1" ]] || return 0
+  awk -F '\t' -v n="$2" '$1 == n { print ($2 == "" ? "suspect" : $2); exit }' "$1" 2>/dev/null
+}
+
 # list_markers <file> — how many lines open with a list marker. grep -c
 # prints 0 and exits 1 on no match, so a `|| echo 0` fallback would append a
 # second zero.

@@ -1171,7 +1171,19 @@ cap_setup() { # -> sets capdir capm capcwd capproj; seeds one delegate row
   printf '{"ts":"%s","source":"delegate","recipe":"maintainer-reply","project":"%s","draft_file":"20260827T100000Z-aaaa1111.draft.txt"}\n' \
     "$capts" "$capproj" > "$capm"
 }
-cap_post() { payload "$1" "$capcwd" | DELEGATE_METRICS_FILE="$capm" bash "$HOOK" >/dev/null 2>&1; }
+cap_pre() { payload "$1" "$capcwd" | DELEGATE_METRICS_FILE="$capm" bash "$HOOK" >/dev/null 2>&1; }
+# A body is stored only once the call has run (#587): the PreToolUse hook
+# leaves a marker holding the inline text or naming the file, and the
+# PostToolUse confirm hook stores it after the call succeeded.
+cap_post() { cap_post_run "$@"; }
+cap_post_run() { # cmd [extra env assignment]
+  jq -nc --arg cmd "$1" --arg cwd "$capcwd" --arg ev PreToolUse \
+    '{hook_event_name:$ev, tool_name:"Bash", cwd:$cwd, session_id:"sess-C", tool_use_id:"toolu-C", tool_input:{command:$cmd}}' \
+    | env ${2:+"$2"} DELEGATE_METRICS_FILE="$capm" bash "$HOOK" >/dev/null 2>&1
+  jq -nc --arg cmd "$1" --arg cwd "$capcwd" --arg ev PostToolUse \
+    '{hook_event_name:$ev, tool_name:"Bash", cwd:$cwd, session_id:"sess-C", tool_use_id:"toolu-C", tool_input:{command:$cmd}, tool_response:{interrupted:false}}' \
+    | DELEGATE_METRICS_FILE="$capm" bash "$REPO/scripts/delegate-boundary-confirm-hook.sh" >/dev/null 2>&1
+}
 
 cap_setup
 cap_post 'gh pr comment 12 --body "the fix landed in abc1234"'
@@ -1229,10 +1241,14 @@ assert_eq "false" "$([[ -e "$capdir/drafts/20260827T100000Z-aaaa1111.final.txt" 
   "capture: the already-spent draft is left alone"
 rm -rf "$capdir" "$capcwd"
 
-# A --body-file post stores the file's contents.
+# A --body-file post stores the file's contents, once the call has run.
 cap_setup
 printf 'the reply that came from a file\n' > "$capcwd/reply.md"
-cap_post "gh pr comment 12 --body-file $capcwd/reply.md"
+cap_pre "gh pr comment 12 --body-file $capcwd/reply.md"
+assert_eq "" "$(ls "$capdir/drafts" 2>/dev/null)" \
+  "capture: a --body-file post stores nothing before the call has run"
+rm -rf "$capdir" "$capcwd"; cap_setup; printf 'the reply that came from a file\n' > "$capcwd/reply.md"
+cap_post_run "gh pr comment 12 --body-file $capcwd/reply.md"
 assert_eq "the reply that came from a file" "$(cat "$capdir/drafts/20260827T100000Z-aaaa1111.final.txt" 2>/dev/null)" \
   "capture: a --body-file post stores the file's contents"
 rm -rf "$capdir" "$capcwd"
@@ -1266,7 +1282,7 @@ rm -rf "$capdir" "$capcwd"
 # `-F body=@file` names a file, so its contents are stored.
 cap_setup_recipe pr-review-reply
 printf 'the reply that came from a field file' > "$capcwd/reply.md"
-cap_post "gh api repos/o/r/pulls/12/comments -X POST -F body=@$capcwd/reply.md -F in_reply_to=1"
+cap_post_run "gh api repos/o/r/pulls/12/comments -X POST -F body=@$capcwd/reply.md -F in_reply_to=1"
 assert_eq "the reply that came from a field file" "$(cat "$capdir/$capfinal" 2>/dev/null)" \
   "capture: -F body=@file stores the file's contents"
 rm -rf "$capdir" "$capcwd"
@@ -1288,7 +1304,7 @@ rm -rf "$capdir" "$capcwd"
 # A bare `-F path` (no `=`) is still `--body-file`.
 cap_setup
 printf 'the reply posted with the short flag' > "$capcwd/reply.md"
-cap_post "gh pr comment 12 -F $capcwd/reply.md"
+cap_post_run "gh pr comment 12 -F $capcwd/reply.md"
 assert_eq "the reply posted with the short flag" "$(cat "$capdir/$capfinal" 2>/dev/null)" \
   "capture: a bare -F path is still a body file"
 rm -rf "$capdir" "$capcwd"
@@ -1479,7 +1495,7 @@ payload 'git commit -am "fix: short"' "$tmpcwd" | dflt bash "$HOOK" >/dev/null
 assert_eq 10 "$(jq -r '.body_chars // empty' <<<"$(last_row)")" "commit -am: the combined short flag is measured"
 # ...and a credited commit stores the same text as its final.
 cap_setup_recipe commit-message
-payload "$cc" "$capcwd" | DELEGATE_METRICS_FILE="$capm" DELEGATE_BOUNDARY_MIN_CHARS= bash "$HOOK" >/dev/null 2>&1
+cap_post_run "$cc" "DELEGATE_BOUNDARY_MIN_CHARS="
 assert_eq "$commit_body" "$(cat "$capdir/$capfinal" 2>/dev/null)" "commit -m: a credited commit stores the unwrapped message as its final"
 rm -rf "$capdir" "$capcwd"
 
@@ -1550,8 +1566,7 @@ assert_eq 6 "$(jq -r '.body_chars // empty' <<<"$(last_row)")" "segment scope: t
 assert_eq "" "$out" "segment scope: a 6-char commit is below its floor, not denied on the PR body's length"
 cap_setup_recipe commit-message
 printf 'notes that are not the commit message\n' > "$capcwd/notes.md"
-payload "git commit -m \"fix: thing\" && gh pr comment 1 --body-file $capcwd/notes.md" "$capcwd" \
-  | DELEGATE_METRICS_FILE="$capm" DELEGATE_BOUNDARY_MIN_CHARS= bash "$HOOK" >/dev/null 2>&1
+cap_post_run "git commit -m \"fix: thing\" && gh pr comment 1 --body-file $capcwd/notes.md" "DELEGATE_BOUNDARY_MIN_CHARS="
 assert_eq "fix: thing" "$(cat "$capdir/$capfinal" 2>/dev/null)" "segment scope: the commit's final is its own message, not a later --body-file"
 rm -rf "$capdir" "$capcwd"
 
@@ -1849,7 +1864,7 @@ assert_eq "${#body300}" "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "f
 # its final beside the draft.
 cap_setup_recipe pr-review-reply
 printf 'the reply posted from the job dir' > "$envdir/rr.txt"
-payload 'gh api repos/o/r/pulls/12/comments -X POST --field body=@"$T489_DIR/rr.txt" -F in_reply_to=1' "$capcwd" | T489_DIR="$envdir" DELEGATE_METRICS_FILE="$capm" bash "$HOOK" >/dev/null 2>&1
+cap_post_run 'gh api repos/o/r/pulls/12/comments -X POST --field body=@"$T489_DIR/rr.txt" -F in_reply_to=1' "T489_DIR=$envdir"
 assert_eq "the reply posted from the job dir" "$(cat "$capdir/$capfinal" 2>/dev/null)" \
   "env path: a credited body=@\"\$VAR/file\" post stores the file as the final"
 rm -rf "$capdir" "$capcwd" "$envdir"
@@ -1884,7 +1899,7 @@ payload "bash $wrdir/no-boundary.sh" "$tmpcwd" | dflt bash "$HOOK" >/dev/null
 assert_eq "" "$(cat "$METRICS")" "wrapper: a script with no boundary command writes no row"
 # A credited wrapper commit stores its message as the final, like an inline one.
 cap_setup_recipe commit-message
-payload "bash $wrdir/do-commit.sh" "$capcwd" | DELEGATE_METRICS_FILE="$capm" DELEGATE_BOUNDARY_MIN_CHARS= bash "$HOOK" >/dev/null 2>&1
+cap_post_run "bash $wrdir/do-commit.sh" "DELEGATE_BOUNDARY_MIN_CHARS="
 assert_eq true "$(jq -r '.delegated' <<<"$(tail -1 "$capm")")" "wrapper: a delegated commit inside a wrapper is credited"
 assert_eq "$body300" "$(cat "$capdir/$capfinal" 2>/dev/null)" "wrapper: ...and stores the message as its final"
 rm -rf "$capdir" "$capcwd" "$wrdir"
@@ -1908,7 +1923,11 @@ post_payload() { # cmd cwd session tool_use_id [event] [interrupted]
       tool_response:{stdout:"", stderr:"", interrupted:$intr, isImage:false}}'
 }
 confirm() { post_payload "$@" | dflt bash "$CONFIRM" 2>/dev/null; }
-marker_id() { jq -r '.id // empty' "$pending/$1" 2>/dev/null; }
+# One marker per call (#587): `<session>.<boundary>.<project>.<id>`; a claimed
+# one is `.superseded` and no longer pending.
+pmarkers() { local m; for m in "$pending/$1".*; do [[ -f "$m" ]] || continue; case "$m" in *.superseded|*.row|*.confirming.*) continue ;; esac; printf '%s\n' "$m"; done; }
+marker_id() { local m; m=$(pmarkers "$1" | head -n 1); [[ -n "$m" ]] && jq -r '.id // empty' "$m" 2>/dev/null; }
+pstate() { [[ -n "$(pmarkers "$1")" ]] && echo present || echo absent; }
 seed_draft() { # recipe draft_stem
   jq -nc --arg ts "$nowts" --arg p "$proj" --arg r "$1" --arg d "$2" \
     '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:$r, draft_file:$d}' >> "$METRICS"
@@ -1934,9 +1953,9 @@ assert_eq 1 "$(grep -c '"delegated":true' "$METRICS")" "refused: exactly one del
 assert_eq 0 "$(grep -c '"denied":true' "$METRICS")" "refused: no denied row"
 assert_eq 1 "$(grep -c '"source":"opportunity"' "$METRICS")" "refused: the retry writes no second row"
 assert_eq toolu-2 "$(marker_id sess-A.pr-review-comment.$proj)" "refused: the marker is re-armed for the retry"
-assert_eq "$body300" "$(cat "$METRICS_DIR/drafts/d497.final.txt" 2>/dev/null)" "refused: the retry stores the final the refused attempt could not"
 confirm "$retried" "$tmpcwd" sess-A toolu-2
-assert_eq "absent" "$([[ -e "$pending/sess-A.pr-review-comment.$proj" ]] && echo present || echo absent)" "refused: the confirmed retry spends the credit"
+assert_eq "$body300" "$(cat "$METRICS_DIR/drafts/d497.final.txt" 2>/dev/null)" "refused: the confirmed retry stores the final the refused attempt could not"
+assert_eq "absent" "$(pstate sess-A.pr-review-comment.$proj)" "refused: the confirmed retry spends the credit"
 out=$(payload_id "$retried" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "refused: a further post finds the credit spent"
 # Shape 2 (the comment): a credited `git commit` exits 1 on an empty index.
@@ -1958,7 +1977,7 @@ assert_eq 1 "$(grep -c '"delegated":true' "$METRICS")" "failed: exactly one dele
 assert_eq 0 "$(grep -c '"denied":true' "$METRICS")" "failed: no denied row"
 assert_eq 1 "$(grep -c '"source":"opportunity"' "$METRICS")" "failed: one opportunity row in all"
 confirm "$commit" "$tmpcwd" sess-A toolu-3
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "failed: the retry's success confirms the spend"
+assert_eq "absent" "$(pstate sess-A.git-commit.$proj)" "failed: the retry's success confirms the spend"
 # The normal shape: one delegation, a post that ran, then a second distinct
 # post. The confirmation is what keeps the second one denied.
 reset497; seed_draft commit-message d497.draft.txt
@@ -1966,7 +1985,7 @@ confirm 'ls' "$tmpcwd" sess-A toolu-0
 payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
 assert_eq toolu-1 "$(marker_id sess-A.git-commit.$proj)" "normal: the credited post is pending"
 confirm "$commit" "$tmpcwd" sess-A toolu-1
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "normal: the spend is confirmed when the call succeeds"
+assert_eq "absent" "$(pstate sess-A.git-commit.$proj)" "normal: the spend is confirmed when the call succeeds"
 out=$(payload_id 'git commit -m "fix: a second, different commit message that is long enough to clear the floor"' "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "normal: a second post after a confirmed spend is denied"
 assert_eq 1 "$(grep -c '"delegated":true' "$METRICS")" "normal: one credited row"
@@ -1998,7 +2017,7 @@ assert_contains '"permissionDecision":"deny"' "$out" "unseen: with no confirm ho
 reset497; seed_draft commit-message d497.draft.txt
 confirm 'ls' "$tmpcwd" sess-A toolu-0
 payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
-jq -c --argjson e "$(( $(date -u +%s) - 301 ))" '.epoch = $e' "$pending/sess-A.git-commit.$proj" > "$pending/old" && mv "$pending/old" "$pending/sess-A.git-commit.$proj"
+m=$(pmarkers sess-A.git-commit.$proj | head -n 1); jq -c --argjson e "$(( $(date -u +%s) - 301 ))" '.epoch = $e' "$m" > "$pending/old" && mv "$pending/old" "$m"
 out=$(payload_id "$commit" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "window: a marker older than 300 s is not honoured"
 reset497; seed_draft commit-message d497.draft.txt
@@ -2028,53 +2047,54 @@ confirm "$commit" "$gitroot/repo-a" sess-A toolu-6
 out=$(payload_id "$commit" "$tmpcwd" sess-A toolu-7 | dflt bash "$HOOK")
 assert_eq "" "$out" "scope: the first repository's retry still reuses its credit"
 # PostToolUse reports the whole call, whose status is the boundary's only
-# when the boundary is the last segment: no marker otherwise, so the credit
+# when the boundary is the last segment or `&&`-joined to the rest (#587): no
+# marker after `;` or `||`, so the credit
 # is spent for good as before, and a reused marker is consumed rather than
 # left for a further post.
 reset497; seed_draft commit-message d497.draft.txt
 confirm 'ls' "$tmpcwd" sess-A toolu-0
-payload_id "$commit && echo done" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+payload_id "$commit; echo done" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
 assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "compound: a commit followed by another command is still credited"
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "compound: ...but leaves no marker, since a later failure would not be the commit's"
+assert_eq "absent" "$(pstate sess-A.git-commit.$proj)" "compound: ...but leaves no marker, since a later failure would not be the commit's"
 reset497; seed_draft commit-message d497.draft.txt
 payload_id "$commit || true" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "compound: || true leaves no marker, since success would not be the commit's"
+assert_eq "absent" "$(pstate sess-A.git-commit.$proj)" "compound: || true leaves no marker, since success would not be the commit's"
 reset497; seed_draft commit-message d497.draft.txt
 payload_id "git add f && $commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
 assert_eq toolu-1 "$(marker_id sess-A.git-commit.$proj)" "compound: a commit that is the last segment leaves a marker"
 reset497; seed_draft commit-message d497.draft.txt
 confirm 'ls' "$tmpcwd" sess-A toolu-0
 payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
-out=$(payload_id "$commit && echo done" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK")
+out=$(payload_id "$commit; echo done" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK")
 assert_eq "" "$out" "compound: a compound retry still reuses the refused post's credit"
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "compound: ...and consumes the marker"
+assert_eq "absent" "$(pstate sess-A.git-commit.$proj)" "compound: ...and consumes the marker"
 out=$(payload_id "$commit" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "compound: ...so a third post is denied"
 # No marker without an id to confirm by, none with metrics off.
 reset497; seed_draft commit-message d497.draft.txt
 payload "$commit" "$tmpcwd" | dflt bash "$HOOK" >/dev/null
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "marker: a payload with no tool_use_id leaves none"
+assert_eq "absent" "$(pstate sess-A.git-commit.$proj)" "marker: a payload with no tool_use_id leaves none"
 reset497; seed_draft commit-message d497.draft.txt
 payload_id "$commit" "$tmpcwd" sess-A toolu-1 | DELEGATE_LOCAL_NO_METRICS=1 dflt bash "$HOOK" >/dev/null
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "marker: DELEGATE_LOCAL_NO_METRICS=1 leaves none"
-# A provisional final is replaced by what the retry actually sends: the
-# refused attempt's measurable body was stored pre-post, and the marker
-# proves it never shipped. A bare final the hook did not write (a verdict's
-# explicit --final, recorded while the marker was pending) is left alone.
+assert_eq "absent" "$(pstate sess-A.git-commit.$proj)" "marker: DELEGATE_LOCAL_NO_METRICS=1 leaves none"
+# Nothing is stored before a call has run (#587), so a refused attempt
+# leaves no final and the confirmed retry stores what it sent. A final the
+# hook did not write (a verdict's explicit --final, recorded while the
+# marker was pending) is never overwritten.
 reset497; seed_draft commit-message d497.draft.txt
 confirm 'ls' "$tmpcwd" sess-A toolu-0
 payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
-assert_eq "$body300" "$(cat "$METRICS_DIR/drafts/d497.final.txt" 2>/dev/null)" "recapture: the refused attempt stored its body as the final"
+assert_eq "absent" "$([[ -e "$METRICS_DIR/drafts/d497.final.txt" ]] && echo present || echo absent)" "recapture: the refused attempt stores nothing"
 rewritten="git commit -m \"fix: rewritten after the refusal. $body300\""
 payload_id "$rewritten" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK" >/dev/null
-assert_eq "fix: rewritten after the refusal. $body300" "$(cat "$METRICS_DIR/drafts/d497.final.txt" 2>/dev/null)" "recapture: the reused retry replaces the final the refused attempt wrote"
-payload_id "git commit -F -" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK" >/dev/null
-assert_eq "fix: rewritten after the refusal. $body300" "$(cat "$METRICS_DIR/drafts/d497.final.txt" 2>/dev/null)" "recapture: an unmeasurable retry leaves the last measurable text"
+confirm "$rewritten" "$tmpcwd" sess-A toolu-2
+assert_eq "fix: rewritten after the refusal. $body300" "$(cat "$METRICS_DIR/drafts/d497.final.txt" 2>/dev/null)" "recapture: the confirmed retry stores what it sent"
 reset497; seed_draft commit-message d497.draft.txt
 confirm 'ls' "$tmpcwd" sess-A toolu-0
 payload_id "git commit -F -" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
 mkdir -p "$METRICS_DIR/drafts"; printf 'from --final' > "$METRICS_DIR/drafts/d497.final.txt"
 payload_id "$rewritten" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK" >/dev/null
+confirm "$rewritten" "$tmpcwd" sess-A toolu-2
 assert_eq "from --final" "$(cat "$METRICS_DIR/drafts/d497.final.txt" 2>/dev/null)" "recapture: a final the hook did not write is never overwritten"
 # The daily prune of stale markers keeps the session's .seen file, which is
 # on a week's retention: a session older than a day would otherwise lose
@@ -2101,13 +2121,13 @@ rm -rf "$rel"
 reset497; seed_draft commit-message d497.draft.txt
 confirm 'ls' "$tmpcwd" sess-A toolu-0
 payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
-# A jq that fails on the marker write only (its --argjson captured is unique).
+# A jq that fails on the marker write only (its --arg body_text is unique).
 BADJQ=$(mktemp -d)
-printf '#!/usr/bin/env bash\ncase " $* " in *" --argjson captured "*) exit 1 ;; esac\nexec %q "$@"\n' "$REAL_JQ" > "$BADJQ/jq"
+printf '#!/usr/bin/env bash\ncase " $* " in *" --arg body_text "*) exit 1 ;; esac\nexec %q "$@"\n' "$REAL_JQ" > "$BADJQ/jq"
 chmod +x "$BADJQ/jq"
 out=$(payload_id "$commit" "$tmpcwd" sess-A toolu-2 | PATH="$BADJQ:$PATH" dflt bash "$HOOK")
 assert_eq "" "$out" "re-arm failure: the retry is still allowed on the reused credit"
-assert_eq "absent" "$([[ -e "$pending/sess-A.git-commit.$proj" ]] && echo present || echo absent)" "re-arm failure: ...and the old marker is consumed, not left with its old id"
+assert_eq "absent" "$(pstate sess-A.git-commit.$proj)" "re-arm failure: ...and the old marker is consumed, not left with its old id"
 out=$(payload_id "$commit" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK")
 assert_contains '"permissionDecision":"deny"' "$out" "re-arm failure: a further post cannot reuse the consumed marker"
 rm -rf "$BADJQ"
@@ -2119,6 +2139,196 @@ ec=0; out=$(confirm 'ls' "$tmpcwd" sess-A toolu-9) || ec=$?
 assert_eq 0 "$ec" "confirm: an ordinary call exits 0"
 assert_eq "" "$out" "confirm: ...silently"
 rm -rf "$pending" "$METRICS_DIR/drafts" "$tmpcwd/rr.txt"
+
+# 82 (#587). A body FILE is read after the command has run, never before:
+# one call that writes the file and posts it would otherwise store the text
+# the file held from the previous post. The PostToolUse confirm hook reads it
+# once the call has succeeded.
+dfinal() { cat "$METRICS_DIR/drafts/$1.final.txt" 2>/dev/null; }
+dfinal_state() { [[ -e "$METRICS_DIR/drafts/$1.final.txt" ]] && echo present || echo absent; }
+stale_text="fix: the previous commit message, which already shipped"
+new_text="fix: the message this very call writes before it commits"
+reset497; seed_draft commit-message d587.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+printf '%s' "$stale_text" > "$tmpcwd/msg.txt"
+stale_cmd="printf '%s' '$new_text' > msg.txt; git commit -F msg.txt"
+payload_id "$stale_cmd" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "stale file: the write-then-commit call is credited"
+assert_eq absent "$(dfinal_state d587)" "stale file: nothing is stored before the command has run"
+printf '%s' "$new_text" > "$tmpcwd/msg.txt"   # what the command does when it runs
+confirm "$stale_cmd" "$tmpcwd" sess-A toolu-1
+assert_eq "$new_text" "$(dfinal d587)" "stale file: the confirmed commit stores what the command wrote"
+[[ "$(dfinal d587)" != *"$stale_text"* ]] && r=clean || r=stale
+assert_eq clean "$r" "stale file: no final holds the previous post's text"
+# A file-backed post that failed (no PostToolUse) stores nothing at all.
+reset497; seed_draft commit-message d587.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "git commit -F msg.txt" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+confirm "git commit -F msg.txt" "$tmpcwd" sess-A toolu-1 PostToolUseFailure
+assert_eq absent "$(dfinal_state d587)" "stale file: a failed file-backed post stores no final"
+# A refused inline commit stores nothing; its confirmed retry from a file is
+# filed once, under one draft.
+reset497; seed_draft commit-message d497.draft.txt; seed_draft commit-message d498.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "$commit" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+assert_eq absent "$(dfinal_state d497)" "file retry: the refused inline attempt stores no final"
+printf '%s' "$new_text" > "$tmpcwd/msg.txt"
+payload_id "git commit -F msg.txt" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK" >/dev/null
+confirm "git commit -F msg.txt" "$tmpcwd" sess-A toolu-2
+assert_eq "$new_text" "$(dfinal d497)" "file retry: the confirmed file-backed retry stores what it sent"
+assert_eq absent "$(dfinal_state d498)" "file retry: ...and no other draft is paired with it"
+rm -f "$tmpcwd/msg.txt"
+
+# Two unspent drafts, the first abandoned after a rejection and never
+# posted: the post is filed under the draft its text overlaps, not under the
+# oldest unspent one, so every later post in the session is not shifted one
+# delegation early. Credits are still counted oldest first.
+seed_two() {
+  reset497; seed_draft maintainer-reply dA.draft.txt; seed_draft maintainer-reply dB.draft.txt
+  mkdir -p "$METRICS_DIR/drafts"
+  printf 'The sandbox flag in the launcher script is the cause of the blank window, not your distribution.\n' > "$METRICS_DIR/drafts/dA.draft.txt"
+  printf 'Pruning the lock directory now also removes stale pending markers left behind by crashed sessions.\n' > "$METRICS_DIR/drafts/dB.draft.txt"
+}
+reply_b="Pruning the lock directory now removes the stale pending markers that crashed sessions leave behind."
+seed_two
+payload_id "gh pr comment 12 --body \"$reply_b\"" "$tmpcwd" sess-A toolu-1 | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+confirm "gh pr comment 12 --body \"$reply_b\"" "$tmpcwd" sess-A toolu-1
+assert_eq "$reply_b" "$(dfinal dB)" "two unspent: an inline post lands under the draft it overlaps (the second)"
+assert_eq absent "$(dfinal_state dA)" "two unspent: ...and not under the abandoned oldest draft"
+seed_two
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+printf '%s' "$reply_b" > "$tmpcwd/reply.md"
+payload_id "gh pr comment 12 --body-file reply.md" "$tmpcwd" sess-A toolu-1 | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+confirm "gh pr comment 12 --body-file reply.md" "$tmpcwd" sess-A toolu-1
+assert_eq "$reply_b" "$(dfinal dB)" "two unspent: a confirmed file-backed post lands under the draft it overlaps"
+assert_eq absent "$(dfinal_state dA)" "two unspent: ...and the abandoned draft is left alone"
+# With no text to tell them apart, the oldest unspent draft still wins.
+seed_two
+payload_id 'gh pr comment 12 --body "Thanks, merged."' "$tmpcwd" sess-A toolu-1 | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+confirm 'gh pr comment 12 --body "Thanks, merged."' "$tmpcwd" sess-A toolu-1
+assert_eq "Thanks, merged." "$(dfinal dA)" "two unspent: no overlap falls back to the oldest unspent draft"
+rm -rf "$pending" "$METRICS_DIR/drafts" "$tmpcwd/reply.md"
+
+# Two file-backed posts in flight at once in one session (parallel subagents
+# share the session id): each keeps its own marker, each confirmed call
+# stores its own final, and both are counted, whichever confirms first.
+text_c1="fix: prune the lock directory and the stale pending markers of crashed sessions"
+text_c2="fix: read the sandbox flag from the launcher so the blank window goes away"
+seed_two_commits() {
+  reset497; seed_draft commit-message dC1.draft.txt; seed_draft commit-message dC2.draft.txt
+  mkdir -p "$METRICS_DIR/drafts"
+  printf 'fix: prune stale pending markers and the lock directory left by crashed sessions\n' > "$METRICS_DIR/drafts/dC1.draft.txt"
+  printf 'fix: the launcher sandbox flag causes the blank window\n' > "$METRICS_DIR/drafts/dC2.draft.txt"
+  printf '%s' "$text_c1" > "$tmpcwd/m1.txt"; printf '%s' "$text_c2" > "$tmpcwd/m2.txt"
+  confirm 'ls' "$tmpcwd" sess-A toolu-0
+  payload_id "git commit -F m1.txt" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+  payload_id "git commit -F m2.txt" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK" >/dev/null
+}
+seed_two_commits
+confirm "git commit -F m1.txt" "$tmpcwd" sess-A toolu-1
+confirm "git commit -F m2.txt" "$tmpcwd" sess-A toolu-2
+assert_eq "$text_c1" "$(dfinal dC1)" "concurrent: the first call's final is kept"
+assert_eq "$text_c2" "$(dfinal dC2)" "concurrent: the second call's final is kept"
+assert_eq 2 "$(grep -c '"delegated":true' "$METRICS")" "concurrent: both posts are counted as credited"
+seed_two_commits
+confirm "git commit -F m2.txt" "$tmpcwd" sess-A toolu-2
+confirm "git commit -F m1.txt" "$tmpcwd" sess-A toolu-1
+assert_eq "$text_c1" "$(dfinal dC1)" "concurrent, reversed: the first call's final is kept"
+assert_eq "$text_c2" "$(dfinal dC2)" "concurrent, reversed: the second call's final is kept"
+assert_eq 2 "$(grep -c '"delegated":true' "$METRICS")" "concurrent, reversed: both posts are counted as credited"
+rm -f "$tmpcwd/m1.txt" "$tmpcwd/m2.txt"
+# The same with INLINE bodies: each call's text waits in its own marker
+# until its own confirmation, so neither overwrites the other's final.
+reply_a="The sandbox flag in the launcher script causes the blank window, not your distribution."
+seed_two_inline() {
+  seed_two
+  confirm 'ls' "$tmpcwd" sess-A toolu-0
+  payload_id "gh pr comment 12 --body \"$reply_a\"" "$tmpcwd" sess-A toolu-1 | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+  payload_id "gh pr comment 12 --body \"$reply_b\"" "$tmpcwd" sess-A toolu-2 | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+}
+seed_two_inline
+confirm "gh pr comment 12 --body \"$reply_a\"" "$tmpcwd" sess-A toolu-1
+confirm "gh pr comment 12 --body \"$reply_b\"" "$tmpcwd" sess-A toolu-2
+assert_eq "$reply_a" "$(dfinal dA)" "concurrent inline: the first call's final holds its own text"
+assert_eq "$reply_b" "$(dfinal dB)" "concurrent inline: the second call's final holds its own text"
+seed_two_inline
+confirm "gh pr comment 12 --body \"$reply_b\"" "$tmpcwd" sess-A toolu-2
+confirm "gh pr comment 12 --body \"$reply_a\"" "$tmpcwd" sess-A toolu-1
+assert_eq "$reply_a" "$(dfinal dA)" "concurrent inline, reversed: the first call's final holds its own text"
+assert_eq "$reply_b" "$(dfinal dB)" "concurrent inline, reversed: the second call's final holds its own text"
+# Overlapping claims reserve credits: three delegations and four calls in
+# flight at once, each later call claiming the previous one's marker. The
+# `.row` a claim defers is not in the metrics file yet, so unless it is
+# counted every claimer sees the same fresh credit and one delegation credits
+# several posts.
+reset497; for _i in 1 2 3; do seed_draft commit-message "dR$_i.draft.txt"; done
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+for _i in 1 2 3 4; do
+  payload_id "git commit -m \"$body300\"" "$tmpcwd" sess-A "toolu-r$_i" | dflt bash "$HOOK" >/dev/null
+done
+for _i in 1 2 3 4; do confirm "git commit -m \"$body300\"" "$tmpcwd" sess-A "toolu-r$_i"; done
+assert_eq 3 "$(grep -c '"delegated":true' "$METRICS")" "concurrent claims: three delegations credit three posts, not four"
+# ...but a claim holds its credit only while its claimer is unconfirmed: in a
+# sweep whose first post was refused, the confirmed retry releases it, so the
+# sweep's other two posts are still credited (#497).
+reset497; for _i in 1 2 3; do seed_draft commit-message "dS$_i.draft.txt"; done
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "git commit -m \"$body300\"" "$tmpcwd" sess-A toolu-s1 | dflt bash "$HOOK" >/dev/null
+payload_id "git commit -m \"$body300\"" "$tmpcwd" sess-A toolu-s2 | dflt bash "$HOOK" >/dev/null
+confirm "git commit -m \"$body300\"" "$tmpcwd" sess-A toolu-s2
+for _i in 3 4; do
+  payload_id "git commit -m \"$body300\"" "$tmpcwd" sess-A "toolu-s$_i" | dflt bash "$HOOK" >/dev/null
+  assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "sweep after a refused post: post $_i is credited"
+  confirm "git commit -m \"$body300\"" "$tmpcwd" sess-A "toolu-s$_i"
+done
+# Two confirm hooks racing onto the same best draft: the one that loses the
+# exclusive create files its text under the next unspent draft instead of
+# dropping it. The race is made deterministic with a pair-score stub whose
+# best_draft lets the rival win first.
+seed_two
+racedir=$(mktemp -d); mkdir -p "$racedir/lib"
+cp "$CONFIRM" "$racedir/confirm.sh"
+cat > "$racedir/lib/pair-score.sh" <<EOF
+best_draft() { printf 'rival' > "$METRICS_DIR/drafts/dA.final.txt"; printf 'dA.draft.txt'; }
+EOF
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "gh pr comment 12 --body \"$reply_b\"" "$tmpcwd" sess-A toolu-1 | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+post_payload "gh pr comment 12 --body \"$reply_b\"" "$tmpcwd" sess-A toolu-1 | dflt bash "$racedir/confirm.sh" 2>/dev/null
+assert_eq rival "$(dfinal dA)" "raced capture: the rival's final is not overwritten"
+assert_eq "$reply_b" "$(dfinal dB)" "raced capture: the losing hook files its text under the next unspent draft"
+rm -rf "$racedir"
+# An inline body is not stored before its call has run.
+seed_two
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "gh pr comment 12 --body \"$reply_a\"" "$tmpcwd" sess-A toolu-1 | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq "absent absent" "$(dfinal_state dA) $(dfinal_state dB)" "inline: nothing is stored before the call has run"
+assert_eq 600 "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$(pmarkers sess-A.comment-reply.$proj | head -n 1)")" \
+  "inline: the marker holding the body is private (600)"
+rm -rf "$pending" "$METRICS_DIR/drafts"
+# The inline text kept in a marker is cut at the drafts' byte cap.
+cap_setup
+cap_post_run 'gh pr comment 12 --body "the fix landed in abc1234"' "DELEGATE_DRAFT_MAX_BYTES=10"
+assert_eq "the fix la" "$(cat "$capdir/$capfinal" 2>/dev/null)" "inline: the stored body respects DELEGATE_DRAFT_MAX_BYTES"
+rm -rf "$capdir" "$capcwd"
+
+# A successful `&&` chain ran every segment, so a file-backed boundary that
+# is not the last segment is still captured once the call succeeds; after
+# `;` or `||` the call's success says nothing about the boundary, so nothing.
+chain_run() { # cmd id
+  reset497; seed_draft commit-message d587.draft.txt
+  printf '%s' "$stale_text" > "$tmpcwd/msg.txt"
+  confirm 'ls' "$tmpcwd" sess-A toolu-0
+  payload_id "$1" "$tmpcwd" sess-A "$2" | dflt bash "$HOOK" >/dev/null
+  printf '%s' "$new_text" > "$tmpcwd/msg.txt"
+  confirm "$1" "$tmpcwd" sess-A "$2"
+}
+chain_run "printf '%s' '$new_text' > msg.txt && git commit -F msg.txt && git push" toolu-1
+assert_eq "$new_text" "$(dfinal d587)" "&& chain: a confirmed chain stores what the command wrote"
+chain_run "git commit -F msg.txt; git push" toolu-1
+assert_eq absent "$(dfinal_state d587)" "; chain: the call's success is not the commit's, so no final"
+chain_run "git commit -F msg.txt || true" toolu-1
+assert_eq absent "$(dfinal_state d587)" "|| chain: the call's success is not the commit's, so no final"
+rm -rf "$pending" "$METRICS_DIR/drafts" "$tmpcwd/msg.txt"
 
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"

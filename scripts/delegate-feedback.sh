@@ -151,6 +151,19 @@ esac
 if [[ -n "$final_src" && "$final_src" != "-" && ! -f "$final_src" ]]; then
   echo "delegate-feedback: --final file not found: $final_src" >&2; exit 2
 fi
+# An empty final is not what shipped (#587): `--final -` with nothing on
+# stdin wrote 20 zero-byte finals in one day, each read as a pair whose
+# shipped half said nothing. Stdin is read once, here, so the refusal comes
+# before any row or file is written.
+if [[ "$final_src" == "-" ]]; then
+  final_stdin=$(mktemp) || { echo "delegate-feedback: cannot buffer --final -" >&2; exit 2; }
+  trap 'rm -f "$final_stdin"' EXIT
+  cat > "$final_stdin"
+  final_src="$final_stdin"
+fi
+if [[ -n "$final_src" && -r "$final_src" ]] && ! grep -q '[^[:space:]]' "$final_src" 2>/dev/null; then
+  echo "delegate-feedback: --final is empty; pass the text that actually shipped (nothing was recorded)" >&2; exit 2
+fi
 # Two pins name one row twice; if they disagree there is no right answer, and
 # if they agree one of them is noise. Refuse rather than pick.
 if [[ -n "$override_id" && -n "$override_ts" ]]; then
@@ -303,7 +316,7 @@ if [[ -n "$final_src" ]]; then
   # the boundary hook's capture or another verdict's, so each further one
   # takes the next free number and the row names the file it wrote. The name
   # is claimed by the open: `set -C` makes `>` fail on an existing file at
-  # the redirect, before `cat` runs, so stdin is untouched on a failed claim.
+  # the redirect, before `cat` runs, so the source is copied once, into the name claimed.
   # Claim and copy are two steps because they fail for different reasons: an
   # existing name means try the next number, anything else ends the loop.
   # 700 on the directory, 600 on the file, written under `umask 077`.
@@ -313,11 +326,7 @@ if [[ -n "$final_src" ]]; then
     while :; do
       if (( final_n == 1 )); then final_name="$final_stem.final.txt"; else final_name="$final_stem.final.$final_n.txt"; fi
       if ( umask 077; set -C; : > "$drafts_dir/$final_name" ) 2>/dev/null; then
-        if [[ "$final_src" == "-" ]]; then
-          cat > "$drafts_dir/$final_name" 2>/dev/null && final_file="$final_name"
-        else
-          cat "$final_src" > "$drafts_dir/$final_name" 2>/dev/null && final_file="$final_name"
-        fi
+        cat "$final_src" > "$drafts_dir/$final_name" 2>/dev/null && final_file="$final_name"
         [[ -n "$final_file" ]] || rm -f "$drafts_dir/$final_name"
         break
       fi
@@ -341,13 +350,31 @@ elif [[ -n "$parent_draft" && "$kept" == "false" ]]; then
   # marks a pair inferred from a post; a bare final an earlier verdict vouched
   # for with --final must not be relabelled, which that earlier row's lack of
   # the `posted` marker tells apart.
+  #
+  # A posted final that shares next to no words with this draft is refused
+  # (#587): it is another delegation's post, filed here because the hook
+  # once took the oldest unspent draft, and a rejected-then-regenerated
+  # draft that was never posted shifted every later post one delegation
+  # early. Under 5% is the bound, `word_overlap` in lib/pair-score.sh: on
+  # the 2026-09-30 corpus 28 of the 44 finals closer to a neighbour's draft
+  # sat under it, against 26 of the 1169 other pairs.
   adopt_name="${parent_draft%.draft.txt}.final.txt"
   if [[ -f "$drafts_dir/$adopt_name" ]]; then
-    final_file="$adopt_name"
     vouched=$(jq -r --arg ts "$ref_ts" --arg f "$adopt_name" \
       'select(.source == "feedback" and .ref_ts == $ts and .final_file == $f and (.final_source // "") != "posted") | .ts' \
       "$metrics_file" | head -n 1)
-    [[ -z "$vouched" ]] && final_source="posted"
+    own_overlap=""
+    if [[ -z "$vouched" && -f "$drafts_dir/$parent_draft" ]]; then
+      # shellcheck source=lib/pair-score.sh
+      . "$_fb_script_dir/lib/pair-score.sh"
+      own_overlap=$(word_overlap "$drafts_dir/$adopt_name" "$drafts_dir/$parent_draft")
+    fi
+    if [[ "$own_overlap" =~ ^[0-9]+$ ]] && (( own_overlap < 5 )); then
+      echo "delegate-feedback: $adopt_name not adopted: it shares ${own_overlap}% of its words with this draft, so it is another delegation's post; pass --final with what shipped" >&2
+    else
+      final_file="$adopt_name"
+      [[ -z "$vouched" ]] && final_source="posted"
+    fi
   fi
 fi
 

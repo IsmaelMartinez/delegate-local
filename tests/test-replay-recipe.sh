@@ -425,6 +425,16 @@ assert_contains "identical to the champion" "$out" "a candidate equal to the cha
 out=$(run --recipe rp --candidate "$tmp/noted")
 assert_contains "identical to the champion" "$out" "a candidate that differs only in its calibration notes is the same template"
 
+# #587: a case whose final is listed in the suspect-finals sidecar beside
+# the metrics file is not a reference and is skipped; the file stays.
+rm -rf "$tmp/data" "$tmp/out"
+seed "$tmp/data" 2 "$champ_sha"
+printf '202601T100000Z-rej00001.final.txt\tneighbour\n' > "$tmp/data/suspect-finals.tsv"
+out=$(run --recipe rp)
+assert_contains "Cases:     2 (kept=1 scaffold=0 rewrote=1; newest 40)" "$out" "a quarantined final drops its case"
+assert_contains "rej00001 skipped: its final is quarantined" "$out" "the skip is named"
+assert_eq present "$([[ -e "$tmp/data/drafts/202601T100000Z-rej00001.final.txt" ]] && echo present || echo absent)" "the quarantined final is not deleted"
+
 rm -rf "$tmp"
 
 echo

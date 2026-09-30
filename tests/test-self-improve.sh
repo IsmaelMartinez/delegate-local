@@ -538,6 +538,67 @@ assert_contains "template=newnewnewnew" "$first_line" "per-template: newest temp
 assert_not_contains "commit-message" "$section" "per-template: a recipe under one template is not listed"
 rm -rf "$tmp"
 
+# --- #587: --quarantine lists the suspect finals in a sidecar beside the
+# metrics file (an empty final, one byte-identical to an earlier stem's, one
+# closer to a neighbour's draft than its own), --peek only prints it, nothing
+# is deleted, and the bundle skips the listed pairs ---
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+q1=$(iso_ago 900); q2=$(iso_ago 800); q3=$(iso_ago 700); q4=$(iso_ago 600); q5=$(iso_ago 500)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$q1","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","session":"S","exit_status":0,"draft_file":"20260901T000001Z-q1.draft.txt"}
+{"ts":"$q2","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","session":"S","exit_status":0,"draft_file":"20260901T000002Z-q2.draft.txt"}
+{"ts":"$q3","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","session":"S","exit_status":0,"draft_file":"20260901T000003Z-q3.draft.txt"}
+{"ts":"$q4","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","session":"S","exit_status":0,"draft_file":"20260901T000004Z-q4.draft.txt"}
+{"ts":"$q5","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","session":"S","exit_status":0,"draft_file":"20260901T000005Z-q5.draft.txt"}
+{"ts":"$(iso_ago 400)","source":"feedback","ref_ts":"$q4","kept":false,"reason":"shifted pair","verdict_source":"agent","final_file":"20260901T000004Z-q4.final.txt","final_source":"posted"}
+{"ts":"$(iso_ago 390)","source":"feedback","ref_ts":"$q5","kept":false,"reason":"a sound pair","verdict_source":"agent","final_file":"20260901T000005Z-q5.final.txt"}
+EOF
+d="$tmp/drafts"
+printf 'Retry the upload once the token has been refreshed in settings.\n' > "$d/20260901T000001Z-q1.draft.txt"
+: > "$d/20260901T000001Z-q1.final.txt"
+printf 'Bumping the electron version fixes the screen sharing crash on wayland.\n' > "$d/20260901T000002Z-q2.draft.txt"
+printf 'Electron bump fixes the wayland screen sharing crash.\n' > "$d/20260901T000002Z-q2.final.txt"
+printf 'The tray icon disappears after suspend because the menu is rebuilt.\n' > "$d/20260901T000003Z-q3.draft.txt"
+printf 'Electron bump fixes the wayland screen sharing crash.\n' > "$d/20260901T000003Z-q3.final.txt"
+printf 'Pruning the lock directory removes stale pending markers from crashed sessions.\n' > "$d/20260901T000004Z-q4.draft.txt"
+printf 'Tray icon vanishes after suspend since the menu gets rebuilt; fixed in the next release.\n' > "$d/20260901T000004Z-q4.final.txt"
+printf 'Proxy settings are read from the environment before the window opens.\n' > "$d/20260901T000005Z-q5.draft.txt"
+printf 'The proxy settings now come from the environment before any window opens.\n' > "$d/20260901T000005Z-q5.final.txt"
+out=$(bash "$SCRIPT" --quarantine --peek --file "$tmp/m.jsonl" 2>&1)
+assert_contains "20260901T000001Z-q1.final.txt	empty" "$out" "quarantine: an empty final is suspect"
+assert_contains "20260901T000003Z-q3.final.txt	duplicate" "$out" "quarantine: a final identical to an earlier stem's is suspect"
+assert_contains "20260901T000004Z-q4.final.txt	neighbour" "$out" "quarantine: a final closer to a neighbour's draft than its own is suspect"
+assert_not_contains "q2.final.txt	" "$out" "quarantine: the earlier of two identical finals is kept"
+assert_not_contains "q5.final.txt	" "$out" "quarantine: a sound pair is not suspect"
+assert_eq absent "$([[ -e "$tmp/suspect-finals.tsv" ]] && echo present || echo absent)" "quarantine: --peek writes no sidecar"
+bash "$SCRIPT" --quarantine --file "$tmp/m.jsonl" >/dev/null 2>&1
+assert_eq 3 "$(grep -c '' "$tmp/suspect-finals.tsv" 2>/dev/null)" "quarantine: the sidecar lists the three suspect finals"
+assert_eq 10 "$(ls "$d" | grep -c '')" "quarantine: nothing in the drafts dir is deleted"
+out=$(bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_contains "quarantined (neighbour" "$out" "bundle: a suspect final is named as quarantined"
+q4block=$(printf '%s\n' "$out" | sed -n '/shifted pair/,/^$/p')
+assert_not_contains "DROPPED" "$q4block" "bundle: a quarantined pair is not diffed"
+assert_not_contains "INVENTED" "$q4block" "bundle: ...nor scored for inventions"
+rm -rf "$tmp"
+
+# Neighbours are the same recipe in the same project AND session: a session
+# that worked in two repositories does not make one project's draft the
+# neighbour of the other's final.
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$(iso_ago 900)","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"pA","session":"S","exit_status":0,"draft_file":"20260902T000001Z-pa.draft.txt"}
+{"ts":"$(iso_ago 800)","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"pB","session":"S","exit_status":0,"draft_file":"20260902T000002Z-pb.draft.txt"}
+EOF
+printf 'Release notes for the tray fix are ready to publish.\n' > "$tmp/drafts/20260902T000001Z-pa.draft.txt"
+printf 'Tray icon vanishes after suspend since the menu gets rebuilt.\n' > "$tmp/drafts/20260902T000001Z-pa.final.txt"
+printf 'The tray icon disappears after suspend because the menu is rebuilt.\n' > "$tmp/drafts/20260902T000002Z-pb.draft.txt"
+: > "$tmp/drafts/20260902T000002Z-pb.final.txt"
+out=$(bash "$SCRIPT" --quarantine --peek --file "$tmp/m.jsonl" 2>&1)
+assert_not_contains "pa.final.txt	" "$out" "quarantine: another project's draft in the same session is not a neighbour"
+# No verdict vouched for any final here: the suspect list must survive that.
+assert_contains "20260902T000002Z-pb.final.txt	empty" "$out" "quarantine: suspects are listed when no final was passed by a verdict"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
