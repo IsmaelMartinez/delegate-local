@@ -18,6 +18,11 @@ assert_contains() {
   if [[ "$haystack" == *"$needle"* ]]; then echo "  PASS  $name"; pass=$((pass+1))
   else echo "  FAIL  $name (missing '$needle')"; fail=$((fail+1)); fi
 }
+assert_not_contains() {
+  local needle="$1" haystack="$2" name="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then echo "  PASS  $name"; pass=$((pass+1))
+  else echo "  FAIL  $name (unexpectedly found '$needle')"; fail=$((fail+1)); fi
+}
 
 # 1. Missing file -> exit 1.
 EC=0
@@ -275,6 +280,35 @@ assert_contains "Per-recipe (delegate):" "$out" "per-recipe: section header pres
 assert_contains "commit-message        n=2  hits=1  misses=0  untracked=1" "$out" "per-recipe: commit-message hit/untracked exact counts"
 assert_contains "summarise-issue       n=1  hits=0  misses=1  untracked=0" "$out" "per-recipe: summarise-issue miss not dropped"
 rm -f "$recipefix"
+
+# 13b. input_quality split (#590): a recipe with any flagged row gets one
+# sub-line per label plus one for its unflagged rows, so a weak-input confound
+# is readable beside the recipe's hit rate. A row with two labels counts under
+# both; a recipe with no flagged row gets no sub-lines.
+iqfix=$(mktemp)
+cat > "$iqfix" <<'EOF'
+{"ts":"2026-09-26T10:00:00Z","source":"delegate","otel_span_id":"a1","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-09-26T10:01:00Z","source":"delegate","otel_span_id":"a2","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100,"input_quality":["one_line_exemplar","no_diff"]}
+{"ts":"2026-09-26T10:02:00Z","source":"delegate","otel_span_id":"a3","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100,"input_quality":["no_diff"]}
+{"ts":"2026-09-26T10:03:00Z","source":"delegate","otel_span_id":"a4","recipe":"summarise-issue","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-09-26T20:00:00Z","source":"feedback","ref_ts":"2026-09-26T10:00:00Z","ref_id":"a1","kept":true}
+{"ts":"2026-09-26T20:01:00Z","source":"feedback","ref_ts":"2026-09-26T10:01:00Z","ref_id":"a2","kept":false,"reason":"subject only"}
+EOF
+EC=0
+out=$(bash "$SCRIPT" --file "$iqfix" 2>&1) || EC=$?
+assert_eq 0 "$EC" "input-quality split: exits 0"
+assert_contains "commit-message        n=3  hits=1  misses=1  untracked=1" "$out" \
+  "input-quality split: the recipe line is unchanged"
+assert_contains "    input_quality=(none)             n=1  hits=1  misses=0  untracked=0" "$out" \
+  "input-quality split: unflagged rows get their own sub-line"
+assert_contains "    input_quality=no_diff            n=2  hits=0  misses=1  untracked=1" "$out" \
+  "input-quality split: a label counts every row carrying it"
+assert_contains "    input_quality=one_line_exemplar  n=1  hits=0  misses=1  untracked=0" "$out" \
+  "input-quality split: a two-label row counts under each label"
+iq_sub=$(printf '%s\n' "$out" | sed -n '/^  summarise-issue/{n;p;}')
+assert_not_contains "input_quality=" "$iq_sub" \
+  "input-quality split: a recipe with no flagged row gets no sub-lines"
+rm -f "$iqfix"
 
 # 14. Per-recipe negative gate: no recipe rows -> section hidden.
 norecipe=$(mktemp)

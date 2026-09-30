@@ -326,7 +326,8 @@ log_metric() {
   # The otel ids are written unconditionally so feedback rows and backfills
   # join without a second lookup. jq builds the line because model ids come
   # from whatever a provider reports. Optional fields (recipe, project,
-  # session, sampling_*) are present iff set, so the row shape is stable.
+  # session, sampling_*, input_quality) are present iff set, so the row shape
+  # is stable. input_quality is read from the global the recipe block sets.
   jq -nc \
     --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" --arg model "$model" \
     --arg recipe "$recipe_name" --arg project "$project" --arg session "${CLAUDE_CODE_SESSION_ID:-}" \
@@ -338,7 +339,7 @@ log_metric() {
     --arg crun "$checks_run" --arg cfail "$checks_failed" --arg cfix "$checks_autofixed" \
     --arg cnames "$checks_failed_names" --arg draft "$draft_file" --arg input "$input_file" \
     --arg retried "$retried" --arg retry_chars "$retry_chars" \
-    --arg tsha "$template_sha" --arg inputs "$inputs_file" --arg retry_failed "$retry_failed" \
+    --arg tsha "$template_sha" --arg inputs "$inputs_file" --arg retry_failed "$retry_failed" --arg iq "${input_quality:-}" \
     '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
      + (if $recipe != "" then {recipe:$recipe} else {} end)
      + (if $tsha != "" then {template_sha:$tsha} else {} end)
@@ -356,7 +357,8 @@ log_metric() {
      + (if $input != "" then {input_file:$input} else {} end)
      + (if $inputs != "" then {inputs_file:$inputs} else {} end)
      + (if $retried != "" then {retried:true, retry_chars:($retry_chars|tonumber)} else {} end)
-     + (if $retry_failed != "" then {retry_failed:true} else {} end)' \
+     + (if $retry_failed != "" then {retry_failed:true} else {} end)
+     + (if $iq != "" then {input_quality:($iq|split(","))} else {} end)' \
     >> "$metrics_file" 2>/dev/null
 }
 
@@ -747,6 +749,73 @@ if [[ -n "$recipe" ]]; then
     echo "delegate: recipe '$recipe' has unsubstituted placeholders: $missing" >&2
     echo "         pass them via --var key=value (or {{stdin}} via piped context)" >&2
     exit 2
+  fi
+fi
+
+# Weak inputs (#590): the recipe's frontmatter `input_quality:` block maps an
+# input (a --var name, or `stdin`) to the shape that makes it weak. A match is
+# named on one stderr line and recorded on the row as `input_quality`, and the
+# call goes ahead: an exit-2 refusal writes no row, so callers padded inputs
+# past it or stopped delegating. The labels:
+#   one_line_exemplar  no exemplar carries a body (one detector, read by
+#   titles_only        the value's shape; the two names follow each recipe):
+#                        `git log --pretty=fuller` — no commit whose indented
+#                        message holds a second non-blank line, so the gap
+#                        between headers and subject is not a body;
+#                        the gather step's BODY:/<<<EXAMPLE_END>>> envelope —
+#                        no BODY: section with a non-blank line in it;
+#                        anything else — no non-blank line after a blank one
+#                        that is not itself subject-shaped (any `#N ` line,
+#                        or a conventional `type(scope): ` line, optionally
+#                        behind a sha or a bare number)
+#   no_diff            no `diff --git` or `@@` line
+# A label this list does not know is ignored.
+input_quality=""
+if [[ -n "$recipe" ]]; then
+  iq_decl=$(awk '
+    NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
+    in_fm && /^---[[:space:]]*$/ { exit }
+    in_fm && /^input_quality:[[:space:]]*$/ { in_iq=1; next }
+    in_fm && in_iq && /^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*[a-z_]+[[:space:]]*$/ {
+      gsub(/[:[:space:]]+/, " "); sub(/^ /, ""); print; next }
+    in_fm && in_iq && /^[a-zA-Z_]/ { in_iq=0 }
+  ' "$recipe_file")
+  iq_named=""
+  while read -r iq_key iq_label; do
+    [[ -z "$iq_key" ]] && continue
+    iq_value=""
+    if [[ "$iq_key" == "stdin" ]]; then
+      iq_value="$context"
+    else
+      # The first value, the one the substitution used.
+      for kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
+        if [[ "${kv%%=*}" == "$iq_key" ]]; then iq_value="${kv#*=}"; break; fi
+      done
+    fi
+    case "$iq_label" in
+      no_diff)
+        grep -Eq '^diff --git |^@@ ' <<<"$iq_value" && continue ;;
+      one_line_exemplar|titles_only)
+        # Exit 0 when some exemplar carries a body, per the shapes above.
+        printf '%s\n' "$iq_value" | awk '
+          function subj(l) { return l ~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]+ / ||
+                                    l ~ /^#[0-9]+ / ||
+                                    l ~ /^([0-9]+ )?[a-z]+(\([^)]*\))?!?: / }
+          /^commit [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/ { mode = "fuller"; msg = 0; next }
+          mode == "fuller" { if (/^[[:space:]]+[^[:space:]]/ && ++msg >= 2) body = 1; next }
+          /^<<<EXAMPLE_(BEGIN|END)/ { mode = "env"; inbody = 0; next }
+          /^BODY:/ { mode = "env"; inbody = 1; if (/^BODY:[[:space:]]*[^[:space:]]/) body = 1; next }
+          mode == "env" { if (inbody && NF) body = 1; next }
+          NF { if (gap && !subj($0)) body = 1; seen = 1; next }
+          seen { gap = 1 }
+          END { exit !body }' && continue ;;
+      *) continue ;;
+    esac
+    input_quality="${input_quality:+$input_quality,}$iq_label"
+    iq_named="${iq_named:+$iq_named, }$iq_key=$iq_label"
+  done <<<"$iq_decl"
+  if [[ -n "$iq_named" ]]; then
+    echo "delegate: weak input for recipe '$recipe': $iq_named (sending anyway; see \"Context to gather first\" in prompts/$recipe.md)" >&2
   fi
 fi
 
