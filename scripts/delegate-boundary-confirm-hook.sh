@@ -9,9 +9,9 @@
 # known. It removes the pending marker the boundary hook left for this call,
 # matched by tool_use_id so no other call can confirm it, and creates a
 # per-session file that tells the boundary hook a confirmation can be
-# expected at all. It is also where a credited post's body FILE is stored as
-# the shipped final (#587), since only now does the file hold what was
-# posted. Fails OPEN: any error exits 0 with no output. Install is
+# expected at all. It is also the only place a credited post's body, inline
+# or file-backed, is stored as the shipped final (#587), since only now is it
+# known to have been posted. Fails OPEN: any error exits 0 with no output. Install is
 # opt-in, beside the boundary hook — see docs/boundary-hook.md.
 #
 # Env:
@@ -55,28 +55,32 @@ if [[ ! -f "$seen" ]]; then
   : > "$seen" 2>/dev/null || exit 0
 fi
 
-# capture_body_file <marker> — a credited post whose body is a FILE is
-# captured here, after the call succeeded, never at PreToolUse (#587): one
-# call that writes the file and posts it would have stored what the file held
-# before, the previous post's text. Filed under the marker's draft that the
-# text overlaps most (the oldest on a tie), with the boundary hook's own
-# guarantees: a bare *.draft.txt name, a stem that holds no final yet, an
-# exclusive create, 700 on the directory and 600 on the file.
-capture_body_file() {
-  local marker="$1" body_file drafts_csv drafts_dir d best text captured draft
+# capture_final <marker> — a credited post's shipped text is stored here,
+# after the call succeeded, never at PreToolUse (#587): a final written
+# before the post held text that never shipped when the post failed, the
+# previous post's text when one call wrote the body file and posted it, and
+# a call claimed as another's retry while both were in flight lost its own.
+# The text is the marker's `body_file`, read now, or the inline `body_text`
+# the boundary hook put in the marker, both cut at DELEGATE_DRAFT_MAX_BYTES.
+# Filed under the marker's draft that the text overlaps most (the oldest on
+# a tie), with the boundary hook's own guarantees: a bare *.draft.txt name, a
+# stem that holds no final yet, an exclusive create, 700 on the directory and
+# 600 on the file.
+capture_final() {
+  local marker="$1" body_file drafts_csv drafts_dir d best text max
   local -a cands=()
-  IFS=$'\x1f' read -r body_file drafts_csv captured draft < <(jq -r '[(.body_file // ""), ((.drafts // []) | map(strings) | join(",")), (.captured // false | tostring), (.draft // "")] | join("\u001f")' "$marker" 2>/dev/null) || return 0
-  [[ -n "${body_file:-}" && "$body_file" == /* && -f "$body_file" && -r "$body_file" ]] || return 0
-  drafts_dir="$(dirname "$metrics_file")/drafts"
-  text=$(head -c 65536 < "$body_file" 2>/dev/null; printf X); text=${text%X}
-  [[ -n "$text" ]] || return 0
-  # A retry of a refused inline post whose provisional final the boundary
-  # hook wrote (`captured`, #497): what this call sent replaces it.
-  case "${draft:-}" in */*|.*) draft="" ;; *.draft.txt) ;; *) draft="" ;; esac
-  if [[ "${captured:-}" == "true" && -n "$draft" ]]; then
-    ( umask 077; printf '%s' "$text" > "$drafts_dir/${draft%.draft.txt}.final.txt" ) 2>/dev/null
-    return 0
+  IFS=$'\x1f' read -r body_file drafts_csv < <(jq -r '[(.body_file // ""), ((.drafts // []) | map(strings) | join(","))] | join("\u001f")' "$marker" 2>/dev/null) || return 0
+  max="${DELEGATE_DRAFT_MAX_BYTES:-65536}"
+  [[ "$max" =~ ^[1-9][0-9]*$ ]] || max=65536
+  if [[ -n "${body_file:-}" ]]; then
+    [[ "$body_file" == /* && -f "$body_file" && -r "$body_file" ]] || return 0
+    text=$(head -c "$max" < "$body_file" 2>/dev/null; printf X)
+  else
+    text=$(jq -j '.body_text // ""' "$marker" 2>/dev/null | head -c "$max"; printf X)
   fi
+  text=${text%X}
+  [[ -n "$text" ]] || return 0
+  drafts_dir="$(dirname "$metrics_file")/drafts"
   IFS=',' read -r -a _raw <<<"${drafts_csv:-}"
   for d in ${_raw[@]+"${_raw[@]}"}; do
     case "$d" in */*|.*) continue ;; *.draft.txt) ;; *) continue ;; esac
@@ -114,7 +118,7 @@ for marker in "$pending_dir/$session_id".*; do
     marker="$marker.superseded"
     mv "$marker" "$mine" 2>/dev/null || continue
   fi
-  capture_body_file "$mine"
+  capture_final "$mine"
   if [[ "$marker" == *.superseded ]]; then
     row="${marker%.superseded}.row"
     if [[ -f "$row" ]] && jq -e 'type == "object" and .source == "opportunity"' "$row" >/dev/null 2>&1; then

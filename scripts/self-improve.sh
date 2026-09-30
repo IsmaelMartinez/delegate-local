@@ -398,9 +398,8 @@ jq -rs --arg prev "$prev_ts" '
     elif [[ -n "$final" && -f "$drafts_dir/$final" ]]; then
       fpath="$drafts_dir/$final"
       fbytes=$(wc -c < "$fpath" | tr -d ' ')
-      # An inline body the hook inferred was captured BEFORE the post, so it
-      # is what was about to go out rather than what demonstrably did; a
-      # body file is captured after the call succeeded (#587).
+      # A final the hook inferred from a post was stored once the call had
+      # succeeded (#587), not written by the caller; label it as such.
       if [[ "$fsrc" == "posted" ]]; then
         echo "    final:  $fpath ($fbytes bytes, captured from the post)"
       else
