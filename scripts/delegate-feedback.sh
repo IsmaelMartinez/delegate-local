@@ -4,7 +4,10 @@
 # `--ts`), or the one row inside the freshness window when no pin is given.
 # Feedback rows are keyed by `ref_ts` (and `ref_id`) to the row they judge and
 # `metrics-summary.sh` joins them at read time. Every row carries
-# verdict_source:"agent", the one verdict tier (ADR 0030).
+# verdict_source:"agent", the one verdict tier (ADR 0030). A row with a
+# stored final and a stored input carries `final_preexisting` (#588): true
+# when the final was already in the stdin the caller piped (a ritual
+# delegation, which the rollups report apart).
 #
 # Usage:  delegate-feedback.sh [--id <otel_span_id>|--ts <iso8601>]
 #                              [--source agent] [--final <path>|-]
@@ -243,7 +246,7 @@ candidates=$(jq -r --arg mode "$pin_mode" --arg id "$override_id" --arg ts "$ove
             elif $mode == "ts" then .ts == $ts
             elif $mode == "window" then ((.ts // "") | fromdateiso8601?) >= $cutoff
             else true end)
-   | [.ts, (.otel_span_id // ""), (.otel_trace_id // ""), (.model // ""), (.recipe // ""), (.project // ""), (.draft_file // "")]
+   | [.ts, (.otel_span_id // ""), (.otel_trace_id // ""), (.model // ""), (.recipe // ""), (.project // ""), (.draft_file // ""), (.inputs_file // ""), (.input_file // "")]
    | join("\u001f")' \
   "$metrics_file")
 [[ "$pin_mode" == "all" ]] && candidates=$(printf '%s\n' "$candidates" | tail -n 1)
@@ -284,7 +287,7 @@ MSG
   printf '%s\n' "$candidates" | awk -F "$(printf '\037')" '{ printf "    %s  %s  %s  %s\n", ($2 == "" ? "-" : $2), $1, ($5 == "" ? "(bare)" : $5), ($6 == "" ? "-" : $6) }' >&2
   exit 1
 fi
-IFS=$'\037' read -r ref_ts ref_id parent_trace_id parent_model parent_recipe feedback_project parent_draft <<< "$candidates"
+IFS=$'\037' read -r ref_ts ref_id parent_trace_id parent_model parent_recipe feedback_project parent_draft parent_inputs parent_input <<< "$candidates"
 parent_span_id="$ref_id"
 
 ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -378,6 +381,33 @@ elif [[ -n "$parent_draft" && "$kept" == "false" ]]; then
   fi
 fi
 
+# A ritual delegation (#588): the caller already had the text, ran the recipe
+# because the boundary hook requires a delegation before the post, and
+# shipped its own words, so the final sits inside the stdin it piped. No
+# template can win that row, so it is measured once, here, and stored as
+# `final_preexisting`: at least ritual_min_pct of the final's word bigrams in
+# the stored stdin (`<stem>.inputs.json`), or in the rendered input the model
+# saw (`<stem>.input.txt`) for a row from before inputs were stored. Left off
+# the row when there is no final or no stored input to measure against.
+# Both names come off the JSONL row and become paths read here: bare
+# filenames of the expected shape only.
+final_preexisting=""
+if [[ -n "$final_file" && -f "$drafts_dir/$final_file" ]]; then
+  ritual_src=""
+  case "$parent_inputs" in */*|.*) ;; *.inputs.json) [[ -f "$drafts_dir/$parent_inputs" ]] && ritual_src="$drafts_dir/$parent_inputs" ;; esac
+  if [[ -z "$ritual_src" ]]; then
+    case "$parent_input" in */*|.*) ;; *.input.txt) [[ -f "$drafts_dir/$parent_input" ]] && ritual_src="$drafts_dir/$parent_input" ;; esac
+  fi
+  if [[ -n "$ritual_src" ]]; then
+    # shellcheck source=lib/pair-score.sh
+    . "$_fb_script_dir/lib/pair-score.sh"
+    contained=$(printf '%s\t%s\n' "$drafts_dir/$final_file" "$ritual_src" | bigram_containment)
+    if [[ "$contained" =~ ^[0-9]+$ ]]; then
+      if (( contained >= ritual_min_pct )); then final_preexisting=true; else final_preexisting=false; fi
+    fi
+  fi
+fi
+
 # A rejection whose reason is byte-identical to one recorded minutes ago on
 # another delegation is a sweep pasting one verdict (#487): warn with the
 # count and write the row anyway, since refusing would leave the batch
@@ -406,8 +436,8 @@ fi
 # the referenced row's, never the cwd's, so the verdict lands where the
 # delegation did whatever shell records it. `ref_id` is written beside
 # `ref_ts` as the key two delegations cannot share.
-jq -nc --arg ts "$ts" --arg ref "$ref_ts" --arg refid "$ref_id" --argjson kept "$kept" --argjson scaffold "$is_scaffold" --arg reason "${reason:-}" --arg project "$feedback_project" --arg vsource "$verdict_source" --arg final "$final_file" --arg finalsrc "$final_source" \
-  '{ts:$ts, source:"feedback", ref_ts:$ref} + (if $refid != "" then {ref_id:$refid} else {} end) + {kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + (if $reason != "" then {reason:$reason} else {} end) + (if $project != "" then {project:$project} else {} end) + {verdict_source:$vsource} + (if $final != "" then {final_file:$final} else {} end) + (if $finalsrc != "" then {final_source:$finalsrc} else {} end)' \
+jq -nc --arg ts "$ts" --arg ref "$ref_ts" --arg refid "$ref_id" --argjson kept "$kept" --argjson scaffold "$is_scaffold" --arg reason "${reason:-}" --arg project "$feedback_project" --arg vsource "$verdict_source" --arg final "$final_file" --arg finalsrc "$final_source" --arg preexisting "$final_preexisting" \
+  '{ts:$ts, source:"feedback", ref_ts:$ref} + (if $refid != "" then {ref_id:$refid} else {} end) + {kept:$kept} + (if $scaffold then {scaffold:true} else {} end) + (if $reason != "" then {reason:$reason} else {} end) + (if $project != "" then {project:$project} else {} end) + {verdict_source:$vsource} + (if $final != "" then {final_file:$final} else {} end) + (if $finalsrc != "" then {final_source:$finalsrc} else {} end) + (if $preexisting != "" then {final_preexisting:($preexisting == "true")} else {} end)' \
   >> "$metrics_file"
 
 case "$verdict" in

@@ -177,3 +177,53 @@ sentences() {
              -e 's/[[:space:]]*\(#[0-9]+\)$//' \
     | awk 'length($0) >= 40'
 }
+
+# The share of its word bigrams a shipped final must find in the stdin the
+# caller piped for the delegation to be ritual (#588): the caller already
+# had the text, ran the recipe for the boundary hook's credit and posted its
+# own words, so no template could have produced a keepable draft.
+ritual_min_pct=90
+
+# bigram_containment — reads `<text path>TAB<source path>` pairs on stdin and
+# prints, one line per pair, the whole percent of the text's distinct word
+# bigrams that also occur in the source, or `-` when either file cannot be
+# read or the text has fewer than two words. A source named *.inputs.json is
+# read as its `stdin` value, the piped context delegate.sh stored (#588). A
+# word is a run of ASCII letters and digits, lowercased, and every word
+# counts: word_overlap's four-letter content words would drop the "is in"
+# and "to the" that make a bigram a sequence rather than a vocabulary. One
+# perl for every pair; the pattern is a single class, linear.
+bigram_containment() {
+  perl -MJSON::PP -e '
+    sub slurp {
+      my $f = shift;
+      open(my $fh, "<", $f) or return undef;
+      local $/; my $t = <$fh> // ""; close $fh;
+      if ($f =~ /\.inputs\.json$/) {
+        my $j = eval { JSON::PP->new->utf8->decode($t) };
+        return undef unless ref $j eq "HASH";
+        $t = $j->{stdin} // "";
+        utf8::encode($t) if utf8::is_utf8($t);
+      }
+      return $t;
+    }
+    sub bigrams {
+      my @w = (lc(shift) =~ /[a-z0-9]+/g);
+      my %b; $b{"$w[$_ - 1] $w[$_]"} = 1 for 1 .. $#w;
+      return \%b;
+    }
+    while (my $line = <STDIN>) {
+      chomp $line;
+      my ($text, $src) = split /\t/, $line, 2;
+      my $t = defined $text ? slurp($text) : undef;
+      my $s = defined $src ? slurp($src) : undef;
+      if (!defined $t || !defined $s) { print "-\n"; next }
+      my $tb = bigrams($t);
+      my $n = scalar keys %$tb;
+      if (!$n) { print "-\n"; next }
+      my $sb = bigrams($s);
+      my $in = grep { $sb->{$_} } keys %$tb;
+      printf "%d\n", $in * 100 / $n;
+    }
+  '
+}

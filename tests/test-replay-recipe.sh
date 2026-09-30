@@ -435,6 +435,21 @@ assert_contains "Cases:     2 (kept=1 scaffold=0 rewrote=1; newest 40)" "$out" "
 assert_contains "rej00001 skipped: its final is quarantined" "$out" "the skip is named"
 assert_eq present "$([[ -e "$tmp/data/drafts/202601T100000Z-rej00001.final.txt" ]] && echo present || echo absent)" "the quarantined final is not deleted"
 
+# #588: a ritual case, whose shipped final was already in the piped stdin, is
+# one no template can win, so it is skipped: by the verdict's stored
+# final_preexisting, or measured here for a verdict recorded before it. The
+# Cases line names the distinct sessions the cases come from.
+rm -rf "$tmp/data" "$tmp/out"
+seed "$tmp/data" 3 "$champ_sha"
+perl -pi -e 's/("ref_id":"rej00001","kept":false)/$1,"final_preexisting":true/' "$tmp/data/m.jsonl"
+printf '%s\n' "$STDIN" > "$tmp/data/drafts/202602T100000Z-rej00002.final.txt"
+perl -pi -e 's/("otel_span_id":"rej00003")/$1,"session":"sess-a"/; s/("otel_span_id":"kept0001")/$1,"session":"sess-b"/' "$tmp/data/m.jsonl"
+out=$(run --recipe rp)
+assert_contains "Cases:     2 (kept=1 scaffold=0 rewrote=1; newest 40)  sessions=2" "$out" \
+  "ritual cases are dropped and the case set names its sessions"
+assert_contains "rej00001 skipped: ritual" "$out" "a stored ritual verdict is skipped and named"
+assert_contains "rej00002 skipped: ritual" "$out" "an unstored ritual case is measured, skipped and named"
+
 rm -rf "$tmp"
 
 echo
