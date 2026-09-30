@@ -421,11 +421,14 @@ score() {
   printf '%s/%s/%s/%s/%s/%s/%s=%s' "$checks" "$dropped" "$over" "$invented" "$echoed" "$shape" "$length" "$(( checks + dropped + over + invented + echoed + shape + length ))"
 }
 
-# sign_p <wins> <losses>: one-sided exact sign test, P(X >= wins | n, 1/2).
+# sign_p <wins> <losses>: one-sided exact sign test, P(X >= wins | n, 1/2),
+# printed as "<three decimals> <1 when p < 0.05, else 0>". The test is on the
+# unrounded p: 101 wins to 78 is p=0.04992, which the print rounds to 0.050,
+# and comparing the printed value read it as not significant (#554).
 sign_p() {
   perl -e 'my ($w,$l)=@ARGV; my $n=$w+$l; my $p=0;
            for my $k ($w..$n) { my $c=1; for my $i (1..$k) { $c *= ($n-$i+1)/$i } $p += $c }
-           printf "%.3f", $p / (2**$n)' "$1" "$2"
+           $p /= 2**$n; printf "%.3f %d", $p, ($p < 0.05 ? 1 : 0)' "$1" "$2"
 }
 
 echo "=== replay: $recipe ==="
@@ -517,12 +520,12 @@ if (( errors > 0 )); then
   exit 0
 fi
 if (( wins > losses )); then
-  p=$(sign_p "$wins" "$losses")
+  read -r p p_sig <<< "$(sign_p "$wins" "$losses")"
   echo "Sign test: p=$p (one-sided, $wins wins to $losses)"
   # A rise in length flags blocks ACCEPT as a rise in failed checks does:
   # over is unbounded, so against anchor-poor references a candidate that
   # says nothing wins on anchors, and the length flag is what names it.
-  if awk -v p="$p" 'BEGIN { exit !(p < 0.05) }' && (( cand_checks <= champ_checks )) && (( cand_len <= champ_len )); then
+  if (( p_sig )) && (( cand_checks <= champ_checks )) && (( cand_len <= champ_len )); then
     echo "Verdict: ACCEPT — the candidate wins $wins cases and loses $losses (p=$p) with no rise in failed checks or length flags."
   elif (( cand_checks > champ_checks )); then
     echo "Verdict: INCONCLUSIVE — more wins than losses, but failed checks rose from $champ_checks to $cand_checks."
@@ -532,9 +535,9 @@ if (( wins > losses )); then
     echo "Verdict: INCONCLUSIVE — $wins wins to $losses is not yet significant (p=$p); wait for more cases or a wider edit."
   fi
 elif (( losses > wins )); then
-  p=$(sign_p "$losses" "$wins")
+  read -r p p_sig <<< "$(sign_p "$losses" "$wins")"
   echo "Sign test: p=$p (one-sided, $losses losses to $wins)"
-  if awk -v p="$p" 'BEGIN { exit !(p < 0.05) }'; then
+  if (( p_sig )); then
     echo "Verdict: REJECT — the candidate loses $losses cases and wins $wins (p=$p)."
   else
     echo "Verdict: INCONCLUSIVE — $losses losses to $wins wins is not yet significant (p=$p)."

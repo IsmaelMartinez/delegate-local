@@ -416,6 +416,91 @@ assert_eq 6 "$EC" "APPLY_AND_TEST_PYTHON: bogus path -> exit 6"
 assert_contains "python3 not on PATH" "$out" "APPLY_AND_TEST_PYTHON: bogus path -> error message"
 rm -rf "$tmp"
 
+# 22. A value flag with no value is a bad invocation (USAGE), not a FAIL
+# from `set -u` tripping on the missing $2 (#554); so is a non-numeric timeout.
+tmp=$(mktemp -d)
+make_fixture "$tmp"
+printf "x\n" > "$tmp/patch.txt"
+for flag in --timeout --test-script --out --source-name; do
+  EC=0
+  out=$(bash "$SCRIPT" "$tmp" "$tmp/patch.txt" "$flag" 2>&1) || EC=$?
+  assert_eq 6 "$EC" "$flag with no value -> exit 6"
+  assert_contains "$flag requires a value" "$out" "$flag with no value -> names the flag"
+done
+# An all-zero value is no limit at all: perl's alarm "00" disables it.
+for val in soon 0 00; do
+  EC=0
+  out=$(bash "$SCRIPT" --timeout "$val" "$tmp" "$tmp/patch.txt" 2>&1) || EC=$?
+  assert_eq 6 "$EC" "--timeout $val -> exit 6"
+done
+rm -rf "$tmp"
+
+# 23. TIMEOUT fires on every platform, not only where coreutils `timeout`
+# exists (#554): a test that sleeps past --timeout is stopped and reported.
+# The outer alarm bounds this suite if the script ever hangs again.
+tmp=$(mktemp -d)
+make_fixture "$tmp"
+cat >> "$tmp/test_source.py" <<'PY'
+
+def test_hangs():
+    import time
+    time.sleep(20)
+PY
+cat > "$tmp/patch.txt" <<'EOF'
+<<<<<<< SEARCH
+def add(a, b):
+    return a + b
+=======
+def add(a, b):
+    return a + b
+>>>>>>> REPLACE
+EOF
+start=$(date +%s)
+EC=0
+out=$(perl -e 'alarm 60; exec @ARGV' bash "$SCRIPT" --timeout 1 --out "$tmp.out" "$tmp" "$tmp/patch.txt" 2>&1) || EC=$?
+elapsed=$(( $(date +%s) - start ))
+assert_eq 4 "$EC" "hanging test -> exit 4"
+assert_contains "VERDICT: TIMEOUT" "$out" "hanging test -> TIMEOUT verdict"
+assert_eq yes "$( (( elapsed < 15 )) && echo yes || echo "no (${elapsed}s)")" "hanging test is stopped near --timeout, not when it finishes"
+rm -rf "$tmp" "$tmp.out"
+
+# 24. The group KILL still lands after pytest itself has exited on TERM: a
+# grandchild that ignores TERM would otherwise outlive a reported TIMEOUT.
+tmp=$(mktemp -d)
+make_fixture "$tmp"
+cat >> "$tmp/test_source.py" <<'PY'
+
+def test_spawns_stubborn_grandchild():
+    import subprocess, sys, time
+    subprocess.Popen([sys.executable, "-c",
+        "import os, signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "open('gc.pid', 'w').write(str(os.getpid()))\n"
+        "time.sleep(60)\n"])
+    time.sleep(30)
+PY
+cat > "$tmp/patch.txt" <<'EOF'
+<<<<<<< SEARCH
+def add(a, b):
+    return a + b
+=======
+def add(a, b):
+    return a + b
+>>>>>>> REPLACE
+EOF
+EC=0
+out=$(perl -e 'alarm 60; exec @ARGV' bash "$SCRIPT" --timeout 2 --out "$tmp.out" "$tmp" "$tmp/patch.txt" 2>&1) || EC=$?
+assert_eq 4 "$EC" "stubborn grandchild -> exit 4"
+gc=$(cat "$tmp.out/gc.pid" 2>/dev/null)
+assert_eq yes "$([[ -n "$gc" ]] && echo yes || echo no)" "stubborn grandchild recorded its pid"
+if [[ -n "$gc" ]] && kill -0 "$gc" 2>/dev/null; then
+  echo "  FAIL  stubborn grandchild is killed with its group after TIMEOUT (pid $gc still alive)"; fail=$((fail+1))
+  kill -9 "$gc" 2>/dev/null
+else
+  echo "  PASS  stubborn grandchild is killed with its group after TIMEOUT"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$tmp.out"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

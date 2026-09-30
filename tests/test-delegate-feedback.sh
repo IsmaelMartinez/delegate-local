@@ -483,6 +483,26 @@ assert_eq 0 "$EC" "nudge names matches: exit 0"
 assert_contains "pr-description prose tier stalled" "$out" "nudge names matches: reason text rendered"
 rm -rf "$tmp"
 
+# n26b: the matches print in the order the header names, most recent first
+# (#554); the file is appended oldest first, so file order is the reverse.
+tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 3
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1)
+assert_eq "(3) (2) (1)" "$(printf '%s\n' "$out" | sed -n 's/^  - .*body (\([0-9]\))$/(\1)/p' | tr '\n' ' ' | sed 's/ $//')" \
+  "nudge order: matches print most recent first, as the header says"
+rm -rf "$tmp"
+# Two matches in the same second: the later append is the more recent, even
+# when its reason sorts first.
+tmp=$(mktemp -d)
+hist_ts=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-600))')
+for tag in zulu alpha; do
+  echo "{\"ts\":\"$hist_ts\",\"source\":\"feedback\",\"ref_ts\":\"$hist_ts\",\"kept\":false,\"reason\":\"pr-description recipe stalled past 30s on prose tier body $tag\"}" >> "$tmp/m.jsonl"
+done
+echo "{\"ts\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\",\"source\":\"delegate\",\"tier\":\"prose\",\"model\":\"q\",\"duration_ms\":1000,\"exit_status\":0}" >> "$tmp/m.jsonl"
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1)
+assert_eq "alpha zulu" "$(printf '%s\n' "$out" | sed -n 's/^  - .*body \([a-z]*\)$/\1/p' | tr '\n' ' ' | sed 's/ $//')" \
+  "nudge order: a same-second tie prints the later append first"
+rm -rf "$tmp"
+
 # n27: a stopword-only reason has length but no tokens, so it reaches the
 # matcher's empty-tokens path and must not crash perl.
 tmp=$(mktemp -d); seed_history "$tmp/m.jsonl" 3
@@ -1630,6 +1650,79 @@ assert_contains "20260827T100000Z-aaaa1111.final.txt already exists" "$out" \
   "adopt: the caller is told the stem already had a final"
 rm -rf "$tmp"
 
+# A --final byte-identical to the hook's capture is that capture (#554): the
+# existing file is reused and the row marked posted, with no numbered copy
+# and no warning that this is another delegation.
+adopt_setup
+printf 'what the hook saw go out\n' > "$tmp/drafts/20260827T100000Z-aaaa1111.final.txt"
+printf 'what the hook saw go out\n' > "$tmp/same.txt"
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id dddddddddddddddd miss "r" --final "$tmp/same.txt" 2>&1)
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "20260827T100000Z-aaaa1111.final.txt posted" "$(printf '%s' "$last" | jq -r '"\(.final_file // "-") \(.final_source // "-")"')" \
+  "identical final: the hook's capture is reused and marked posted"
+assert_eq "20260827T100000Z-aaaa1111.final.txt" "$(ls "$tmp/drafts" 2>/dev/null | grep aaaa1111 | tr '\n' ' ' | sed 's/ $//')" \
+  "identical final: no numbered copy is written"
+if [[ "$out" != *"already exists"* ]]; then echo "  PASS  identical final: no collision warning"; pass=$((pass+1))
+else echo "  FAIL  identical final: collision warning printed ($out)"; fail=$((fail+1)); fi
+# The same from stdin.
+printf 'what the hook saw go out\n' | DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id dddddddddddddddd miss "r2" --final - >/dev/null 2>&1
+assert_eq "20260827T100000Z-aaaa1111.final.txt posted" "$(tail -1 "$tmp/m.jsonl" | jq -r '"\(.final_file // "-") \(.final_source // "-")"')" \
+  "identical final from stdin: the capture is reused and marked posted"
+# Trailing newlines are not a different text: the hook's capture and a
+# caller's file differ there (8 of 171 numbered finals on 2026-09-30).
+printf 'what the hook saw go out\n\n\n' > "$tmp/more-nl.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id dddddddddddddddd miss "r3" --final "$tmp/more-nl.txt" >/dev/null 2>&1
+printf 'what the hook saw go out' > "$tmp/no-nl.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id dddddddddddddddd miss "r4" --final "$tmp/no-nl.txt" >/dev/null 2>&1
+assert_eq "20260827T100000Z-aaaa1111.final.txt posted 20260827T100000Z-aaaa1111.final.txt posted" \
+  "$(tail -2 "$tmp/m.jsonl" | jq -r '"\(.final_file // "-") \(.final_source // "-")"' | tr '\n' ' ' | sed 's/ $//')" \
+  "final differing only in trailing newlines: the capture is reused and marked posted"
+assert_eq 1 "$(ls "$tmp/drafts" | grep -c 'aaaa1111\.final')" \
+  "final differing only in trailing newlines: no numbered copy"
+rm -rf "$tmp"
+
+# An identical final an earlier verdict supplied by hand is reused but is
+# not relabelled posted; one identical to a numbered sibling reuses that
+# sibling and does not take the next number.
+adopt_setup
+printf 'first shipped' > "$tmp/one.txt"
+printf 'second shipped' > "$tmp/two.txt"
+for f in one two; do
+  DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+    bash "$SCRIPT" --id dddddddddddddddd miss "r $f" --final "$tmp/$f.txt" >/dev/null 2>&1
+done
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id dddddddddddddddd miss "again one" --final "$tmp/one.txt" >/dev/null 2>&1
+assert_eq "20260827T100000Z-aaaa1111.final.txt -" "$(tail -1 "$tmp/m.jsonl" | jq -r '"\(.final_file // "-") \(.final_source // "-")"')" \
+  "identical to a hand-supplied final: reused, not labelled posted"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id dddddddddddddddd miss "again two" --final "$tmp/two.txt" >/dev/null 2>&1
+assert_eq "20260827T100000Z-aaaa1111.final.2.txt -" "$(tail -1 "$tmp/m.jsonl" | jq -r '"\(.final_file // "-") \(.final_source // "-")"')" \
+  "identical to a numbered final: that sibling is reused"
+assert_eq 2 "$(ls "$tmp/drafts" | grep -c 'aaaa1111\.final')" \
+  "identical finals: no third final file"
+rm -rf "$tmp"
+
+# A draftless stem is named from the second-precision ref_ts alone, so two
+# draftless delegations in one second share it: the same text shipped by
+# both is two finals, not one reused file.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","tier":"prose","exit_status":0,"otel_span_id":"ffffffffffffff01"}\n' "$TS_LATEST" >> "$tmp/m.jsonl"
+printf 'same shipped text\n' > "$tmp/same.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id "$ID_LATEST" miss "first" --final "$tmp/same.txt" >/dev/null 2>&1
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id ffffffffffffff01 miss "second" --final "$tmp/same.txt" >/dev/null 2>&1
+nd_stem="$(printf '%s' "$TS_LATEST" | tr -d ':-')-nodraft"
+assert_eq "$nd_stem.final.txt $nd_stem.final.2.txt" \
+  "$(jq -r 'select(.source=="feedback") | .final_file // "-"' "$tmp/m.jsonl" | tr '\n' ' ' | sed 's/ $//')" \
+  "draftless stems sharing a second: the second verdict stores its own numbered final"
+rm -rf "$tmp"
+
 # Each further final on the same stem takes the next free number, and every
 # row names the file it wrote.
 adopt_setup
@@ -2000,6 +2093,16 @@ DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
 last=$(tail -1 "$tmp/m.jsonl")
 assert_eq "posted true" "$(printf '%s' "$last" | jq -r '"\(.final_source // "-") \(.final_preexisting // "absent")"')" \
   "ritual: an adopted posted final is scored against the stdin too"
+rm -rf "$tmp"
+
+# A --final identical to the hook's capture reuses it (#554) and is scored.
+ritual_setup
+printf '%s\n' "$RITUAL_TEXT" > "$tmp/drafts/20260927T100000Z-bbbb2222.final.txt"
+printf '%s\n' "$RITUAL_TEXT" > "$tmp/shipped.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id eeeeeeeeeeeeeeee miss "posted my own text" --final "$tmp/shipped.txt" >/dev/null 2>&1
+assert_eq "20260927T100000Z-bbbb2222.final.txt posted true" "$(tail -1 "$tmp/m.jsonl" | jq -r '"\(.final_file // "-") \(.final_source // "-") \(.final_preexisting // "absent")"')" \
+  "ritual: a reused identical final is marked posted and scored"
 rm -rf "$tmp"
 
 # Without inputs.json (a row from before 2026-09-19) the row is unmeasurable:

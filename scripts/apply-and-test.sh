@@ -57,12 +57,16 @@ EOF
   exit 6
 }
 
+# A value flag at the end of the line is a bad invocation: under `set -u` a
+# bare $2 aborted with status 1, which reads as a FAIL verdict (#554).
+need_value() { [[ $# -ge 2 ]] || { echo "$1 requires a value" >&2; usage; }; }
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --test-script) test_script="$2"; shift 2 ;;
-    --timeout)     timeout_secs="$2"; shift 2 ;;
-    --out)         out_dir="$2"; shift 2 ;;
-    --source-name) source_name="$2"; shift 2 ;;
+    --test-script) need_value "$@"; test_script="$2"; shift 2 ;;
+    --timeout)     need_value "$@"; timeout_secs="$2"; shift 2 ;;
+    --out)         need_value "$@"; out_dir="$2"; shift 2 ;;
+    --source-name) need_value "$@"; source_name="$2"; shift 2 ;;
     -h|--help)     usage ;;
     --*)           echo "unknown flag: $1" >&2; usage ;;
     *)
@@ -75,6 +79,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$source_dir" && -n "$patch_file" ]] || usage
+# No leading zero: "00" is no limit at all to perl's alarm.
+case "$timeout_secs" in ''|*[!0-9]*|0*) echo "--timeout must be a positive number of seconds" >&2; usage ;; esac
 [[ -d "$source_dir" ]] || { echo "source-dir not a directory: $source_dir" >&2; exit 6; }
 [[ -f "$source_dir/$source_name" ]] || { echo "missing $source_name in $source_dir" >&2; exit 6; }
 [[ -f "$source_dir/$test_script" ]] || { echo "missing $test_script in $source_dir" >&2; exit 6; }
@@ -207,24 +213,44 @@ mkdir -p "$out_dir"
 cp -R "$source_dir/." "$out_dir/"
 cp "$patched_file" "$out_dir/$source_name"
 
-# `timeout` is coreutils, not part of the BSD baseline. pytest is invoked as
-# a python module so only the chosen interpreter matters.
+# `timeout` is coreutils and absent on macOS, where TIMEOUT never fired, so
+# the limit is a perl alarm on every platform (#554): pytest runs in its own
+# process group, which gets TERM at the limit and KILL 5 s later, as
+# `timeout --kill-after=5` did, and the wrapper returns 124 on either. pytest
+# is invoked as a python module so only the chosen interpreter matters.
 log_file=$(mktemp)
 
 run_pytest() {
-  if command -v timeout >/dev/null 2>&1; then
-    timeout --kill-after=5 "$timeout_secs" "$py" -m pytest -q --no-header "$test_script" >"$log_file" 2>&1
-  else
-    # No timeout on the BSD baseline: an infinite loop hangs the caller.
-    "$py" -m pytest -q --no-header "$test_script" >"$log_file" 2>&1
-  fi
+  perl -e '
+    my ($secs, @cmd) = @ARGV;
+    my $pid = fork;
+    die "fork: $!\n" unless defined $pid;
+    if ($pid == 0) { setpgrp(0, 0); exec @cmd or exit 127; }
+    # Its own group no longer sees the terminal'"'"'s ^C, so pass it on.
+    for my $s (qw(INT TERM HUP)) { $SIG{$s} = sub { kill($s, -$pid) } }
+    my ($fired, $term_at) = (0, 0);
+    $SIG{ALRM} = sub { $term_at ||= time; kill(($fired++ ? "KILL" : "TERM"), -$pid); alarm 5; };
+    alarm $secs;
+    my $r;
+    do { $r = waitpid($pid, 0) } while ($r == -1 && $!{EINTR});
+    alarm 0;
+    if ($fired) {
+      # pytest may exit on TERM while a child that ignores it lives on in
+      # the group: the KILL is still owed when the grace period ends.
+      if ($fired == 1) {
+        select(undef, undef, undef, 0.1) while kill(0, -$pid) && time < $term_at + 5;
+        kill("KILL", -$pid);
+      }
+      exit 124;
+    }
+    exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
+  ' "$timeout_secs" "$py" -m pytest -q --no-header "$test_script" >"$log_file" 2>&1
 }
 
 (cd "$out_dir" && run_pytest)
 pytest_rc=$?
 
-# coreutils timeout returns 124 on timeout, 137 on SIGKILL after kill-after.
-if [[ "$pytest_rc" == "124" || "$pytest_rc" == "137" ]]; then
+if [[ "$pytest_rc" == "124" ]]; then
   emit TIMEOUT "pytest exceeded ${timeout_secs}s"
   exit 4
 fi
