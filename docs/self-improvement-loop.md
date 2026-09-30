@@ -35,7 +35,14 @@ kept, used as a scaffold, or rewritten, and the usable rate over all of them.
 Every verdict is the agent's own record of what it did with its draft, and
 that is the one tier there is (ADR 0030): the agent that used or rewrote the
 output is the judge, and the reason plus the draft/final pair is what turns a
-verdict into evidence.
+verdict into evidence. A draft that shipped with only caller-fixed lines added
+(a trailer, a `Refs` or `Closes` line, the Claude Code footer, a session URL)
+is a hit, not a scaffold: those lines are the caller's to add whatever the
+draft said, and such pairs were labelled kept on 6 rows on 2026-09-16 and
+scaffold on 13 from 2026-09-23 (#589). The
+bundle's `SHAPE` and `DROPPED` lines and the replay's `dropped` read the
+shipped body without those lines for the same reason (`body_only` in
+`scripts/lib/pair-score.sh`).
 
 The **per-recipe outcomes** section ranks recipes by usable rate — kept plus
 scaffold — over a rolling window, worst first, so the recipe worth your

@@ -7554,6 +7554,111 @@ else
 fi
 rm -rf "$tmp"
 
+# 589a. no_title_line: pr-description's output is a body, so a leading
+# conventional-commit title line (`type(scope): ...` or `#N type: ...`) is
+# stripped when a blank line separates it from the body, like the
+# no_padding_tail autofix, and counted as checks_autofixed.
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/ttl.md" <<'EOF'
+---
+checks:
+  no_title_line: true
+---
+# ttl
+
+## When to use
+Title-line test recipe.
+
+## Prompt template
+
+```
+GO
+```
+
+## Calibration notes
+n/a
+EOF
+ttl_run() { # <mock response> [env...]
+  make_mock_curl_think "$tmp" "$1"; shift
+  errf=$(mktemp)
+  out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
+    DELEGATE_PROMPTS_DIR="$prompts" "$@" bash "$SCRIPT" --recipe ttl prose "go" </dev/null 2>"$errf")
+  err=$(cat "$errf"); rm -f "$errf"
+}
+ttl_run 'feat(replay): add the gate\n\nThe gate replays each case under both templates.'
+assert_contains "check 'no_title_line' AUTO-FIXED" "$err" "no_title_line: a type(scope): title line is auto-fixed"
+assert_eq "The gate replays each case under both templates." "$out" "no_title_line: the title and its blank line are stripped, the body kept"
+assert_contains '"checks_autofixed":1' "$(tail -1 "$metrics")" "no_title_line: the strip is counted on the row"
+ttl_run '#587 fix: store finals after the call\n\nThe confirm hook stores every body.'
+assert_eq "The confirm hook stores every body." "$out" "no_title_line: a #N type: title line is stripped"
+ttl_run 'The gate replays each case.\n\nfix: nothing here is a title.'
+assert_not_contains "no_title_line" "$err" "no_title_line: a body that opens with prose is clean"
+assert_eq $'The gate replays each case.\n\nfix: nothing here is a title.' "$out" "no_title_line: a type-shaped line after the first is left alone"
+ttl_run 'feat: add the gate\nThe gate replays each case.' DELEGATE_NO_RETRY=1
+assert_contains "check 'no_title_line' FAILED" "$err" "no_title_line: a title glued to the body is reported, not stripped"
+assert_contains $'feat: add the gate\nThe gate' "$out" "no_title_line: ...and the output is left as generated"
+assert_contains '"checks_failed_names":["no_title_line"]' "$(tail -1 "$metrics")" "no_title_line: the failure is named on the row"
+ttl_run 'feat: add the gate' DELEGATE_NO_RETRY=1
+assert_contains "check 'no_title_line' FAILED" "$err" "no_title_line: a title with no body after it is reported, never stripped to nothing"
+ttl_run 'feat(replay): add the gate\n\nThe gate replays each case.' DELEGATE_NO_AUTOFIX=1 DELEGATE_NO_RETRY=1
+assert_contains "check 'no_title_line' FAILED" "$err" "no_title_line: DELEGATE_NO_AUTOFIX=1 restores warn-only"
+rm -rf "$tmp" "$metrics"
+
+# 589b. no_subject_echo: commit-message's subject copied from an exemplar
+# subject — the recipe's own Wrong/Correct lines or a recent_commits entry —
+# is rejected. no_example_echo cannot see it: a lone subject normalises under
+# its 40-char floor, and a semicolon-joined list of subjects is one line. The
+# compare strips a leading hash, the type prefix and a trailing (#N) on both
+# sides, splits on ';' and has no floor. Only the draft's subject is compared.
+tmp=$(mktemp -d)
+metrics=$(mktemp)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+cat > "$prompts/sub.md" <<'EOF'
+---
+echo_guard_vars: recent_commits
+checks:
+  no_subject_echo: true
+---
+# sub
+
+## When to use
+Subject-echo test recipe.
+
+## Prompt template
+
+```
+Wrong: fix: refresh token before handshake
+Correct: fix(auth): refresh token before handshake
+=== Recent ===
+{{recent_commits}}
+```
+
+## Calibration notes
+n/a
+EOF
+sub_rc='3f9e2a1 feat: add the replay gate (#534); 81a3511 fix: store finals after the call (#596)'
+sub_run() { # <mock response> [env...]
+  make_mock_curl_think "$tmp" "$1"; shift
+  errf=$(mktemp)
+  out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
+    DELEGATE_PROMPTS_DIR="$prompts" DELEGATE_NO_RETRY=1 "$@" \
+    bash "$SCRIPT" --recipe sub --var recent_commits="$sub_rc" prose "go" </dev/null 2>"$errf")
+  err=$(cat "$errf"); rm -f "$errf"
+}
+sub_run 'fix(auth): refresh token before handshake\n\nThe token expired mid-handshake.'
+assert_contains "check 'no_subject_echo' FAILED" "$err" "no_subject_echo: a subject copied from the recipe's own example fails"
+assert_not_contains "no_example_echo' FAILED" "$err" "no_subject_echo: ...which no_example_echo misses under its 40-char floor"
+assert_contains '"checks_failed_names":["no_subject_echo"]' "$(tail -1 "$metrics")" "no_subject_echo: the failure is named on the row"
+sub_run 'fix(hooks): store finals after the call\n\nThe confirm hook now writes them.'
+assert_contains "check 'no_subject_echo' FAILED" "$err" "no_subject_echo: a subject copied from one of the semicolon-joined recent commits fails, hash, type and (#N) aside"
+sub_run 'fix: write finals from the confirm hook\n\nStore finals after the call.'
+assert_not_contains "no_subject_echo" "$err" "no_subject_echo: a new subject is clean, whatever the body repeats"
+sub_run 'fix: store finals after the call\n\nBody.' DELEGATE_NO_ECHO_CHECK=1
+assert_not_contains "no_subject_echo" "$err" "no_subject_echo: DELEGATE_NO_ECHO_CHECK=1 silences it with the other echo checks"
+rm -rf "$tmp" "$metrics"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
