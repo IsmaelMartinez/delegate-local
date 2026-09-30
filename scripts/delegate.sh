@@ -1242,14 +1242,16 @@ echo_matches() {
 }
 
 # echo_guard_values — the values of the --var names the recipe lists under
-# `echo_guard_vars:` (#428), one after another, each ending in a newline:
+# `echo_guard_vars:` (#428), the first value of each, each ending in a newline:
 # exemplars passed as shape anchors, whose content the answer must not copy.
 echo_guard_values() {
   local _egv _kv
   [[ -n "${recipe_echo_guard_vars:-}" ]] || return 0
   for _egv in $(printf '%s' "$recipe_echo_guard_vars" | tr ',' ' '); do
     for _kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
-      [[ "${_kv%%=*}" == "$_egv" ]] && printf '%s\n' "${_kv#*=}"
+      # First value only: a var passed twice substitutes its first, and the
+      # second never reached the model.
+      if [[ "${_kv%%=*}" == "$_egv" ]]; then printf '%s\n' "${_kv#*=}"; break; fi
     done
   done
   return 0

@@ -7657,6 +7657,15 @@ sub_run 'fix: write finals from the confirm hook\n\nStore finals after the call.
 assert_not_contains "no_subject_echo" "$err" "no_subject_echo: a new subject is clean, whatever the body repeats"
 sub_run 'fix: store finals after the call\n\nBody.' DELEGATE_NO_ECHO_CHECK=1
 assert_not_contains "no_subject_echo" "$err" "no_subject_echo: DELEGATE_NO_ECHO_CHECK=1 silences it with the other echo checks"
+# A guard var passed twice substitutes its first value; the second never
+# reached the model, so a subject matching only it is not an echo.
+make_mock_curl_think "$tmp" 'fix: tidy the release notes\n\nBody.'
+errf=$(mktemp)
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_PROMPTS_DIR="$prompts" DELEGATE_NO_RETRY=1 \
+  bash "$SCRIPT" --recipe sub --var recent_commits="$sub_rc" --var recent_commits="chore: tidy the release notes" prose "go" </dev/null 2>"$errf")
+err=$(cat "$errf"); rm -f "$errf"
+assert_not_contains "no_subject_echo" "$err" "no_subject_echo: only the first value of a guard var passed twice is an exemplar"
 rm -rf "$tmp" "$metrics"
 
 echo
