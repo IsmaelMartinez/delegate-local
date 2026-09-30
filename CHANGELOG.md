@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.42.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.41.0...v0.42.0) (2026-09-30)
+
+
+### Features
+
+* add scheduled self-improvement runner with launchd and lock ([#602](https://github.com/IsmaelMartinez/delegate-local/issues/602)) ([0287568](https://github.com/IsmaelMartinez/delegate-local/commit/0287568624c182f63555e929df6fc8cdbf31d76c))
+
+
+### Bug Fixes
+
+* align self-improve bundle with latest verdicts and max watermark ([#600](https://github.com/IsmaelMartinez/delegate-local/issues/600)) ([13701b5](https://github.com/IsmaelMartinez/delegate-local/commit/13701b54c0f9a8820d94abd0f45c6f60f3152d91))
+* resolve four calibration bugs from the 2026-09-26 review ([#599](https://github.com/IsmaelMartinez/delegate-local/issues/599)) ([7d79c39](https://github.com/IsmaelMartinez/delegate-local/commit/7d79c392068a0e8e747c0fc5394beeb1de4f3306))
+
 ## [0.41.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.40.2...v0.41.0) (2026-09-30)
 
 
