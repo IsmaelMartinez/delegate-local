@@ -98,11 +98,30 @@ capture_body_file() {
 
 # An interrupted call may or may not have posted; only a clean success confirms.
 [[ -n "${tool_use_id:-}" && "${interrupted:-}" != "true" ]] || exit 0
+# One marker per call (#587). It is renamed before it is acted on: the
+# boundary hook claims a marker it takes for a retry by the same kind of
+# rename, so exactly one of the two wins. A plain marker won here is the
+# ordinary confirmation. A `.superseded` one was claimed by a later call
+# taken for this one's retry, but this call ran, so that one was a post of
+# its own: its row, written beside the claim as `.row`, is appended now.
 for marker in "$pending_dir/$session_id".*; do
   [[ -f "$marker" && "$marker" != "$seen" ]] || continue
-  if [[ "$(jq -r '.id // empty' "$marker" 2>/dev/null)" == "$tool_use_id" ]]; then
-    capture_body_file "$marker"
-    rm -f "$marker" 2>/dev/null
+  case "$marker" in *.row|*.confirming.*) continue ;; esac
+  [[ "$(jq -r '.id // empty' "$marker" 2>/dev/null)" == "$tool_use_id" ]] || continue
+  mine="$marker.confirming.$$"
+  if ! mv "$marker" "$mine" 2>/dev/null; then
+    # Claimed between the glob and the rename: act on the claimed copy.
+    marker="$marker.superseded"
+    mv "$marker" "$mine" 2>/dev/null || continue
   fi
+  capture_body_file "$mine"
+  if [[ "$marker" == *.superseded ]]; then
+    row="${marker%.superseded}.row"
+    if [[ -f "$row" ]] && jq -e 'type == "object" and .source == "opportunity"' "$row" >/dev/null 2>&1; then
+      jq -c . "$row" >> "$metrics_file" 2>/dev/null
+    fi
+    rm -f "$row" 2>/dev/null
+  fi
+  rm -f "$mine" 2>/dev/null
 done
 exit 0

@@ -18,8 +18,8 @@
 #   --quarantine       scan the stored finals and list the suspect ones in
 #                      suspect-finals.tsv beside the metrics file (#587): an
 #                      empty final, one byte-identical to an earlier stem's,
-#                      or one closer to a neighbouring draft (same recipe and
-#                      session) than its own. The bundle and replay-recipe.sh
+#                      or one closer to a neighbouring draft (same recipe,
+#                      project and session) than its own. The bundle and replay-recipe.sh
 #                      skip the listed pairs; nothing is deleted. With --peek
 #                      the list is printed and no sidecar is written.
 #   --peek             report without advancing the watermark
@@ -85,7 +85,7 @@ prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 # `duplicate` (byte-identical to a final of an earlier stem: a body file
 # read before the command rewrote it holds the previous post), `neighbour`
 # (its words overlap the draft of the delegation before or after it, same
-# recipe and session, or project where no session was recorded, more than
+# recipe, project and session, more than
 # its own draft: a post filed one delegation early). The writer column says
 # who stored it: `verdict` for a numbered final or one a verdict passed with
 # --final, `hook` for one the boundary hook captured. Read-only on the
@@ -99,7 +99,9 @@ if (( quarantine == 1 )); then
   jq -rs '
     [ to_entries[] | .value + {idx: .key}
       | select((.source // "delegate") == "delegate" and ((.draft_file // "") | test("^[^./][^/]*\\.draft\\.txt$"))) ]
-    | group_by([(.recipe // ""), (.session // .project // "")])
+    # Keyed on project AND session: credits and captures are per project, so
+    # one session working in two repositories is two sequences, not one.
+    | group_by([(.recipe // ""), (.project // ""), (.session // "")])
     | map(sort_by(.ts, .idx) | [.[].draft_file])
     | .[] | . as $g
     | range(0; length) as $i
@@ -144,7 +146,9 @@ if (( quarantine == 1 )); then
     fi
   done < "$q_tmp/finals"
   sort -o "$q_tmp/suspect" "$q_tmp/suspect"
-  awk -F '\t' 'NR == FNR { v[$1] = 1; next }
+  # FILENAME, not NR == FNR: with no vouched final the first file is empty
+  # and NR == FNR would read every suspect line as a vouched name.
+  awk -F '\t' 'FILENAME == ARGV[1] { v[$1] = 1; next }
        { w = ($1 ~ /\.final\.[0-9]+\.txt$/ || ($1 in v)) ? "verdict" : "hook"; printf "%s\t%s\t%s\n", $1, $2, w }' \
     "$q_tmp/vouched" "$q_tmp/suspect" > "$q_tmp/listed"
   cat "$q_tmp/listed"

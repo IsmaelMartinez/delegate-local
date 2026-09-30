@@ -176,19 +176,24 @@ scan_all=$(awk 'BEGIN{RS="\1"} {
         || c == "(" || c == ")" || c == "{" || c == "}") {
       out = out "\n";
       rawseg[++nseg] = substr($0, segstart, i - segstart); segstart = i + 1;
+      seps = seps c;
       continue
     }
     out = out c;
   }
   rawseg[++nseg] = substr($0, segstart, n - segstart + 1);
-  printf "%s\036", out;
+  printf "%s\036%s\036", out, seps;
   for (s = 1; s <= nseg; s++) printf "%s\002", rawseg[s];
   printf ".";
 }' <<<"$cmd" 2>/dev/null) || exit 0
 scan="${scan_all%%$'\x1e'*}"
 [[ -z "$scan" ]] && exit 0
+# The separator that ended each segment, one character per segment in order
+# (`&&` is two, with an empty segment between them).
+_scan_rest="${scan_all#*$'\x1e'}"
+seps="${_scan_rest%%$'\x1e'*}"
 rawsegs=()
-IFS=$'\x02' read -r -d '' -a rawsegs < <(printf '%s' "${scan_all#*$'\x1e'}") || true
+IFS=$'\x02' read -r -d '' -a rawsegs < <(printf '%s' "${_scan_rest#*$'\x1e'}") || true
 
 # --- is this a delegatable boundary? --------------------------------------
 # Segments are classified independently and the first match wins, so a flag
@@ -507,15 +512,26 @@ done <<<"$scan"
 [[ -z "$boundary" ]] && exit 0
 # Every other boundary reads its body here, once, from its own segment.
 [[ "$body_read" == "true" ]] || read_posted_body "$matched_raw"
-# PostToolUse reports the whole call, and its status is the boundary's own
-# only when the boundary is the last segment: `cd x && git commit` and a
-# wrapper script ending in the commit both are, `git commit … && gh pr
-# create` and `git commit … || true` are not, and a marker for those would
-# be left unconfirmed by a later failure the commit had nothing to do with,
-# or confirmed by a success it did not have (#497). The last non-blank line
-# of the scan is compared by the index the loop stopped at.
+# PostToolUse reports the whole call, and its success is the boundary's own
+# only when the boundary is the last segment or is joined to everything after
+# it by `&&`: `cd x && git commit` and `git commit -F m && git push` both
+# are, since a chain that succeeded ran every link (#587). After `;` or a
+# newline the call's status is only the last command's, and after `||` or
+# `|` a success can hide the boundary's failure, so `git commit … ; git push`
+# and `git commit … || true` get no marker: it would be left unconfirmed by
+# a later failure the commit had nothing to do with, or confirmed by a
+# success it did not have (#497). A wrapper script's lines are newline
+# separated, so only a script that ends in the boundary qualifies, `set -e`
+# or not. The last non-blank line of the scan is compared by the index the
+# loop stopped at; the separators between are the scan's own.
 boundary_last=false
-[[ "$seg_idx" == "$(awk 'NF { n = NR } END { print n + 0 }' <<<"$scan")" ]] && boundary_last=true
+_last_seg=$(awk 'NF { n = NR } END { print n + 0 }' <<<"$scan")
+if [[ "$seg_idx" == "$_last_seg" ]]; then
+  boundary_last=true
+elif (( seg_idx < _last_seg )); then
+  _after="${seps:$((seg_idx - 1)):$((_last_seg - seg_idx))}"
+  [[ "$_after" =~ ^(\&\&)+$ ]] && boundary_last=true
+fi
 
 # --- derive the project name (shared with delegate.sh via lib/otel.sh) -----
 # The SAME function delegate.sh and delegate-feedback.sh call, so the row this
@@ -679,6 +695,25 @@ if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
   fi
 fi
 
+# The opportunity row as JSON: `delegated`, then `denied` and the
+# enforce_skipped reason (both default to none). Built here, before the
+# lookup, because a claimed retry marker carries this call's row (#587).
+row_json() { # delegated [denied] [skipped]
+  local ts; ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  jq -nc --arg ts "$ts" --arg project "$project" --arg boundary "$boundary" \
+     --arg recipe "$recipe" --arg sid "$session_id" --argjson delegated "$1" \
+     --arg body_chars "$body_chars" --argjson below_floor "$below_floor" \
+     --argjson denied "${2:-false}" --arg skipped "${3:-}" --arg wrapper "$wrapper" '
+     {ts:$ts, source:"opportunity", boundary:$boundary, suggested_recipe:$recipe, delegated:$delegated}
+     + (if $project != "" then {project:$project} else {} end)
+     + (if $sid != "" then {session:$sid} else {} end)
+     + (if $body_chars != "" then {body_chars:($body_chars | tonumber)} else {} end)
+     + (if $below_floor then {below_floor:true} else {} end)
+     + (if $denied then {denied:true} else {} end)
+     + (if $skipped != "" then {enforce_skipped:$skipped} else {} end)
+     + (if $wrapper != "" then {wrapper:$wrapper} else {} end)'
+}
+
 delegated=false
 credit_draft="" unspent_drafts=""
 denied_streak=0 streak_attempted=no
@@ -790,16 +825,50 @@ if [[ -f "$metrics_file" ]]; then
   # does not overwrite it. The name is a basename or DELEGATE_PROJECT, so it
   # is reduced to a safe charset for the filename; a collision only makes the
   # stored project mismatch, which denies as before.
+  #
+  # One marker PER CALL, `<prefix>.<tool_use_id>` (#587): parallel subagents
+  # share a session id, and a single marker per session and boundary let a
+  # second call in flight overwrite the first's, so the first confirmation
+  # matched nothing and its final was lost. The hook cannot tell a refused
+  # call from one still running, so the oldest unconfirmed marker in the
+  # window is still taken as the one this call retries, but it is CLAIMED,
+  # not deleted: renamed to `.superseded` with this call's would-be row
+  # beside it as `.row`. The rename is the arbiter against the confirm hook,
+  # which renames a marker before acting on it, so exactly one side wins. If
+  # the claimed call does confirm later, it ran, so this call was not its
+  # retry: the confirm hook stores its final and appends the `.row`, and the
+  # post is counted after all, credited if a fresh credit stood behind it.
+  # One case stays lossy: an INLINE provisional final the claimed call wrote
+  # is replaced by this call's text as a retry's would be, so if that call
+  # did run, its own text is the one lost.
   pending_key="${project//[^A-Za-z0-9._-]/_}"
   [[ -n "$session_id" ]] && pending="$pending_dir/$session_id.$boundary.${pending_key:--}"
   if [[ -n "$pending" && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" \
-        && -f "$pending_dir/$session_id.seen" && -f "$pending" ]]; then
-    IFS=$'\x1f' read -r pending_epoch pending_project pending_draft pending_captured pending_drafts < <(jq -r '[(.epoch // 0 | tostring), (.project // ""), (.draft // ""), (.captured // false | tostring), ((.drafts // []) | map(strings) | join(","))] | join("\u001f")' "$pending" 2>/dev/null) || pending_epoch=""
-    if [[ "${pending_epoch:-}" =~ ^[0-9]+$ && "${pending_project:-}" == "$project" ]] \
-       && (( now_epoch - pending_epoch <= reuse_window )); then
-      # The retry is the post the marker was for, so it chooses among the
-      # drafts that post could have been, and keeps the one it was filed under.
-      reused=true; credit_draft="${pending_draft:-}"; unspent_drafts="${pending_drafts:-$credit_draft}"
+        && -f "$pending_dir/$session_id.seen" ]]; then
+    claim="" claim_epoch=""
+    for _m in "$pending".*; do
+      [[ -f "$_m" ]] || continue
+      case "$_m" in *.superseded|*.row|*.confirming.*) continue ;; esac
+      IFS=$'\x1f' read -r _e _p _d _c _ds < <(jq -r '[(.epoch // 0 | tostring), (.project // ""), (.draft // ""), (.captured // false | tostring), ((.drafts // []) | map(strings) | join(","))] | join("\u001f")' "$_m" 2>/dev/null) || continue
+      [[ "${_e:-}" =~ ^[0-9]+$ && "${_p:-}" == "$project" ]] && (( now_epoch - _e <= reuse_window )) || continue
+      if [[ -z "$claim" ]] || (( _e < claim_epoch )); then
+        claim="$_m" claim_epoch="$_e"
+        pending_epoch="$_e" pending_project="$_p" pending_draft="$_d" pending_captured="$_c" pending_drafts="$_ds"
+      fi
+    done
+    if [[ -n "$claim" ]]; then
+      # Written before the claim, so a confirmation that finds the claim has
+      # the row; removed again if the claim loses.
+      fresh=false; [[ "${recent:-0}" -gt 0 ]] && fresh=true
+      row_json "$fresh" > "$claim.row" 2>/dev/null
+      if mv "$claim" "$claim.superseded" 2>/dev/null; then
+        # The retry is the post the marker was for, so it chooses among the
+        # drafts that post could have been, and keeps the one it was filed under.
+        reused=true; credit_draft="${pending_draft:-}"; unspent_drafts="${pending_drafts:-$credit_draft}"
+      else
+        rm -f "$claim.row" 2>/dev/null
+        pending_epoch="" pending_draft="" pending_captured=false pending_drafts=""
+      fi
     fi
   fi
   [[ "$reused" == "true" || "${recent:-0}" -gt 0 ]] && delegated=true
@@ -836,21 +905,8 @@ done
 # can be withdrawn when no credit could be recorded.
 append_row() {
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] || return 0
-  local ts; ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
-  jq -nc --arg ts "$ts" --arg project "$project" --arg boundary "$boundary" \
-     --arg recipe "$recipe" --arg sid "$session_id" --argjson delegated "$delegated" \
-     --arg body_chars "$body_chars" --argjson below_floor "$below_floor" \
-     --argjson denied "$denied" --arg skipped "$enforce_skipped" --arg wrapper "$wrapper" '
-     {ts:$ts, source:"opportunity", boundary:$boundary, suggested_recipe:$recipe, delegated:$delegated}
-     + (if $project != "" then {project:$project} else {} end)
-     + (if $sid != "" then {session:$sid} else {} end)
-     + (if $body_chars != "" then {body_chars:($body_chars | tonumber)} else {} end)
-     + (if $below_floor then {below_floor:true} else {} end)
-     + (if $denied then {denied:true} else {} end)
-     + (if $skipped != "" then {enforce_skipped:$skipped} else {} end)
-     + (if $wrapper != "" then {wrapper:$wrapper} else {} end)' \
-     >> "$metrics_file" 2>/dev/null
+  row_json "$delegated" "$denied" "$enforce_skipped" >> "$metrics_file" 2>/dev/null
 }
 
 # The marker the confirm hook removes when this call succeeds (#497): the
@@ -861,14 +917,14 @@ append_row() {
 # written and the credit is spent for good as before.
 write_pending() {
   [[ -n "$pending" && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] || return 0
-  # A reused marker is consumed FIRST: this call is already allowed and its
-  # confirmation carries the new id, so a re-arm that fails below must not
-  # leave the old id for a further post to reuse. The same holds for a
-  # credited call that can leave no marker at all.
-  [[ "$reused" == "true" ]] && rm -f "$pending" 2>/dev/null
+  # A reused marker was already claimed by the lookup (renamed to
+  # `.superseded`), so a re-arm that fails below leaves nothing a further
+  # post could reuse; the same holds for a credited call that can leave no
+  # marker at all.
   [[ -n "$tool_use_id" && "$boundary_last" == "true" ]] || return 0
-  local epoch="$now_epoch"
+  local epoch="$now_epoch" marker
   [[ "$reused" == "true" ]] && epoch="$pending_epoch"
+  marker="$pending.${tool_use_id//[^A-Za-z0-9_-]/_}"
   mkdir -p "$pending_dir" 2>/dev/null || return 0
   chmod 700 "$pending_dir" 2>/dev/null || true
   # `drafts` are the ones this post may be filed under and `body_file` the
@@ -881,8 +937,8 @@ write_pending() {
      --arg drafts "$drafts_csv" --arg body_file "$body_file" \
     '{id:$id, epoch:$epoch, project:$project, draft:$draft, captured:$captured,
       drafts:($drafts | split(",") | map(select(. != "")))}
-     + (if $body_file != "" then {body_file:$body_file} else {} end)' > "$pending" 2>/dev/null \
-    || rm -f "$pending" 2>/dev/null
+     + (if $body_file != "" then {body_file:$body_file} else {} end)' > "$marker" 2>/dev/null \
+    || rm -f "$marker" 2>/dev/null
   # Opportunistic prune; -mtime/-delete work on BSD and GNU find. The .seen
   # files are on a week's retention, not a day's: a session older than a
   # day would otherwise lose its confirmation on its next refused post.

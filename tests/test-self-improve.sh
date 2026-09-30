@@ -581,6 +581,24 @@ assert_not_contains "DROPPED" "$q4block" "bundle: a quarantined pair is not diff
 assert_not_contains "INVENTED" "$q4block" "bundle: ...nor scored for inventions"
 rm -rf "$tmp"
 
+# Neighbours are the same recipe in the same project AND session: a session
+# that worked in two repositories does not make one project's draft the
+# neighbour of the other's final.
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$(iso_ago 900)","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"pA","session":"S","exit_status":0,"draft_file":"20260902T000001Z-pa.draft.txt"}
+{"ts":"$(iso_ago 800)","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"pB","session":"S","exit_status":0,"draft_file":"20260902T000002Z-pb.draft.txt"}
+EOF
+printf 'Release notes for the tray fix are ready to publish.\n' > "$tmp/drafts/20260902T000001Z-pa.draft.txt"
+printf 'Tray icon vanishes after suspend since the menu gets rebuilt.\n' > "$tmp/drafts/20260902T000001Z-pa.final.txt"
+printf 'The tray icon disappears after suspend because the menu is rebuilt.\n' > "$tmp/drafts/20260902T000002Z-pb.draft.txt"
+: > "$tmp/drafts/20260902T000002Z-pb.final.txt"
+out=$(bash "$SCRIPT" --quarantine --peek --file "$tmp/m.jsonl" 2>&1)
+assert_not_contains "pa.final.txt	" "$out" "quarantine: another project's draft in the same session is not a neighbour"
+# No verdict vouched for any final here: the suspect list must survive that.
+assert_contains "20260902T000002Z-pb.final.txt	empty" "$out" "quarantine: suspects are listed when no final was passed by a verdict"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
