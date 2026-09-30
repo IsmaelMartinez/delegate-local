@@ -356,6 +356,9 @@ arm_output() {
 # The reference sets of one case, computed once for both arms:
 #   sup_sal    salient tokens the caller supplied (stdin, vars, prompt)
 #   fin_sal    salient tokens the shipped text carries
+#   fin_body   salient tokens its body carries, trailer lines left out
+#              (body_only): an anchor only a Closes line or the footer
+#              names is the caller's fixed line, not a dropped fact (#589)
 #   stdin_sent piped sentences (the unit no_context_echo measures)
 #   fin_echo   the piped sentences the shipped text itself reproduces
 #   fin_path   the shipped text, for the shape comparison
@@ -364,13 +367,15 @@ case_refs() { # <inputs.json> <final>
   { cat "$work_tmp/stdin"; echo; jq -r '(.vars // {} | .[] | if type == "string" then . else tojson end), (.prompt // "")' "$1"; } > "$work_tmp/supplied"
   salient "$work_tmp/supplied" > "$work_tmp/sup_sal"
   salient "$2" > "$work_tmp/fin_sal"
+  body_only "$2" > "$work_tmp/fin_body.txt"
+  salient "$work_tmp/fin_body.txt" > "$work_tmp/fin_body"
   sentences < "$work_tmp/stdin" | sort -u > "$work_tmp/stdin_sent"
   sentences < "$2" | sort -u | comm -12 "$work_tmp/stdin_sent" - > "$work_tmp/fin_echo"
   fin_path="$2"
 }
 
 # score <output> <checks>: prints "c/d/o/i/e/s/l=total" where c is failed
-# checks, d the supplied anchors the shipped text carried and this output
+# checks, d the supplied anchors the shipped body carried and this output
 # dropped, o the supplied anchors this output carries that the shipped text
 # does not (the facts handed back in the model's own sentences: the
 # supplied subset of what the bundle lists as CUT or INVENTED, which no
@@ -392,7 +397,7 @@ case_refs() { # <inputs.json> <final>
 score() {
   local out="$1" checks="$2" dropped over invented echoed shape length past ow fw
   salient "$out" > "$work_tmp/out_sal"
-  dropped=$(comm -12 "$work_tmp/sup_sal" "$work_tmp/fin_sal" | comm -23 - "$work_tmp/out_sal" | absent_from "$out" | grep -c '')
+  dropped=$(comm -12 "$work_tmp/sup_sal" "$work_tmp/fin_body" | comm -23 - "$work_tmp/out_sal" | absent_from "$out" | grep -c '')
   comm -23 "$work_tmp/out_sal" "$work_tmp/fin_sal" | absent_from "$fin_path" > "$work_tmp/out_past"
   past=$(grep -c '' "$work_tmp/out_past")
   invented=$(absent_from "$work_tmp/supplied" < "$work_tmp/out_past" | grep -c '')

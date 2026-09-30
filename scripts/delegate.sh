@@ -1200,6 +1200,10 @@ retry_constraint_for() {
       echo "no_invented_refs: every issue or ticket identifier in a trailer must appear in the input you were given." ;;
     no_example_echo)
       echo "no_example_echo: do not reproduce any line of this prompt or of an example; write from the input." ;;
+    no_title_line)
+      echo "no_title_line: output only the body; do not open with a title line of the form '<type>: <summary>'." ;;
+    no_subject_echo)
+      echo "no_subject_echo: the subject must describe this change in words of your own; never reuse a subject from the prompt or the recent commits." ;;
     no_unbidden_mention)
       echo "no_unbidden_mention: @-mention nobody except the recipient handle you were given; with none, address the reader as \"you\" and write no \"@\" at all." ;;
     no_context_echo)
@@ -1235,6 +1239,42 @@ echo_matches() {
     | awk 'length($0) >= 40' \
     | grep -Fxf - <(printf '%s\n' "$1" | echo_normalise) \
     | sort -u
+}
+
+# echo_guard_values — the values of the --var names the recipe lists under
+# `echo_guard_vars:` (#428), the first value of each, each ending in a newline:
+# exemplars passed as shape anchors, whose content the answer must not copy.
+echo_guard_values() {
+  local _egv _kv
+  [[ -n "${recipe_echo_guard_vars:-}" ]] || return 0
+  for _egv in $(printf '%s' "$recipe_echo_guard_vars" | tr ',' ' '); do
+    for _kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
+      # First value only: a var passed twice substitutes its first, and the
+      # second never reached the model.
+      if [[ "${_kv%%=*}" == "$_egv" ]]; then printf '%s\n' "${_kv#*=}"; break; fi
+    done
+  done
+  return 0
+}
+
+# subject_echo_match <subject> — the exemplar subject the draft's subject
+# ($1) reproduces, if any (#589). Sources are the recipe's own template and
+# the echo_guard_vars values, split on ';' as well as on lines because
+# callers join recent subjects into one line. Both sides lose a leading
+# commit hash and then take echo_normalise (label, type prefix, trailing
+# (#N)); there is NO 40-char floor, because a subject is shorter than a line
+# and a lone exemplar subject normalises well under it, which is how
+# no_example_echo let subject copies through. Case-insensitive, fixed-string
+# whole-unit match, so linear.
+subject_echo_match() {
+  local subj
+  subj=$(printf '%s\n' "$1" | sed -E -e 's/^[[:space:]]*//' -e 's/^[0-9a-f]{7,40}[[:space:]]+//' | echo_normalise)
+  [[ -n "$subj" ]] || return 0
+  { printf '%s\n' "${recipe_template_raw:-}"; echo_guard_values; } \
+    | tr ';' '\n' \
+    | sed -E -e 's/^[[:space:]]*//' -e 's/^[0-9a-f]{7,40}[[:space:]]+//' | echo_normalise \
+    | grep -Fxi -e "$subj" | head -n 1
+  return 0
 }
 
 # split_sentences — one unit per line, on newlines and on `.`/`?`/`!` followed
@@ -1350,7 +1390,7 @@ mentions_in() {
 run_output_checks() {
 # The result and the counters (output, checks_*, capability_failed) are
 # deliberately NOT local: they are the function's outputs.
-local padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio fact_questions caller_text allowed unbidden mention_tok recipient_seen caller_mentions
+local subj_echo padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio fact_questions caller_text allowed unbidden mention_tok recipient_seen caller_mentions
 checks_failed=0
 checks_failed_names=""
 checks_run=0
@@ -1373,17 +1413,9 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
   # subject. A line repeated across exemplars is convention (a trailer, a
   # footer) the output is supposed to reproduce, so only a line unique to one
   # exemplar is that exemplar's own content.
-  echo_exemplars=""
-  if [[ -n "${recipe_echo_guard_vars:-}" ]]; then
-    for _egv in $(printf '%s' "$recipe_echo_guard_vars" | tr ',' ' '); do
-      for _kv in ${recipe_vars[@]+"${recipe_vars[@]}"}; do
-        if [[ "${_kv%%=*}" == "$_egv" ]]; then
-          echo_exemplars="${echo_exemplars}${_kv#*=}
+  echo_exemplars=$(echo_guard_values)
+  [[ -n "$echo_exemplars" ]] && echo_exemplars="${echo_exemplars}
 "
-        fi
-      done
-    done
-  fi
   # The convention filter judges on the normalised form (so `ci: X` and
   # `chore(deps): X (#253)` count as one line repeated) but hands echo_matches
   # the RAW line: echo_normalise is not idempotent, and a twice-normalised
@@ -1800,6 +1832,55 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             echo "  What it asks about is in the piped facts and absent from the '$cval' var: the reader is asked to confirm what the facts already state. State it instead." >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_fact_as_question"
+            capability_failed=$((capability_failed + 1))
+          fi
+        fi
+        ;;
+      no_title_line)
+        # pr-description's output is a body (#589): 9 of 40 rejected drafts on
+        # template dfaad6df0739 opened with a title line, 2 the exemplar's own
+        # and 2 with an invented PR number. A leading `type(scope): ...` or
+        # `#N type: ...` line is stripped like no_padding_tail's tail, and
+        # only when a blank line separates it from a body that follows, so a
+        # title glued to prose or standing alone is reported, never guessed at.
+        if [[ "$cval" == "true" ]]; then
+          checks_run=$((checks_run + 1))
+          if printf '%s\n' "$check_first_line" | grep -Eq '^[[:space:]]*(#[0-9]+:?[[:space:]]+)?(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]*\))?!?:[[:space:]]'; then
+            new_output=""
+            if [[ "${DELEGATE_NO_AUTOFIX:-}" != "1" ]]; then
+              new_output=$(printf '%s\n' "$output" | awk '
+                !t && !NF { next }
+                !t { t = 1; next }
+                t == 1 { if (NF) exit; t = 2; next }
+                t == 2 && !NF { next }
+                { t = 3; print }')
+            fi
+            if [[ -n "$new_output" ]]; then
+              echo "delegate: check 'no_title_line' AUTO-FIXED — stripped a leading title line: \"${check_first_line:0:120}\"" >&2
+              output="$new_output"
+              check_first_line=$(printf '%s' "$output" | awk 'NF { print; exit }')
+              check_last_line=$(printf '%s' "$output" | awk 'NF { l=$0 } END { print l }')
+              checks_autofixed=$((checks_autofixed + 1))
+            else
+              echo "delegate: check 'no_title_line' FAILED — output opens with a title line: \"${check_first_line:0:120}\"" >&2
+              checks_failed=$((checks_failed + 1))
+              checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_title_line"
+            fi
+          fi
+        fi
+        ;;
+      no_subject_echo)
+        # commit-message's subject copied from an exemplar subject (#589):
+        # the prompt's own Wrong/Correct subjects or a recent commit passed
+        # under echo_guard_vars. subject_echo_match has no floor and splits
+        # joined subjects, the two gaps no_example_echo leaves here.
+        if [[ "$cval" == "true" && "${DELEGATE_NO_ECHO_CHECK:-}" != "1" ]]; then
+          checks_run=$((checks_run + 1))
+          subj_echo=$(subject_echo_match "$check_first_line")
+          if [[ -n "$subj_echo" ]]; then
+            echo "delegate: check 'no_subject_echo' FAILED — REJECT this draft. Its subject is an example's: \"${check_first_line:0:120}\"" >&2
+            checks_failed=$((checks_failed + 1))
+            checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_subject_echo"
             capability_failed=$((capability_failed + 1))
           fi
         fi

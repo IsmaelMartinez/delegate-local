@@ -574,6 +574,18 @@ for base in maintainer-reply maintainer-review-reply; do
     fi
   fi
 done
+
+# #589: pr-description strips a leading title line and commit-message rejects
+# a subject copied from an exemplar; both are declared checks.
+for pair in pr-description:no_title_line commit-message:no_subject_echo; do
+  base="${pair%%:*}"; chk="${pair#*:}"
+  rf_fm=$(awk '/^---[[:space:]]*$/{d++; if (d==2) exit; next} d==1' "$PROMPTS_DIR/$base.md" 2>/dev/null)
+  if printf '%s\n' "$rf_fm" | grep -qE "^[[:space:]]+$chk:[[:space:]]*true[[:space:]]*$"; then
+    echo "  PASS  $base.md declares $chk (#589)"; pass=$((pass+1))
+  else
+    echo "  FAIL  $base.md does not declare $chk: true (#589)"; fail=$((fail+1))
+  fi
+done
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

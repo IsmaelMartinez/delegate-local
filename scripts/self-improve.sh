@@ -345,7 +345,8 @@ supplied() {
 # The supplied half of the input, extracted once per rejection: salient reads
 # a file four times over.
 supplied_tmp=$(mktemp)
-trap 'rm -f "$supplied_tmp"' EXIT
+body_tmp=$(mktemp)
+trap 'rm -f "$supplied_tmp" "$body_tmp"' EXIT
 
 # One record per rejected delegation. The separator is US (\u001f), not a tab: tab is IFS
 # whitespace, so `read` would collapse the frequently-empty draft_file /
@@ -409,7 +410,10 @@ jq -rs --arg prev "$prev_ts" '
       # comm emits them.
       # A token is only new (or only the draft's) when the other text does
       # not carry it in any spelling: `absent_from` in lib/pair-score.sh.
-      new_tokens=$(comm -13 <(salient "$dpath") <(salient "$fpath") | absent_from "$dpath")
+      # They are read off the body alone (body_only): a Refs or Closes line and
+      # the footer are the caller's fixed lines, not anchors the draft lost (#589).
+      body_only "$fpath" > "$body_tmp"
+      new_tokens=$(comm -13 <(salient "$dpath") <(salient "$body_tmp") | absent_from "$dpath")
       draft_only=$(comm -23 <(salient "$dpath") <(salient "$fpath") | absent_from "$fpath" | head -n 12 | tr '\n' ' ')
       # With the input, DROPPED is what the caller supplied and the model
       # dropped; a token the shipped text carries that neither the input nor
