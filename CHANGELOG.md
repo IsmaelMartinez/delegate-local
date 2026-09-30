@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.41.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.40.2...v0.41.0) (2026-09-30)
+
+
+### Features
+
+* measure ritual delegations and exclude them from calibration rates ([#597](https://github.com/IsmaelMartinez/delegate-local/issues/597)) ([55a2ac2](https://github.com/IsmaelMartinez/delegate-local/commit/55a2ac2f2846b2e79e6e90cd2439c8d5e5218157))
+* track weak recipe inputs as input_quality on metrics rows ([#595](https://github.com/IsmaelMartinez/delegate-local/issues/595)) ([81a3511](https://github.com/IsmaelMartinez/delegate-local/commit/81a35118f7021db2c62474163876d1a56404e59d))
+
+
+### Bug Fixes
+
+* ignore trailers in pair scoring and add title/subject echo checks ([#598](https://github.com/IsmaelMartinez/delegate-local/issues/598)) ([6735639](https://github.com/IsmaelMartinez/delegate-local/commit/6735639a9a46268230c8e669916e61b08a205b71))
+* store file-backed finals after the call and match posts to overlapping drafts ([#596](https://github.com/IsmaelMartinez/delegate-local/issues/596)) ([6d34e50](https://github.com/IsmaelMartinez/delegate-local/commit/6d34e5082423d29917e69183a7a4401fde54940d))
+
+
+### Documentation
+
+* record the Lean and correct plan as the ROADMAP resume point ([#591](https://github.com/IsmaelMartinez/delegate-local/issues/591)) ([2e5331f](https://github.com/IsmaelMartinez/delegate-local/commit/2e5331f3535bf1cc5a43f749de997d0504d6f307))
+
+
+### Maintenance
+
+* retire quality-trend.py and quality-report.sh ([#594](https://github.com/IsmaelMartinez/delegate-local/issues/594)) ([6fc4361](https://github.com/IsmaelMartinez/delegate-local/commit/6fc43613ab6069a6cacd4c25f7a8df64a17bea9c)), closes [#555](https://github.com/IsmaelMartinez/delegate-local/issues/555)
+
 ## [0.40.2](https://github.com/IsmaelMartinez/delegate-local/compare/v0.40.1...v0.40.2) (2026-09-26)
 
 
