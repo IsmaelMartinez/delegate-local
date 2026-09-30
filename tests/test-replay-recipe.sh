@@ -460,6 +460,15 @@ assert_contains "Cases:     2 (kept=1 scaffold=0 rewrote=1; newest 40)  sessions
 assert_contains "rej00001 skipped: ritual" "$out" "a stored ritual verdict is skipped and named"
 assert_contains "rej00002 skipped: ritual" "$out" "an unstored ritual case is measured, skipped and named"
 
+# #554: significance is decided on the unrounded p. 101 wins to 78 is
+# p=0.04992, printed as 0.050; comparing the print read it as not
+# significant. A 179-case replay reaching it costs minutes, so the function
+# that decides is read out of the script and called directly.
+eval "$(sed -n '/^sign_p() {$/,/^}$/p' "$SCRIPT")"
+assert_eq "0.050 1" "$(sign_p 101 78)" "101 wins to 78: printed 0.050, significant (p=0.04992)"
+assert_eq "0.016 1" "$(sign_p 6 0)" "six wins to none: significant"
+assert_eq "0.067 0" "$(sign_p 100 79)" "100 wins to 79: not significant (p=0.06736)"
+
 rm -rf "$tmp"
 
 echo

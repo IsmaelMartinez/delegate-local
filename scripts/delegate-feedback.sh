@@ -297,6 +297,7 @@ ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # calibrated from. Local, never transmitted; failure to write is non-fatal.
 final_file=""
 final_source=""
+final_reused=""
 drafts_dir="$(dirname "$metrics_file")/drafts"
 # Named after the DRAFT the selected row points at, not after ref_ts: ref_ts
 # has second precision and parallel delegations share it, so a ts-derived
@@ -308,6 +309,14 @@ case "$parent_draft" in
   *.draft.txt) [[ "$parent_draft" == */* || "$parent_draft" == .* ]] && parent_draft="" ;;
   *) parent_draft="" ;;
 esac
+
+# hand_vouched <final name>: the ts of an earlier verdict on this row that
+# stored that final by hand (--final, no posted marker); empty when none did.
+hand_vouched() {
+  jq -r --arg ts "$ref_ts" --arg f "$1" \
+    'select(.source == "feedback" and .ref_ts == $ts and .final_file == $f and (.final_source // "") != "posted") | .ts' \
+    "$metrics_file" | head -n 1
+}
 
 if [[ -n "$final_src" ]]; then
   if [[ -n "$parent_draft" ]]; then
@@ -334,12 +343,22 @@ if [[ -n "$final_src" ]]; then
         break
       fi
       [[ -e "$drafts_dir/$final_name" ]] || break
+      # The same bytes already on the stem are the same final (#554): the
+      # confirm hook stored the post, and a copy would only read as a
+      # second shipped text. Reuse the file; a posted label follows below.
+      if cmp -s "$final_src" "$drafts_dir/$final_name"; then
+        final_file="$final_name"; final_reused=1; break
+      fi
       final_n=$((final_n + 1))
     done
-    [[ -n "$final_file" ]] && chmod 600 "$drafts_dir/$final_file" 2>/dev/null
+    [[ -n "$final_file" && -z "$final_reused" ]] && chmod 600 "$drafts_dir/$final_file" 2>/dev/null
   fi
   if [[ -z "$final_file" ]]; then
     echo "delegate-feedback: could not store --final text (verdict still recorded)" >&2
+  elif [[ -n "$final_reused" ]]; then
+    # The bare name is the hook's; it is a posted capture unless an earlier
+    # verdict stored it by hand, which that row's lack of the marker says.
+    (( final_n == 1 )) && [[ -z "$(hand_vouched "$final_file")" ]] && final_source="posted"
   elif (( final_n > 1 )); then
     # Worth a line, because an existing final usually means this is not the
     # delegation the caller thinks it is.
@@ -363,9 +382,7 @@ elif [[ -n "$parent_draft" && "$kept" == "false" ]]; then
   # sat under it, against 26 of the 1169 other pairs.
   adopt_name="${parent_draft%.draft.txt}.final.txt"
   if [[ -f "$drafts_dir/$adopt_name" ]]; then
-    vouched=$(jq -r --arg ts "$ref_ts" --arg f "$adopt_name" \
-      'select(.source == "feedback" and .ref_ts == $ts and .final_file == $f and (.final_source // "") != "posted") | .ts' \
-      "$metrics_file" | head -n 1)
+    vouched=$(hand_vouched "$adopt_name")
     own_overlap=""
     if [[ -z "$vouched" && -f "$drafts_dir/$parent_draft" ]]; then
       # shellcheck source=lib/pair-score.sh
@@ -514,7 +531,10 @@ if [[ "$verdict" == "miss" && "${DELEGATE_FEEDBACK_NO_NUDGE:-0}" != "1" && -n "$
       }
     }
     print "SIMILAR_COUNT=$similar\n";
-    for (@rows) { print "$_\n" }
+    # Most recent first, as the nudge header says (#554): the file is
+    # appended oldest first. Rows lead with their ISO ts, so a string sort
+    # orders them by time.
+    for (reverse sort @rows) { print "$_\n" }
   ' "$reason" "$similar_threshold" "$window_secs" "$ts" < "$metrics_file" 2>/dev/null) || matcher_out=""
 
   if [[ -n "$matcher_out" ]]; then
