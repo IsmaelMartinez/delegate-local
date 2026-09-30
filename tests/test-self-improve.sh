@@ -219,7 +219,7 @@ EC=0
 out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1) || EC=$?
 assert_eq 0 "$EC" "one tier: a window with no verdicts still exits 0"
 assert_contains "Verdicts recorded since watermark: n=0" "$out" "one tier: a window with no verdicts says n=0"
-assert_not_contains "usable=" "$(printf '%s\n' "$out" | grep -F 'Verdicts on those')" \
+assert_not_contains "usable=" "$(printf '%s\n' "$out" | grep -F 'Verdicts recorded since watermark')" \
   "one tier: no rate is quoted over zero verdicts"
 rm -rf "$tmp"
 
