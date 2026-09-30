@@ -7494,6 +7494,45 @@ assert_eq '"absent"' "$(iq_field)" "input-quality: a pasted title and body are n
 iq_run "one fact about the bug" --recipe summarise-issue --var kind=issue --var N_FACTS=3 prose "go"
 assert_eq '"absent"' "$(iq_field)" "input-quality: an undeclaring recipe carries no field"
 
+# 54h2. A subject-only --pretty=fuller entry has a blank line between its
+# headers and its subject, which is not a body: flagged.
+iq_fuller_subject_only='commit 59c7966b358a8ac01fac54f9b1ad15cb4203a956
+Author:     A <a@example.com>
+AuthorDate: Mon Sep 28 07:15:19 2026 +0100
+Commit:     A <a@example.com>
+CommitDate: Mon Sep 28 07:15:19 2026 +0100
+
+    chore(main): release 0.40.2 (#586)
+    '
+iq_run "$iq_diff" --recipe commit-message --var recent_commits="$iq_fuller_subject_only" \
+  --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
+assert_eq '["one_line_exemplar"]' "$(iq_field)" \
+  "input-quality: a subject-only fuller entry is flagged despite its header gap"
+
+# 54h3. Subjects separated by blank lines are still subjects only.
+iq_run "$iq_diff" --recipe commit-message \
+  --var recent_commits=$'fix: typo in README\n\nfeat(cli): add --dry-run\n\nchore(deps): bump jq' \
+  --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
+assert_eq '["one_line_exemplar"]' "$(iq_field)" \
+  "input-quality: a blank-separated subject list is flagged"
+
+# 54h4. A pasted subject and body, no git headers, carries a body.
+iq_run "$iq_diff" --recipe commit-message \
+  --var recent_commits=$'fix: Loki sync survives bad rows\n\nOne malformed row used to stop the whole sync; it is now skipped.' \
+  --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
+assert_eq '"absent"' "$(iq_field)" "input-quality: a pasted subject and body are not flagged"
+
+# 54h5. An envelope whose BODY: is empty carries no body, alone or twice over
+# with the blank separator the gather step prints between examples.
+iq_run "" --recipe pr-description \
+  --var recent_prs=$'<<<EXAMPLE_BEGIN PR #586>>>\nTITLE: chore(main): release 0.40.2\nBODY:\n\n<<<EXAMPLE_END>>>' \
+  --var diff_stat=" x.sh | 2 +-" --var context="Adds a thing." prose "go"
+assert_eq '["titles_only"]' "$(iq_field)" "input-quality: one empty BODY: envelope is titles-only"
+iq_run "" --recipe pr-description \
+  --var recent_prs=$'<<<EXAMPLE_BEGIN PR #586>>>\nTITLE: chore(main): release 0.40.2\nBODY:\n\n<<<EXAMPLE_END>>>\n\n<<<EXAMPLE_BEGIN PR #580>>>\nTITLE: chore(main): release 0.40.1\nBODY:\n\n<<<EXAMPLE_END>>>' \
+  --var diff_stat=" x.sh | 2 +-" --var context="Adds a thing." prose "go"
+assert_eq '["titles_only"]' "$(iq_field)" "input-quality: two empty BODY: envelopes are titles-only"
+
 # 54i. The declaration shapes no output, so it is kept out of template_sha:
 # adding it did not start a new per-template bucket.
 . "$REPO/scripts/lib/recipe.sh"

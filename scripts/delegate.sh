@@ -757,10 +757,16 @@ fi
 # named on one stderr line and recorded on the row as `input_quality`, and the
 # call goes ahead: an exit-2 refusal writes no row, so callers padded inputs
 # past it or stopped delegating. The labels:
-#   one_line_exemplar  no blank line inside the value, so no exemplar carries
-#                      a body; `git log --pretty=fuller` always has one
-#   titles_only        the same, unless a `BODY:` line marks a body, as the
-#                      gather step's envelope does even for one-line bodies
+#   one_line_exemplar  no exemplar carries a body (one detector, read by
+#   titles_only        the value's shape; the two names follow each recipe):
+#                        `git log --pretty=fuller` — no commit whose indented
+#                        message holds a second non-blank line, so the gap
+#                        between headers and subject is not a body;
+#                        the gather step's BODY:/<<<EXAMPLE_END>>> envelope —
+#                        no BODY: section with a non-blank line in it;
+#                        anything else — no non-blank line after a blank one
+#                        that is not itself subject-shaped (a conventional
+#                        `type(scope): ` line, optionally behind a sha or #N)
 #   no_diff            no `diff --git` or `@@` line
 # A label this list does not know is ignored.
 input_quality=""
@@ -789,9 +795,18 @@ if [[ -n "$recipe" ]]; then
       no_diff)
         grep -Eq '^diff --git |^@@ ' <<<"$iq_value" && continue ;;
       one_line_exemplar|titles_only)
-        # Exit 0 when a blank line sits between two non-blank ones.
-        printf '%s\n' "$iq_value" | awk 'NF { if (gap) f=1; seen=1; gap=0; next } seen { gap=1 } END { exit !f }' && continue
-        [[ "$iq_label" == "titles_only" ]] && grep -q '^BODY:' <<<"$iq_value" && continue ;;
+        # Exit 0 when some exemplar carries a body, per the shapes above.
+        printf '%s\n' "$iq_value" | awk '
+          function subj(l) { return l ~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]+ / ||
+                                    l ~ /^(#?[0-9]+ )?[a-z]+(\([^)]*\))?!?: / }
+          /^commit [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/ { mode = "fuller"; msg = 0; next }
+          mode == "fuller" { if (/^[[:space:]]+[^[:space:]]/ && ++msg >= 2) body = 1; next }
+          /^<<<EXAMPLE_(BEGIN|END)/ { mode = "env"; inbody = 0; next }
+          /^BODY:/ { mode = "env"; inbody = 1; if (/^BODY:[[:space:]]*[^[:space:]]/) body = 1; next }
+          mode == "env" { if (inbody && NF) body = 1; next }
+          NF { if (gap && !subj($0)) body = 1; seen = 1; next }
+          seen { gap = 1 }
+          END { exit !body }' && continue ;;
       *) continue ;;
     esac
     input_quality="${input_quality:+$input_quality,}$iq_label"
