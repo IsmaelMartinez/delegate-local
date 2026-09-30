@@ -765,8 +765,9 @@ fi
 #                        the gather step's BODY:/<<<EXAMPLE_END>>> envelope —
 #                        no BODY: section with a non-blank line in it;
 #                        anything else — no non-blank line after a blank one
-#                        that is not itself subject-shaped (a conventional
-#                        `type(scope): ` line, optionally behind a sha or #N)
+#                        that is not itself subject-shaped (any `#N ` line,
+#                        or a conventional `type(scope): ` line, optionally
+#                        behind a sha or a bare number)
 #   no_diff            no `diff --git` or `@@` line
 # A label this list does not know is ignored.
 input_quality=""
@@ -798,7 +799,8 @@ if [[ -n "$recipe" ]]; then
         # Exit 0 when some exemplar carries a body, per the shapes above.
         printf '%s\n' "$iq_value" | awk '
           function subj(l) { return l ~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]+ / ||
-                                    l ~ /^(#?[0-9]+ )?[a-z]+(\([^)]*\))?!?: / }
+                                    l ~ /^#[0-9]+ / ||
+                                    l ~ /^([0-9]+ )?[a-z]+(\([^)]*\))?!?: / }
           /^commit [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/ { mode = "fuller"; msg = 0; next }
           mode == "fuller" { if (/^[[:space:]]+[^[:space:]]/ && ++msg >= 2) body = 1; next }
           /^<<<EXAMPLE_(BEGIN|END)/ { mode = "env"; inbody = 0; next }

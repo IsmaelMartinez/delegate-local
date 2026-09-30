@@ -7522,6 +7522,14 @@ iq_run "$iq_diff" --recipe commit-message \
   --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
 assert_eq '"absent"' "$(iq_field)" "input-quality: a pasted subject and body are not flagged"
 
+# 54h4b. A `#N `-prefixed line is a title whatever its wording, so a
+# blank-separated list mixing conventional and plain titles is titles-only.
+iq_run "" --recipe pr-description \
+  --var recent_prs=$'#400 feat(audio): scenes that loop\n\n#399 Arcade music round 2' \
+  --var diff_stat=" x.sh | 2 +-" --var context="Adds a thing." prose "go"
+assert_eq '["titles_only"]' "$(iq_field)" \
+  "input-quality: a blank-separated list of #N titles is titles-only"
+
 # 54h5. An envelope whose BODY: is empty carries no body, alone or twice over
 # with the blank separator the gather step prints between examples.
 iq_run "" --recipe pr-description \
