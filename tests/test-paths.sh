@@ -89,22 +89,6 @@ echo "--- no script still DEFAULTS to the legacy data path ---"
 leftovers=$(grep -rln ':-\$HOME/\.claude/skills/delegate-local/' "$REPO/scripts/" 2>/dev/null || true)
 assert_eq "" "$leftovers" "scripts: no legacy data-file default remains"
 
-# The `:-` grep cannot see Python, so quality-trend.py gets a behavioural
-# probe like probe_metrics above.
-QT="$REPO/experiments/quality-trend.py"
-if [[ -f "$QT" ]]; then
-  qt_probe() {
-    env -i PATH="$SAFE_PATH" HOME="$H" "$@" python3 "$QT" 2>&1 \
-      | sed -n 's/^quality-trend: metrics file not found or is not a file at //p'
-  }
-  assert_eq "$H/.local/share/delegate-local/metrics.jsonl" "$(qt_probe)" \
-    "quality-trend.py: defaults under \$HOME/.local/share/delegate-local"
-  assert_eq "/tmp/dd-qt/metrics.jsonl" "$(qt_probe DELEGATE_LOCAL_DATA_DIR=/tmp/dd-qt)" \
-    "quality-trend.py: honours DELEGATE_LOCAL_DATA_DIR"
-  assert_eq "/tmp/mf-qt.jsonl" "$(qt_probe DELEGATE_LOCAL_DATA_DIR=/tmp/dd-qt DELEGATE_METRICS_FILE=/tmp/mf-qt.jsonl)" \
-    "quality-trend.py: DELEGATE_METRICS_FILE wins over the data dir"
-fi
-
 # ...and the hint itself is still present where it should be.
 for s in metrics-summary delegate-feedback; do
   if grep -q 'onboard.sh --migrate-data' "$REPO/scripts/$s.sh"; then

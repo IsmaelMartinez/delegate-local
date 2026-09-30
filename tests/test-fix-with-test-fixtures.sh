@@ -17,7 +17,7 @@ APPLY="$REPO/scripts/apply-and-test.sh"
 pass=0; fail=0
 assert_eq() { local e="$1" a="$2" n="$3"; if [[ "$e" == "$a" ]]; then echo "  PASS  $n"; pass=$((pass+1)); else echo "  FAIL  $n (want $e got $a)"; fail=$((fail+1)); fi; }
 
-for d in "$REPO"/experiments/fixtures/fix-with-test/*/; do
+for d in "$REPO"/tests/fixtures/fix-with-test/*/; do
   name=$(basename "$d")
   # Buggy source fails its own test: a no-op patch (identity SEARCH/REPLACE)
   # leaves the bug in place, so apply-and-test must return FAIL (exit 1).
