@@ -652,6 +652,33 @@ assert_eq absent "$([[ -e "$tmp/state" ]] && echo present || echo absent)" \
 assert_eq 8 "$(grep -c '' "$tmp/m.jsonl")" "ritual backfill: the metrics file is not written"
 rm -rf "$tmp"
 
+# Only the structured stdin is scored: a row with the rendered input.txt
+# alone is unmeasurable, because the template text and the non-stdin vars
+# (lead, ask, signoff) in it would read a final repeating them as ritual.
+# And a quarantined final is never judged ritual, stored tag or not: it is
+# not the text that shipped.
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+p1=$(iso_ago 900); p2=$(iso_ago 800)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$p1","source":"delegate","tier":"prose","model":"q","recipe":"pr-review-reply","project":"p","session":"S9","exit_status":0,"otel_span_id":"p1","draft_file":"20260928T000001Z-p1.draft.txt","input_file":"20260928T000001Z-p1.input.txt"}
+{"ts":"$(iso_ago 890)","source":"feedback","ref_ts":"$p1","ref_id":"p1","kept":false,"reason":"echoed the lead","verdict_source":"agent","final_file":"20260928T000001Z-p1.final.txt"}
+{"ts":"$p2","source":"delegate","tier":"prose","model":"q","recipe":"pr-review-reply","project":"p","session":"S9","exit_status":0,"otel_span_id":"p2","draft_file":"20260928T000002Z-p2.draft.txt"}
+{"ts":"$(iso_ago 790)","source":"feedback","ref_ts":"$p2","ref_id":"p2","kept":false,"reason":"shifted final","verdict_source":"agent","final_file":"20260928T000002Z-p2.final.txt","final_preexisting":true}
+EOF
+printf 'A model draft.\n' > "$tmp/drafts/20260928T000001Z-p1.draft.txt"
+printf 'A model draft.\n' > "$tmp/drafts/20260928T000002Z-p2.draft.txt"
+printf '%s\n' "$RT" > "$tmp/drafts/20260928T000001Z-p1.final.txt"
+printf 'Reply template.\nLead: %s\n' "$RT" > "$tmp/drafts/20260928T000001Z-p1.input.txt"
+printf '%s\n' "$RT" > "$tmp/drafts/20260928T000002Z-p2.final.txt"
+printf '20260928T000002Z-p2.final.txt\tneighbour\thook\n' > "$tmp/suspect-finals.tsv"
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_contains "  pr-review-reply  n=2  kept=0  scaffold=0  rewrote=2  usable=0%  sessions=1" "$out" \
+  "ritual: neither a rendered-input-only row nor a quarantined final is taken out as ritual"
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --ritual --file "$tmp/m.jsonl" 2>&1)
+assert_contains "pr-review-reply  rejections=2  paired=0  ritual=0" "$out" \
+  "ritual backfill: neither row is judged, so neither is paired"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

@@ -341,10 +341,13 @@ assert_contains "commit-message        n=1  hits=1  misses=0  untracked=0  sessi
   "ritual: a recipe with no ritual row prints no ritual= column"
 assert_contains "alpha                 n=2  hits=1  misses=1  untracked=0  ritual=2  p50=4000ms  sessions=2" "$out" \
   "ritual: the per-project line counts ritual separately and names its sessions"
-assert_contains "alpha                 opportunities=3  delegated=3  missed=0  rate=100%  ritual=2  sessions=2" "$out" \
-  "ritual: the trigger rate names the credited posts that were ritual, and its sessions"
+# The trigger line carries sessions= but not ritual=: a verdict is not joined
+# to the opportunity row it would sit beside, so a count there would imply
+# a join that does not exist.
+assert_contains "alpha                 opportunities=3  delegated=3  missed=0  rate=100%  sessions=2" "$out" \
+  "ritual: the trigger rate names its sessions and no ritual= count"
 assert_contains "beta                  opportunities=1  delegated=1  missed=0  rate=100%  sessions=1" "$out" \
-  "ritual: a project with no ritual delegation prints no ritual= on its trigger line"
+  "ritual: every trigger line names its sessions"
 rm -f "$ritualfix"
 
 # 14. Per-recipe negative gate: no recipe rows -> section hidden.

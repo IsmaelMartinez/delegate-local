@@ -96,8 +96,10 @@ prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 # caller piped, so the verdict says nothing about the template. A verdict
 # row carries `final_preexisting` since #588; one recorded before it is
 # measured here the way delegate-feedback.sh measures it (bigram_containment
-# against the stored stdin, else the rendered input), unless its final is
-# quarantined, since that final is not what shipped. `ritual_map <out>`
+# against the stdin in `inputs.json` only: the rendered input.txt carries the
+# template and the non-stdin vars, so a row without inputs.json is left
+# unjudged). A quarantined final is never judged, stored tag or not, since it
+# is not what shipped. `ritual_map <out>`
 # writes one JSON object, keyed by `fkey`, of {r: bool, how: stored|measured}
 # for every verdict with a final that could be judged; `ritual_def` reads it
 # as `ritual`, given `--slurpfile rt <out>`.
@@ -107,7 +109,7 @@ ritual_def='
   def sessions_of: map(parent.session // "" | select(. != "")) | unique | length;
 '
 ritual_map() {
-  local out="$1" key stored fin ij it src
+  local out="$1" key stored fin ij src
   local pairs keys
   pairs=$(mktemp); keys=$(mktemp)
   : > "$out.tsv"
@@ -117,20 +119,18 @@ ritual_map() {
     map(select(referenced and (.final_file // "") != "")) | .[]
     | parent as $p
     | [fkey, (if has("final_preexisting") then (.final_preexisting | tostring) else "" end),
-       .final_file, ($p.inputs_file // ""), ($p.input_file // "")]
+       .final_file, ($p.inputs_file // "")]
     | join("\u001f")
   ' --slurpfile rt /dev/null "$metrics_file" 2>/dev/null \
-  | while IFS=$'\037' read -r key stored fin ij it; do
+  | while IFS=$'\037' read -r key stored fin ij; do
+      case "$fin" in */*|.*|'') continue ;; esac
+      [[ -z "$(suspect_reason "$suspect_file" "$fin")" ]] || continue
       if [[ "$stored" == true || "$stored" == false ]]; then
         printf '%s\tstored\t%s\n' "$key" "$stored" >> "$out.tsv"; continue
       fi
-      case "$fin" in */*|.*|'') continue ;; esac
-      [[ -f "$drafts_dir/$fin" && -z "$(suspect_reason "$suspect_file" "$fin")" ]] || continue
+      [[ -f "$drafts_dir/$fin" ]] || continue
       src=""
       case "$ij" in */*|.*) ;; *.inputs.json) [[ -f "$drafts_dir/$ij" ]] && src="$drafts_dir/$ij" ;; esac
-      if [[ -z "$src" ]]; then
-        case "$it" in */*|.*) ;; *.input.txt) [[ -f "$drafts_dir/$it" ]] && src="$drafts_dir/$it" ;; esac
-      fi
       [[ -n "$src" ]] || continue
       printf '%s\t%s\n' "$drafts_dir/$fin" "$src" >> "$pairs"
       printf '%s\n' "$key" >> "$keys"

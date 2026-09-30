@@ -133,8 +133,8 @@ echo "Tokens avoided (≈):  $total_avoided"
 #
 # A verdict whose final was already in the piped stdin (final_preexisting,
 # #588) is its own class, "ritual": the caller posted text it had before the
-# delegation, so the draft never had a chance. Every rate leaves it out of n
-# and prints it as ritual=, and every rate prints sessions=, the distinct
+# delegation, so the draft never had a chance. Every verdict rate leaves it
+# out of n and prints it as ritual=, and every rate prints sessions=, the distinct
 # sessions its rows come from, since two sessions made most of one template's
 # rejections.
 verdict_join='
@@ -393,17 +393,12 @@ if (( n_opp > 0 )); then
   [[ "${DELEGATE_BOUNDARY_MIN_CHARS:-}" =~ ^[0-9]+$ ]] && floor_override="$DELEGATE_BOUNDARY_MIN_CHARS"
   retry_win="${DELEGATE_BOUNDARY_WINDOW_MIN:-480}"
   [[ "$retry_win" =~ ^[0-9]+$ ]] || retry_win=480
-  # ritual= counts the project's delegations whose verdict is ritual (#588):
-  # each credited one post that was the caller's own text. Read off the
-  # verdict because the opportunity row is written before the post runs and
-  # before the hook knows which draft it spends; a credit spends exactly one
-  # delegation, so the counts are the same posts.
+  # No ritual= here (#588): ritual is a verdict tag, and a verdict is not
+  # joined to the opportunity row this line counts, so the per-project and
+  # per-recipe rollups above carry it and this line carries sessions= only.
   jq -rs --arg floor "$floor_override" --argjson win_min "$retry_win" '
     def epoch: ((.ts | fromdateiso8601?) // 0);
-    '"$verdict_join"'
-    (reduce (.[] | select((.source // "delegate") == "delegate" and (.exit_status // 0) == 0 and verdict == "ritual")) as $r
-       ({}; .[$r.project // ""] += 1)) as $ritual
-    |
+    def sessions: map(.session // "" | select(. != "")) | unique | length;
     # A denial is retried when a LATER row (append order, not ts: a redraft in
     # the same second must not count as both a miss and a hit) for the same
     # session, project and boundary lands within the window AND is itself a
@@ -439,7 +434,6 @@ if (( n_opp > 0 )); then
       | .[]
       | "  \((if .project == "" then "(no project)" else .project end) | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
         + "  rate=\(.delegated * 100 / .n | floor)%"
-        + (($ritual[.project] // 0) as $r | if $r > 0 then "  ritual=\($r)" else "" end)
         + "  sessions=\(.sessions)"),
       "  excluded \($floored) boundaries under " + (if $floor != "" then "\($floor) chars" else "the floor (20 chars for git-commit, 120 for the rest)" end),
       (if $denied > 0 then "  excluded \($denied) denied attempts retried within \($win_min)m (the post did not happen; the retry is what counts)" else empty end)

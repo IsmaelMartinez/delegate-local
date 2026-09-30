@@ -246,7 +246,7 @@ candidates=$(jq -r --arg mode "$pin_mode" --arg id "$override_id" --arg ts "$ove
             elif $mode == "ts" then .ts == $ts
             elif $mode == "window" then ((.ts // "") | fromdateiso8601?) >= $cutoff
             else true end)
-   | [.ts, (.otel_span_id // ""), (.otel_trace_id // ""), (.model // ""), (.recipe // ""), (.project // ""), (.draft_file // ""), (.inputs_file // ""), (.input_file // "")]
+   | [.ts, (.otel_span_id // ""), (.otel_trace_id // ""), (.model // ""), (.recipe // ""), (.project // ""), (.draft_file // ""), (.inputs_file // "")]
    | join("\u001f")' \
   "$metrics_file")
 [[ "$pin_mode" == "all" ]] && candidates=$(printf '%s\n' "$candidates" | tail -n 1)
@@ -287,7 +287,7 @@ MSG
   printf '%s\n' "$candidates" | awk -F "$(printf '\037')" '{ printf "    %s  %s  %s  %s\n", ($2 == "" ? "-" : $2), $1, ($5 == "" ? "(bare)" : $5), ($6 == "" ? "-" : $6) }' >&2
   exit 1
 fi
-IFS=$'\037' read -r ref_ts ref_id parent_trace_id parent_model parent_recipe feedback_project parent_draft parent_inputs parent_input <<< "$candidates"
+IFS=$'\037' read -r ref_ts ref_id parent_trace_id parent_model parent_recipe feedback_project parent_draft parent_inputs <<< "$candidates"
 parent_span_id="$ref_id"
 
 ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -386,18 +386,16 @@ fi
 # shipped its own words, so the final sits inside the stdin it piped. No
 # template can win that row, so it is measured once, here, and stored as
 # `final_preexisting`: at least ritual_min_pct of the final's word bigrams in
-# the stored stdin (`<stem>.inputs.json`), or in the rendered input the model
-# saw (`<stem>.input.txt`) for a row from before inputs were stored. Left off
-# the row when there is no final or no stored input to measure against.
-# Both names come off the JSONL row and become paths read here: bare
-# filenames of the expected shape only.
+# the stored stdin (`<stem>.inputs.json`). Only the structured stdin: the
+# rendered `<stem>.input.txt` also carries the template and the non-stdin
+# vars (lead, ask, signoff), so a final repeating those would falsely read
+# ritual, and a row without inputs.json is left unmeasured. Left off the row
+# when there is no final or no stored stdin. The name comes off the JSONL
+# row and becomes a path read here: a bare filename of the expected shape.
 final_preexisting=""
 if [[ -n "$final_file" && -f "$drafts_dir/$final_file" ]]; then
   ritual_src=""
   case "$parent_inputs" in */*|.*) ;; *.inputs.json) [[ -f "$drafts_dir/$parent_inputs" ]] && ritual_src="$drafts_dir/$parent_inputs" ;; esac
-  if [[ -z "$ritual_src" ]]; then
-    case "$parent_input" in */*|.*) ;; *.input.txt) [[ -f "$drafts_dir/$parent_input" ]] && ritual_src="$drafts_dir/$parent_input" ;; esac
-  fi
   if [[ -n "$ritual_src" ]]; then
     # shellcheck source=lib/pair-score.sh
     . "$_fb_script_dir/lib/pair-score.sh"

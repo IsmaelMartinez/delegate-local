@@ -2002,8 +2002,9 @@ assert_eq "posted true" "$(printf '%s' "$last" | jq -r '"\(.final_source // "-")
   "ritual: an adopted posted final is scored against the stdin too"
 rm -rf "$tmp"
 
-# Without inputs.json (a row from before 2026-09-19) the rendered input the
-# model saw stands in: the template around the stdin only adds bigrams.
+# Without inputs.json (a row from before 2026-09-19) the row is unmeasurable:
+# the rendered input carries template text and the non-stdin vars (lead, ask,
+# signoff), so a final repeating those would falsely read ritual.
 ritual_setup
 jq -c 'select(.otel_span_id == "eeeeeeeeeeeeeeee") | del(.inputs_file) + {input_file:"20260927T100000Z-bbbb2222.input.txt"}' "$tmp/m.jsonl" > "$tmp/row"
 grep -v eeeeeeeeeeeeeeee "$tmp/m.jsonl" > "$tmp/rest"; cat "$tmp/rest" "$tmp/row" > "$tmp/m.jsonl"
@@ -2012,8 +2013,8 @@ printf 'Write a reply.\n\nFacts:\n%s\n' "$RITUAL_TEXT" > "$tmp/drafts/20260927T1
 printf '%s' "$RITUAL_TEXT" > "$tmp/shipped.txt"
 DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
   bash "$SCRIPT" --id eeeeeeeeeeeeeeee miss "posted my own text" --final "$tmp/shipped.txt" >/dev/null 2>&1
-assert_eq "true" "$(tail -1 "$tmp/m.jsonl" | jq -r '.final_preexisting // "absent"')" \
-  "ritual: without inputs.json the stored rendered input stands in"
+assert_eq "absent" "$(tail -1 "$tmp/m.jsonl" | jq -r 'if has("final_preexisting") then "present" else "absent" end')" \
+  "ritual: without inputs.json the rendered input is not scored, so no field"
 rm -rf "$tmp"
 
 # No stored input at all, or no final: nothing to measure, so no field.
