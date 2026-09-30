@@ -33,8 +33,12 @@ log="$data_dir/self-improve-daily.log"
 lock="$data_dir/self-improve-daily.lock"
 work="$data_dir/self-improve-work"
 
+# The log carries rejection reasons and corpus evidence: private, as the
+# drafts and the replay cache are.
+umask 077
 mkdir -p "$data_dir" || exit 2
 exec >>"$log" 2>&1
+chmod 600 "$log" 2>/dev/null || true
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
 # One run at a time. The lock names its owner, so a run killed mid-session

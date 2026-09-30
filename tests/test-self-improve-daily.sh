@@ -87,6 +87,18 @@ assert_eq 0 "$(claude_calls)" "quiet gate starts no claude session"
 assert_contains "--peek" "$(cat "$T/rec/gate.args" 2>/dev/null)" "the gate runs self-improve.sh --peek"
 assert_eq "" "$(cat "$T/data/self-improve.state" 2>/dev/null)" "quiet gate writes no watermark"
 assert_contains "quiet" "$LOG" "quiet gate is logged"
+assert_eq 600 "$(perl -e 'printf "%o", (stat shift)[2] & 07777' "$T/data/self-improve-daily.log")" \
+  "a new log is private"
+rm -rf "$T"
+
+# 1b. A log left world-readable by an earlier run is made private.
+setup
+mkdir -p "$T/data"
+: > "$T/data/self-improve-daily.log"
+chmod 644 "$T/data/self-improve-daily.log"
+MOCK_GATE_RC=10 run
+assert_eq 600 "$(perl -e 'printf "%o", (stat shift)[2] & 07777' "$T/data/self-improve-daily.log")" \
+  "an existing log is made private"
 rm -rf "$T"
 
 # 2. An open gate runs exactly one headless session with the bundle on
