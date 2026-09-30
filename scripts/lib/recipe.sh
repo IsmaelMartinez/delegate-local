@@ -21,13 +21,17 @@ recipe_tier() { # file
 # under "## Prompt template", the block delegate.sh sends. The prose sections
 # ("When to use", "Calibration notes") are left out, so a dated note added
 # after a revert does not split the per-template read into a third bucket.
+# The `input_quality:` block is left out too: it judges the caller's inputs
+# and shapes nothing the model sees (#590).
 # One helper for delegate.sh (the row's template_sha) and replay-recipe.sh
 # (the arm's hash), so the two cannot drift. Empty where shasum is missing.
 recipe_template_sha() { # file
   command -v shasum >/dev/null 2>&1 || return 0
   awk '
     NR==1 && /^---[[:space:]]*$/ { in_fm=1; print; next }
-    in_fm { print; if (/^---[[:space:]]*$/) in_fm=0; next }
+    in_fm && /^input_quality:[[:space:]]*$/ { in_iq=1; next }
+    in_fm && in_iq && /^[[:space:]]+[^[:space:]]/ { next }
+    in_fm { in_iq=0; print; if (/^---[[:space:]]*$/) in_fm=0; next }
     /^## Prompt template[[:space:]]*$/ { in_section=1; next }
     /^## / && in_section && !in_block { in_section=0 }
     in_section && /^```/ { if (in_block) { exit } in_block=1; next }

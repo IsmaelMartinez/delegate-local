@@ -6,6 +6,9 @@ inputs:
   why: string
   type: string?
 echo_guard_vars: recent_commits
+input_quality:
+  recent_commits: one_line_exemplar
+  stdin: no_diff
 checks:
   subject_max: {{flavor_commit_subject_max}}
   no_padding_tail: true

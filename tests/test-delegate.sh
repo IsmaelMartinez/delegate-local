@@ -7398,6 +7398,115 @@ assert_contains '"retried":true' "$row" \
   "unbidden-mention: the retry is recorded on the row"
 rm -rf "$tmp"
 
+# --- 54. input_quality (#590): a recipe declares in its frontmatter which
+# input gets which weak-shape detector; a weak input is named on ONE stderr
+# warning line and recorded on the row as an `input_quality` array, and the
+# call goes ahead, because an exit-2 refusal writes no row and teaches callers
+# to pad or to skip delegating. Run against the REAL recipes so the
+# declarations are proved through the wrapper. ---
+tmp=$(mktemp -d)
+data="$tmp/data"; mkdir -p "$data"
+metrics="$data/metrics.jsonl"
+make_mock_curl_think "$tmp" 'fix: keep the cache warm\n\nThe cache was cold on every start, so the first call paid the load.'
+iq_fuller='commit 1c7b48a0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6
+Author:     A <a@example.com>
+AuthorDate: Mon Sep 28 10:00:00 2026 +0100
+Commit:     A <a@example.com>
+CommitDate: Mon Sep 28 10:00:00 2026 +0100
+
+    fix: Loki sync survives bad rows
+
+    One malformed row used to stop the whole sync; it is now skipped and counted.'
+iq_diff='diff --git a/x.sh b/x.sh
+--- a/x.sh
++++ b/x.sh
+@@ -1 +1 @@
+-a
++b'
+iq_run() { # stdin-text, then delegate.sh args; stderr to $iq_err, row to $iq_row
+  local stdin_text="$1"; shift
+  : > "$metrics"
+  iq_err=$(printf '%s' "$stdin_text" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+    DELEGATE_LOCAL_DATA_DIR="$data" DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$REPO/prompts" \
+    bash "$SCRIPT" "$@" 2>&1 >/dev/null)
+  iq_rc=$?
+  iq_row=$(tail -1 "$metrics" 2>/dev/null)
+}
+iq_field() { printf '%s' "$iq_row" | jq -c '.input_quality // "absent"'; }
+iq_warn_lines() { printf '%s\n' "$iq_err" | grep -c 'weak input'; }
+
+# 54a. commit-message with one subject line as its exemplar and no diff: both
+# labels on the row, both named on one warning line, the call still ships.
+iq_run "" --recipe commit-message --var recent_commits="fix: typo in README" \
+  --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
+assert_eq 0 "$iq_rc" "input-quality: a weak commit-message input is never refused"
+assert_eq '["one_line_exemplar","no_diff"]' "$(iq_field)" \
+  "input-quality: one-line exemplar and no diff both land on the row"
+assert_eq 1 "$(iq_warn_lines)" "input-quality: the weak inputs share ONE warning line"
+assert_contains "recent_commits=one_line_exemplar" "$iq_err" \
+  "input-quality: the warning names recent_commits and its shape"
+assert_contains "stdin=no_diff" "$iq_err" "input-quality: the warning names the missing diff"
+
+# 54b. A --oneline list is one line per exemplar: no exemplar carries a body.
+iq_run "$iq_diff" --recipe commit-message \
+  --var recent_commits=$'8b9065f0 chore: update roadmap (#403)\n60e03baa chore(deps): bump the group (#404)\nbc012022 feat: lockfile tool (#400)' \
+  --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
+assert_eq '["one_line_exemplar"]' "$(iq_field)" \
+  "input-quality: a --oneline list is flagged as one-line exemplars"
+
+# 54c. The gather step's own output (--pretty=fuller) with a diff piped is the
+# legitimate input: no field, no warning.
+iq_run "$iq_diff" --recipe commit-message --var recent_commits="$iq_fuller" \
+  --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
+assert_eq '"absent"' "$(iq_field)" "input-quality: fuller exemplars and a diff leave no field"
+assert_eq 0 "$(iq_warn_lines)" "input-quality: fuller exemplars and a diff print no warning"
+
+# 54d. A diff stat piped where the diff belongs is still no diff.
+iq_run " x.sh | 2 +-" --recipe commit-message --var recent_commits="$iq_fuller" \
+  --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
+assert_eq '["no_diff"]' "$(iq_field)" "input-quality: a piped diff stat is flagged no_diff"
+
+# 54e. pr-description given merged-PR titles only.
+iq_run "" --recipe pr-description \
+  --var recent_prs=$'#400 feat(audio): scenes that loop\n#399 Arcade music round 2' \
+  --var diff_stat=" x.sh | 2 +-" --var context="Adds a thing." prose "go"
+assert_eq 0 "$iq_rc" "input-quality: a titles-only pr-description input is never refused"
+assert_eq '["titles_only"]' "$(iq_field)" "input-quality: titles-only recent_prs lands on the row"
+assert_contains "recent_prs=titles_only" "$iq_err" "input-quality: the warning names recent_prs"
+
+# 54f. The gather step's envelope with a one-paragraph body and --limit 1 has
+# no blank line at all once $(...) trims the trailing newline; its BODY: line
+# is what marks it as carrying a body, so it is not flagged.
+iq_run "" --recipe pr-description \
+  --var recent_prs=$'<<<EXAMPLE_BEGIN PR #545>>>\nTITLE: fix: keep the first draft\nBODY:\nKeeps the first draft when the retry fails. Closes #550.\n<<<EXAMPLE_END>>>' \
+  --var diff_stat=" x.sh | 2 +-" --var context="Adds a thing." prose "go"
+assert_eq '"absent"' "$(iq_field)" "input-quality: a gathered example with a body is not titles-only"
+assert_eq 0 "$(iq_warn_lines)" "input-quality: a gathered example prints no warning"
+
+# 54g. A body pasted without the envelope still has its paragraph break.
+iq_run "" --recipe pr-description \
+  --var recent_prs=$'fix: keep the first draft\n\nKeeps the first draft when the retry fails.' \
+  --var diff_stat=" x.sh | 2 +-" --var context="Adds a thing." prose "go"
+assert_eq '"absent"' "$(iq_field)" "input-quality: a pasted title and body are not titles-only"
+
+# 54h. A recipe that declares nothing never carries the field.
+iq_run "one fact about the bug" --recipe summarise-issue --var kind=issue --var N_FACTS=3 prose "go"
+assert_eq '"absent"' "$(iq_field)" "input-quality: an undeclaring recipe carries no field"
+
+# 54i. The declaration shapes no output, so it is kept out of template_sha:
+# adding it did not start a new per-template bucket.
+. "$REPO/scripts/lib/recipe.sh"
+awk '!/^input_quality:/ && !/^  (recent_commits|stdin): (one_line_exemplar|no_diff)$/' \
+  "$REPO/prompts/commit-message.md" > "$tmp/no-iq.md"
+if cmp -s "$tmp/no-iq.md" "$REPO/prompts/commit-message.md"; then
+  echo "  FAIL  input-quality: commit-message declares no input_quality block"; fail=$((fail+1))
+else
+  assert_eq "$(recipe_template_sha "$tmp/no-iq.md")" "$(recipe_template_sha "$REPO/prompts/commit-message.md")" \
+    "input-quality: the declaration leaves template_sha unchanged"
+fi
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

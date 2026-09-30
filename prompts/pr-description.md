@@ -5,6 +5,8 @@ inputs:
   diff_stat: string
   context: string
 echo_guard_vars: recent_prs
+input_quality:
+  recent_prs: titles_only
 checks:
   no_invented_task_list: recent_prs
   no_invented_headings: recent_prs

@@ -345,19 +345,21 @@ if (( n_recipe > 0 )); then
   jq -rs --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
     '"$verdict_join"'
-    map(select(src == "delegate" and .recipe != null and (.exit_status // 0) == 0) | {ts, recipe, v: verdict})
+    def counts: "n=\(length)  hits=\(map(select(.v == "hit")) | length)  misses=\(map(select(.v == "miss")) | length)" + (if $show_scaffold then "  scaffold=\(map(select(.v == "scaffold")) | length)" else "" end) + "  untracked=\(map(select(.v == null)) | length)";
+    map(select(src == "delegate" and .recipe != null and (.exit_status // 0) == 0) | {ts, recipe, iq: (.input_quality // []), v: verdict})
     | group_by(.recipe)
-    | map({
-        recipe: .[0].recipe,
-        n: length,
-        hits: (map(select(.v == "hit")) | length),
-        misses: (map(select(.v == "miss")) | length),
-        scaffold: (map(select(.v == "scaffold")) | length),
-        untracked: (map(select(.v == null)) | length)
-      })
-    | sort_by(-.n)
+    | sort_by(-length)
     | .[]
-    | "  \(.recipe | . + (" " * (20 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + "  untracked=\(.untracked)"
+    # A recipe with any row delegate.sh flagged as a weak input (#590) gets a
+    # sub-line per label, a row with two labels counting under both, and one
+    # for its unflagged rows, so the confound reads beside the hit rate.
+    | . as $rows
+    | "  \($rows[0].recipe | . + (" " * (20 - length)))  \($rows | counts)",
+      (if any($rows[]; (.iq | length) > 0) then
+         ([$rows[] | select((.iq | length) == 0)] | select(length > 0) | "    input_quality=(none)             \(counts)"),
+         ([$rows[].iq[]] | unique | .[] as $l
+          | [$rows[] | select(any(.iq[]; . == $l))] | "    input_quality=\($l + (" " * (17 - ($l | length))))  \(counts)")
+       else empty end)
   ' "$metrics_file"
   echo
 fi
