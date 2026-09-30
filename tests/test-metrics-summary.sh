@@ -315,10 +315,10 @@ rm -f "$iqfix"
 # counted as ritual=; every rate names the distinct sessions it comes from.
 ritualfix=$(mktemp)
 cat > "$ritualfix" <<'EOF'
-{"ts":"2026-09-27T10:00:00Z","source":"delegate","otel_span_id":"r1","recipe":"maintainer-reply","project":"alpha","session":"s1","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-09-27T10:00:00Z","source":"delegate","otel_span_id":"r1","recipe":"maintainer-reply","project":"alpha","session":"s1","tier":"prose","model":"q","duration_ms":9000,"exit_status":0,"estimated_tokens_avoided":100}
 {"ts":"2026-09-27T10:01:00Z","source":"delegate","otel_span_id":"r2","recipe":"maintainer-reply","project":"alpha","session":"s1","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
 {"ts":"2026-09-27T10:02:00Z","source":"delegate","otel_span_id":"r3","recipe":"maintainer-reply","project":"alpha","session":"s2","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
-{"ts":"2026-09-27T10:03:00Z","source":"delegate","otel_span_id":"r4","recipe":"maintainer-reply","project":"alpha","session":"s3","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-09-27T10:03:00Z","source":"delegate","otel_span_id":"r4","recipe":"maintainer-reply","project":"alpha","session":"s3","tier":"prose","model":"q","duration_ms":9000,"exit_status":0,"estimated_tokens_avoided":100}
 {"ts":"2026-09-27T10:04:00Z","source":"delegate","otel_span_id":"r5","recipe":"commit-message","project":"beta","session":"s4","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
 {"ts":"2026-09-27T11:00:00Z","source":"feedback","ref_ts":"2026-09-27T10:00:00Z","ref_id":"r1","kept":false,"reason":"posted my own","final_file":"a.final.txt","final_preexisting":true}
 {"ts":"2026-09-27T11:01:00Z","source":"feedback","ref_ts":"2026-09-27T10:01:00Z","ref_id":"r2","kept":false,"reason":"rewrote","final_file":"b.final.txt","final_preexisting":false}
@@ -339,8 +339,8 @@ assert_contains "maintainer-reply      n=2  hits=1  misses=1  untracked=0  ritua
   "ritual: the per-recipe line counts ritual separately and names its sessions"
 assert_contains "commit-message        n=1  hits=1  misses=0  untracked=0  sessions=1" "$out" \
   "ritual: a recipe with no ritual row prints no ritual= column"
-assert_contains "alpha                 n=2  hits=1  misses=1  untracked=0  ritual=2  p50=4000ms  sessions=2" "$out" \
-  "ritual: the per-project line counts ritual separately and names its sessions"
+assert_contains "alpha                 n=2  hits=1  misses=1  untracked=0  ritual=2  p50=9000ms  sessions=2" "$out" \
+  "ritual: the per-project line counts ritual separately, names its sessions, and takes p50 over every row"
 # The trigger line carries sessions= but not ritual=: a verdict is not joined
 # to the opportunity row it would sit beside, so a count there would imply
 # a join that does not exist.
@@ -349,6 +349,22 @@ assert_contains "alpha                 opportunities=3  delegated=3  missed=0  r
 assert_contains "beta                  opportunities=1  delegated=1  missed=0  rate=100%  sessions=1" "$out" \
   "ritual: every trigger line names its sessions"
 rm -f "$ritualfix"
+
+# A final listed in suspect-finals.tsv beside the metrics file is not what
+# shipped (#587), so its stored final_preexisting is not trusted: the verdict
+# counts as the miss it recorded, not as ritual.
+qdir=$(mktemp -d)
+cat > "$qdir/metrics.jsonl" <<'EOF'
+{"ts":"2026-09-27T10:00:00Z","source":"delegate","otel_span_id":"q1","recipe":"maintainer-reply","project":"alpha","session":"s1","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-09-27T10:01:00Z","source":"delegate","otel_span_id":"q2","recipe":"maintainer-reply","project":"alpha","session":"s2","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-09-27T11:00:00Z","source":"feedback","ref_ts":"2026-09-27T10:00:00Z","ref_id":"q1","kept":false,"reason":"shifted","final_file":"q1.final.txt","final_preexisting":true}
+{"ts":"2026-09-27T11:01:00Z","source":"feedback","ref_ts":"2026-09-27T10:01:00Z","ref_id":"q2","kept":false,"reason":"posted my own","final_file":"q2.final.txt","final_preexisting":true}
+EOF
+printf 'q1.final.txt\tneighbour\thook\n' > "$qdir/suspect-finals.tsv"
+out=$(bash "$SCRIPT" --file "$qdir/metrics.jsonl" 2>&1)
+assert_contains "maintainer-reply      n=1  hits=0  misses=1  untracked=0  ritual=1  sessions=1" "$out" \
+  "ritual: a quarantined final's stored final_preexisting is not trusted"
+rm -rf "$qdir"
 
 # 14. Per-recipe negative gate: no recipe rows -> section hidden.
 norecipe=$(mktemp)

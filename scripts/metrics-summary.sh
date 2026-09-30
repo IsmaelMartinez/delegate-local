@@ -136,9 +136,16 @@ echo "Tokens avoided (≈):  $total_avoided"
 # delegation, so the draft never had a chance. Every verdict rate leaves it
 # out of n and prints it as ritual=, and every rate prints sessions=, the distinct
 # sessions its rows come from, since two sessions made most of one template's
-# rejections.
+# rejections. A final `self-improve.sh --quarantine` listed in
+# suspect-finals.tsv beside the metrics file is not what shipped (#587), so a
+# stored final_preexisting on it is not trusted: `$suspects`, passed to every
+# program that interpolates verdict_join, is that list's first column.
+suspects_json='[]'
+if [[ -f "$(dirname "$display_file")/suspect-finals.tsv" ]]; then
+  suspects_json=$(jq -Rnc '[inputs | split("\t")[0] | select(. != "")]' < "$(dirname "$display_file")/suspect-finals.tsv" 2>/dev/null) || suspects_json='[]'
+fi
 verdict_join='
-  def fbv: if (.final_preexisting // false) then "ritual" elif (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
+  def fbv: if (.final_preexisting // false) and ((.final_file // "") as $f | any($suspects[]; . == $f) | not) then "ritual" elif (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
   def sessions: map(.session // "" | select(. != "")) | unique | length;
   def ritual_col($rows): ($rows | map(select(.v == "ritual")) | length) as $r | if $r > 0 then "  ritual=\($r)" else "" end;
   def fbkey: if (.ref_id // "") != "" then "id:" + .ref_id else "ts:" + .ref_ts end;
@@ -146,7 +153,7 @@ verdict_join='
      ({}; .[$i | fbkey] = ($i | fbv))) as $vmap
   | def verdict: $vmap["id:" + (.otel_span_id // "")] // $vmap["ts:" + .ts];
 '
-jq -rs '
+jq -rs --argjson suspects "$suspects_json" '
   def src: .source // "delegate";
   # One decimal always, so the column does not go ragged on a whole number.
   def pct($n; $d):
@@ -282,7 +289,7 @@ if (( n_feedback > 0 )); then
     | select($by_hand[$stem] != true)
     | $stem
   ' --slurpfile all "$display_file" "$metrics_file")
-  jq -rs --argjson show_scaffold "$show_scaffold" --argjson hook_captured "$hook_captured" '
+  jq -rs --argjson suspects "$suspects_json" --argjson show_scaffold "$show_scaffold" --argjson hook_captured "$hook_captured" '
     def src: .source // "delegate";
     # fbv checks scaffold first because it also carries kept:false; verdict
     # looks a delegate row up by otel_span_id, then ts.
@@ -323,7 +330,7 @@ n_projects=$(jq -rs '
 ' "$metrics_file")
 if (( n_projects > 1 )); then
   echo "Per-project (delegate):"
-  jq -rs --argjson show_scaffold "$show_scaffold" '
+  jq -rs --argjson suspects "$suspects_json" --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
     '"$pct_def"'
     '"$verdict_join"'
@@ -338,7 +345,9 @@ if (( n_projects > 1 )); then
         untracked: (map(select(.v == null)) | length),
         ritual: ritual_col($all),
         sessions: sessions,
-        p50: (map(.duration_ms) | pct(50) // 0)
+        # Latency is every delegation the project ran, ritual ones included:
+        # only the verdict counts leave them out.
+        p50: ($all | map(.duration_ms) | pct(50) // 0)
       })
     | sort_by((.project == ""), -.n)
     | .[]
@@ -355,7 +364,7 @@ n_recipe=$(jq -rs '
 ' "$metrics_file")
 if (( n_recipe > 0 )); then
   echo "Per-recipe (delegate):"
-  jq -rs --argjson show_scaffold "$show_scaffold" '
+  jq -rs --argjson suspects "$suspects_json" --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
     '"$verdict_join"'
     def counts: . as $all | map(select(.v != "ritual"))
