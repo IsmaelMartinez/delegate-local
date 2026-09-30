@@ -108,18 +108,43 @@ ritual_def='
   def ritual: ($rt[0][fkey].r // false);
   def sessions_of: map(parent.session // "" | select(. != "")) | unique | length;
 '
+
+# The final a verdict is scored against (#553): the one its row names, else
+# the bare `<stem>.final.txt` beside its draft, which the boundary hook
+# writes and a verdict recorded before the capture never names, unless the
+# quarantine lists it (a listed stem final is not this draft's shipped text,
+# so it is not adopted at all). `$finals` and `$suspect` are sets read from
+# the two lists below, the bare finals in the drafts dir and the sidecar,
+# passed as `--rawfile fl` and `--rawfile sl`.
+final_def='
+  ($fl | split("\n") | map(select(. != "") | {(.): true}) | add // {}) as $finals
+  | ($sl | split("\n") | map(select(. != "") | split("\t")[0] | {(.): true}) | add // {}) as $suspect
+  | def stem_final: (parent.draft_file // "") as $df
+      | if ($df | test("^[^./][^/]*\\.draft\\.txt$")) then ($df | sub("\\.draft\\.txt$"; ".final.txt")) else "" end;
+  def eff_final:
+    if (.final_file // "") != "" then .final_file
+    else stem_final as $s
+      | if $s != "" and ($finals[$s] // false) and (($suspect[$s] // false) | not) then $s else "" end
+    end;
+'
+finals_list=$(mktemp); suspect_list=$(mktemp)
+trap 'rm -f "$finals_list" "$suspect_list"' EXIT
+(cd "$drafts_dir" 2>/dev/null && ls) 2>/dev/null | grep -E '^[^./][^/]*\.final\.txt$' > "$finals_list"
+[[ -f "$suspect_file" ]] && cat "$suspect_file" > "$suspect_list"
+
 ritual_map() {
   local out="$1" key stored fin ij src
   local pairs keys
   pairs=$(mktemp); keys=$(mktemp)
   : > "$out.tsv"
-  jq -rs '
+  jq -rs --rawfile fl "$finals_list" --rawfile sl "$suspect_list" '
     '"$parent_join"'
     '"$ritual_def"'
-    map(select(referenced and (.final_file // "") != "")) | .[]
+    '"$final_def"'
+    map(select(referenced and eff_final != "")) | .[]
     | parent as $p
     | [fkey, (if has("final_preexisting") then (.final_preexisting | tostring) else "" end),
-       .final_file, ($p.inputs_file // "")]
+       eff_final, ($p.inputs_file // "")]
     | join("\u001f")
   ' --slurpfile rt /dev/null "$metrics_file" 2>/dev/null \
   | while IFS=$'\037' read -r key stored fin ij; do
@@ -157,7 +182,7 @@ ritual_map() {
 # ---------------------------------------------------------------------------
 if (( quarantine == 1 )); then
   q_tmp=$(mktemp -d)
-  trap 'rm -rf "$q_tmp"' EXIT
+  trap 'rm -rf "$q_tmp" "$finals_list" "$suspect_list"' EXIT
   [[ -d "$drafts_dir" ]] || { echo "self-improve: no drafts directory at $drafts_dir" >&2; exit 2; }
   # draft<TAB>previous<TAB>next, one line per delegation that stored a draft.
   jq -rs '
@@ -237,7 +262,7 @@ fi
 # ---------------------------------------------------------------------------
 if (( ritual_only == 1 )); then
   rt_file=$(mktemp)
-  trap 'rm -f "$rt_file"' EXIT
+  trap 'rm -f "$rt_file" "$finals_list" "$suspect_list"' EXIT
   ritual_map "$rt_file"
   echo "=== ritual delegations (#588): shipped final with >= ${ritual_min_pct}% of its word bigrams in the piped stdin ==="
   echo "Metrics: $metrics_file${since:+  (delegations since $since)}"
@@ -260,11 +285,16 @@ fi
 prev_ts=""
 [[ -f "$state_file" ]] && prev_ts=$(head -n 1 "$state_file" 2>/dev/null | tr -d '[:space:]')
 
-newest_ts=$(jq -r 'select((.source // "delegate") == "delegate") | .ts' "$metrics_file" 2>/dev/null | tail -n 1)
-if [[ -z "$newest_ts" || "$newest_ts" == "null" ]]; then
+if ! jq -e 'select((.source // "delegate") == "delegate" and .ts != null)' "$metrics_file" >/dev/null 2>&1; then
   echo "self-improve: no delegate rows in $metrics_file" >&2
   exit 10
 fi
+# The watermark is the newest ts of any row, verdicts included, not the last
+# delegate row's (#553): a row is stamped when its call starts and appended
+# when it ends, so the file is not in ts order. The since-watermark sections
+# below read each verdict's own ts, so a verdict on a delegation an earlier
+# run already saw is still new.
+newest_ts=$(jq -rs 'map(.ts | strings) | max // empty' "$metrics_file" 2>/dev/null)
 
 new_count=$(jq -r --arg prev "$prev_ts" \
   'select((.source // "delegate") == "delegate") | select($prev == "" or .ts > $prev) | .ts' \
@@ -280,7 +310,7 @@ fi
 # Every rate below leaves ritual verdicts out of n, names them as ritual=,
 # and names the distinct sessions its verdicts come from (#588).
 rt_file=$(mktemp)
-trap 'rm -f "$rt_file"' EXIT
+trap 'rm -f "$rt_file" "$finals_list" "$suspect_list"' EXIT
 ritual_map "$rt_file"
 
 # ---------------------------------------------------------------------------
@@ -307,19 +337,20 @@ echo
 
 # One verdict tier (ADR 0030): the keep rate is quoted from every feedback
 # row. A delegation counts once, under its latest verdict, as
-# metrics-summary.sh counts it. `usable` is kept plus scaffold over n, the
-# same ranking key the per-recipe section uses.
+# metrics-summary.sh counts it, and is new when that verdict was recorded
+# after the watermark, whenever the delegation ran (#553). `usable` is kept
+# plus scaffold over n, the same ranking key the per-recipe section uses.
 jq -rs --arg prev "$prev_ts" --slurpfile rt "$rt_file" '
   '"$parent_join"'
   '"$ritual_def"'
   latest_verdicts
-  | map(select($prev == "" or (parent.ts // "") > $prev))
+  | map(select($prev == "" or .ts > $prev))
   | (map(select(ritual)) | length) as $ritual
   | map(select(ritual | not))
   | (map(select(.kept)) | length) as $kept
   | (map(select(.scaffold)) | length) as $scaffold
   | (map(select((.kept | not) and (.scaffold | not))) | length) as $rewrote
-  | "Verdicts on those delegations: n=\(length)"
+  | "Verdicts recorded since watermark: n=\(length)"
     + (if length > 0
        then "  kept=\($kept)  scaffold=\($scaffold)  rewrote=\($rewrote)  usable=\((($kept + $scaffold) * 100 / length) | floor)%"
        else ""
@@ -456,22 +487,27 @@ supplied() {
   fi
 }
 
-# The supplied half of the input, extracted once per rejection: salient reads
-# a file four times over.
+# The supplied half of the input and each file's salient set (in $sal_dir),
+# extracted once per rejection and reused by every comparison.
 supplied_tmp=$(mktemp)
 body_tmp=$(mktemp)
-trap 'rm -f "$supplied_tmp" "$body_tmp" "$rt_file"' EXIT
+sal_dir=$(mktemp -d)
+trap 'rm -f "$supplied_tmp" "$body_tmp" "$rt_file" "$finals_list" "$suspect_list"; rm -rf "$sal_dir"' EXIT
 
 # One record per rejected delegation. The separator is US (\u001f), not a tab: tab is IFS
 # whitespace, so `read` would collapse the frequently-empty draft_file /
 # final_file fields and shift every later field left.
-jq -rs --arg prev "$prev_ts" --slurpfile rt "$rt_file" '
+# A delegation is a rejection when its LATEST verdict is, as the tally counts
+# it, and is new when that verdict was recorded after the watermark (#553).
+jq -rs --arg prev "$prev_ts" --slurpfile rt "$rt_file" --rawfile fl "$finals_list" --rawfile sl "$suspect_list" '
   '"$parent_join"'
   '"$ritual_def"'
-  map(select(referenced and (.kept | not)))
-  | map(select($prev == "" or (parent.ts // "") > $prev))
+  '"$final_def"'
+  latest_verdicts
+  | map(select((.kept | not) and ($prev == "" or .ts > $prev)))
+  | sort_by(.ts)
   | .[]
-  | (.final_file // "") as $fin
+  | eff_final as $fin
   | parent as $p
   | [ .ref_ts,
       ($p.project // "-"),
@@ -483,7 +519,7 @@ jq -rs --arg prev "$prev_ts" --slurpfile rt "$rt_file" '
        then ($fin | sub("\\.final(\\.[0-9]+)?\\.txt$"; ".draft.txt"))
        else ($p.draft_file // "") end),
       $fin,
-      (.final_source // ""),
+      (if (.final_file // "") == "" and $fin != "" then "adopted" else (.final_source // "") end),
       (if .scaffold then "scaffold" else "rewrote" end),
       (if ritual then "ritual" else "-" end),
       ((.reason // "(no reason recorded)") | gsub("[[:cntrl:]]"; " ")) ]
@@ -506,6 +542,7 @@ jq -rs --arg prev "$prev_ts" --slurpfile rt "$rt_file" '
       ibytes=$(wc -c < "$ipath" | tr -d ' ')
       echo "    input:  $ipath ($ibytes bytes)"
       supplied "$ipath" "$rec" > "$supplied_tmp"
+      salient "$supplied_tmp" > "$sal_dir/s"
     else
       ipath=""
     fi
@@ -522,6 +559,10 @@ jq -rs --arg prev "$prev_ts" --slurpfile rt "$rt_file" '
       # succeeded (#587), not written by the caller; label it as such.
       if [[ "$fsrc" == "posted" ]]; then
         echo "    final:  $fpath ($fbytes bytes, captured from the post)"
+      elif [[ "$fsrc" == "adopted" ]]; then
+        # The verdict named no final; the hook wrote this one beside the
+        # draft and the quarantine does not list it (#553).
+        echo "    final:  $fpath ($fbytes bytes, captured from the post; the verdict named no final)"
       else
         echo "    final:  $fpath ($fbytes bytes)"
       fi
@@ -531,16 +572,19 @@ jq -rs --arg prev "$prev_ts" --slurpfile rt "$rt_file" '
       # not carry it in any spelling: `absent_from` in lib/pair-score.sh.
       # They are read off the body alone (body_only): a Refs or Closes line and
       # the footer are the caller's fixed lines, not anchors the draft lost (#589).
+      # Each file's salient set is read once per rejection and reused (#553):
+      # recomputing it for every comparison cost ~0.45 s a rejection.
       body_only "$fpath" > "$body_tmp"
-      new_tokens=$(comm -13 <(salient "$dpath") <(salient "$body_tmp") | absent_from "$dpath")
-      draft_only=$(comm -23 <(salient "$dpath") <(salient "$fpath") | absent_from "$fpath" | head -n 12 | tr '\n' ' ')
+      salient "$dpath" > "$sal_dir/d"; salient "$fpath" > "$sal_dir/f"; salient "$body_tmp" > "$sal_dir/b"
+      new_tokens=$(comm -13 "$sal_dir/d" "$sal_dir/b" | absent_from "$dpath")
+      draft_only=$(comm -23 "$sal_dir/d" "$sal_dir/f" | absent_from "$fpath" | head -n 12 | tr '\n' ' ')
       # With the input, DROPPED is what the caller supplied and the model
       # dropped; a token the shipped text carries that neither the input nor
       # the draft had is context the human added, not a fact the model lost,
       # and goes under ADDED. Without one, DROPPED is the whole set, as ever.
       if [[ -n "$ipath" ]]; then
-        dropped=$(printf '%s\n' "$new_tokens" | comm -12 - <(salient "$supplied_tmp") | head -n 12 | tr '\n' ' ')
-        added=$(printf '%s\n' "$new_tokens" | comm -23 - <(salient "$supplied_tmp") | head -n 12 | tr '\n' ' ')
+        dropped=$(printf '%s\n' "$new_tokens" | comm -12 - "$sal_dir/s" | head -n 12 | tr '\n' ' ')
+        added=$(printf '%s\n' "$new_tokens" | comm -23 - "$sal_dir/s" | head -n 12 | tr '\n' ' ')
         [[ -n "${dropped// /}" ]] && echo "    DROPPED  (in the input and the shipped text, absent from the draft): $dropped"
         [[ -n "${added// /}"   ]] && echo "    ADDED    (in the shipped text, absent from the input and the draft): $added"
       else
@@ -574,7 +618,7 @@ jq -rs --arg prev "$prev_ts" --slurpfile rt "$rt_file" '
       # Scored against what was supplied rather than against the draft: the
       # anchors the caller gave that the shipped text carried nowhere.
       if [[ -n "$ipath" ]]; then
-        unused=$(comm -23 <(salient "$supplied_tmp") <(salient "$fpath") | absent_from "$fpath" | head -n 12 | tr '\n' ' ')
+        unused=$(comm -23 "$sal_dir/s" "$sal_dir/f" | absent_from "$fpath" | head -n 12 | tr '\n' ' ')
         [[ -n "${unused// /}" ]] && echo "    UNUSED   (in the input, absent from the shipped text): $unused"
       fi
     else
@@ -601,13 +645,14 @@ echo
 # blind spot goes on optimising the half it can see.
 # ---------------------------------------------------------------------------
 echo "--- capture coverage since watermark ---"
-jq -rs --arg prev "$prev_ts" '
+jq -rs --arg prev "$prev_ts" --rawfile fl "$finals_list" --rawfile sl "$suspect_list" '
   '"$parent_join"'
-  map(select(referenced and (.kept | not)))
-  | map(select($prev == "" or (parent.ts // "") > $prev))
+  '"$final_def"'
+  latest_verdicts
+  | map(select((.kept | not) and ($prev == "" or .ts > $prev)))
   | (map(select((parent.draft_file // "") != "")) | length) as $wd
   | (map(select((parent.input_file // "") != "")) | length) as $wi
-  | (map(select((.final_file // "") != "")) | length) as $wf
+  | (map(select(eff_final != "")) | length) as $wf
   | (map(select((.reason // "") == "")) | length) as $nr
   | "  rejections=\(length)  with draft=\($wd)  with input=\($wi)  with final=\($wf)  with no reason=\($nr)"
 ' "$metrics_file"

@@ -24,14 +24,18 @@ Exit 0 means there are new delegations and the evidence bundle is on stdout.
 Exit 2 is a real error (no metrics file, no `jq`) and is worth surfacing.
 
 Running it advances a watermark, so the next run sees only what is new. Use
-`--peek` when you want to look without consuming the window.
+`--peek` when you want to look without consuming the window. The watermark is
+the newest `ts` in the file, and the verdict sections read each verdict's own
+`ts`, so a verdict recorded after a run on a delegation that run already saw
+still reaches the next bundle (#553).
 
 ## What the bundle gives you
 
 Six sections, in the order you should read them.
 
-The **verdict tally** is the headline: how many of the new delegations were
-kept, used as a scaffold, or rewritten, and the usable rate over all of them.
+The **verdict tally** is the headline: how many of the verdicts recorded since
+the watermark were kept, used as a scaffold, or rewritten, and the usable rate
+over all of them, each delegation counted once under its latest verdict.
 Every verdict is the agent's own record of what it did with its draft, and
 that is the one tier there is (ADR 0030): the agent that used or rewrote the
 output is the judge, and the reason plus the draft/final pair is what turns a
