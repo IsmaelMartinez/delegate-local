@@ -228,13 +228,21 @@ run_pytest() {
     if ($pid == 0) { setpgrp(0, 0); exec @cmd or exit 127; }
     # Its own group no longer sees the terminal'"'"'s ^C, so pass it on.
     for my $s (qw(INT TERM HUP)) { $SIG{$s} = sub { kill($s, -$pid) } }
-    my $fired = 0;
-    $SIG{ALRM} = sub { kill(($fired++ ? "KILL" : "TERM"), -$pid); alarm 5; };
+    my ($fired, $term_at) = (0, 0);
+    $SIG{ALRM} = sub { $term_at ||= time; kill(($fired++ ? "KILL" : "TERM"), -$pid); alarm 5; };
     alarm $secs;
     my $r;
     do { $r = waitpid($pid, 0) } while ($r == -1 && $!{EINTR});
     alarm 0;
-    exit 124 if $fired;
+    if ($fired) {
+      # pytest may exit on TERM while a child that ignores it lives on in
+      # the group: the KILL is still owed when the grace period ends.
+      if ($fired == 1) {
+        select(undef, undef, undef, 0.1) while kill(0, -$pid) && time < $term_at + 5;
+        kill("KILL", -$pid);
+      }
+      exit 124;
+    }
     exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
   ' "$timeout_secs" "$py" -m pytest -q --no-header "$test_script" >"$log_file" 2>&1
 }

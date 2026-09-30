@@ -464,6 +464,43 @@ assert_contains "VERDICT: TIMEOUT" "$out" "hanging test -> TIMEOUT verdict"
 assert_eq yes "$( (( elapsed < 15 )) && echo yes || echo "no (${elapsed}s)")" "hanging test is stopped near --timeout, not when it finishes"
 rm -rf "$tmp" "$tmp.out"
 
+# 24. The group KILL still lands after pytest itself has exited on TERM: a
+# grandchild that ignores TERM would otherwise outlive a reported TIMEOUT.
+tmp=$(mktemp -d)
+make_fixture "$tmp"
+cat >> "$tmp/test_source.py" <<'PY'
+
+def test_spawns_stubborn_grandchild():
+    import subprocess, sys, time
+    subprocess.Popen([sys.executable, "-c",
+        "import os, signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "open('gc.pid', 'w').write(str(os.getpid()))\n"
+        "time.sleep(60)\n"])
+    time.sleep(30)
+PY
+cat > "$tmp/patch.txt" <<'EOF'
+<<<<<<< SEARCH
+def add(a, b):
+    return a + b
+=======
+def add(a, b):
+    return a + b
+>>>>>>> REPLACE
+EOF
+EC=0
+out=$(perl -e 'alarm 60; exec @ARGV' bash "$SCRIPT" --timeout 2 --out "$tmp.out" "$tmp" "$tmp/patch.txt" 2>&1) || EC=$?
+assert_eq 4 "$EC" "stubborn grandchild -> exit 4"
+gc=$(cat "$tmp.out/gc.pid" 2>/dev/null)
+assert_eq yes "$([[ -n "$gc" ]] && echo yes || echo no)" "stubborn grandchild recorded its pid"
+if [[ -n "$gc" ]] && kill -0 "$gc" 2>/dev/null; then
+  echo "  FAIL  stubborn grandchild is killed with its group after TIMEOUT (pid $gc still alive)"; fail=$((fail+1))
+  kill -9 "$gc" 2>/dev/null
+else
+  echo "  PASS  stubborn grandchild is killed with its group after TIMEOUT"; pass=$((pass+1))
+fi
+rm -rf "$tmp" "$tmp.out"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

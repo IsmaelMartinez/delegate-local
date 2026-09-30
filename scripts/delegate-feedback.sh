@@ -530,14 +530,14 @@ if [[ "$verdict" == "miss" && "${DELEGATE_FEEDBACK_NO_NUDGE:-0}" != "1" && -n "$
         my $r = $j->{reason} // "";
         $r =~ s/\s+/ /g;
         $r = substr($r, 0, 100) . (length($r) > 100 ? "…" : "");
-        push @rows, sprintf("%s\t%s", $j->{ts}, $r);
+        push @rows, [$j->{ts}, scalar(@rows), sprintf("%s\t%s", $j->{ts}, $r)];
       }
     }
     print "SIMILAR_COUNT=$similar\n";
     # Most recent first, as the nudge header says (#554): the file is
-    # appended oldest first. Rows lead with their ISO ts, so a string sort
-    # orders them by time.
-    for (reverse sort @rows) { print "$_\n" }
+    # appended oldest first. ISO ts compare as strings; within one second
+    # the later append is the more recent.
+    for (sort { $b->[0] cmp $a->[0] || $b->[1] <=> $a->[1] } @rows) { print "$_->[2]\n" }
   ' "$reason" "$similar_threshold" "$window_secs" "$ts" < "$metrics_file" 2>/dev/null) || matcher_out=""
 
   if [[ -n "$matcher_out" ]]; then

@@ -490,6 +490,18 @@ out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "pr-description r
 assert_eq "(3) (2) (1)" "$(printf '%s\n' "$out" | sed -n 's/^  - .*body (\([0-9]\))$/(\1)/p' | tr '\n' ' ' | sed 's/ $//')" \
   "nudge order: matches print most recent first, as the header says"
 rm -rf "$tmp"
+# Two matches in the same second: the later append is the more recent, even
+# when its reason sorts first.
+tmp=$(mktemp -d)
+hist_ts=$(perl -MPOSIX -e 'print POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time-600))')
+for tag in zulu alpha; do
+  echo "{\"ts\":\"$hist_ts\",\"source\":\"feedback\",\"ref_ts\":\"$hist_ts\",\"kept\":false,\"reason\":\"pr-description recipe stalled past 30s on prose tier body $tag\"}" >> "$tmp/m.jsonl"
+done
+echo "{\"ts\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\",\"source\":\"delegate\",\"tier\":\"prose\",\"model\":\"q\",\"duration_ms\":1000,\"exit_status\":0}" >> "$tmp/m.jsonl"
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" miss "pr-description recipe stalled past 30s on prose tier body" 2>&1)
+assert_eq "alpha zulu" "$(printf '%s\n' "$out" | sed -n 's/^  - .*body \([a-z]*\)$/\1/p' | tr '\n' ' ' | sed 's/ $//')" \
+  "nudge order: a same-second tie prints the later append first"
+rm -rf "$tmp"
 
 # n27: a stopword-only reason has length but no tokens, so it reaches the
 # matcher's empty-tokens path and must not crash perl.
