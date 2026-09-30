@@ -1707,6 +1707,22 @@ assert_eq 2 "$(ls "$tmp/drafts" | grep -c 'aaaa1111\.final')" \
   "identical finals: no third final file"
 rm -rf "$tmp"
 
+# A draftless stem is named from the second-precision ref_ts alone, so two
+# draftless delegations in one second share it: the same text shipped by
+# both is two finals, not one reused file.
+tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+printf '{"ts":"%s","source":"delegate","tier":"prose","exit_status":0,"otel_span_id":"ffffffffffffff01"}\n' "$TS_LATEST" >> "$tmp/m.jsonl"
+printf 'same shipped text\n' > "$tmp/same.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id "$ID_LATEST" miss "first" --final "$tmp/same.txt" >/dev/null 2>&1
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id ffffffffffffff01 miss "second" --final "$tmp/same.txt" >/dev/null 2>&1
+nd_stem="$(printf '%s' "$TS_LATEST" | tr -d ':-')-nodraft"
+assert_eq "$nd_stem.final.txt $nd_stem.final.2.txt" \
+  "$(jq -r 'select(.source=="feedback") | .final_file // "-"' "$tmp/m.jsonl" | tr '\n' ' ' | sed 's/ $//')" \
+  "draftless stems sharing a second: the second verdict stores its own numbered final"
+rm -rf "$tmp"
+
 # Each further final on the same stem takes the next free number, and every
 # row names the file it wrote.
 adopt_setup

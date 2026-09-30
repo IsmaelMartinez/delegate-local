@@ -347,8 +347,9 @@ if [[ -n "$final_src" ]]; then
       # confirm hook stored the post, and a copy would only read as a
       # second shipped text. Reuse the file; a posted label follows below.
       # Trailing newlines do not count: the hook's capture and a caller's
-      # file differ there.
-      if perl -e 'my @t = map { open(my $f, "<", $_) or exit 1; local $/; my $s = <$f> // ""; $s =~ s/\n+\z//; $s } @ARGV; exit($t[0] eq $t[1] ? 0 : 1)' \
+      # file differ there. Only on a draft's stem: a draftless one is named
+      # from the second-precision ref_ts, which two delegations can share.
+      if [[ -n "$parent_draft" ]] && perl -e 'my @t = map { open(my $f, "<", $_) or exit 1; local $/; my $s = <$f> // ""; $s =~ s/\n+\z//; $s } @ARGV; exit($t[0] eq $t[1] ? 0 : 1)' \
           "$final_src" "$drafts_dir/$final_name"; then
         final_file="$final_name"; final_reused=1; break
       fi
