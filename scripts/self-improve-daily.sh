@@ -41,24 +41,27 @@ exec >>"$log" 2>&1
 chmod 600 "$log" 2>/dev/null || true
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
-# One run at a time. The lock names its owner, so a run killed mid-session
-# (sleep, reboot) leaves a lock the next day's run can see is dead.
-if ! mkdir "$lock" 2>/dev/null; then
-  owner=$(cat "$lock/pid" 2>/dev/null)
+# One run at a time. The lock is a symlink whose target is the owner's pid,
+# created in one step, so there is no moment where it exists without an
+# owner for a second run to read as stale; a run killed mid-session (sleep,
+# reboot) leaves a lock the next day's run can see is dead. Two runs that
+# both find the same dead owner can still race the takeover, which launchd,
+# never starting a job that is already running, does not produce.
+if ! ln -s "$$" "$lock" 2>/dev/null; then
+  owner=$(readlink "$lock" 2>/dev/null)
   if [[ -n "$owner" ]] && kill -0 "$owner" 2>/dev/null; then
     say "another run is already running (pid $owner); skipping"
     exit 0
   fi
   say "taking over a stale lock (pid ${owner:-unknown})"
   rm -rf "$lock"
-  mkdir "$lock" || { say "could not take the lock $lock"; exit 2; }
+  ln -s "$$" "$lock" 2>/dev/null || { say "another run took the lock first; skipping"; exit 0; }
 fi
-echo $$ > "$lock/pid"
 bundle=$(mktemp)
 cleanup() {
   if [[ -d "$work" ]]; then git -C "$root" worktree remove --force "$work" >/dev/null 2>&1 || rm -rf "$work"; fi
   rm -f "$bundle"
-  rm -rf "$lock"
+  if [[ "$(readlink "$lock" 2>/dev/null)" == "$$" ]]; then rm -f "$lock"; fi
 }
 trap cleanup EXIT
 
@@ -90,14 +93,23 @@ Choose at most one fix. If you make one, create a branch named loop/$today-<shor
 Never merge, never push to main, never publish or release anything.
 End with one line: the PR URL, or why the evidence was too thin to change anything."
 
+# The allowlist is only a boundary while nothing it runs can be rewritten:
+# a script the session could edit and then run would carry any denied
+# command past it. So edits are confined to prompts/ (a recipe and its
+# calibration notes, all the procedure changes; an Edit rule binds the Write
+# tool too, and prompts/../ is refused), the scripts and suites it may run
+# live outside prompts/, and the suites are named exactly. User settings are
+# not loaded, so the profile's own allow rules cannot widen this list.
 allowed=(
-  Read Grep Glob Edit Write
+  Read Grep Glob "Edit(prompts/**)"
   "Bash(bash scripts/self-improve.sh --peek*)"
   "Bash(bash scripts/replay-recipe.sh *)"
   "Bash(bash scripts/metrics-summary.sh*)"
   "Bash(bash scripts/delegate.sh *)"
   "Bash(bash scripts/delegate-feedback.sh *)"
-  "Bash(bash tests/*)"
+  "Bash(bash tests/test-delegate.sh)"
+  "Bash(bash tests/test-prompts-library.sh)"
+  "Bash(bash tests/test-self-improve.sh)"
   "Bash(shellcheck *)"
   "Bash(git status*)" "Bash(git diff*)" "Bash(git log*)" "Bash(git show*)"
   "Bash(git switch -c loop/*)" "Bash(git checkout -b loop/*)"
@@ -112,6 +124,7 @@ denied=(
 
 say "session: $claude_bin -p in $work"
 (cd "$work" && "$claude_bin" -p "$prompt" \
+  --setting-sources project \
   --permission-mode dontAsk \
   --allowedTools "${allowed[@]}" \
   --disallowedTools "${denied[@]}" < "$bundle")

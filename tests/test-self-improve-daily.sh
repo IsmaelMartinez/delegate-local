@@ -114,6 +114,12 @@ assert_contains $'--permission-mode\ndontAsk' "$cargs" "claude denies anything n
 assert_contains "--allowedTools" "$cargs" "claude gets an explicit tool allowlist"
 assert_contains "Bash(gh pr merge *)" "$cargs" "merging is on the deny list"
 assert_contains "docs/self-improvement-loop.md" "$cargs" "the prompt names the procedure"
+assert_contains $'\nEdit(prompts/**)\n' "$cargs" "edits are confined to prompts/"
+assert_not_contains $'\nEdit\n' "$cargs" "no unscoped Edit"
+assert_not_contains $'\nWrite\n' "$cargs" "no unscoped Write"
+assert_not_contains "Bash(bash tests/*)" "$cargs" "no wildcard over runnable test files"
+assert_contains $'\nBash(bash tests/test-prompts-library.sh)\n' "$cargs" "the suites the procedure runs are named exactly"
+assert_contains $'--setting-sources\nproject\n' "$cargs" "user settings cannot widen the allowlist"
 assert_contains "Newest row: 2026-09-30T12:00:00Z" "$(cat "$T/rec/claude.stdin" 2>/dev/null)" \
   "the bundle is piped to the session"
 assert_contains "worktree add --detach" "$(cat "$T/rec/git.args" 2>/dev/null)" \
@@ -143,24 +149,24 @@ rm -rf "$T"
 # 5. A lock held by a live run means this run steps aside without a session.
 setup
 sleep 30 & holder=$!
-mkdir -p "$T/data/self-improve-daily.lock"; echo "$holder" > "$T/data/self-improve-daily.lock/pid"
+ln -s "$holder" "$T/data/self-improve-daily.lock"
 MOCK_GATE_RC=0 run
 kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
 assert_eq 0 "$EC" "a held lock exits 0"
 assert_eq 0 "$(claude_calls)" "a held lock starts no claude session"
 assert_contains "already running" "$LOG" "a held lock is logged"
-assert_eq "$holder" "$(cat "$T/data/self-improve-daily.lock/pid" 2>/dev/null)" "a held lock is left to its owner"
+assert_eq "$holder" "$(readlink "$T/data/self-improve-daily.lock" 2>/dev/null)" "a held lock is left to its owner"
 rm -rf "$T"
 
 # 6. A lock left by a dead run is taken over, so one killed run cannot stop
 #    the loop for good.
 setup
 sh -c 'exit 0' & dead=$!; wait "$dead"
-mkdir -p "$T/data/self-improve-daily.lock"; echo "$dead" > "$T/data/self-improve-daily.lock/pid"
+ln -s "$dead" "$T/data/self-improve-daily.lock"
 MOCK_GATE_RC=0 run
 assert_eq 0 "$EC" "a stale lock is taken over"
 assert_eq 1 "$(claude_calls)" "a stale lock does not block the session"
-[[ -d "$T/data/self-improve-daily.lock" ]] && held=yes || held=no
+[[ -L "$T/data/self-improve-daily.lock" ]] && held=yes || held=no
 assert_eq no "$held" "the lock is released when the run ends"
 rm -rf "$T"
 

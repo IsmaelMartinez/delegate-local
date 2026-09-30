@@ -302,14 +302,18 @@ Everything the runner and the session print goes to
 `<data dir>/self-improve-daily.log`.
 
 The session runs with `--permission-mode dontAsk`, so any tool outside its
-allowlist is refused rather than prompted: read and edit files, run the
-gate with `--peek`, `replay-recipe.sh`, `metrics-summary.sh`, `delegate.sh`,
-`delegate-feedback.sh`, the test files and `shellcheck`, read-only git,
+allowlist is refused rather than prompted: read files, edit only under
+`prompts/`, run the gate with `--peek`, `replay-recipe.sh`,
+`metrics-summary.sh`, `delegate.sh`, `delegate-feedback.sh`, the three suites
+named under "Apply it" and `shellcheck`, read-only git,
 branch as `loop/<date>-<slug>`, add, commit, push that branch, and
 `gh pr create`/`list`/`view` and `gh issue view`. `gh pr merge`,
 `gh release`, `npm publish` and any push naming `main` are denied outright.
-Permission rules in the profile's own `settings.json` still apply on top,
-and its hooks still run.
+The list is a boundary only because nothing it runs can be rewritten from
+inside it: with an unscoped `Write` and `bash tests/*`, the session could
+write a script that merges and run it. For the same reason the session
+loads project settings only (`--setting-sources project`), so the profile's
+own allow rules cannot widen the list, and the profile's hooks do not run.
 
 Install it from the live clone, after the change that added the runner has
 been pulled into it:
