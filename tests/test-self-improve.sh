@@ -94,7 +94,7 @@ EC=0
 out=$(DELEGATE_SELF_IMPROVE_STATE="$STATE" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1) || EC=$?
 assert_eq 0 "$EC" "first run with new delegations exits 0"
 assert_contains "New delegations since watermark: 3" "$out" "first run counts every delegate row"
-assert_contains "Verdicts on those delegations: n=3  kept=1  scaffold=0  rewrote=2  usable=33%" "$out" \
+assert_contains "Verdicts recorded since watermark: n=3  kept=1  scaffold=0  rewrote=2  usable=33%" "$out" \
   "verdict tally quotes kept, scaffold, rewrote and the usable rate from every row"
 
 # 5. The per-recipe section ranks worst keep-rate first.
@@ -129,8 +129,8 @@ assert_contains "SHAPE: draft used" "$out" "captured pair reports the list-vs-pr
 assert_contains "rejections=2  with draft=1  with input=0  with final=1" "$out" "capture coverage counted"
 
 # 11. The watermark advanced, so a second run has nothing to do.
-assert_eq "$(jq -r 'select(.source=="delegate") | .ts' "$tmp/m.jsonl" | tail -1)" \
-  "$(cat "$STATE")" "watermark records the newest delegate ts"
+assert_eq "$(jq -rs 'map(.ts) | max' "$tmp/m.jsonl")" \
+  "$(cat "$STATE")" "watermark records the newest ts in the file"
 EC=0
 out2=$(DELEGATE_SELF_IMPROVE_STATE="$STATE" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1) || EC=$?
 assert_eq 10 "$EC" "second run with no new delegations exits 10"
@@ -185,7 +185,7 @@ cat > "$tmp/m.jsonl" <<EOF
 {"ts":"$(iso_ago 890)","source":"feedback","ref_ts":"$t3","kept":false,"reason":"discarded","verdict_source":"agent"}
 EOF
 out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
-assert_contains "Verdicts on those delegations: n=3  kept=1  scaffold=1  rewrote=1  usable=66%" "$out" \
+assert_contains "Verdicts recorded since watermark: n=3  kept=1  scaffold=1  rewrote=1  usable=66%" "$out" \
   "one tier: an untagged row and two tagged rows land in one tally"
 assert_not_contains "human (quality)" "$out" "one tier: no human tier line"
 assert_not_contains "agent (usage)" "$out" "one tier: no agent usage line"
@@ -207,7 +207,7 @@ cat > "$tmp/m.jsonl" <<EOF
 {"ts":"$(iso_ago 3590)","source":"feedback","ref_ts":"$t1","kept":false,"reason":"no","verdict_source":"agent"}
 EOF
 out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
-assert_contains "Verdicts on those delegations: n=1  kept=0  scaffold=0  rewrote=1  usable=0%" "$out" \
+assert_contains "Verdicts recorded since watermark: n=1  kept=0  scaffold=0  rewrote=1  usable=0%" "$out" \
   "one tier: an all-rejection window quotes its 0%"
 rm -rf "$tmp"
 
@@ -218,7 +218,7 @@ printf '{"ts":"%s","source":"delegate","tier":"prose","model":"q","recipe":"comm
 EC=0
 out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1) || EC=$?
 assert_eq 0 "$EC" "one tier: a window with no verdicts still exits 0"
-assert_contains "Verdicts on those delegations: n=0" "$out" "one tier: a window with no verdicts says n=0"
+assert_contains "Verdicts recorded since watermark: n=0" "$out" "one tier: a window with no verdicts says n=0"
 assert_not_contains "usable=" "$(printf '%s\n' "$out" | grep -F 'Verdicts on those')" \
   "one tier: no rate is quoted over zero verdicts"
 rm -rf "$tmp"
@@ -232,7 +232,7 @@ cat > "$tmp/m.jsonl" <<EOF
 {"ts":"$(iso_ago 3580)","source":"feedback","ref_ts":"$r1","ref_id":"bbbb000000000001","kept":true,"verdict_source":"agent"}
 EOF
 out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
-assert_contains "Verdicts on those delegations: n=1  kept=1  scaffold=0  rewrote=0  usable=100%" "$out" \
+assert_contains "Verdicts recorded since watermark: n=1  kept=1  scaffold=0  rewrote=0  usable=100%" "$out" \
   "revision: the tally counts the delegation once, under its latest verdict"
 assert_contains "  commit-message  n=1  kept=1  scaffold=0  rewrote=0  usable=100%" "$out" \
   "revision: the per-recipe row counts the delegation once, under its latest verdict"
@@ -257,7 +257,7 @@ assert_contains "draft:  $tmp/drafts/S1.draft.txt" "$out" \
   "ref_id join: the draft fallback follows ref_id, not the last row of the second"
 assert_not_contains "S2.draft.txt" "$out" "ref_id join: the sibling's draft is not shown"
 assert_not_contains "AMBIGUOUS" "$out" "ref_id join: a ref_id verdict on a shared second is not ambiguous"
-assert_contains "Verdicts on those delegations: n=1  kept=0  scaffold=0  rewrote=1  usable=0%" "$out" \
+assert_contains "Verdicts recorded since watermark: n=1  kept=0  scaffold=0  rewrote=1  usable=0%" "$out" \
   "ref_id join: the tally counts the one verdict"
 assert_contains "  commit-message  n=1  kept=0  scaffold=0  rewrote=1  usable=0%" "$out" \
   "ref_id join: the per-recipe row is the ref_id row's recipe"
@@ -281,7 +281,7 @@ EOF
 EC=0
 out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1) || EC=$?
 assert_eq 0 "$EC" "orphan: feedback rows with no reference do not abort the bundle"
-assert_contains "Verdicts on those delegations: n=1  kept=1  scaffold=0  rewrote=0  usable=100%" "$out" \
+assert_contains "Verdicts recorded since watermark: n=1  kept=1  scaffold=0  rewrote=0  usable=100%" "$out" \
   "orphan: unreferenced rows are skipped, not collapsed into one phantom verdict"
 assert_not_contains "orphan one" "$out" "orphan: an unreferenced rejection is not listed"
 assert_not_contains "orphan two" "$out" "orphan: nor is the second"
@@ -624,7 +624,7 @@ jq -nc --arg s "Post this:
 $RT" '{recipe:"maintainer-reply", stdin:$s, vars:{}}' > "$tmp/drafts/20260927T000002Z-m2.inputs.json"
 printf 'My own reply, nothing like the facts.\n' > "$tmp/drafts/20260927T000003Z-m3.final.txt"
 out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
-assert_contains "Verdicts on those delegations: n=2  kept=1  scaffold=0  rewrote=1  usable=50%  ritual=2  sessions=2" "$out" \
+assert_contains "Verdicts recorded since watermark: n=2  kept=1  scaffold=0  rewrote=1  usable=50%  ritual=2  sessions=2" "$out" \
   "ritual: the since-watermark rate leaves ritual verdicts out and names its sessions"
 assert_contains "  maintainer-reply  n=2  kept=1  scaffold=0  rewrote=1  usable=50%  ritual=2  sessions=2" "$out" \
   "ritual: the per-recipe rate leaves both ritual verdicts out, the stored and the measured one"
@@ -717,6 +717,96 @@ assert_contains "the shipped text used 3 (one per topic" "$t2block" "trailers: S
 printf 'Refs are resolved lazily.\n\nCo-authored-by: x <x@y>\nFixes: #12\nfixes owner/repo#3\n' > "$tmp/p.txt"
 assert_eq 1 "$(paragraphs "$tmp/p.txt")" "paragraphs: a trailer-only paragraph is not counted, lower-case forms included"
 assert_eq "Refs are resolved lazily." "$(body_only "$tmp/p.txt" | awk 'NF')" "body_only: a body line starting with a trailer word is kept"
+rm -rf "$tmp"
+
+# --- #553: the rejection list and the coverage line count a delegation under
+# its latest verdict, as the tally does: a miss later revised to a hit is not
+# a rejection ---
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+v1=$(iso_ago 900)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$v1","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","exit_status":0,"otel_span_id":"cccc000000000001"}
+{"ts":"$(iso_ago 890)","source":"feedback","ref_ts":"$v1","ref_id":"cccc000000000001","kept":false,"reason":"first look: too long","verdict_source":"agent"}
+{"ts":"$(iso_ago 880)","source":"feedback","ref_ts":"$v1","ref_id":"cccc000000000001","kept":true,"verdict_source":"agent"}
+EOF
+out=$(bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+rejections=$(printf '%s\n' "$out" | sed -n '/rejected drafts/,/capture coverage/p')
+assert_not_contains "first look: too long" "$rejections" "latest verdict: a miss revised to a hit is not listed as a rejection"
+assert_contains "rejections=0  with draft=0" "$out" "latest verdict: the coverage line does not count the revised miss"
+rm -rf "$tmp"
+
+# --- #553: the watermark is the newest ts in the file, and the since-watermark
+# sections read the verdict's own ts, so a verdict recorded after a run on a
+# delegation that run already saw, and one on a delegation row appended out
+# of order, both reach the next bundle ---
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+w1=$(iso_ago 3600); w1f=$(iso_ago 3500)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$w1","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","exit_status":0,"otel_span_id":"dddd000000000001"}
+{"ts":"$w1f","source":"feedback","ref_ts":"$w1","ref_id":"dddd000000000001","kept":true,"verdict_source":"agent"}
+EOF
+DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" >/dev/null 2>&1
+assert_eq "$w1f" "$(cat "$tmp/state" 2>/dev/null)" \
+  "watermark: the newest ts in the file, the verdict's included"
+# After that run: a late verdict on the delegation it saw, an out-of-order
+# delegation (its ts older than the watermark) with its verdict, and one new
+# delegation so the gate opens.
+w2=$(iso_ago 7200); w3=$(iso_ago 60)
+cat >> "$tmp/m.jsonl" <<EOF
+{"ts":"$w3","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","exit_status":0,"otel_span_id":"dddd000000000003"}
+{"ts":"$(iso_ago 120)","source":"feedback","ref_ts":"$w1","ref_id":"dddd000000000001","kept":false,"reason":"late verdict on an older delegation","verdict_source":"agent"}
+{"ts":"$w2","source":"delegate","tier":"prose","model":"q","recipe":"commit-message","project":"p","exit_status":0,"otel_span_id":"dddd000000000002"}
+{"ts":"$(iso_ago 100)","source":"feedback","ref_ts":"$w2","ref_id":"dddd000000000002","kept":false,"reason":"verdict on an out-of-order row","verdict_source":"agent"}
+EOF
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
+rejections=$(printf '%s\n' "$out" | sed -n '/rejected drafts/,/capture coverage/p')
+assert_contains "late verdict on an older delegation" "$rejections" \
+  "watermark: a verdict recorded after a run on a delegation it saw is bundled next run"
+assert_contains "verdict on an out-of-order row" "$rejections" \
+  "watermark: a verdict on a delegation row appended out of order is bundled"
+assert_contains "Verdicts recorded since watermark: n=2  kept=0  scaffold=0  rewrote=2" "$out" \
+  "watermark: the tally counts the verdicts recorded since the watermark"
+assert_contains "rejections=2  with draft=0" "$out" "watermark: coverage counts both late rejections"
+# The file's last delegate row is not its newest: the watermark is the max.
+assert_eq "$w3" "$(cat "$tmp/state" 2>/dev/null)" "watermark: the max ts, not the last row's"
+rm -rf "$tmp"
+
+# --- #553: a verdict that names no final adopts the hook-written
+# `<stem>.final.txt` beside its draft, unless the quarantine lists it; the
+# adopted final is judged for ritual as a named one is ---
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+f1=$(iso_ago 900); f2=$(iso_ago 800); f3=$(iso_ago 700)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$f1","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","session":"S","exit_status":0,"otel_span_id":"f1","draft_file":"20260929T000001Z-f1.draft.txt"}
+{"ts":"$(iso_ago 890)","source":"feedback","ref_ts":"$f1","ref_id":"f1","kept":false,"reason":"fallback adopted","verdict_source":"agent"}
+{"ts":"$f2","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","session":"S","exit_status":0,"otel_span_id":"f2","draft_file":"20260929T000002Z-f2.draft.txt"}
+{"ts":"$(iso_ago 790)","source":"feedback","ref_ts":"$f2","ref_id":"f2","kept":false,"reason":"fallback quarantined","verdict_source":"agent"}
+{"ts":"$f3","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","session":"S","exit_status":0,"otel_span_id":"f3","draft_file":"20260929T000003Z-f3.draft.txt","inputs_file":"20260929T000003Z-f3.inputs.json"}
+{"ts":"$(iso_ago 690)","source":"feedback","ref_ts":"$f3","ref_id":"f3","kept":false,"reason":"fallback ritual","verdict_source":"agent"}
+EOF
+d="$tmp/drafts"
+printf 'Thanks, we will look into it.\n' > "$d/20260929T000001Z-f1.draft.txt"
+printf 'The crash is in `src/tray.js` and PR #4410 fixes it.\n' > "$d/20260929T000001Z-f1.final.txt"
+printf 'Thanks, we will look into it.\n' > "$d/20260929T000002Z-f2.draft.txt"
+printf 'Shifted post naming `src/other.js` and #9911.\n' > "$d/20260929T000002Z-f2.final.txt"
+printf '20260929T000002Z-f2.final.txt\tneighbour\thook\n' > "$tmp/suspect-finals.tsv"
+printf 'A model draft about something else entirely.\n' > "$d/20260929T000003Z-f3.draft.txt"
+printf '%s\n' "$RT" > "$d/20260929T000003Z-f3.final.txt"
+jq -nc --arg s "Post this:
+$RT" '{recipe:"maintainer-reply", stdin:$s, vars:{}}' > "$d/20260929T000003Z-f3.inputs.json"
+out=$(bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+f1block=$(printf '%s\n' "$out" | sed -n '/fallback adopted/,/^$/p')
+assert_contains "$d/20260929T000001Z-f1.final.txt" "$f1block" "fallback: the stem's final is adopted when the verdict names none"
+assert_contains "src/tray.js" "$f1block" "fallback: the adopted pair is diffed"
+f2block=$(printf '%s\n' "$out" | sed -n '/fallback quarantined/,/^$/p')
+assert_not_contains "DROPPED" "$f2block" "fallback: a quarantined stem final is not adopted"
+assert_contains "(not captured" "$f2block" "fallback: ...and the pair reads as uncaptured"
+f3block=$(printf '%s\n' "$out" | sed -n '/fallback ritual/,/^$/p')
+assert_contains "RITUAL" "$f3block" "fallback: an adopted final is judged for ritual"
+assert_contains "  maintainer-reply  n=2  kept=0  scaffold=0  rewrote=2  usable=0%  ritual=1" "$out" \
+  "fallback: the ritual adopted final leaves the rate"
+assert_contains "rejections=3  with draft=3  with input=0  with final=2" "$out" \
+  "fallback: coverage counts adopted finals and not the quarantined one"
 rm -rf "$tmp"
 
 echo
