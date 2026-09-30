@@ -144,7 +144,10 @@ hash for the post-merge read. Goals, read off `metrics.jsonl`:
    resolvable margin produces a revert PR rather than a second edit.
 4. The loop runs on a schedule that outlives a session: one calibration pass a
    day, each pass either quiet (exit 10), a PR with a replay line, or a report
-   saying the evidence is thin.
+   saying the evidence is thin. Since #558 the pass is a launchd job
+   (`scripts/self-improve-daily.sh`, installed per
+   `docs/self-improvement-loop.md`); the goal is met once the watermark has
+   advanced within 26 hours on 7 consecutive days.
 
 The milestone is done when a full cycle has happened at least once: an edit
 accepted by replay, merged, and read online at thirty rows, whichever way that
