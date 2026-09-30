@@ -139,13 +139,28 @@ list_markers() {
   echo "${n:-0}"
 }
 
-# paragraphs <file> — how many blank-line-separated blocks. With
+# body_only <file> — the file without its trailer lines: a Closes/Fixes/
+# Resolves line naming a ref, a Refs line, Co-Authored-By, Signed-off-by,
+# Claude-Session, the Claude Code footer, a bare session URL, a Stacked-on
+# line. The caller fixes those lines whatever the draft said, so they are
+# neither the draft's shape nor its facts (#589): 60 of 64 pr-description
+# finals read as three or more paragraphs with them and 23 without. A body
+# line that merely starts with a trailer word ("Refs are resolved") is kept.
+# One anchored alternation with flat quantifiers, so the match is linear.
+body_only() {
+  [[ -f "$1" ]] || return 0
+  grep -viE '^[[:space:]]*((close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]:]+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+|refs?(:|[[:space:]]+#)|co-authored-by:|signed-off-by:|claude-session:|stacked on[[:space:]]|[^[:alnum:]]*generated with \[?claude code|https?://claude\.ai/code/)' "$1" 2>/dev/null
+  return 0
+}
+
+# paragraphs <file> — how many blank-line-separated blocks of body, trailer
+# lines left out (body_only), so a paragraph of trailers is not one. With
 # list_markers it is the shape signal: a draft of one paragraph where three
 # or more shipped is the collapse pr-description showed on 10 of 10 pairs on
 # 2026-09-19 (drafts of 1 paragraph against shipped bodies of 3 to 7).
 paragraphs() {
   [[ -f "$1" ]] || { echo 0; return 0; }
-  awk 'BEGIN { RS=""; n=0 } { n++ } END { print n }' "$1" 2>/dev/null
+  body_only "$1" | awk 'BEGIN { RS=""; n=0 } { n++ } END { print n }' 2>/dev/null
 }
 
 # shape_mismatch <a> <b> — 1 when the two texts differ in shape: one is a

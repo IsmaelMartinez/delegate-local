@@ -375,6 +375,16 @@ printf 'see #123 and main.js:412 and inLocale() here\n' > "$tmp/absent.txt"
 assert_eq "#12" "$(printf '#12\n412\ninlocale()\n' | absent_from "$tmp/absent.txt")" \
   "absent_from: #12 is absent from #123 while 412 and inlocale() are present"
 
+# 10e. #589: an anchor the shipped text carries only in a trailer (a Closes
+# line, the footer) is the caller's fixed line, not a supplied fact the
+# output dropped.
+seed "$tmp/data" 1 "$champ_sha" stub-model "$BAD" "$(printf '%s\n\nCloses #2632\nCo-Authored-By: A <a@b.c>' "$BAD")"
+rm -rf "$tmp/out"
+out=$(run --recipe rp)
+row=$(printf '%s\n' "$out" | grep '^  rej00001 ')
+assert_contains "0/0/0/0/0/0/0=0" "$row" \
+  "trailers: a body shipped verbatim scores zero dropped though its Closes line names a supplied ref (row: $row)"
+
 # 11. Inputs that are not valid JSON are skipped, not run.
 seed "$tmp/data" 2 "$champ_sha"
 printf '{"recipe":"rp","stdin":"x' > "$tmp/data/drafts/202601T100000Z-rej00001.inputs.json"

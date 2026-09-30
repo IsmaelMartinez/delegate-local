@@ -15,6 +15,7 @@ checks:
   body_required: true
   body_max_words: {{flavor_commit_body_max_words}}
   subject_type: {{type}}
+  no_subject_echo: true
 ---
 # commit-message
 
@@ -412,3 +413,9 @@ One thing did change and is worth separating out. The 2026-08-27 calls include
 the first that needed no length edit at all, and the two most recent shipped
 at 39 and 45 words. That is consistent with the fix working; it is also
 consistent with four calls being four calls.
+
+2026-09-30 (#589): `no_subject_echo` declared. `no_example_echo` let subject
+copies through: a lone exemplar subject normalises under its 40-char floor and a
+`;`-joined list of subjects is one line. Over the 368 stored drafts it flags 8
+(5 rejected, 2 scaffold, 1 unverdicted, 0 kept), 5 of which no check caught.
+Template `3c2e0ca3eebd` becomes `a20e93b62bab`.

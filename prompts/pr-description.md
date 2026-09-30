@@ -8,6 +8,7 @@ echo_guard_vars: recent_prs
 input_quality:
   recent_prs: titles_only
 checks:
+  no_title_line: true
   no_invented_task_list: recent_prs
   no_invented_headings: recent_prs
   no_invented_refs: true
@@ -458,3 +459,9 @@ written as finished sentences the model reflows and returns them — two calls o
 order, with no synthesis. Given the same facts as terse notes it writes a PR
 body. Write `context` as notes, one fact per line, the way
 `maintainer-review-reply.md` asks for its stdin.
+
+2026-09-30 (#589): `no_title_line` declared. 9 of 40 rejected drafts on template
+`dfaad6df0739` opened with a title line, 2 copying the exemplar's and 2 with an
+invented PR number; the check strips a leading `type(scope): ...` or `#N type: ...`
+line when a blank line separates it from the body (`checks_autofixed`), and
+reports it otherwise. Template `dfaad6df0739` becomes `4426d3be28da`.

@@ -679,6 +679,46 @@ assert_contains "pr-review-reply  rejections=2  paired=0  ritual=0" "$out" \
   "ritual backfill: neither row is judged, so neither is paired"
 rm -rf "$tmp"
 
+# --- #589: trailer paragraphs and trailer anchors in the shipped text are the
+# caller's fixed lines, not the draft's shape or facts: SHAPE and DROPPED
+# ignore Refs/Closes/Fixes lines, Co-Authored-By, the Claude Code footer, the
+# session URL and a Stacked-on line ---
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+tr1=$(iso_ago 900); tr2=$(iso_ago 800)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$tr1","source":"delegate","tier":"prose","model":"q","recipe":"pr-description","project":"p","exit_status":0,"draft_file":"20260903T000001Z-t1.draft.txt"}
+{"ts":"$(iso_ago 890)","source":"feedback","ref_ts":"$tr1","kept":false,"reason":"trailers only","verdict_source":"agent","final_file":"20260903T000001Z-t1.final.txt"}
+{"ts":"$tr2","source":"delegate","tier":"prose","model":"q","recipe":"pr-description","project":"p","exit_status":0,"draft_file":"20260903T000002Z-t2.draft.txt"}
+{"ts":"$(iso_ago 790)","source":"feedback","ref_ts":"$tr2","kept":false,"reason":"split into topics","verdict_source":"agent","final_file":"20260903T000002Z-t2.final.txt"}
+EOF
+body='Store file-backed finals after the call so a failed post leaves nothing behind.'
+trailers='Refs: #589
+
+Closes #590
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+https://claude.ai/code/session_01ABCdef
+
+Stacked on #588; merge after it.'
+printf '%s\n' "$body" > "$tmp/drafts/20260903T000001Z-t1.draft.txt"
+printf '%s\n\n%s\n' "$body" "$trailers" > "$tmp/drafts/20260903T000001Z-t1.final.txt"
+printf '%s\n' "$body" > "$tmp/drafts/20260903T000002Z-t2.draft.txt"
+printf '%s\n\nThe hook matches by overlap.\n\nThe tests cover both.\n\n%s\n' "$body" "$trailers" > "$tmp/drafts/20260903T000002Z-t2.final.txt"
+out=$(bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+t1block=$(printf '%s\n' "$out" | sed -n '/trailers only/,/^$/p')
+assert_not_contains "SHAPE" "$t1block" "trailers: a body shipped verbatim plus trailer paragraphs is not a shape change"
+assert_not_contains "DROPPED" "$t1block" "trailers: anchors only the trailers carry are not dropped"
+assert_not_contains "INVENTED" "$t1block" "trailers: ...and do not turn a clean pair into an invention"
+t2block=$(printf '%s\n' "$out" | sed -n '/split into topics/,/^$/p')
+assert_contains "the shipped text used 3 (one per topic" "$t2block" "trailers: SHAPE counts body paragraphs only"
+. "$REPO/scripts/lib/pair-score.sh"
+printf 'Refs are resolved lazily.\n\nCo-authored-by: x <x@y>\nFixes: #12\nfixes owner/repo#3\n' > "$tmp/p.txt"
+assert_eq 1 "$(paragraphs "$tmp/p.txt")" "paragraphs: a trailer-only paragraph is not counted, lower-case forms included"
+assert_eq "Refs are resolved lazily." "$(body_only "$tmp/p.txt" | awk 'NF')" "body_only: a body line starting with a trailer word is kept"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
