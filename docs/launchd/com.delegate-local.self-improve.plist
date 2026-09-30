@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template for the daily self-improvement pass (#558). Install it with the
+     sed + launchctl bootstrap lines in docs/self-improvement-loop.md "Run it
+     on a schedule"; __HOME__ is replaced with your home directory there.
+     launchd does not read a shell profile, so PATH must name where claude,
+     git, gh, jq and shellcheck live. A run missed while the Mac slept starts
+     on wake. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.delegate-local.self-improve</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__HOME__/.local/share/delegate-local-live/scripts/self-improve-daily.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>10</integer>
+    <key>Minute</key>
+    <integer>7</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/delegate-local-self-improve.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/delegate-local-self-improve.log</string>
+</dict>
+</plist>

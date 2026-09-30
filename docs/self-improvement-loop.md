@@ -8,7 +8,9 @@ on 2026-08-26 meant a full day of twenty delegations, zero kept, and a defect
 in the recorded reasons since the first call that morning.
 
 This document is the procedure that closes the gap on a schedule. It is written
-for a session woken by cron, but it is equally the checklist to follow by hand.
+for the headless session `scripts/self-improve-daily.sh` starts once a day (see
+"Run it on a schedule" below), but it is equally the checklist to follow by
+hand.
 
 ## Run the gate first
 
@@ -279,3 +281,64 @@ recipe". A previous era of this corpus was polluted by exactly this kind of
 optimism, which is why it was reset (ADR 0028).
 
 If the loop finds nothing to fix on a run, that is a successful run.
+
+## Run it on a schedule
+
+Until 2026-09-30 the loop was two crons inside a Claude session, and a cron
+dies with its session: the watermark sat at 2026-09-22 for over a week with
+nobody noticing (#558). The pass now runs under launchd, which outlives any
+session and starts a run missed while the Mac slept as soon as it wakes.
+
+`scripts/self-improve-daily.sh` is the runner. It runs the gate with `--peek`;
+exit 10 is a quiet, successful run and no model is called. Otherwise it
+starts one headless `claude -p` session in a detached worktree of the live
+clone at `origin/main`, with the bundle on stdin and this document as its
+instructions, and advances the watermark to the bundle's `Newest row` only
+when that session exits 0. A failed session leaves the window for the next
+day, and the session's own commit and PR delegations land after the
+watermark, so the next bundle judges them. A lock under the data dir keeps
+two runs from overlapping, and a lock whose owner has died is taken over.
+Everything the runner and the session print goes to
+`<data dir>/self-improve-daily.log`.
+
+The session runs with `--permission-mode dontAsk`, so any tool outside its
+allowlist is refused rather than prompted: read and edit files, run the
+gate with `--peek`, `replay-recipe.sh`, `metrics-summary.sh`, `delegate.sh`,
+`delegate-feedback.sh`, the test files and `shellcheck`, read-only git,
+branch as `loop/<date>-<slug>`, add, commit, push that branch, and
+`gh pr create`/`list`/`view` and `gh issue view`. `gh pr merge`,
+`gh release`, `npm publish` and any push naming `main` are denied outright.
+Permission rules in the profile's own `settings.json` still apply on top,
+and its hooks still run.
+
+Install it from the live clone, after the change that added the runner has
+been pulled into it:
+
+```bash
+sed "s|__HOME__|$HOME|g" ~/.local/share/delegate-local-live/docs/launchd/com.delegate-local.self-improve.plist > ~/Library/LaunchAgents/com.delegate-local.self-improve.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.delegate-local.self-improve.plist
+launchctl kickstart gui/$(id -u)/com.delegate-local.self-improve   # optional: one run now
+```
+
+The template runs at 10:07 local time. Its `PATH` covers `~/.local/bin`
+(where the `claude` installer puts the binary) and Homebrew; edit it if
+`claude`, `gh` or `jq` live elsewhere, because launchd reads no shell
+profile and the runner exits 2 with `claude not found on PATH` rather than
+guess.
+
+Check it with the job's state and last exit code, the log, and the age of
+the watermark, which should never be more than about 26 hours behind on a
+day with delegations:
+
+```bash
+launchctl print gui/$(id -u)/com.delegate-local.self-improve | grep -E 'state|last exit code'
+tail -n 20 ~/.local/share/delegate-local/self-improve-daily.log
+cat ~/.local/share/delegate-local/self-improve.state
+```
+
+Stop it with:
+
+```bash
+launchctl bootout gui/$(id -u)/com.delegate-local.self-improve
+rm ~/Library/LaunchAgents/com.delegate-local.self-improve.plist
+```
