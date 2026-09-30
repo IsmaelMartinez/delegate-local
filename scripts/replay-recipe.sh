@@ -192,11 +192,13 @@ if [[ -f "$metrics_file" ]]; then
              draft: ($p.draft_file // ""),
              final: (if .kept then ($p.draft_file // "") else (.final_file // "") end),
              inputs: $p.inputs_file, sha: ($p.template_sha // ""),
-             checks: ($p.checks_failed // 0), model: ($p.model // "")})
+             checks: ($p.checks_failed // 0), model: ($p.model // ""),
+             ritual: (if has("final_preexisting") then (.final_preexisting | tostring) else "" end),
+             session: ($p.session // "")})
     | map(select(.final != "" and .draft != ""))
     | sort_by(.ts) | reverse
     | .[]
-    | [.id, .ts, .verdict, ($ddir + "/" + .draft), ($ddir + "/" + .final), ($ddir + "/" + .inputs), .sha, (.checks | tostring), .model]
+    | [.id, .ts, .verdict, ($ddir + "/" + .draft), ($ddir + "/" + .final), ($ddir + "/" + .inputs), .sha, (.checks | tostring), .model, .ritual, .session]
     | join("|")
   ' "$metrics_file" 2>/dev/null > "$cases_tmp"
 fi
@@ -218,7 +220,7 @@ if [[ -n "$seed" ]]; then
     jq -j --arg id "$sid" '.[] | select(.id == $id) | .draft' "$seed" > "$seed_dir/$sid.draft.txt"
     jq -j --arg id "$sid" '.[] | select(.id == $id) | .final' "$seed" > "$seed_dir/$sid.final.txt"
     case "$sverdict" in kept|scaffold|rewrote) ;; hit) sverdict=kept;; miss) sverdict=rewrote;; *) sverdict=rewrote;; esac
-    printf '%s|%s|%s|%s|%s|%s||0|%s\n' "$sid" "$sts" "$sverdict" \
+    printf '%s|%s|%s|%s|%s|%s||0|%s||\n' "$sid" "$sts" "$sverdict" \
       "$seed_dir/$sid.draft.txt" "$seed_dir/$sid.final.txt" "$seed_dir/$sid.inputs.json" "$smodel" >> "$cases_tmp"
   done
   # Newest first across both sources; the limit takes the newest.
@@ -234,17 +236,27 @@ fi
 # (#587): it is not the shipped text of this draft, so it cannot score one.
 usable_tmp="$work_tmp/usable"
 suspect_file="$(dirname "$metrics_file")/suspect-finals.tsv"
-while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel; do
+# Nor a ritual one (#588): its shipped final was already in the piped stdin,
+# the caller's own text posted after a delegation made for the boundary
+# hook's credit, so no template can win it. Read off the verdict's
+# final_preexisting, or measured here as delegate-feedback.sh measures it for
+# a verdict recorded before the field.
+while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel ritual session; do
   [[ -f "$draft" && -f "$final" && -f "$inputs" ]] || continue
   if [[ "$verdict" != kept ]]; then
     qreason=$(suspect_reason "$suspect_file" "$(basename "$final")")
     [[ -z "$qreason" ]] || { echo "replay-recipe: $id skipped: its final is quarantined ($qreason)" >&2; continue; }
+    if [[ -z "$ritual" ]]; then
+      contained=$(printf '%s\t%s\n' "$final" "$inputs" | bigram_containment)
+      [[ "$contained" =~ ^[0-9]+$ ]] && (( contained >= ritual_min_pct )) && ritual=true
+    fi
+    [[ "$ritual" != true ]] || { echo "replay-recipe: $id skipped: ritual (its final was already in the piped stdin)" >&2; continue; }
   fi
   jq -e . "$inputs" >/dev/null 2>&1 || { echo "replay-recipe: $id skipped: $inputs is not valid JSON" >&2; continue; }
   if [[ "$verdict" == kept ]] && grep -qF '[truncated at ' "$final"; then
     echo "replay-recipe: $id skipped: the kept draft was cut at the byte cap, so it cannot be the reference" >&2; continue
   fi
-  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$ts" "$verdict" "$draft" "$final" "$inputs" "$sha" "$checks" "$rmodel"
+  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$ts" "$verdict" "$draft" "$final" "$inputs" "$sha" "$checks" "$rmodel" "$session"
 done < "$cases_tmp" | head -n "$limit" > "$usable_tmp"
 mv "$usable_tmp" "$cases_tmp"
 
@@ -431,7 +443,10 @@ else
   echo "Model:     (unresolved — stored drafts stand in for the champion whatever model produced them)"
 fi
 kept_n=$(grep -c '|kept|' "$cases_tmp"); scaffold_n=$(grep -c '|scaffold|' "$cases_tmp"); rewrote_n=$(grep -c '|rewrote|' "$cases_tmp")
-echo "Cases:     $n_cases (kept=$kept_n scaffold=$scaffold_n rewrote=$rewrote_n; newest $limit)"
+# The distinct sessions the cases come from (#588): two sessions once made
+# most of one template's case set.
+sessions_n=$(cut -d'|' -f10 "$cases_tmp" | awk 'NF' | sort -u | grep -c '')
+echo "Cases:     $n_cases (kept=$kept_n scaffold=$scaffold_n rewrote=$rewrote_n; newest $limit)  sessions=$sessions_n"
 echo
 
 wins=0; losses=0; ties=0; errors=0
@@ -444,7 +459,7 @@ if [[ -n "$candidate" ]]; then
 else
   printf '  %-10s %-20s %-8s %-18s\n' case ts verdict champion
 fi
-while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel; do
+while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel _session; do
   i=$((i + 1))
   case_refs "$inputs" "$final"
   a=$(arm_output "$champion" "$champion_sha" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")

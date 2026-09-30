@@ -1942,6 +1942,97 @@ assert_contains "this reason was already recorded 2 time(s) in the last 10 min" 
   "repeat reason: the fallback window still warns"
 rm -rf "$tmp"
 
+# --- Ritual delegations (#588): the shipped final was already in the stdin
+# the caller piped, so the recipe ran for the boundary hook's credit and its
+# draft was never a candidate. `final_preexisting` is computed once, here,
+# from the final and the delegation's stored stdin, and stored on the row.
+. "$REPO/scripts/lib/pair-score.sh"
+RITUAL_TEXT='Thanks for the report. The crash comes from the tray icon handler, which reads the config before it is loaded. The fix is in the next release; please retry with it and reopen this if it still happens.'
+ritual_setup() { # -> tmp with a recipe delegate row naming a draft and its inputs
+  tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
+  mkdir -p "$tmp/drafts"
+  printf '{"ts":"%s","source":"delegate","tier":"prose","recipe":"maintainer-reply","session":"s-ritual","exit_status":0,"otel_span_id":"eeeeeeeeeeeeeeee","draft_file":"20260927T100000Z-bbbb2222.draft.txt","inputs_file":"20260927T100000Z-bbbb2222.inputs.json"}\n' \
+    "$TS_LATEST" >> "$tmp/m.jsonl"
+  printf 'Hi, a model reply that says something else entirely about the crash.' > "$tmp/drafts/20260927T100000Z-bbbb2222.draft.txt"
+  jq -nc --arg s "Reply to post:
+$RITUAL_TEXT" '{recipe:"maintainer-reply", stdin:$s, vars:{recipient:"someone"}}' > "$tmp/drafts/20260927T100000Z-bbbb2222.inputs.json"
+}
+
+# The containment unit: the share of the text's distinct word bigrams found
+# in the source, a whole percent; `.inputs.json` is read as its stdin.
+ritual_setup
+printf '%s' "$RITUAL_TEXT" > "$tmp/final.txt"
+printf 'Zebra quilts hum loudly over velvet marsh lanterns.' > "$tmp/other.txt"
+printf 'word' > "$tmp/one.txt"
+got=$(printf '%s\t%s\n%s\t%s\n%s\t%s\n%s\t%s\n' \
+  "$tmp/final.txt" "$tmp/drafts/20260927T100000Z-bbbb2222.inputs.json" \
+  "$tmp/other.txt" "$tmp/drafts/20260927T100000Z-bbbb2222.inputs.json" \
+  "$tmp/one.txt" "$tmp/final.txt" \
+  "$tmp/final.txt" "$tmp/missing.txt" | bigram_containment | tr '\n' ' ')
+assert_eq "100 0 - - " "$got" \
+  "bigram_containment: contained, disjoint, a one-word text and an unreadable source"
+rm -rf "$tmp"
+
+ritual_setup
+printf '%s\n' "$RITUAL_TEXT" > "$tmp/shipped.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id eeeeeeeeeeeeeeee miss "posted my own text" --final "$tmp/shipped.txt" >/dev/null 2>&1
+assert_eq "true" "$(tail -1 "$tmp/m.jsonl" | jq -r '.final_preexisting // "absent"')" \
+  "ritual: a --final contained in the stored stdin is final_preexisting:true"
+rm -rf "$tmp"
+
+ritual_setup
+printf 'A rewrite in my own words: the tray handler reads config too early, fixed in the next build, so please retry and tell us.' > "$tmp/shipped.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id eeeeeeeeeeeeeeee miss "rewrote it" --final "$tmp/shipped.txt" >/dev/null 2>&1
+assert_eq "false" "$(tail -1 "$tmp/m.jsonl" | jq -r 'if has("final_preexisting") then (.final_preexisting | tostring) else "absent" end')" \
+  "ritual: a rewritten final is final_preexisting:false"
+rm -rf "$tmp"
+
+# A final the hook captured from the post is scored the same way. It shares
+# too few words with the draft to be adopted here, so the draft is the
+# final's own text reworded, as a regenerated draft would be.
+ritual_setup
+printf 'Thanks for the report. The crash comes from the tray icon handler reading config early; a fix ships next release.' > "$tmp/drafts/20260927T100000Z-bbbb2222.draft.txt"
+printf '%s' "$RITUAL_TEXT" > "$tmp/drafts/20260927T100000Z-bbbb2222.final.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id eeeeeeeeeeeeeeee miss "posted my own text" >/dev/null 2>&1
+last=$(tail -1 "$tmp/m.jsonl")
+assert_eq "posted true" "$(printf '%s' "$last" | jq -r '"\(.final_source // "-") \(.final_preexisting // "absent")"')" \
+  "ritual: an adopted posted final is scored against the stdin too"
+rm -rf "$tmp"
+
+# Without inputs.json (a row from before 2026-09-19) the row is unmeasurable:
+# the rendered input carries template text and the non-stdin vars (lead, ask,
+# signoff), so a final repeating those would falsely read ritual.
+ritual_setup
+jq -c 'select(.otel_span_id == "eeeeeeeeeeeeeeee") | del(.inputs_file) + {input_file:"20260927T100000Z-bbbb2222.input.txt"}' "$tmp/m.jsonl" > "$tmp/row"
+grep -v eeeeeeeeeeeeeeee "$tmp/m.jsonl" > "$tmp/rest"; cat "$tmp/rest" "$tmp/row" > "$tmp/m.jsonl"
+rm -f "$tmp/drafts/20260927T100000Z-bbbb2222.inputs.json"
+printf 'Write a reply.\n\nFacts:\n%s\n' "$RITUAL_TEXT" > "$tmp/drafts/20260927T100000Z-bbbb2222.input.txt"
+printf '%s' "$RITUAL_TEXT" > "$tmp/shipped.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id eeeeeeeeeeeeeeee miss "posted my own text" --final "$tmp/shipped.txt" >/dev/null 2>&1
+assert_eq "absent" "$(tail -1 "$tmp/m.jsonl" | jq -r 'if has("final_preexisting") then "present" else "absent" end')" \
+  "ritual: without inputs.json the rendered input is not scored, so no field"
+rm -rf "$tmp"
+
+# No stored input at all, or no final: nothing to measure, so no field.
+ritual_setup
+rm -f "$tmp/drafts/20260927T100000Z-bbbb2222.inputs.json"
+printf '%s' "$RITUAL_TEXT" > "$tmp/shipped.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id eeeeeeeeeeeeeeee miss "posted my own text" --final "$tmp/shipped.txt" >/dev/null 2>&1
+assert_eq "absent" "$(tail -1 "$tmp/m.jsonl" | jq -r 'if has("final_preexisting") then "present" else "absent" end')" \
+  "ritual: no stored input leaves final_preexisting off the row"
+rm -rf "$tmp"
+ritual_setup
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id eeeeeeeeeeeeeeee hit >/dev/null 2>&1
+assert_eq "absent" "$(tail -1 "$tmp/m.jsonl" | jq -r 'if has("final_preexisting") then "present" else "absent" end')" \
+  "ritual: a hit with no final carries no final_preexisting"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

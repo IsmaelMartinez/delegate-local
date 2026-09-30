@@ -14,6 +14,7 @@
 # Usage:
 #   self-improve.sh [--file PATH] [--peek] [--min-delegations N] [--days N]
 #   self-improve.sh --quarantine [--peek] [--file PATH]
+#   self-improve.sh --ritual [--since YYYY-MM-DD] [--file PATH]
 #
 #   --quarantine       scan the stored finals and list the suspect ones in
 #                      suspect-finals.tsv beside the metrics file (#587): an
@@ -22,7 +23,13 @@
 #                      project and session) than its own. The bundle and replay-recipe.sh
 #                      skip the listed pairs; nothing is deleted. With --peek
 #                      the list is printed and no sidecar is written.
-#   --peek             report without advancing the watermark
+#   --ritual           read-only backfill (#588): per recipe and template, the
+#                      rejections whose shipped final was already in the
+#                      piped stdin, from the stored final_preexisting or
+#                      measured now for a verdict recorded before it; with
+#                      --since, delegations on or after that date only.
+#                      Writes nothing, the watermark included.
+#   --peek            report without advancing the watermark
 #   --min-delegations  new delegations needed before there is anything to
 #                      report (default 1)
 #   --days N           rolling window for the per-recipe section (default 7);
@@ -41,6 +48,8 @@ metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/s
 state_file="${DELEGATE_SELF_IMPROVE_STATE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/self-improve.state}"
 peek=0
 quarantine=0
+ritual_only=0
+since=""
 min_delegations=1
 window_days=7
 
@@ -50,6 +59,9 @@ while (($# > 0)); do
     --file=*) metrics_file="${1#--file=}"; shift;;
     --peek) peek=1; shift;;
     --quarantine) quarantine=1; shift;;
+    --ritual) ritual_only=1; shift;;
+    --since) since="${2:?--since requires a date}"; shift 2;;
+    --since=*) since="${1#--since=}"; shift;;
     --min-delegations) min_delegations="${2:?--min-delegations requires a number}"; shift 2;;
     --min-delegations=*) min_delegations="${1#--min-delegations=}"; shift;;
     --days) window_days="${2:?--days requires a number}"; shift 2;;
@@ -66,6 +78,7 @@ if [[ ! -f "$metrics_file" ]]; then
 fi
 case "$min_delegations" in ''|*[!0-9]*) echo "self-improve: --min-delegations must be a number" >&2; exit 2;; esac
 case "$window_days" in ''|*[!0-9]*) echo "self-improve: --days must be a number" >&2; exit 2;; esac
+case "$since" in ''|[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) echo "self-improve: --since takes YYYY-MM-DD" >&2; exit 2;; esac
 
 drafts_dir="$(dirname "$metrics_file")/drafts"
 suspect_file="$(dirname "$metrics_file")/suspect-finals.tsv"
@@ -78,6 +91,57 @@ prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 # rejection's DROPPED list and a replay's dropped count are one measurement.
 # shellcheck source=lib/pair-score.sh
 . "$script_dir/lib/pair-score.sh"
+
+# Ritual verdicts (#588): the shipped final was already in the stdin the
+# caller piped, so the verdict says nothing about the template. A verdict
+# row carries `final_preexisting` since #588; one recorded before it is
+# measured here the way delegate-feedback.sh measures it (bigram_containment
+# against the stdin in `inputs.json` only: the rendered input.txt carries the
+# template and the non-stdin vars, so a row without inputs.json is left
+# unjudged). A quarantined final is never judged, stored tag or not, since it
+# is not what shipped. `ritual_map <out>`
+# writes one JSON object, keyed by `fkey`, of {r: bool, how: stored|measured}
+# for every verdict with a final that could be judged; `ritual_def` reads it
+# as `ritual`, given `--slurpfile rt <out>`.
+ritual_def='
+  def fkey: (.ts // "") + "|" + (.ref_id // .ref_ts // "");
+  def ritual: ($rt[0][fkey].r // false);
+  def sessions_of: map(parent.session // "" | select(. != "")) | unique | length;
+'
+ritual_map() {
+  local out="$1" key stored fin ij src
+  local pairs keys
+  pairs=$(mktemp); keys=$(mktemp)
+  : > "$out.tsv"
+  jq -rs '
+    '"$parent_join"'
+    '"$ritual_def"'
+    map(select(referenced and (.final_file // "") != "")) | .[]
+    | parent as $p
+    | [fkey, (if has("final_preexisting") then (.final_preexisting | tostring) else "" end),
+       .final_file, ($p.inputs_file // "")]
+    | join("\u001f")
+  ' --slurpfile rt /dev/null "$metrics_file" 2>/dev/null \
+  | while IFS=$'\037' read -r key stored fin ij; do
+      case "$fin" in */*|.*|'') continue ;; esac
+      [[ -z "$(suspect_reason "$suspect_file" "$fin")" ]] || continue
+      if [[ "$stored" == true || "$stored" == false ]]; then
+        printf '%s\tstored\t%s\n' "$key" "$stored" >> "$out.tsv"; continue
+      fi
+      [[ -f "$drafts_dir/$fin" ]] || continue
+      src=""
+      case "$ij" in */*|.*) ;; *.inputs.json) [[ -f "$drafts_dir/$ij" ]] && src="$drafts_dir/$ij" ;; esac
+      [[ -n "$src" ]] || continue
+      printf '%s\t%s\n' "$drafts_dir/$fin" "$src" >> "$pairs"
+      printf '%s\n' "$key" >> "$keys"
+    done
+  if [[ -s "$pairs" ]]; then
+    bigram_containment < "$pairs" | paste "$keys" - \
+      | awk -F '\t' -v min="$ritual_min_pct" '$2 ~ /^[0-9]+$/ { printf "%s\tmeasured\t%s\n", $1, ($2 + 0 >= min ? "true" : "false") }' >> "$out.tsv"
+  fi
+  jq -Rn '[inputs | split("\t") | {key: .[0], value: {how: .[1], r: (.[2] == "true")}}] | from_entries' < "$out.tsv" > "$out"
+  rm -f "$pairs" "$keys" "$out.tsv"
+}
 
 # ---------------------------------------------------------------------------
 # --quarantine (#587): the finals that are not the shipped text of their own
@@ -164,6 +228,34 @@ if (( quarantine == 1 )); then
   exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# --ritual (#588): the backfill read. Per recipe, then per template, the
+# rejected delegations (latest verdict, as every rate counts them), how many
+# had a final and an input to judge (`paired`), how many were ritual and
+# from how many sessions, and whether each tag was stored on the row or
+# measured now. Read-only: no watermark, no sidecar, no metrics row.
+# ---------------------------------------------------------------------------
+if (( ritual_only == 1 )); then
+  rt_file=$(mktemp)
+  trap 'rm -f "$rt_file"' EXIT
+  ritual_map "$rt_file"
+  echo "=== ritual delegations (#588): shipped final with >= ${ritual_min_pct}% of its word bigrams in the piped stdin ==="
+  echo "Metrics: $metrics_file${since:+  (delegations since $since)}"
+  jq -rs --arg since "$since" --slurpfile rt "$rt_file" '
+    '"$parent_join"'
+    '"$ritual_def"'
+    def line: "rejections=\(length)  paired=\(map(select(.t != null)) | length)  ritual=\(map(select(.t.r)) | length)  sessions=\(map(select(.t.r) | .s | select(. != "")) | unique | length)";
+    latest_verdicts
+    | map(select((.kept | not) and parent != null and ($since == "" or (parent.ts // "") >= $since)))
+    | map({rec: (parent.recipe // "(bare)"), sha: (parent.template_sha // "(unhashed)"), s: (parent.session // ""), t: $rt[0][fkey]})
+    | group_by(.rec) | sort_by(-(map(select(.t.r)) | length), -length)
+    | .[]
+    | "  \(.[0].rec)  \(line)  (stored=\(map(select(.t.how == "stored")) | length) measured=\(map(select(.t.how == "measured")) | length))",
+      (group_by(.sha) | sort_by(-(map(select(.t.r)) | length)) | .[] | "    template=\(.[0].sha)  \(line)")
+  ' "$metrics_file"
+  exit 0
+fi
+
 # An absent watermark (first run, or a reset corpus) means everything is new.
 prev_ts=""
 [[ -f "$state_file" ]] && prev_ts=$(head -n 1 "$state_file" 2>/dev/null | tr -d '[:space:]')
@@ -184,6 +276,12 @@ if (( new_count < min_delegations )); then
   echo "self-improve: $new_count new delegation(s) since ${prev_ts:-the beginning} (< $min_delegations) — nothing to do" >&2
   exit 10
 fi
+
+# Every rate below leaves ritual verdicts out of n, names them as ritual=,
+# and names the distinct sessions its verdicts come from (#588).
+rt_file=$(mktemp)
+trap 'rm -f "$rt_file"' EXIT
+ritual_map "$rt_file"
 
 # ---------------------------------------------------------------------------
 # Section 1 — what happened since the last run.
@@ -211,10 +309,13 @@ echo
 # row. A delegation counts once, under its latest verdict, as
 # metrics-summary.sh counts it. `usable` is kept plus scaffold over n, the
 # same ranking key the per-recipe section uses.
-jq -rs --arg prev "$prev_ts" '
+jq -rs --arg prev "$prev_ts" --slurpfile rt "$rt_file" '
   '"$parent_join"'
+  '"$ritual_def"'
   latest_verdicts
   | map(select($prev == "" or (parent.ts // "") > $prev))
+  | (map(select(ritual)) | length) as $ritual
+  | map(select(ritual | not))
   | (map(select(.kept)) | length) as $kept
   | (map(select(.scaffold)) | length) as $scaffold
   | (map(select((.kept | not) and (.scaffold | not))) | length) as $rewrote
@@ -223,6 +324,8 @@ jq -rs --arg prev "$prev_ts" '
        then "  kept=\($kept)  scaffold=\($scaffold)  rewrote=\($rewrote)  usable=\((($kept + $scaffold) * 100 / length) | floor)%"
        else ""
        end)
+    + (if $ritual > 0 then "  ritual=\($ritual)" else "" end)
+    + (if length > 0 then "  sessions=\(sessions_of)" else "" end)
 ' "$metrics_file"
 echo
 
@@ -231,25 +334,30 @@ echo
 # says which recipe is worth the session's time. Worst first, ties by volume.
 # ---------------------------------------------------------------------------
 echo "--- per-recipe outcomes, last ${window_days}d (worst usable-rate first) ---"
-jq -rs --argjson days "$window_days" '
+jq -rs --argjson days "$window_days" --slurpfile rt "$rt_file" '
   (now - ($days * 86400)) as $cut
   | '"$parent_join"'
+  '"$ritual_def"'
   latest_verdicts
   | map(select(((parent.ts // "") | if . == "" then 0 else (fromdateiso8601? // 0) end) > $cut))
-  | map({r: (parent.recipe // "(bare)"),
-         u: (if .kept then "kept" elif .scaffold then "scaffold" else "rewrote" end)})
+  | map({r: (parent.recipe // "(bare)"), s: (parent.session // ""),
+         u: (if ritual then "ritual" elif .kept then "kept" elif .scaffold then "scaffold" else "rewrote" end)})
   | group_by(.r)
   | map({recipe: .[0].r,
-         n: length,
-         kept: (map(select(.u == "kept")) | length),
-         scaffold: (map(select(.u == "scaffold")) | length),
-         rewrote: (map(select(.u == "rewrote")) | length)})
+         ritual: (map(select(.u == "ritual")) | length)}
+        + (map(select(.u != "ritual"))
+           | {n: length,
+              kept: (map(select(.u == "kept")) | length),
+              scaffold: (map(select(.u == "scaffold")) | length),
+              rewrote: (map(select(.u == "rewrote")) | length),
+              sessions: (map(.s | select(. != "")) | unique | length)}))
   # Ranked on kept+scaffold: a recipe whose drafts are all thrown away is a
   # worse problem than one whose drafts get edited, and kept alone cannot tell.
   | map(. + {rate: (if .n > 0 then ((.kept + .scaffold) * 100 / .n | floor) else 0 end)})
   | sort_by(.rate, -.n)
   | .[]
   | "  \(.recipe)  n=\(.n)  kept=\(.kept)  scaffold=\(.scaffold)  rewrote=\(.rewrote)  usable=\(.rate)%"
+    + (if .ritual > 0 then "  ritual=\(.ritual)" else "" end) + "  sessions=\(.sessions)"
 ' "$metrics_file"
 echo
 
@@ -261,26 +369,32 @@ echo
 # `(unhashed)`, so the pre-edit baseline sits beside the first hashed
 # template rather than vanishing. Silent when no recipe changed template.
 # ---------------------------------------------------------------------------
-template_lines=$(jq -rs --argjson days "$window_days" '
+template_lines=$(jq -rs --argjson days "$window_days" --slurpfile rt "$rt_file" '
   (now - ($days * 86400)) as $cut
   | '"$parent_join"'
+  '"$ritual_def"'
   latest_verdicts
   | map(select(((parent.ts // "") | if . == "" then 0 else (fromdateiso8601? // 0) end) > $cut))
   | map({r: (parent.recipe // "(bare)"),
          sha: (parent.template_sha // "(unhashed)"),
-         ts: (parent.ts // ""),
-         u: (if .kept then "kept" elif .scaffold then "scaffold" else "rewrote" end)})
+         ts: (parent.ts // ""), s: (parent.session // ""),
+         u: (if ritual then "ritual" elif .kept then "kept" elif .scaffold then "scaffold" else "rewrote" end)})
   | group_by(.r)
   | map(select((map(.sha) | unique | length) > 1))
   | map(.[0].r as $r
         | group_by(.sha)
-        | map({recipe: $r, sha: .[0].sha, since: (map(.ts) | min), n: length,
-               kept: (map(select(.u == "kept")) | length),
-               scaffold: (map(select(.u == "scaffold")) | length),
-               rewrote: (map(select(.u == "rewrote")) | length)})
+        | map({recipe: $r, sha: .[0].sha, since: (map(.ts) | min),
+               ritual: (map(select(.u == "ritual")) | length)}
+              + (map(select(.u != "ritual"))
+                 | {n: length,
+                    kept: (map(select(.u == "kept")) | length),
+                    scaffold: (map(select(.u == "scaffold")) | length),
+                    rewrote: (map(select(.u == "rewrote")) | length),
+                    sessions: (map(.s | select(. != "")) | unique | length)}))
         | sort_by(.since) | reverse)
   | .[] | .[]
   | "  \(.recipe)  template=\(.sha)  since=\(.since)  n=\(.n)  kept=\(.kept)  scaffold=\(.scaffold)  rewrote=\(.rewrote)  usable=\(if .n > 0 then ((.kept + .scaffold) * 100 / .n | floor) else 0 end)%"
+    + (if .ritual > 0 then "  ritual=\(.ritual)" else "" end) + "  sessions=\(.sessions)"
 ' "$metrics_file")
 if [[ -n "$template_lines" ]]; then
   echo "--- per-template outcomes, last ${window_days}d (recipes that changed template, newest first) ---"
@@ -346,13 +460,14 @@ supplied() {
 # a file four times over.
 supplied_tmp=$(mktemp)
 body_tmp=$(mktemp)
-trap 'rm -f "$supplied_tmp" "$body_tmp"' EXIT
+trap 'rm -f "$supplied_tmp" "$body_tmp" "$rt_file"' EXIT
 
 # One record per rejected delegation. The separator is US (\u001f), not a tab: tab is IFS
 # whitespace, so `read` would collapse the frequently-empty draft_file /
 # final_file fields and shift every later field left.
-jq -rs --arg prev "$prev_ts" '
+jq -rs --arg prev "$prev_ts" --slurpfile rt "$rt_file" '
   '"$parent_join"'
+  '"$ritual_def"'
   map(select(referenced and (.kept | not)))
   | map(select($prev == "" or (parent.ts // "") > $prev))
   | .[]
@@ -370,12 +485,16 @@ jq -rs --arg prev "$prev_ts" '
       $fin,
       (.final_source // ""),
       (if .scaffold then "scaffold" else "rewrote" end),
+      (if ritual then "ritual" else "-" end),
       ((.reason // "(no reason recorded)") | gsub("[[:cntrl:]]"; " ")) ]
   | join("\u001f")
-' "$metrics_file" | while IFS=$'\037' read -r rts proj rec draft final fsrc verdict reason; do
+' "$metrics_file" | while IFS=$'\037' read -r rts proj rec draft final fsrc verdict rit reason; do
   echo
   echo "  [$verdict] $rts  project=$proj  recipe=$rec"
   echo "    reason: $reason"
+  # #588: the caller posted text it already had, so the pair below teaches
+  # the template nothing.
+  [[ "$rit" == ritual ]] && echo "    RITUAL   (the shipped text was already in the piped stdin: the caller's own words, not a template miss)"
   if [[ -n "$draft" && -f "$drafts_dir/$draft" ]]; then
     dpath="$drafts_dir/$draft"
     dbytes=$(wc -c < "$dpath" | tr -d ' ')

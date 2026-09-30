@@ -130,14 +130,30 @@ echo "Tokens avoided (≈):  $total_avoided"
 # siblings. A feedback row with neither key is skipped, since indexing by
 # null aborts the jq. Latest verdict per key wins; sort_by(.ts) guards
 # against a concurrent or backfilled append.
+#
+# A verdict whose final was already in the piped stdin (final_preexisting,
+# #588) is its own class, "ritual": the caller posted text it had before the
+# delegation, so the draft never had a chance. Every verdict rate leaves it
+# out of n and prints it as ritual=, and every rate prints sessions=, the distinct
+# sessions its rows come from, since two sessions made most of one template's
+# rejections. A final `self-improve.sh --quarantine` listed in
+# suspect-finals.tsv beside the metrics file is not what shipped (#587), so a
+# stored final_preexisting on it is not trusted: `$suspects`, passed to every
+# program that interpolates verdict_join, is that list's first column.
+suspects_json='[]'
+if [[ -f "$(dirname "$display_file")/suspect-finals.tsv" ]]; then
+  suspects_json=$(jq -Rnc '[inputs | split("\t")[0] | select(. != "")]' < "$(dirname "$display_file")/suspect-finals.tsv" 2>/dev/null) || suspects_json='[]'
+fi
 verdict_join='
-  def fbv: if (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
+  def fbv: if (.final_preexisting // false) and ((.final_file // "") as $f | any($suspects[]; . == $f) | not) then "ritual" elif (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
+  def sessions: map(.session // "" | select(. != "")) | unique | length;
+  def ritual_col($rows): ($rows | map(select(.v == "ritual")) | length) as $r | if $r > 0 then "  ritual=\($r)" else "" end;
   def fbkey: if (.ref_id // "") != "" then "id:" + .ref_id else "ts:" + .ref_ts end;
   (reduce ([.[] | select((.source // "delegate") == "feedback" and (.ref_id != null or .ref_ts != null))] | sort_by(.ts) | .[]) as $i
      ({}; .[$i | fbkey] = ($i | fbv))) as $vmap
   | def verdict: $vmap["id:" + (.otel_span_id // "")] // $vmap["ts:" + .ts];
 '
-jq -rs '
+jq -rs --argjson suspects "$suspects_json" '
   def src: .source // "delegate";
   # One decimal always, so the column does not go ragged on a whole number.
   def pct($n; $d):
@@ -154,6 +170,7 @@ jq -rs '
        ["rewritten",       "miss"],
        ["used as scaffold","scaffold"],
        ["no verdict",      "none"] ]
+     + (if any($ok[]; .v == "ritual") then [["ritual (own text)", "ritual"]] else [] end)
      | map(. as [$label, $key]
            | (bucket($key)) as $b
            | "    \($label + (" " * (18 - ($label | length))))tokens≈\($b | map(.t) | add // 0)  \(pct(($b | map(.t) | add // 0); $ok_tok))%  n=\($b | length)")) as $lines
@@ -272,17 +289,18 @@ if (( n_feedback > 0 )); then
     | select($by_hand[$stem] != true)
     | $stem
   ' --slurpfile all "$display_file" "$metrics_file")
-  jq -rs --argjson show_scaffold "$show_scaffold" --argjson hook_captured "$hook_captured" '
+  jq -rs --argjson suspects "$suspects_json" --argjson show_scaffold "$show_scaffold" --argjson hook_captured "$hook_captured" '
     def src: .source // "delegate";
     # fbv checks scaffold first because it also carries kept:false; verdict
     # looks a delegate row up by otel_span_id, then ts.
     '"$verdict_join"'
-    (map(select(src == "delegate" and (.exit_status // 0) == 0) | {recipe, tier, v: verdict})) as $d
-    | ($d | map(select(.recipe != null))) as $rx
+    (map(select(src == "delegate" and (.exit_status // 0) == 0) | {recipe, tier, session, v: verdict})) as $d
+    | ($d | map(select(.recipe != null))) as $rx_all
+    | ($rx_all | map(select(.v != "ritual"))) as $rx
     | ($d | map(select(.recipe == null))) as $raw
     | ($rx | length) as $rn
     | ($raw | length) as $wn
-    | "  Recipe delegations (calibration signal): n=\($rn)  hits=\($rx|map(select(.v=="hit"))|length)  misses=\($rx|map(select(.v=="miss"))|length)" + (if $show_scaffold then "  scaffold=\($rx|map(select(.v=="scaffold"))|length)" else "" end) + "  untracked=\($rx|map(select(.v==null))|length)" + (if $rn > 0 then "  coverage=\((($rx|map(select(.v!=null))|length) * 100 / $rn) | floor)%" else "" end),
+    | "  Recipe delegations (calibration signal): n=\($rn)  hits=\($rx|map(select(.v=="hit"))|length)  misses=\($rx|map(select(.v=="miss"))|length)" + (if $show_scaffold then "  scaffold=\($rx|map(select(.v=="scaffold"))|length)" else "" end) + "  untracked=\($rx|map(select(.v==null))|length)" + ritual_col($rx_all) + (if $rn > 0 then "  coverage=\((($rx|map(select(.v!=null))|length) * 100 / $rn) | floor)%  sessions=\($rx | sessions)" else "" end),
       ($rx | group_by(.tier) | map({tier:.[0].tier, n:length, hits:(map(select(.v=="hit"))|length), misses:(map(select(.v=="miss"))|length), scaffold:(map(select(.v=="scaffold"))|length), untracked:(map(select(.v==null))|length)}) | sort_by(-.n) | .[] | "    \(.tier | . + (" " * (14 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + "  untracked=\(.untracked)"),
       # Captured-pair coverage, counted over feedback ROWS (a delegation can
       # carry more than one verdict). inferred= is adoption: the verdict took
@@ -312,24 +330,28 @@ n_projects=$(jq -rs '
 ' "$metrics_file")
 if (( n_projects > 1 )); then
   echo "Per-project (delegate):"
-  jq -rs --argjson show_scaffold "$show_scaffold" '
+  jq -rs --argjson suspects "$suspects_json" --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
     '"$pct_def"'
     '"$verdict_join"'
-    map(select(src == "delegate" and (.exit_status // 0) == 0) | {ts, project: (.project // ""), duration_ms, v: verdict})
+    map(select(src == "delegate" and (.exit_status // 0) == 0) | {ts, project: (.project // ""), session, duration_ms, v: verdict})
     | group_by(.project)
-    | map({
-        project: .[0].project,
+    | map(. as $all | map(select(.v != "ritual")) | {
+        project: $all[0].project,
         n: length,
         hits: (map(select(.v == "hit")) | length),
         misses: (map(select(.v == "miss")) | length),
         scaffold: (map(select(.v == "scaffold")) | length),
         untracked: (map(select(.v == null)) | length),
-        p50: (map(.duration_ms) | pct(50) // 0)
+        ritual: ritual_col($all),
+        sessions: sessions,
+        # Latency is every delegation the project ran, ritual ones included:
+        # only the verdict counts leave them out.
+        p50: ($all | map(.duration_ms) | pct(50) // 0)
       })
     | sort_by((.project == ""), -.n)
     | .[]
-    | "  \((if .project == "" then "(no project)" else .project end) | . + (" " * (20 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + "  untracked=\(.untracked)  p50=\(.p50)ms"
+    | "  \((if .project == "" then "(no project)" else .project end) | . + (" " * (20 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + "  untracked=\(.untracked)\(.ritual)  p50=\(.p50)ms  sessions=\(.sessions)"
   ' "$metrics_file"
   echo
 fi
@@ -342,11 +364,12 @@ n_recipe=$(jq -rs '
 ' "$metrics_file")
 if (( n_recipe > 0 )); then
   echo "Per-recipe (delegate):"
-  jq -rs --argjson show_scaffold "$show_scaffold" '
+  jq -rs --argjson suspects "$suspects_json" --argjson show_scaffold "$show_scaffold" '
     def src: .source // "delegate";
     '"$verdict_join"'
-    def counts: "n=\(length)  hits=\(map(select(.v == "hit")) | length)  misses=\(map(select(.v == "miss")) | length)" + (if $show_scaffold then "  scaffold=\(map(select(.v == "scaffold")) | length)" else "" end) + "  untracked=\(map(select(.v == null)) | length)";
-    map(select(src == "delegate" and .recipe != null and (.exit_status // 0) == 0) | {ts, recipe, iq: (.input_quality // []), v: verdict})
+    def counts: . as $all | map(select(.v != "ritual"))
+      | "n=\(length)  hits=\(map(select(.v == "hit")) | length)  misses=\(map(select(.v == "miss")) | length)" + (if $show_scaffold then "  scaffold=\(map(select(.v == "scaffold")) | length)" else "" end) + "  untracked=\(map(select(.v == null)) | length)" + ritual_col($all) + "  sessions=\(sessions)";
+    map(select(src == "delegate" and .recipe != null and (.exit_status // 0) == 0) | {ts, recipe, session, iq: (.input_quality // []), v: verdict})
     | group_by(.recipe)
     | sort_by(-length)
     | .[]
@@ -379,8 +402,12 @@ if (( n_opp > 0 )); then
   [[ "${DELEGATE_BOUNDARY_MIN_CHARS:-}" =~ ^[0-9]+$ ]] && floor_override="$DELEGATE_BOUNDARY_MIN_CHARS"
   retry_win="${DELEGATE_BOUNDARY_WINDOW_MIN:-480}"
   [[ "$retry_win" =~ ^[0-9]+$ ]] || retry_win=480
+  # No ritual= here (#588): ritual is a verdict tag, and a verdict is not
+  # joined to the opportunity row this line counts, so the per-project and
+  # per-recipe rollups above carry it and this line carries sessions= only.
   jq -rs --arg floor "$floor_override" --argjson win_min "$retry_win" '
     def epoch: ((.ts | fromdateiso8601?) // 0);
+    def sessions: map(.session // "" | select(. != "")) | unique | length;
     # A denial is retried when a LATER row (append order, not ts: a redraft in
     # the same second must not count as both a miss and a hit) for the same
     # session, project and boundary lands within the window AND is itself a
@@ -409,12 +436,14 @@ if (( n_opp > 0 )); then
           project: (.[0].project // ""),
           n: length,
           delegated: (map(select(.delegated == true)) | length),
-          missed: (map(select(.delegated == false)) | length)
+          missed: (map(select(.delegated == false)) | length),
+          sessions: sessions
         })
       | sort_by((.project == ""), -.n)
       | .[]
       | "  \((if .project == "" then "(no project)" else .project end) | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
-        + "  rate=\(.delegated * 100 / .n | floor)%"),
+        + "  rate=\(.delegated * 100 / .n | floor)%"
+        + "  sessions=\(.sessions)"),
       "  excluded \($floored) boundaries under " + (if $floor != "" then "\($floor) chars" else "the floor (20 chars for git-commit, 120 for the rest)" end),
       (if $denied > 0 then "  excluded \($denied) denied attempts retried within \($win_min)m (the post did not happen; the retry is what counts)" else empty end)
   ' "$metrics_file"

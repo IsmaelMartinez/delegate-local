@@ -599,6 +599,86 @@ assert_not_contains "pa.final.txt	" "$out" "quarantine: another project's draft 
 assert_contains "20260902T000002Z-pb.final.txt	empty" "$out" "quarantine: suspects are listed when no final was passed by a verdict"
 rm -rf "$tmp"
 
+# --- #588: ritual delegations. A verdict whose shipped final was already in
+# the stdin the caller piped is not a template's miss: the rates leave it out
+# and name it as ritual=, and every rate names its distinct sessions. A row
+# recorded before the field existed is measured here from its stored final
+# and inputs, the same containment delegate-feedback.sh stores. ---
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+RT='Thanks for the report. The crash comes from the tray icon handler, which reads the config before it is loaded. The fix ships in the next release.'
+r1=$(iso_ago 900); r2=$(iso_ago 800); r3=$(iso_ago 700); r4=$(iso_ago 600)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$r1","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","session":"S1","exit_status":0,"otel_span_id":"m1","template_sha":"tttttttttt01","draft_file":"20260927T000001Z-m1.draft.txt"}
+{"ts":"$(iso_ago 890)","source":"feedback","ref_ts":"$r1","ref_id":"m1","kept":false,"reason":"posted my own","verdict_source":"agent","final_file":"20260927T000001Z-m1.final.txt","final_preexisting":true}
+{"ts":"$r2","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","session":"S1","exit_status":0,"otel_span_id":"m2","template_sha":"tttttttttt02","draft_file":"20260927T000002Z-m2.draft.txt","inputs_file":"20260927T000002Z-m2.inputs.json"}
+{"ts":"$(iso_ago 790)","source":"feedback","ref_ts":"$r2","ref_id":"m2","kept":false,"reason":"posted my own again","verdict_source":"agent","final_file":"20260927T000002Z-m2.final.txt"}
+{"ts":"$r3","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","session":"S2","exit_status":0,"otel_span_id":"m3","template_sha":"tttttttttt02","draft_file":"20260927T000003Z-m3.draft.txt"}
+{"ts":"$(iso_ago 690)","source":"feedback","ref_ts":"$r3","ref_id":"m3","kept":false,"reason":"rewrote the ask","verdict_source":"agent","final_file":"20260927T000003Z-m3.final.txt","final_preexisting":false}
+{"ts":"$r4","source":"delegate","tier":"prose","model":"q","recipe":"maintainer-reply","project":"p","session":"S3","exit_status":0,"otel_span_id":"m4","template_sha":"tttttttttt02","draft_file":"20260927T000004Z-m4.draft.txt"}
+{"ts":"$(iso_ago 590)","source":"feedback","ref_ts":"$r4","ref_id":"m4","kept":true,"verdict_source":"agent"}
+EOF
+for s in m1 m2 m3 m4; do printf 'A model draft for %s about something else entirely.\n' "$s" > "$tmp/drafts/20260927T00000${s#m}Z-$s.draft.txt"; done
+printf '%s\n' "$RT" > "$tmp/drafts/20260927T000001Z-m1.final.txt"
+printf '%s\n' "$RT" > "$tmp/drafts/20260927T000002Z-m2.final.txt"
+jq -nc --arg s "Post this:
+$RT" '{recipe:"maintainer-reply", stdin:$s, vars:{}}' > "$tmp/drafts/20260927T000002Z-m2.inputs.json"
+printf 'My own reply, nothing like the facts.\n' > "$tmp/drafts/20260927T000003Z-m3.final.txt"
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_contains "Verdicts on those delegations: n=2  kept=1  scaffold=0  rewrote=1  usable=50%  ritual=2  sessions=2" "$out" \
+  "ritual: the since-watermark rate leaves ritual verdicts out and names its sessions"
+assert_contains "  maintainer-reply  n=2  kept=1  scaffold=0  rewrote=1  usable=50%  ritual=2  sessions=2" "$out" \
+  "ritual: the per-recipe rate leaves both ritual verdicts out, the stored and the measured one"
+section=$(printf '%s\n' "$out" | sed -n '/per-template outcomes/,/^$/p')
+assert_contains "template=tttttttttt02  since=$r2  n=2  kept=1  scaffold=0  rewrote=1  usable=50%  ritual=1  sessions=2" "$section" \
+  "ritual: the per-template rate leaves the ritual verdict out and names its sessions"
+assert_contains "template=tttttttttt01  since=$r1  n=0  kept=0  scaffold=0  rewrote=0  usable=0%  ritual=1  sessions=0" "$section" \
+  "ritual: a template with only ritual verdicts reads n=0, not a 0% usable template"
+m2block=$(printf '%s\n' "$out" | sed -n '/posted my own again/,/^$/p')
+assert_contains "RITUAL" "$m2block" "ritual: the bundle labels a ritual rejection"
+m3block=$(printf '%s\n' "$out" | sed -n '/rewrote the ask/,/^$/p')
+assert_not_contains "RITUAL" "$m3block" "ritual: a real rewrite is not labelled ritual"
+
+# --ritual is the read-only backfill: per recipe and template, how many
+# rejections were paired with a measurable stdin and how many were ritual.
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --ritual --file "$tmp/m.jsonl" 2>&1)
+EC=$?
+assert_eq 0 "$EC" "ritual backfill: exits 0"
+assert_contains "maintainer-reply  rejections=3  paired=3  ritual=2  sessions=1  (stored=2 measured=1)" "$out" \
+  "ritual backfill: per-recipe counts, sessions and where each tag came from"
+assert_contains "    template=tttttttttt02  rejections=2  paired=2  ritual=1  sessions=1" "$out" \
+  "ritual backfill: per-template counts"
+assert_eq absent "$([[ -e "$tmp/state" ]] && echo present || echo absent)" \
+  "ritual backfill: the watermark is not advanced"
+assert_eq 8 "$(grep -c '' "$tmp/m.jsonl")" "ritual backfill: the metrics file is not written"
+rm -rf "$tmp"
+
+# Only the structured stdin is scored: a row with the rendered input.txt
+# alone is unmeasurable, because the template text and the non-stdin vars
+# (lead, ask, signoff) in it would read a final repeating them as ritual.
+# And a quarantined final is never judged ritual, stored tag or not: it is
+# not the text that shipped.
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+p1=$(iso_ago 900); p2=$(iso_ago 800)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$p1","source":"delegate","tier":"prose","model":"q","recipe":"pr-review-reply","project":"p","session":"S9","exit_status":0,"otel_span_id":"p1","draft_file":"20260928T000001Z-p1.draft.txt","input_file":"20260928T000001Z-p1.input.txt"}
+{"ts":"$(iso_ago 890)","source":"feedback","ref_ts":"$p1","ref_id":"p1","kept":false,"reason":"echoed the lead","verdict_source":"agent","final_file":"20260928T000001Z-p1.final.txt"}
+{"ts":"$p2","source":"delegate","tier":"prose","model":"q","recipe":"pr-review-reply","project":"p","session":"S9","exit_status":0,"otel_span_id":"p2","draft_file":"20260928T000002Z-p2.draft.txt"}
+{"ts":"$(iso_ago 790)","source":"feedback","ref_ts":"$p2","ref_id":"p2","kept":false,"reason":"shifted final","verdict_source":"agent","final_file":"20260928T000002Z-p2.final.txt","final_preexisting":true}
+EOF
+printf 'A model draft.\n' > "$tmp/drafts/20260928T000001Z-p1.draft.txt"
+printf 'A model draft.\n' > "$tmp/drafts/20260928T000002Z-p2.draft.txt"
+printf '%s\n' "$RT" > "$tmp/drafts/20260928T000001Z-p1.final.txt"
+printf 'Reply template.\nLead: %s\n' "$RT" > "$tmp/drafts/20260928T000001Z-p1.input.txt"
+printf '%s\n' "$RT" > "$tmp/drafts/20260928T000002Z-p2.final.txt"
+printf '20260928T000002Z-p2.final.txt\tneighbour\thook\n' > "$tmp/suspect-finals.tsv"
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_contains "  pr-review-reply  n=2  kept=0  scaffold=0  rewrote=2  usable=0%  sessions=1" "$out" \
+  "ritual: neither a rendered-input-only row nor a quarantined final is taken out as ritual"
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --ritual --file "$tmp/m.jsonl" 2>&1)
+assert_contains "pr-review-reply  rejections=2  paired=0  ritual=0" "$out" \
+  "ritual backfill: neither row is judged, so neither is paired"
+rm -rf "$tmp"
+
 # --- #589: trailer paragraphs and trailer anchors in the shipped text are the
 # caller's fixed lines, not the draft's shape or facts: SHAPE and DROPPED
 # ignore Refs/Closes/Fixes lines, Co-Authored-By, the Claude Code footer, the
