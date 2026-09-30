@@ -79,7 +79,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$source_dir" && -n "$patch_file" ]] || usage
-case "$timeout_secs" in ''|*[!0-9]*|0) echo "--timeout must be a positive number of seconds" >&2; usage ;; esac
+# No leading zero: "00" is no limit at all to perl's alarm.
+case "$timeout_secs" in ''|*[!0-9]*|0*) echo "--timeout must be a positive number of seconds" >&2; usage ;; esac
 [[ -d "$source_dir" ]] || { echo "source-dir not a directory: $source_dir" >&2; exit 6; }
 [[ -f "$source_dir/$source_name" ]] || { echo "missing $source_name in $source_dir" >&2; exit 6; }
 [[ -f "$source_dir/$test_script" ]] || { echo "missing $test_script in $source_dir" >&2; exit 6; }

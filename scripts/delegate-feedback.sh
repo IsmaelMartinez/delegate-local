@@ -343,10 +343,13 @@ if [[ -n "$final_src" ]]; then
         break
       fi
       [[ -e "$drafts_dir/$final_name" ]] || break
-      # The same bytes already on the stem are the same final (#554): the
+      # The same text already on the stem is the same final (#554): the
       # confirm hook stored the post, and a copy would only read as a
       # second shipped text. Reuse the file; a posted label follows below.
-      if cmp -s "$final_src" "$drafts_dir/$final_name"; then
+      # Trailing newlines do not count: the hook's capture and a caller's
+      # file differ there.
+      if perl -e 'my @t = map { open(my $f, "<", $_) or exit 1; local $/; my $s = <$f> // ""; $s =~ s/\n+\z//; $s } @ARGV; exit($t[0] eq $t[1] ? 0 : 1)' \
+          "$final_src" "$drafts_dir/$final_name"; then
         final_file="$final_name"; final_reused=1; break
       fi
       final_n=$((final_n + 1))

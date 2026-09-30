@@ -427,9 +427,12 @@ for flag in --timeout --test-script --out --source-name; do
   assert_eq 6 "$EC" "$flag with no value -> exit 6"
   assert_contains "$flag requires a value" "$out" "$flag with no value -> names the flag"
 done
-EC=0
-out=$(bash "$SCRIPT" --timeout soon "$tmp" "$tmp/patch.txt" 2>&1) || EC=$?
-assert_eq 6 "$EC" "--timeout soon -> exit 6"
+# An all-zero value is no limit at all: perl's alarm "00" disables it.
+for val in soon 0 00; do
+  EC=0
+  out=$(bash "$SCRIPT" --timeout "$val" "$tmp" "$tmp/patch.txt" 2>&1) || EC=$?
+  assert_eq 6 "$EC" "--timeout $val -> exit 6"
+done
 rm -rf "$tmp"
 
 # 23. TIMEOUT fires on every platform, not only where coreutils `timeout`

@@ -1658,6 +1658,19 @@ printf 'what the hook saw go out\n' | DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEG
   bash "$SCRIPT" --id dddddddddddddddd miss "r2" --final - >/dev/null 2>&1
 assert_eq "20260827T100000Z-aaaa1111.final.txt posted" "$(tail -1 "$tmp/m.jsonl" | jq -r '"\(.final_file // "-") \(.final_source // "-")"')" \
   "identical final from stdin: the capture is reused and marked posted"
+# Trailing newlines are not a different text: the hook's capture and a
+# caller's file differ there (8 of 171 numbered finals on 2026-09-30).
+printf 'what the hook saw go out\n\n\n' > "$tmp/more-nl.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id dddddddddddddddd miss "r3" --final "$tmp/more-nl.txt" >/dev/null 2>&1
+printf 'what the hook saw go out' > "$tmp/no-nl.txt"
+DELEGATE_METRICS_FILE="$tmp/m.jsonl" DELEGATE_FEEDBACK_NO_NUDGE=1 \
+  bash "$SCRIPT" --id dddddddddddddddd miss "r4" --final "$tmp/no-nl.txt" >/dev/null 2>&1
+assert_eq "20260827T100000Z-aaaa1111.final.txt posted 20260827T100000Z-aaaa1111.final.txt posted" \
+  "$(tail -2 "$tmp/m.jsonl" | jq -r '"\(.final_file // "-") \(.final_source // "-")"' | tr '\n' ' ' | sed 's/ $//')" \
+  "final differing only in trailing newlines: the capture is reused and marked posted"
+assert_eq 1 "$(ls "$tmp/drafts" | grep -c 'aaaa1111\.final')" \
+  "final differing only in trailing newlines: no numbered copy"
 rm -rf "$tmp"
 
 # An identical final an earlier verdict supplied by hand is reused but is
