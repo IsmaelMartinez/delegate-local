@@ -842,6 +842,20 @@ if [[ -f "$metrics_file" ]]; then
   # claim can never cost the claimed call its text.
   pending_key="${project//[^A-Za-z0-9._-]/_}"
   [[ -n "$session_id" ]] && pending="$pending_dir/$session_id.$boundary.${pending_key:--}"
+  # A claim's deferred `.row` is not in the metrics file yet, so the lookup
+  # above did not count it as a spend: overlapping claims each saw the same
+  # fresh credit and one delegation credited several posts. A credited `.row`
+  # holds its credit while the call that claimed it (its `claimer`) is still
+  # unconfirmed. Once the claimer has run, a claimed call that never confirms
+  # was the refused attempt it retried, and holding the credit longer would
+  # deny the next post of a sweep (#497).
+  for _r in "$pending_dir"/*".$boundary.${pending_key:--}".*.row; do
+    [[ -f "$_r" ]] || continue
+    IFS=$'\x1f' read -r _rd _re _rc < <(jq -r '[(.delegated // false | tostring), ((.ts | fromdateiso8601?) // 0 | tostring), (.claimer // "")] | join("\u001f")' "$_r" 2>/dev/null) || continue
+    [[ "$_rd" == "true" && "$_re" =~ ^[0-9]+$ ]] && (( now_epoch - _re <= reuse_window )) || continue
+    case "$_rc" in ""|*/*) continue ;; esac
+    [[ -f "$pending_dir/$_rc" || -f "$pending_dir/$_rc.superseded" ]] && recent=$(( ${recent:-0} - 1 ))
+  done
   if [[ -n "$pending" && "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" \
         && -f "$pending_dir/$session_id.seen" ]]; then
     claim="" claim_epoch=""
@@ -859,7 +873,8 @@ if [[ -f "$metrics_file" ]]; then
       # Written before the claim, so a confirmation that finds the claim has
       # the row; removed again if the claim loses.
       fresh=false; [[ "${recent:-0}" -gt 0 ]] && fresh=true
-      row_json "$fresh" > "$claim.row" 2>/dev/null
+      claimer="$(basename "$pending").${tool_use_id//[^A-Za-z0-9_-]/_}"
+      row_json "$fresh" | jq -c --arg c "$claimer" '. + {claimer:$c}' > "$claim.row" 2>/dev/null
       if mv "$claim" "$claim.superseded" 2>/dev/null; then
         # The retry is the post the marker was for, so it chooses among the
         # drafts that post could have been.

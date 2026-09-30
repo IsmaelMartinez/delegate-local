@@ -86,17 +86,28 @@ capture_final() {
     case "$d" in */*|.*) continue ;; *.draft.txt) ;; *) continue ;; esac
     [[ -e "$drafts_dir/${d%.draft.txt}.final.txt" ]] || cands+=("$d")
   done
-  (( ${#cands[@]} > 0 )) || return 0
-  best="${cands[0]}"
-  if (( ${#cands[@]} > 1 )) && [[ -f "$script_dir/lib/pair-score.sh" ]]; then
-    # shellcheck source=lib/pair-score.sh
-    . "$script_dir/lib/pair-score.sh"
-    best=$(best_draft <(printf '%s' "$text") "$drafts_dir" "${cands[@]}")
-  fi
   mkdir -p "$drafts_dir" 2>/dev/null || return 0
   chmod 700 "$drafts_dir" 2>/dev/null || true
-  ( umask 077; set -C; printf '%s' "$text" > "$drafts_dir/${best%.draft.txt}.final.txt" ) 2>/dev/null \
-    && chmod 600 "$drafts_dir/${best%.draft.txt}.final.txt" 2>/dev/null
+  # shellcheck source=lib/pair-score.sh
+  [[ -f "$script_dir/lib/pair-score.sh" ]] && . "$script_dir/lib/pair-score.sh"
+  # A parallel confirmation can choose the same draft between the choice and
+  # the exclusive create; the loser drops that draft and chooses again among
+  # the rest, so its text is filed rather than lost. Bounded by the list.
+  while (( ${#cands[@]} > 0 )); do
+    best="${cands[0]}"
+    if (( ${#cands[@]} > 1 )) && declare -F best_draft >/dev/null; then
+      best=$(best_draft <(printf '%s' "$text") "$drafts_dir" "${cands[@]}")
+    fi
+    if ( umask 077; set -C; printf '%s' "$text" > "$drafts_dir/${best%.draft.txt}.final.txt" ) 2>/dev/null; then
+      chmod 600 "$drafts_dir/${best%.draft.txt}.final.txt" 2>/dev/null
+      return 0
+    fi
+    local -a rest=()
+    for d in "${cands[@]}"; do
+      [[ "$d" == "$best" || -e "$drafts_dir/${d%.draft.txt}.final.txt" ]] || rest+=("$d")
+    done
+    cands=(${rest[@]+"${rest[@]}"})
+  done
   return 0
 }
 
@@ -122,7 +133,7 @@ for marker in "$pending_dir/$session_id".*; do
   if [[ "$marker" == *.superseded ]]; then
     row="${marker%.superseded}.row"
     if [[ -f "$row" ]] && jq -e 'type == "object" and .source == "opportunity"' "$row" >/dev/null 2>&1; then
-      jq -c . "$row" >> "$metrics_file" 2>/dev/null
+      jq -c 'del(.claimer)' "$row" >> "$metrics_file" 2>/dev/null
     fi
     rm -f "$row" 2>/dev/null
   fi

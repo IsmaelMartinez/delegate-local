@@ -2256,6 +2256,47 @@ confirm "gh pr comment 12 --body \"$reply_b\"" "$tmpcwd" sess-A toolu-2
 confirm "gh pr comment 12 --body \"$reply_a\"" "$tmpcwd" sess-A toolu-1
 assert_eq "$reply_a" "$(dfinal dA)" "concurrent inline, reversed: the first call's final holds its own text"
 assert_eq "$reply_b" "$(dfinal dB)" "concurrent inline, reversed: the second call's final holds its own text"
+# Overlapping claims reserve credits: three delegations and four calls in
+# flight at once, each later call claiming the previous one's marker. The
+# `.row` a claim defers is not in the metrics file yet, so unless it is
+# counted every claimer sees the same fresh credit and one delegation credits
+# several posts.
+reset497; for _i in 1 2 3; do seed_draft commit-message "dR$_i.draft.txt"; done
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+for _i in 1 2 3 4; do
+  payload_id "git commit -m \"$body300\"" "$tmpcwd" sess-A "toolu-r$_i" | dflt bash "$HOOK" >/dev/null
+done
+for _i in 1 2 3 4; do confirm "git commit -m \"$body300\"" "$tmpcwd" sess-A "toolu-r$_i"; done
+assert_eq 3 "$(grep -c '"delegated":true' "$METRICS")" "concurrent claims: three delegations credit three posts, not four"
+# ...but a claim holds its credit only while its claimer is unconfirmed: in a
+# sweep whose first post was refused, the confirmed retry releases it, so the
+# sweep's other two posts are still credited (#497).
+reset497; for _i in 1 2 3; do seed_draft commit-message "dS$_i.draft.txt"; done
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "git commit -m \"$body300\"" "$tmpcwd" sess-A toolu-s1 | dflt bash "$HOOK" >/dev/null
+payload_id "git commit -m \"$body300\"" "$tmpcwd" sess-A toolu-s2 | dflt bash "$HOOK" >/dev/null
+confirm "git commit -m \"$body300\"" "$tmpcwd" sess-A toolu-s2
+for _i in 3 4; do
+  payload_id "git commit -m \"$body300\"" "$tmpcwd" sess-A "toolu-s$_i" | dflt bash "$HOOK" >/dev/null
+  assert_eq true "$(jq -r .delegated <<<"$(last_row)")" "sweep after a refused post: post $_i is credited"
+  confirm "git commit -m \"$body300\"" "$tmpcwd" sess-A "toolu-s$_i"
+done
+# Two confirm hooks racing onto the same best draft: the one that loses the
+# exclusive create files its text under the next unspent draft instead of
+# dropping it. The race is made deterministic with a pair-score stub whose
+# best_draft lets the rival win first.
+seed_two
+racedir=$(mktemp -d); mkdir -p "$racedir/lib"
+cp "$CONFIRM" "$racedir/confirm.sh"
+cat > "$racedir/lib/pair-score.sh" <<EOF
+best_draft() { printf 'rival' > "$METRICS_DIR/drafts/dA.final.txt"; printf 'dA.draft.txt'; }
+EOF
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "gh pr comment 12 --body \"$reply_b\"" "$tmpcwd" sess-A toolu-1 | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+post_payload "gh pr comment 12 --body \"$reply_b\"" "$tmpcwd" sess-A toolu-1 | dflt bash "$racedir/confirm.sh" 2>/dev/null
+assert_eq rival "$(dfinal dA)" "raced capture: the rival's final is not overwritten"
+assert_eq "$reply_b" "$(dfinal dB)" "raced capture: the losing hook files its text under the next unspent draft"
+rm -rf "$racedir"
 # An inline body is not stored before its call has run.
 seed_two
 confirm 'ls' "$tmpcwd" sess-A toolu-0
