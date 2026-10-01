@@ -591,9 +591,9 @@ else
   fail=$((fail+1))
 fi
 
-# The bench's own scorers, with padding_re from delegate.sh as the bench reads
+# The bench's own scorers, with padding_re from lib/checks.sh as the bench reads
 # it; a failed extraction fails cleanly rather than on an undefined function.
-eval "$(grep -E '^[[:space:]]*padding_re=' "$SKILL_DIR/scripts/delegate.sh" | head -1)"
+eval "$(grep -E '^[[:space:]]*padding_re=' "$SKILL_DIR/scripts/lib/checks.sh" | head -1)"
 eval "$(grep -E '^has_padding\(\) ' "$DSBENCH")"
 eval "$(grep -E '^count_sentences\(\) ' "$DSBENCH")"
 if [[ -n "${padding_re:-}" ]] && command -v has_padding >/dev/null 2>&1 && command -v count_sentences >/dev/null 2>&1; then
