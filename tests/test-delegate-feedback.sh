@@ -1361,7 +1361,7 @@ assert_eq 2 "$(grep -c 'verdict_source="\${\(9\|11\):-agent}"' "$REPO/scripts/li
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 before=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
 EC=0
-out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" scaffold "draft compiled, kept the approach not the code" 2>&1) || EC=$?
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" scaffold "draft compiled, reworded the subject before shipping" 2>&1) || EC=$?
 assert_eq 0 "$EC" "scaffold: exit 0"
 after=$(wc -l < "$tmp/m.jsonl" | tr -d ' ')
 assert_one_row_added "$before" "$after" "scaffold: exactly one row appended"
@@ -1370,7 +1370,7 @@ assert_contains '"source":"feedback"' "$last" "scaffold: source field"
 assert_contains '"scaffold":true' "$last" "scaffold: scaffold:true discriminator present"
 assert_contains '"kept":false' "$last" "scaffold: kept:false for back-compat readers"
 assert_contains "\"ref_ts\":\"$TS_LATEST\"" "$last" "scaffold: ref_ts is latest delegate"
-assert_contains '"reason":"draft compiled, kept the approach not the code"' "$last" "scaffold: reason captured"
+assert_contains '"reason":"draft compiled, reworded the subject before shipping"' "$last" "scaffold: reason captured"
 assert_contains "SCAFFOLD recorded" "$out" "scaffold: stdout reports SCAFFOLD"
 EC=0; echo "$last" | jq -e . >/dev/null 2>&1 || EC=$?
 assert_eq 0 "$EC" "scaffold: row is valid JSON"
@@ -1379,7 +1379,7 @@ rm -rf "$tmp"
 # SC2: --source agent scaffold → row carries verdict_source:"agent" AND scaffold:true.
 tmp=$(mktemp -d); seed_metrics "$tmp/m.jsonl"
 EC=0
-out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --source agent scaffold "executable feedback only" 2>&1) || EC=$?
+out=$(DELEGATE_METRICS_FILE="$tmp/m.jsonl" bash "$SCRIPT" --source agent scaffold "edited the body before shipping" 2>&1) || EC=$?
 assert_eq 0 "$EC" "scaffold --source agent: exit 0"
 last=$(tail -1 "$tmp/m.jsonl")
 assert_contains '"scaffold":true' "$last" "scaffold --source agent: scaffold:true present"

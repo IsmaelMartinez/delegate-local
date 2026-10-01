@@ -4,6 +4,8 @@ Date: 2026-06-22
 
 ## Status
 
+Superseded in part by ADR 0030 / #624 (2026-10-01): scaffold now means edited and shipped, not discarded-but-useful; the text below records the original decision.
+
 Accepted as an experiment. The amendment ships behind an explicit evidence gate
 (below); if the gate fails, the kill path reverts most of it. Records the
 decision designed in

@@ -418,7 +418,7 @@
       "id": 37,
       "type": "stat",
       "title": "Misses",
-      "description": "Drafts the agent rewrote or discarded, scaffold excluded (delegate-feedback.sh: scaffold is useful, not a miss).",
+      "description": "Drafts the agent rewrote or discarded, scaffold excluded (delegate-feedback.sh: scaffold is edited and shipped, a miss is rewritten or discarded).",
       "datasource": {
         "type": "loki",
         "uid": "loki"
