@@ -1,0 +1,81 @@
+# What a recipe call runs: canary, input labels, output checks and the retry
+
+A bare `delegate.sh <tier> "<prompt>"` call sends one request and returns the answer. A recipe call (`--recipe NAME`) adds four things around that request, all inside `scripts/delegate.sh` and its libraries: a pre-flight canary before the request, a weak-input label on the row, deterministic checks on the output, and at most one retry when a check fails. This document is the reference for each. The recipe template itself (loading `prompts/<NAME>.md`, substituting `{{key}}` from `--var` and `{{stdin}}` from the pipe, exit 2 on an unsubstituted placeholder) is described in `prompts/README.md`.
+
+## The pre-flight canary
+
+The canary fires on every recipe call (issue #110 mitigation). After `pick-model.sh` resolves the tier but before the full templated request is sent, a 1-token probe hits the resolved model on the same `/chat/completions` envelope as the real call (`max_tokens:1`, `temperature:0`) with `curl --max-time ${DELEGATE_PREFLIGHT_TIMEOUT:-10}`. If the probe does not return within the timeout the wrapper exits 3 with an actionable stderr (raise the timeout, use a smaller-parameter model, hand-write, or opt out with `DELEGATE_NO_PREFLIGHT=1`) and writes a metrics row tagged `exit_status:3`, so stall events stay observable in the rollup. The failed-canary row carries the would-be `prompt_chars`, so stalls can be correlated with input size afterwards, and `template_sha`, so a stall is attributed to the template that was live. The canary is skipped on bare calls, where the input investment is low. When a cold model load is suspected, the stderr suggests retrying with `DELEGATE_PREFLIGHT_TIMEOUT=30`.
+
+## Weak-input labels
+
+A recipe's frontmatter `input_quality:` block maps an input (a `--var` name or `stdin`) to a weak-shape label (`one_line_exemplar`, `titles_only`, `no_diff`, #590). A matching input is named on one `weak input` stderr line and recorded as the row's `input_quality` array (absent when nothing matched), and the call is still sent, because an exit-2 refusal writes no row. The block is left out of `template_sha`, and `metrics-summary.sh` splits a recipe's per-recipe line by label when any of its rows carries one.
+
+## Output checks
+
+Recipes that declare a frontmatter `checks:` block run the ADR 0014 deterministic output checks after generation. The checks live in `run_output_checks` in `scripts/lib/checks.sh`, and the sentence, normalise and anchor helpers they share with `scripts/lib/pair-score.sh` live in `scripts/lib/text.sh`, so the self-improvement bundle's sentence unit is the check's own and not a copy. `tests/test-checks.sh` calls each check without a wrapper process (#560); `tests/test-delegate.sh` keeps one case per check for the wiring (the stderr line, the row, the retry).
+
+ADR 0017 persists the results as `checks_run`, `checks_failed` and `checks_autofixed` on the metrics row (omitted when no check ran), so structural quality is observable. `checks_failed` means "problems shipped", `checks_autofixed` means "problems fixed in place".
+
+The checks, and who declares them as of 2026-10-01:
+
+| Check | Declared by | What fails |
+|---|---|---|
+| `subject_max`, `subject_type`, `body_required`, `body_max_words` | `commit-message` | subject length and type, a missing body, a body over the profile's word cap |
+| `no_padding_tail` | `commit-message`, `github-issue-body`, the three reply recipes, `release-announcement` | a trailing participial-comma padding clause (autofixed when safe) |
+| `no_single_item_list` | `maintainer-reply`, `maintainer-review-reply` | a one-item numbered list |
+| `no_invented_task_list`, `no_invented_headings` | `pr-description` (value: `recent_prs`) | a task list or heading when the shape-authority var has none |
+| `no_invented_refs` | `pr-description` | a trailer identifier not in any caller input |
+| `no_title_line` | `pr-description` | a leading title line (autofixed when separated) |
+| `no_subject_echo` | `commit-message` | the subject copied from the template or an exemplar |
+| `no_example_echo` | every recipe, by default | an output line reproducing a template line |
+| `no_context_echo` | `maintainer-reply`, `maintainer-review-reply` | two or more piped sentences returned verbatim |
+| `max_context_ratio` (+ `min_context_chars`) | both maintainer reply recipes | output length at or above the ratio of the context |
+| `no_fact_as_question` | `maintainer-reply` (value: `ask`) | a supplied fact handed back as a question |
+| `no_unbidden_mention` | both maintainer reply recipes (value: `recipient`) | an `@`-mention of anyone but the recipient |
+
+### Autofix
+
+`no_padding_tail` is actionable rather than only reported: it auto-strips the safe trailing participial-comma padding clause, records it as `checks_autofixed` and surfaces it on the meta line. It is on by default; `DELEGATE_NO_AUTOFIX=1` restores warn-only. The riskier "This-X" and ambiguous multi-comma shapes are never auto-stripped. `no_title_line` (#589, declared on `pr-description`) is the second autofix: a leading `type(scope): ...` or `#N type: ...` line is stripped when a blank line separates it from the body, and reported as failed otherwise.
+
+### `no_example_echo`
+
+The one check that runs on every recipe call rather than being declared per recipe: it fails when an output line reproduces a line of the recipe's own prompt, because that is never a correct outcome. It caught the 2026-08-26 leak where two `maintainer-reply` calls carrying 7.7k and 7.3k chars of context each returned exactly the recipe's 96-character `Correct:` example, byte for byte. Comparison is whole-line and literal against the pre-substitution template (so reproducing a caller-supplied fact never flags), with a 40-char floor and `Wrong:`/`Correct:` labels stripped. Opt out with `no_example_echo: false` in a recipe's frontmatter or `DELEGATE_NO_ECHO_CHECK=1`. When a recipe carries contrastive anchors, write them as angle-bracket skeletons rather than fluent sentences, so a leak is visibly bracketed and not a plausible fabrication.
+
+### `no_subject_echo`
+
+A subject copy slips under `no_example_echo`, because a lone exemplar subject normalises below the floor and a `;`-joined list of subjects is one line, so `commit-message` declares `no_subject_echo` (#589): the draft's subject is compared against every template line and every `echo_guard_vars` value split on `;`, a leading hash stripped and `echo_normalise` applied, with no floor. Over the stored corpus it flags 8 of 368 drafts (5 rejected, 2 scaffold, 1 unverdicted, 0 kept).
+
+### `no_context_echo`
+
+The mirror of `no_example_echo` for the other side of the prompt (#475). It is declared per recipe in the `checks:` block rather than default-on, and silenced by the same `DELEGATE_NO_ECHO_CHECK=1`. It runs the same comparison (`echo_matches`, the one helper both checks call: `echo_normalise` on both sides, 40-char floor, fixed-string whole-unit match) against the piped stdin only, never the `--var` values, and fails when two or more distinct context sentences come back verbatim. The unit is the sentence, not the line: facts are piped one per line and the rejected drafts return them joined into a single paragraph line (row 2026-09-10T20:00:01Z has a 1687-char context and a one-line 1687-char body), so a whole-line compare matched none of the 46 drafts the check was measured against. One sentence is deliberately allowed, because quoting a single fact back is the anchor-carrying the reply recipes ask for and a one-fact context legitimately returns as that fact plus an ask; two is the draft handing the input back, which is what 63 of 97 reply-recipe rejections in the fortnight to 2026-09-11 described while every one of them carried `checks_failed=0`.
+
+### `max_context_ratio`
+
+The length half of the same failure (#487), declared per recipe as a decimal (`max_context_ratio: 0.8` on both maintainer reply recipes). It fails when `output_chars / context_chars` reaches the ratio while the context is at least `min_context_chars`, a sibling key defaulting to 400 so that a short fact list that legitimately comes back as its facts plus an ask is exempt. `maintainer-review-reply` sets the floor to 900 since #514, because 2 of the 5 shipped replies in the agent-framework spike set (789 chars on 832 of facts, and 813 on 693) failed the ratio under the default. The check exists because `no_context_echo` measures echo and its retry notice cannot claim a length rule was broken, and because the second generation after that notice came back the same size as the first on every retry measured over 2026-09-13/14.
+
+### `no_fact_as_question`
+
+The third failure of the reply recipes, the one STATED-NOT-ASKED forbids (#513): a supplied fact handed back to the reader as a question ("Could you confirm that all 531 tests pass?" when the facts state it), which 65 of 132 `maintainer-reply` rejections described while one carried a failed check. It is declared with the name of the `--var` holding the caller's asks (`no_fact_as_question: ask`), as `no_invented_task_list` names its authority.
+
+The unit is the anchor (`fact_anchors`: issue refs, file:line, file names, numbers of two-plus digits, snake_case and camelCase, the spike's scorer regex). A question whose anchors are all in the piped stdin and none in the ask var is a fact, not an ask, because an anchor outside the facts is the model's own question and one in the ask var is the caller's. A question with no anchor falls back to content words (`content_words`, four-plus letters minus the function words a question is built from): two or more from the facts and none from the ask var, since one shared word is any question at all. Only the piped stdin is a fact source, never the other `--var` values; a question the caller supplied in any `--var` value (an opener, a sign-off, emitted as written) is the caller's and is skipped wherever it sits inside the emitted question, recipient handle in front or not.
+
+Measured on the 18 spike cases: anchors alone flag 6 of the 11 drafts whose verdict reason mentions confirm or question and 0 of the 16 shipped finals, and the fallback lifts that to 8 of 11 at the same 0; the three left are the caller's own ask phrased as a question, which the recipe instructs. It never earns the retry, on its own or in another check's notice: the spike's validator arm cleared 3 of 13 on a second generation, so the row records it and the caller decides.
+
+### `no_unbidden_mention`
+
+The fourth, and the only one whose failure leaves the machine: an `@`-mention of somebody the caller did not address the reply to sends a real notification to a person who is not in the thread. It is declared as the name of the `--var` holding the recipient handle (`no_unbidden_mention: recipient` on both maintainer reply recipes), and fails on any mention that is not that handle, and on every mention when the caller supplied none, which is what the recipes already say in prose ("when it is empty there is no handle and no `@` at all, so address the reader as you").
+
+Fenced blocks (backtick or tilde; a fence that never closes is not a block, so its lines are still scanned) and inline code spans are dropped before the scan, so a `@property` decorator or an `@Override` annotation in a quoted snippet is not a mention. A mention the caller wrote in any other `--var` (a lead, an opener, a sign-off, emitted as written) is the caller's and is skipped, as `no_fact_as_question` skips caller questions. When the recipient var is passed twice its first value, the one substituted, is the permitted handle. A scoped package is dropped by its trailing slash, and an email address never matches because its `@` is preceded by a word character. Handles compare case-insensitively and with or without the `@` in the var, as the forges resolve them.
+
+Grounding is deliberately not the test: on 2026-09-22 two `maintainer-review-reply` posts to `teams-for-linux` opened by mentioning the reporter of a referenced issue, whose name the piped context did carry, so a check that asked "is this handle in the input" would have passed both. Measured over the stored corpus, it flags 42 of 82 rejected reply drafts and 0 of 81 replies that shipped. It does earn the retry, because removing a mention is a deletion the second generation can make.
+
+## The retry
+
+When a declared check still fails after any autofix, the wrapper spends exactly one more generation on it (#384): the same templated prompt is re-sent with the failed check names and the constraint each one states appended, and the checks re-run on the second output. One retry, never a loop: a second failure means the model cannot satisfy the constraint on this input. Two checks are held out of it:
+
+- `no_context_echo` alone is never retried (#514). On `maintainer-review-reply` the second generation came back the same size and the same echo on 8 of the 12 retries measured over 2026-09-13/14, so when it is the only failed check the reject is printed and named on the row and no second generation is spent. Beside any other failed check the retry still runs.
+- `no_fact_as_question` never earns the retry and is left out of the notice (#513), for the reason above.
+
+The row gains `retried:true` and `retry_chars` (both absent otherwise) so the cost is measurable. `retry_chars` carries the rejected generation plus the appended notice, which are real local work, and keeps `estimated_tokens_avoided` equal to `(prompt_chars + context_chars + output_chars + retry_chars) / 4` while those three fields go on meaning the request that produced the answer you got. The first pass's stderr is suppressed when a retry follows, so the caller is not shown a complaint about a draft that was thrown away. `DELEGATE_NO_RETRY=1` restores the single-call behaviour.
+
+When the retry itself fails to dispatch (a transport error or an empty answer) the first draft is returned with its own status and check results, a warning says so, and the row gains `retry_failed:true` with `retry_chars` reduced to the notice, since the rejected generation is then the output (#550).
