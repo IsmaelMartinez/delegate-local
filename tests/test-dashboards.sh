@@ -34,7 +34,7 @@ fi
 # sync-metrics-to-loki.sh, which enriches feedback rows with the parent's
 # recipe, tier and tokens, and the allowlist is the union of keys Loki holds.
 # embed.sh rows are not written here: no dashboard queries them, and one that
-# starts to fails below as an unknown field.
+# starts querying them fails below on an unknown field.
 make_fixture_fields() { # prints the field names, one per line
   local w repo mock
   w=$(mktemp -d); mock="$w/bin"; repo="$w/repo"; mkdir -p "$mock" "$repo"
