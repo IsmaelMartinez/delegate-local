@@ -4,11 +4,7 @@ Date: 2026-05-01
 
 ## Status
 
-Accepted.
-
-> Superseded — the implementation was archived in the 2026-06-19 lean-core reset (recoverable from tag pre-cleanup-2026-06-19). See ROADMAP.md.
-
-
+Superseded by the 2026-06-19 lean-core reset, which archived the implementation out of main (recoverable from tag `pre-cleanup-2026-06-19`; see ROADMAP.md).
 
 ## Context
 

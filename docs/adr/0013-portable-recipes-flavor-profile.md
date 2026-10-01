@@ -4,9 +4,7 @@ Date: 2026-06-06
 
 ## Status
 
-Proposed.
-
-This ADR captures a design direction reached through analysis, not a decision to build. It is recorded so the reasoning is durable before any implementation, and so the work that precedes it — the v0.15.0 release and a review of recent session usage — happens with the target written down.
+Accepted. The direction was first recorded as Proposed on 2026-06-06, before any implementation; it has since been built (`scripts/onboard.sh`, `scripts/derive-flavor.sh`, `scripts/flavor-defaults.sh`, `scripts/load-flavor.sh`), as the two implementation-status sections at the end record, with the recipe preview step still unbuilt.
 
 ## Context
 

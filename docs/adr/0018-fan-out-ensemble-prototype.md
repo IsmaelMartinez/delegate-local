@@ -4,11 +4,7 @@ Date: 2026-06-18
 
 ## Status
 
-Accepted. Records a negative prototype result and the reasons it does not (yet) justify production work. Supersedes nothing; informs any future ensemble or sampling work.
-
-> Superseded — the implementation was archived in the 2026-06-19 lean-core reset (recoverable from tag pre-cleanup-2026-06-19). See ROADMAP.md.
-
-
+Superseded by the 2026-06-19 lean-core reset, which archived the implementation out of main (recoverable from tag `pre-cleanup-2026-06-19`; see ROADMAP.md). Original status: Records a negative prototype result and the reasons it does not (yet) justify production work. Supersedes nothing; informs any future ensemble or sampling work.
 
 ## Context
 
