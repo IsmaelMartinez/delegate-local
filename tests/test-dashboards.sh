@@ -23,23 +23,121 @@ if [[ ! -d "$DASHBOARDS/grafana" ]]; then
   echo; echo "$pass passed, $((fail+1)) failed"; exit 1
 fi
 
-# The JSONL fields the scripts write (the sync script enriches feedback rows
-# with recipe/tier); a LogQL reference outside this set is a typo or drift.
-KNOWN_FIELDS="ts source project tier recipe backend model service \
-prompt_chars context_chars output_chars duration_ms queue_wait_ms \
-generation_ms exit_status estimated_tokens_avoided kept reason ref_ts \
-embedding_dim input_chars eval_tokens prompt_tokens output_bytes session \
-verdict_source scaffold \
-boundary suggested_recipe delegated body_chars below_floor denied enforce_skipped"
+# The JSONL fields the writers produce, derived by running them rather than
+# kept by hand: the old hand-kept list carried three fields no script writes
+# (eval_tokens, prompt_tokens, output_bytes, #565). Each source is a real
+# writer run against a mock curl in a scratch git repository: delegate.sh (a
+# recipe call, for the recipe and check fields), delegate-feedback.sh (a
+# scaffold with a reason and a final, then a hit), and delegate-boundary-hook.sh
+# (a denied commit, a below-floor reply and a no-provider fail-open, for
+# denied, below_floor and enforce_skipped). The rows are then pushed through
+# sync-metrics-to-loki.sh, which enriches feedback rows with the parent's
+# recipe, tier and tokens, and the allowlist is the union of keys Loki holds.
+# embed.sh rows are not written here: no dashboard queries them, and one that
+# starts querying them fails below on an unknown field.
+make_fixture_fields() { # prints the field names, one per line
+  local w repo mock
+  w=$(mktemp -d); mock="$w/bin"; repo="$w/repo"; mkdir -p "$mock" "$repo"
+  cat > "$mock/curl" <<'MOCK'
+#!/usr/bin/env bash
+out_file="" write_out="" mode=chat
+args=("$@")
+for a in "$@"; do
+  case "$a" in */models) mode=models;; */loki/api/v1/push) mode=push;; */flush) mode=flush;; esac
+done
+if [[ $mode == models ]]; then
+  case " $* " in
+    *:8080/*) printf '{"object":"list","data":[{"id":"qwen3.6:35b-a3b-q8_0","object":"model"}]}'; exit 0;;
+  esac
+  exit 7
+fi
+i=0
+while (( i < ${#args[@]} )); do
+  case "${args[$i]}" in
+    -o) out_file="${args[$((i+1))]}"; i=$((i+1));;
+    -w) write_out="${args[$((i+1))]}"; i=$((i+1));;
+  esac
+  i=$((i+1))
+done
+if [[ $mode == push ]]; then cat > "$(dirname "$0")/push.json"; printf 204; exit 0; fi
+if [[ $mode == flush ]]; then exit 0; fi
+cat > /dev/null
+body='{"choices":[{"message":{"content":"Add a thing\n\nBecause reasons.\n"},"finish_reason":"stop"}]}'
+if [[ -n "$out_file" ]]; then printf '%s' "$body" > "$out_file"; else printf '%s' "$body"; fi
+[[ -n "$write_out" ]] && printf '%s' "${write_out//%\{time_starttransfer\}/0.001}"
+exit 0
+MOCK
+  chmod +x "$mock/curl"
+  ( cd "$repo" && git init -q . && git config user.email t@t.t && git config user.name t \
+    && : > f && git add f && git commit -qm init ) >/dev/null 2>&1
+  (
+    export PATH="$mock:$PATH" DELEGATE_BASE_URL=http://localhost:8080/v1 DELEGATE_LOCAL_CONFIG=/dev/null
+    export DELEGATE_METRICS_FILE="$w/metrics.jsonl" DELEGATE_LOCAL_DATA_DIR="$w/data"
+    export CLAUDE_CODE_SESSION_ID=fixture-session DELEGATE_NO_PREFLIGHT=1
+    unset DELEGATE_PROJECT DELEGATE_BOUNDARY_MODE DELEGATE_BOUNDARY_ENFORCE DELEGATE_LOCAL_NO_METRICS
+    cd "$repo" || exit 1
+    long=$(printf 'The sandbox flag in src/main.js is the cause, not your distro. %.0s' 1 2 3 4 5)
+    hook() {
+      jq -nc --arg cmd "$1" --arg cwd "$repo" \
+        '{hook_event_name:"PreToolUse", tool_name:"Bash", cwd:$cwd, session_id:"fixture-hook-session", tool_input:{command:$cmd}}' \
+        | DELEGATE_BOUNDARY_MIN_CHARS= bash "$REPO/scripts/delegate-boundary-hook.sh" >/dev/null 2>&1
+    }
+    # The hook rows come first: a delegation already recorded for the project would credit them.
+    hook "git commit -m \"$long\""                                          # denied
+    hook 'gh pr comment 12 --body "LGTM, thanks!"'                          # below_floor
+    DELEGATE_BASE_URL=http://localhost:1/v1 hook "git commit -m \"$long\""  # enforce_skipped
+    echo ctx | bash "$REPO/scripts/delegate.sh" --recipe commit-message \
+      --var recent_commits=a --var diff_stat="f | 1" --var why=w prose msg >/dev/null 2>&1
+    id=$(jq -r 'select(.source=="delegate") | .otel_span_id' "$w/metrics.jsonl" | head -1)
+    printf 'shipped text\n' > "$w/final.txt"
+    bash "$REPO/scripts/delegate-feedback.sh" --id "$id" --final "$w/final.txt" scaffold "edited before shipping" >/dev/null 2>&1
+    bash "$REPO/scripts/delegate-feedback.sh" --id "$id" hit >/dev/null 2>&1
+    PATH="$mock:/usr/bin:/bin:/usr/sbin:/sbin" bash "$REPO/scripts/sync-metrics-to-loki.sh" --full \
+      --metrics-file "$w/metrics.jsonl" --state-file "$w/state" --loki-url http://loki.invalid >/dev/null 2>&1
+  )
+  jq -r '.streams[].values[][1] | fromjson | keys[]' "$mock/push.json" 2>/dev/null | sort -u
+  rm -rf "$w"
+}
+KNOWN_FIELDS=$(make_fixture_fields)
+n_known=$(printf '%s\n' "$KNOWN_FIELDS" | grep -c .)
+# One field per source proves each writer ran: recipe (delegate), kept
+# (feedback), enforce_skipped (the fail-open hook row).
+missing_src=""
+for f in recipe kept scaffold denied below_floor enforce_skipped; do
+  printf '%s\n' "$KNOWN_FIELDS" | grep -qxF "$f" || missing_src="$missing_src $f"
+done
+if [[ -z "$missing_src" ]]; then
+  echo "  PASS  field allowlist derived from writer-produced rows ($n_known fields; delegate, feedback and opportunity rows)"; pass=$((pass+1))
+else
+  echo "  FAIL  field allowlist derivation lacks:$missing_src ($n_known fields; a writer did not run)"; fail=$((fail+1))
+fi
 
 is_known() {
-  local needle="$1" f
+  local needle="$1"
   # Loki's own label, set when a stage fails (`| __error__=""` drops those
   # samples after an unwrap); it is not a JSONL field.
   [[ "$needle" == "__error__" ]] && return 0
-  for f in $KNOWN_FIELDS; do [[ "$f" == "$needle" ]] && return 0; done
-  return 1
+  printf '%s\n' "$KNOWN_FIELDS" | grep -qxF "$needle"
 }
+
+# Every field a LogQL expression reads: `unwrap X`, `by (X)`, a `| X op` or
+# `or X op` filter (the `or` form: `kept="true" or scaffold="true"`), and a
+# line_format `{{.X}}`; one name per line.
+logql_fields() { # exprs on stdin
+  grep -oE 'unwrap [a-z_]+|by \([a-z_]+\)|(\||or) +[a-z_]+ *(=~|!~|!=|=)|\{\{ *\.[a-z_]+ *\}\}' \
+    | sed -E 's/^unwrap //; s/^by \(([a-z_]+)\)$/\1/; s/^(\||or) +([a-z_]+).*$/\2/; s/^\{\{ *\.([a-z_]+) *\}\}$/\1/' \
+    | sort -u
+}
+
+# The checker has to see what the hand-kept list let through: a field no
+# writer produces, in the pipe and in the `or` position.
+bad=$(printf '%s\n' '{service="delegate-local"} | json | eval_tokens!="" | kept="true" or bogus_field="x"' \
+  | logql_fields | while IFS= read -r f; do is_known "$f" || printf '%s ' "$f"; done)
+if [[ "$bad" == *eval_tokens* && "$bad" == *bogus_field* ]]; then
+  echo "  PASS  checker flags an unwritten field in a pipe filter and in an 'or' filter"; pass=$((pass+1))
+else
+  echo "  FAIL  checker missed an unwritten field (flagged: '$bad')"; fail=$((fail+1))
+fi
 
 dash_count=0
 shopt -s nullglob
@@ -85,13 +183,20 @@ for dash in "$DASHBOARDS/grafana"/*.json; do
     echo "  FAIL  $base: $bad_svc query(ies) do not select service=\"delegate-local\""; fail=$((fail+1))
   fi
 
+  # 3b. No query folds the pre-rename project name into delegate-local: that
+  #     project is absent from the live corpus, so every label_replace was
+  #     dead weight on each per-project query (#565).
+  stale=$(jq -r '[.panels[].targets[]?.expr // "" | select(contains("delegate-to-ollama"))] | length' "$dash")
+  if [[ "$stale" == "0" ]]; then
+    echo "  PASS  $base: no query folds the retired delegate-to-ollama project name"; pass=$((pass+1))
+  else
+    echo "  FAIL  $base: $stale query(ies) still label_replace the retired delegate-to-ollama project"; fail=$((fail+1))
+  fi
+
   # 4. Every `unwrap X`, `by (X)`, `| X op` filter and `line_format` `{{.X}}`
   #    reference is a known JSONL field.
   exprs=$(jq -r '[.panels[].targets[]?.expr // ""] | join("\n")' "$dash")
-  fields=$(printf '%s\n' "$exprs" \
-    | grep -oE 'unwrap [a-z_]+|by \([a-z_]+\)|\| [a-z_]+(=|!=|=~)|\{\{ *\.[a-z_]+ *\}\}' \
-    | sed -E 's/^unwrap //; s/^by \(([a-z_]+)\)$/\1/; s/^\| ([a-z_]+).*$/\1/; s/^\{\{ *\.([a-z_]+) *\}\}$/\1/' \
-    | sort -u)
+  fields=$(printf '%s\n' "$exprs" | logql_fields)
   dash_field_fail=0
   while IFS= read -r fld; do
     [[ -z "$fld" ]] && continue

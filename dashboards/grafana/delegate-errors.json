@@ -694,7 +694,7 @@
       "id": 24,
       "type": "bargauge",
       "title": "Errors by project",
-      "description": "Errors per repo. delegate-to-ollama folded into delegate-local (#230 rename).",
+      "description": "Errors per repo.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -745,7 +745,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status!=\"0\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))",
+          "expr": "sum by (project) (count_over_time({service=\"delegate-local\", source=\"delegate\"} | json | project=~\"$project\" | exit_status!=\"0\" [$__range]))",
           "queryType": "instant",
           "legendFormat": "{{project}}"
         }

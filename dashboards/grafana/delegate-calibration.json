@@ -807,7 +807,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "(sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\")) or 0 * sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))) / sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))",
+          "expr": "(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" | project!=\"\" [$__range])) or 0 * sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range]))) / sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range]))",
           "queryType": "instant",
           "legendFormat": "{{project}}"
         }
@@ -931,7 +931,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "(sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" or scaffold=\"true\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\")) or 0 * sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))) / sum by (project) (label_replace(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range])), \"project\", \"delegate-local\", \"project\", \"delegate-to-ollama\"))",
+          "expr": "(sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | kept=\"true\" or scaffold=\"true\" | project!=\"\" [$__range])) or 0 * sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range]))) / sum by (project) (count_over_time({service=\"delegate-local\", source=\"feedback\"} | json | project=~\"$project\" | project!=\"\" [$__range]))",
           "queryType": "instant",
           "legendFormat": "{{project}}"
         }

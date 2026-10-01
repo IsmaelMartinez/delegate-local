@@ -469,6 +469,23 @@ assert_contains "Qwen/Qwen2.5-Coder-7B-Instruct  [not installed]" "$OUT" "audit:
 assert_contains "No strong upgrades found" "$OUT" "audit: the installed leader beats the candidate, so nothing is suggested"
 rm -rf "$tmp"
 
+# llmfit is asked once per distinct argument list: prose, reasoning and
+# long-context all map to the "general" use-case, so three identical calls
+# collapsed to one (#565); only code maps to "coding".
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b-q8_0"
+cat > "$tmp/llmfit" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$tmp/llmfit.calls"
+if [[ "\$*" == *--json* ]]; then echo '{"models":[]}'; else echo ""; fi
+EOF
+chmod +x "$tmp/llmfit"
+EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
+assert_eq "2" "$(wc -l < "$tmp/llmfit.calls" | tr -d ' ')" "audit: llmfit runs once per distinct use-case, not once per tier (#565)"
+assert_eq "1" "$(grep -c -- '--use-case general' "$tmp/llmfit.calls")" "audit: the three general-use-case tiers share one llmfit call"
+assert_eq "$(sort -u "$tmp/llmfit.calls" | wc -l | tr -d ' ')" "$(wc -l < "$tmp/llmfit.calls" | tr -d ' ')" "audit: no llmfit argument list is repeated"
+rm -rf "$tmp"
+
 # The embedding tier resolves like every other tier, with no per-tier
 # provider pin (#357).
 tmp=$(mktemp -d)
