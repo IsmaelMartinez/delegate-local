@@ -490,18 +490,12 @@ if [[ -n "$recipe" ]]; then
     fi
   fi
 
-  # Frontmatter `inputs:` block: flat `key: type` pairs only (integer, string,
-  # `?` suffix for optional), parsed with awk so there is no yq dependency.
-  # Validated BEFORE placeholder substitution so the caller gets a type error
-  # rather than "missing placeholder"; recipes without the block skip it.
-  inputs_block=$(awk '
-    BEGIN { in_fm=0; in_inputs=0 }
-    NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
-    in_fm && /^---[[:space:]]*$/ { exit }
-    in_fm && /^inputs:[[:space:]]*$/ { in_inputs=1; next }
-    in_fm && in_inputs && /^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*[a-zA-Z?]+[[:space:]]*$/ { print; next }
-    in_fm && in_inputs && /^[a-zA-Z_]/ { in_inputs=0 }
-  ' "$recipe_file")
+  # Frontmatter `inputs:` block (integer, string, `?` suffix for optional),
+  # read by `recipe_required_inputs` in lib/recipe.sh, shared with the
+  # boundary hook's nudge. Validated BEFORE placeholder substitution so the
+  # caller gets a type error rather than "missing placeholder"; recipes
+  # without the block skip it.
+  inputs_block=$(recipe_required_inputs "$recipe_file")
 
   if [[ -n "$inputs_block" ]]; then
     # Parallel indexed arrays: bash 3.2 has no associative arrays. The `?` is
@@ -509,13 +503,8 @@ if [[ -n "$recipe" ]]; then
     declared_keys=()
     declared_types=()
     declared_optional=()
-    while IFS= read -r line; do
-      [[ -z "$line" ]] && continue
-      trimmed="${line#"${line%%[![:space:]]*}"}"
-      ikey="${trimmed%%:*}"
-      itype_raw="${trimmed#*:}"
-      itype_raw="${itype_raw#"${itype_raw%%[![:space:]]*}"}"
-      itype_raw="${itype_raw%"${itype_raw##*[![:space:]]}"}"
+    while read -r ikey itype_raw; do
+      [[ -z "$ikey" ]] && continue
       iopt=0
       if [[ "$itype_raw" == *"?" ]]; then
         iopt=1
@@ -617,17 +606,9 @@ if [[ -n "$recipe" ]]; then
     fi
   fi
 
-  # First fenced block under '## Prompt template'. The `/^## /` section end is
-  # gated on `!in_block` so a heading inside the fenced block does not close it.
-  recipe_template=$(awk '
-    /^## Prompt template[[:space:]]*$/ { in_section=1; next }
-    /^## / && in_section && !in_block { in_section=0 }
-    in_section && /^```/ {
-      if (in_block) { exit }
-      in_block=1; next
-    }
-    in_section && in_block { print }
-  ' "$recipe_file")
+  # First fenced block under '## Prompt template' (lib/recipe.sh), the same
+  # block template_sha hashes.
+  recipe_template=$(recipe_template "$recipe_file")
   if [[ -z "$recipe_template" ]]; then
     echo "delegate: recipe '$recipe' has empty or missing '## Prompt template' fenced block" >&2
     exit 2
@@ -639,25 +620,19 @@ if [[ -n "$recipe" ]]; then
   # Frontmatter `checks:` block (ADR 0014), extracted here so it rides the
   # same {{key}} substitution as the template: a check value may reference a
   # flavor placeholder and must stay consistent with the prompt.
-  recipe_checks=$(awk '
-    BEGIN { in_fm=0; in_checks=0 }
-    NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
-    in_fm && /^---[[:space:]]*$/ { exit }
-    in_fm && /^checks:[[:space:]]*$/ { in_checks=1; next }
-    in_fm && in_checks && /^[[:space:]]+[a-zA-Z_]/ { print; next }
-    in_fm && in_checks && /^[a-zA-Z_]/ { in_checks=0 }
-  ' "$recipe_file")
+  recipe_checks=$(recipe_fm_block "$recipe_file" | awk '
+    /^checks:[[:space:]]*$/ { in_checks=1; next }
+    in_checks && /^[[:space:]]+[a-zA-Z_]/ { print; next }
+    in_checks && /^[a-zA-Z_]/ { in_checks=0 }
+  ')
 
   # Frontmatter `echo_guard_vars:`: comma-separated --var names whose values
   # are shape exemplars and must never come back in the output (#428).
-  recipe_echo_guard_vars=$(awk '
-    BEGIN { in_fm=0 }
-    NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
-    in_fm && /^---[[:space:]]*$/ { exit }
-    in_fm && /^echo_guard_vars:[[:space:]]*/ {
+  recipe_echo_guard_vars=$(recipe_fm_block "$recipe_file" | awk '
+    /^echo_guard_vars:[[:space:]]*/ {
       sub(/^echo_guard_vars:[[:space:]]*/, ""); print; exit
     }
-  ' "$recipe_file")
+  ')
 
   # Placeholders of the ORIGINAL template, so substituted values that contain
   # `{{...}}` (Vue bindings, Go templates) do not trip the guard below.
@@ -772,14 +747,12 @@ fi
 # A label this list does not know is ignored.
 input_quality=""
 if [[ -n "$recipe" ]]; then
-  iq_decl=$(awk '
-    NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
-    in_fm && /^---[[:space:]]*$/ { exit }
-    in_fm && /^input_quality:[[:space:]]*$/ { in_iq=1; next }
-    in_fm && in_iq && /^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*[a-z_]+[[:space:]]*$/ {
+  iq_decl=$(recipe_fm_block "$recipe_file" | awk '
+    /^input_quality:[[:space:]]*$/ { in_iq=1; next }
+    in_iq && /^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*[a-z_]+[[:space:]]*$/ {
       gsub(/[:[:space:]]+/, " "); sub(/^ /, ""); print; next }
-    in_fm && in_iq && /^[a-zA-Z_]/ { in_iq=0 }
-  ' "$recipe_file")
+    in_iq && /^[a-zA-Z_]/ { in_iq=0 }
+  ')
   iq_named=""
   while read -r iq_key iq_label; do
     [[ -z "$iq_key" ]] && continue
@@ -872,19 +845,16 @@ fi
 # DELEGATE_FORCE_FLAKY=1. Before the canary: no point probing a model the
 # recipe already classifies as unreliable.
 if [[ -n "$recipe" ]] && [[ "${DELEGATE_FORCE_FLAKY:-}" != "1" ]]; then
-  flaky_list=$(awk '
-    BEGIN { in_fm=0; in_flaky=0 }
-    NR==1 && /^---[[:space:]]*$/ { in_fm=1; next }
-    in_fm && /^---[[:space:]]*$/ { exit }
-    in_fm && /^flaky_on_models:[[:space:]]*$/ { in_flaky=1; next }
-    in_fm && in_flaky && /^[[:space:]]+-[[:space:]]+[^[:space:]]/ {
+  flaky_list=$(recipe_fm_block "$recipe_file" | awk '
+    /^flaky_on_models:[[:space:]]*$/ { in_flaky=1; next }
+    in_flaky && /^[[:space:]]+-[[:space:]]+[^[:space:]]/ {
       sub(/^[[:space:]]+-[[:space:]]+/, "")
       sub(/[[:space:]]+$/, "")
       print
       next
     }
-    in_fm && in_flaky && /^[a-zA-Z_]/ { in_flaky=0 }
-  ' "$recipe_file")
+    in_flaky && /^[a-zA-Z_]/ { in_flaky=0 }
+  ')
   if [[ -n "$flaky_list" ]]; then
     model_lower=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
     matched_pat=""
@@ -915,14 +885,7 @@ fi
 # for every model. The Qwen-recommended profile was auto-applied once and
 # measured to regress commit-message output (temperature reintroduces the
 # padding tails the recipe guards reject), so non-greedy is opt-in via the
-# env vars. model_family is not emitted yet; it is a hook for future audit work.
-model_family=""
-model_lc=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
-case "$model_lc" in
-  *qwen3.6*|*qwen3-coder*|*qwen3-next*|*qwen3.5*)
-    model_family="qwen3"
-    ;;
-esac
+# env vars.
 
 # The parallel `metric_*` set carries only what the caller explicitly opted
 # into, so a bare greedy call writes no sampling_* keys to the row.
@@ -1060,10 +1023,9 @@ EMPTY_PAYLOAD_STATUS=101
 # Initialised here because the script runs under `set -u`.
 empty_finish_reason=""
 
-# dispatch_to_model <model> — POST the request, parse the response into the
+# dispatch_to_model — POST the request to $model, parse the response into the
 # globals $output, $status, $ttfb_s, $payload, and strip any reasoning trace.
 dispatch_to_model() {
-local _model="$1"
 # Not validated: a non-numeric value makes curl print its own clear error.
 # Not local: the dispatch-failure guidance below reads it.
 request_timeout="${DELEGATE_REQUEST_TIMEOUT:-600}"
@@ -1075,7 +1037,7 @@ request_timeout="${DELEGATE_REQUEST_TIMEOUT:-600}"
 # it is the bare {temperature:0} greedy shape. The input goes in on stdin
 # (-Rs), never as an --arg: above ARG_MAX (1 MiB on macOS, 128 KiB per
 # argument on Linux) jq cannot start and the body came out empty (#547).
-payload=$(printf '%s' "$full_input" | jq -Rsc --arg m "$_model" --argjson mt "$max_tokens" --argjson et "$think" \
+payload=$(printf '%s' "$full_input" | jq -Rsc --arg m "$model" --argjson mt "$max_tokens" --argjson et "$think" \
   --argjson temp "$sampling_temperature" \
   --arg top_p "$sampling_top_p" --arg top_k "$sampling_top_k" --arg pp "$sampling_presence_penalty" \
   '{model:$m, messages:[{role:"user", content:.}], stream:false, temperature:$temp, max_tokens:$mt, chat_template_kwargs:{enable_thinking:$et}}
@@ -1124,7 +1086,7 @@ if (( _strip == 1 )) && [[ "$output" == *"</think>"* ]]; then
 fi
 }
 
-dispatch_to_model "$model"
+dispatch_to_model
 
 # curl -sS already printed its own error line; this adds the delegate context.
 if (( status == EMPTY_RESPONSE_STATUS )); then
@@ -1169,7 +1131,7 @@ fi
 # declares constraints run on the finalised output. All are warn-only except
 # no_padding_tail, whose safe participial-comma tail is auto-stripped
 # (checks_autofixed). Gated like the meta line, so NO_META and failed calls
-# stay quiet. $capability_failed counts the non-style checks; nothing reads it yet.
+# stay quiet.
 #
 # retry_constraint_for — one sentence per check name for the repair attempt
 # (#384). The limit is read back out of $recipe_checks, the same
@@ -1388,14 +1350,13 @@ mentions_in() {
 }
 
 run_output_checks() {
-# The result and the counters (output, checks_*, capability_failed) are
+# The result and the counters (output, checks_*) are
 # deliberately NOT local: they are the function's outputs.
 local subj_echo padding_re padding_re_adopt check_first_line check_last_line cline ckey cval stripped new_output new_last subj_type body_lines body_words echoed_line echo_exemplars _egv _kv list_items task_prog out_tasks auth_tasks head_prog out_heads auth_heads authority ref_ground ref_tok invented_refs context_echoed context_echoed_n ctx_floor ctx_ratio fact_questions caller_text allowed unbidden mention_tok recipient_seen caller_mentions
 checks_failed=0
 checks_failed_names=""
 checks_run=0
 checks_autofixed=0
-capability_failed=0
 
 # no_example_echo — ON by default for every recipe call: a line copied out of
 # the prompt is never a correct outcome, and the contrastive anchors (ADR 0011)
@@ -1443,7 +1404,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) \
     echo "  convention) rather than removing it from the answer." >&2
     checks_failed=$((checks_failed + 1))
     checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_example_echo"
-    capability_failed=$((capability_failed + 1))
   fi
 fi
 
@@ -1480,7 +1440,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             echo "delegate: check 'subject_max' FAILED — first line is ${#check_first_line} chars (> $cval)" >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}subject_max"
-            capability_failed=$((capability_failed + 1))
           fi
         fi
         ;;
@@ -1541,7 +1500,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             echo "delegate: check 'subject_type' FAILED — subject does not start with '$cval:' (got '${check_first_line%%:*}:')" >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}subject_type"
-            capability_failed=$((capability_failed + 1))
           fi
         fi
         ;;
@@ -1557,7 +1515,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             echo "delegate: check 'body_required' FAILED — output is subject-only ($body_lines non-empty line(s), need >= 2)" >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}body_required"
-            capability_failed=$((capability_failed + 1))
           fi
         fi
         ;;
@@ -1579,7 +1536,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             echo "delegate: check 'body_max_words' FAILED — body is $body_words words (> $cval)" >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}body_max_words"
-            capability_failed=$((capability_failed + 1))
           fi
         fi
         ;;
@@ -1597,7 +1553,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             echo "delegate: check 'no_single_item_list' FAILED — output is a numbered list of one item; a single ask is one sentence" >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_single_item_list"
-            capability_failed=$((capability_failed + 1))
           fi
         fi
         ;;
@@ -1626,7 +1581,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
               echo "delegate: check 'no_invented_task_list' FAILED — output carries $out_tasks markdown task-list item(s) but the '$cval' examples carry none; the shape was invented, and a task-list box asserts a verification state the model cannot know" >&2
               checks_failed=$((checks_failed + 1))
               checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_invented_task_list"
-              capability_failed=$((capability_failed + 1))
             fi
           fi
         fi
@@ -1655,7 +1609,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
               echo "delegate: check 'no_invented_headings' FAILED — output carries $out_heads markdown heading(s) but the '$cval' examples carry none; the shape was invented rather than matched" >&2
               checks_failed=$((checks_failed + 1))
               checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_invented_headings"
-              capability_failed=$((capability_failed + 1))
             fi
           fi
         fi
@@ -1693,7 +1646,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             echo "delegate: check 'no_invented_refs' FAILED — trailer names $invented_refs, which appears in none of the inputs you supplied" >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_invented_refs"
-            capability_failed=$((capability_failed + 1))
           fi
         fi
         ;;
@@ -1715,7 +1667,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             echo "  The draft restates the facts instead of curating them; carry the anchors inside new sentences." >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_context_echo"
-            capability_failed=$((capability_failed + 1))
           fi
         fi
         ;;
@@ -1726,7 +1677,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
         # cannot be met on a three-line fact list). Applies only when the
         # context is at least min_context_chars (sibling key, default 400).
         # The ratio is a decimal, compared in awk since bash arithmetic is
-        # integer-only. Capability, so it counts toward capability_failed.
+        # integer-only.
         if [[ "$cval" =~ ^[0-9]*\.?[0-9]+$ ]]; then
           checks_run=$((checks_run + 1))
           ctx_floor=$(printf '%s\n' "$recipe_checks" | awk '
@@ -1740,7 +1691,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
               echo "  The draft runs about as long as its facts; curate them, well under the facts' length, in sentences of your own." >&2
               checks_failed=$((checks_failed + 1))
               checks_failed_names="${checks_failed_names:+$checks_failed_names,}max_context_ratio"
-              capability_failed=$((capability_failed + 1))
             fi
           fi
         fi
@@ -1800,7 +1750,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             fi
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_unbidden_mention"
-            capability_failed=$((capability_failed + 1))
           fi
         fi
         ;;
@@ -1832,7 +1781,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             echo "  What it asks about is in the piped facts and absent from the '$cval' var: the reader is asked to confirm what the facts already state. State it instead." >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_fact_as_question"
-            capability_failed=$((capability_failed + 1))
           fi
         fi
         ;;
@@ -1881,7 +1829,6 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] && (( status == 0 )) && [[ -n "${r
             echo "delegate: check 'no_subject_echo' FAILED — REJECT this draft. Its subject is an example's: \"${check_first_line:0:120}\"" >&2
             checks_failed=$((checks_failed + 1))
             checks_failed_names="${checks_failed_names:+$checks_failed_names,}no_subject_echo"
-            capability_failed=$((capability_failed + 1))
           fi
         fi
         ;;
@@ -1948,7 +1895,6 @@ if (( status == 0 )) && [[ -n "$retry_names" ]] \
   first_output="$output" first_full_input="$full_input" first_checks_stderr=$(cat "$checks_stderr")
   first_checks_run=$checks_run first_checks_failed=$checks_failed
   first_checks_autofixed=$checks_autofixed first_checks_failed_names=$checks_failed_names
-  first_capability_failed=$capability_failed
   full_input="${full_input}
 
 Your previous answer was REJECTED. It broke these constraints:
@@ -1957,7 +1903,7 @@ ${retry_notice}Write the answer again, in full, obeying every rule above. Output
   # duration_ms covers both dispatches, so both waits are summed or the whole
   # rejected call lands in generation_ms; dispatch_to_model overwrites ttfb_s.
   ttfb_prev="${ttfb_s:-0}"
-  dispatch_to_model "$model"
+  dispatch_to_model
   ttfb_s=$(awk -v a="${ttfb_prev:-0}" -v b="${ttfb_s:-0}" 'BEGIN { printf "%.6f", a + b }')
   if (( status == 0 )); then
     run_output_checks
@@ -1975,7 +1921,6 @@ ${retry_notice}Write the answer again, in full, obeying every rule above. Output
     retry_chars=$(( retry_chars - rejected_output_chars ))
     checks_run=$first_checks_run checks_failed=$first_checks_failed
     checks_autofixed=$first_checks_autofixed checks_failed_names=$first_checks_failed_names
-    capability_failed=$first_capability_failed
   fi
 else
   cat "$checks_stderr" >&2
