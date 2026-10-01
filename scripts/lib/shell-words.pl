@@ -7,7 +7,8 @@
 # With no argument it prints the classification surface: each segment's words
 # with every quoted span reduced to a space, one segment per line, then 0x1e,
 # the separator characters in order, then 0x1e. With a segment index N
-# (0-based) it prints the text that segment posts: `FILE\t<path>`, `NONE`, or
+# (0-based) it prints a `TARGET\t<key>` line (what the segment posts to),
+# then the text that segment posts: `FILE\t<path>`, `NONE`, or
 # `INLINE\t<1 if literal, else 0>\n<text>`. A body is unmeasurable (literal 0)
 # when it carries `$` or a backtick the shell would expand; the one resolved
 # shape is `"$(cat <<EOF ... EOF\n)"`, whose heredoc is the text. Heredoc
@@ -184,6 +185,65 @@ exit 0 unless $want =~ /\A[0-9]+\z/ && $want < @segs;
 # --body-file. -m and -am are git commit and glab note.
 my $sg = $segs[$want];
 my @W = @{ $sg->{w} };
+
+# Printed first: `TARGET\t<key>`, what the segment posts to (#563), so a
+# pending marker is reused only by a retry of the same post. Read from the
+# words, never a regex over the line: a git commit names no target (its
+# project is the key); a gh/glab post names its positional arguments after
+# the subcommand (a PR or issue number, URL or branch, a release tag, the
+# `gh api` endpoint), its --repo, and the `gh api` fields that pick a
+# thread. Values of the options that take one (bodies, files, titles,
+# headers) and redirections are skipped, as are words before the command
+# (env assignments, sudo, timeout). Which options take a value is per
+# command, as `gh <cmd> --help` and `glab <cmd> --help` list them: a short
+# flag is overloaded (`-r` is --reviewer on `gh pr create` but the boolean
+# --request-changes on `gh pr review`, `-p` --project there but the boolean
+# --prerelease on `gh release create`), so one global table swallowed the
+# word after a boolean as its value. An unlisted command knows only --repo.
+my %value_flags = (
+  'gh pr create'      => '-a --assignee --attach -B --base -b --body -F --body-file -H --head -l --label -m --milestone -p --project --recover -r --reviewer -T --template -t --title -R --repo',
+  'gh pr comment'     => '--attach -b --body -F --body-file -R --repo',
+  'gh pr review'      => '-b --body -F --body-file -R --repo',
+  'gh issue create'   => '-a --assignee --attach --blocked-by --blocking -b --body -F --body-file -l --label -m --milestone --parent -p --project --recover -T --template -t --title --type -R --repo',
+  'gh issue comment'  => '--attach -b --body -F --body-file -R --repo',
+  'gh release create' => '--discussion-category -n --notes -F --notes-file --notes-start-tag --target -t --title -R --repo',
+  'gh api'            => '--cache -F --field -H --header --hostname --input -q --jq -X --method -p --preview -f --raw-field -t --template',
+  'glab mr create'    => '-a --assignee --attach -d --description --description-file -H --head -l --label -m --milestone --recover -i --related-issue -R --repo --reviewer -s --source-branch -b --target-branch --template -t --title',
+  'glab mr note'      => '--attach --file --line -m --message --old-line --reply -R --repo',
+  'glab issue note'   => '--attach -m --message -R --repo',
+);
+my @tgt;
+my $c = 0;
+$c++ while $c < @W && $W[$c][0] !~ m{(?:\A|/)(?:git|gh|glab)\z};
+if ($c < @W && $W[$c][0] =~ m{(?:\A|/)(?:gh|glab)\z}) {
+  my $tool = $W[$c][0] =~ m{glab\z} ? 'glab' : 'gh';
+  my $api = $c + 1 < @W && $W[$c + 1][0] eq 'api';
+  my $k = $c + ($api ? 2 : 3);
+  my $cmd = $api ? 'gh api' : join(' ', $tool, map { $k - 2 + $_ < @W ? $W[$k - 2 + $_][0] : '' } 0, 1);
+  # `glab mr discussion note` is the note command under another name.
+  if ($cmd =~ /\Aglab (mr|issue) discussion\z/ && $k < @W && $W[$k][0] eq 'note') { $cmd = "glab $1 note"; $k++ }
+  $k++ if $cmd eq 'glab mr note' && $k < @W && $W[$k][0] eq 'create';
+  # A command with no table still never keys on a body-ish value.
+  my %takes_value = map { $_ => 1 } split ' ',
+    ($value_flags{$cmd} // '-R --repo --body --message --notes --title --field --raw-field');
+  for (; $k < @W; $k++) {
+    my $t = $W[$k][0];
+    if ($t =~ /\A--repo=/) { push @tgt, 'repo=' . substr($t, 7); next }
+    if ($t =~ /\A[0-9]*(?:<<?|>>?)&?\z/) { $k++; next }   # a bare redirection and its target
+    next if $t =~ /\A[0-9]*[<>]/;                        # an attached one
+    if (substr($t, 0, 1) eq '-') {
+      next if index($t, '=') >= 0 || !$takes_value{$t} || $k + 1 >= @W;
+      my $v = $W[++$k][0];
+      if ($t eq '-R' || $t eq '--repo') { push @tgt, "repo=$v" }
+      elsif ($t =~ /\A(?:-f|-F|--field|--raw-field)\z/
+             && $v =~ /\A(?:in_reply_to|number|pull_number|issue_number|comment_id)=/) { push @tgt, $v }
+      next;
+    }
+    push @tgt, $t;
+  }
+}
+my $key = join(' ', sort @tgt); $key =~ tr/\t\n/  /;
+print "TARGET\t$key\n";
 my ($file, @body) = ('');
 my $blit = 1;
 for (my $k = 0; $k < @W; $k++) {
