@@ -95,13 +95,14 @@ End with one line: the PR URL, or why the evidence was too thin to change anythi
 
 # The allowlist is only a boundary while nothing it runs can be rewritten:
 # a script the session could edit and then run would carry any denied
-# command past it. So edits are confined to prompts/ (a recipe and its
-# calibration notes, all the procedure changes; an Edit rule binds the Write
-# tool too, and prompts/../ is refused), the scripts and suites it may run
-# live outside prompts/, and the suites are named exactly. User settings are
-# not loaded, so the profile's own allow rules cannot widen this list.
+# command past it. So edits are confined to prompts/ and docs/calibration/
+# (a recipe and its dated calibration history, all the procedure changes; an
+# Edit rule binds the Write tool too, and ../ is refused), the scripts and
+# suites it may run live outside both, and the suites are named exactly. User
+# settings are not loaded, so the profile's own allow rules cannot widen this
+# list.
 allowed=(
-  Read Grep Glob "Edit(prompts/**)"
+  Read Grep Glob "Edit(prompts/**)" "Edit(docs/calibration/**)"
   "Bash(bash scripts/self-improve.sh --peek*)"
   "Bash(bash scripts/replay-recipe.sh *)"
   "Bash(bash scripts/metrics-summary.sh*)"

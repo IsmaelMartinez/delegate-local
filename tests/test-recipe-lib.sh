@@ -26,24 +26,24 @@ trap 'rm -rf "$tmp"' EXIT
 
 # --- golden template_sha for every recipe in prompts/ ----------------------
 # <recipe> <sha256 of the whole file, 12> <template_sha>, computed on main @
-# 26ebba6 (bulk-classify, commit-message and release-announcement file shas
-# refreshed in #568 after prose-only edits; template_sha unchanged). A pin applies only while the file is the one it was computed on:
+# 26ebba6 (every file sha refreshed in #569 after the calibration notes
+# moved to docs/calibration/; template_sha unchanged). A pin applies only while the file is the one it was computed on:
 # editing a recipe changes its hash by design, so an edited recipe is
 # skipped here rather than failing, and the synthetic fixture below keeps
 # pinning the reader's behaviour after every recipe has moved on.
-golden='bulk-classify 690496210bc0 7b63da5f5be8
-code-draft 58b48fdb7d43 015fe4d5f44c
-commit-message 87b9afcb1078 a20e93b62bab
-doc-section 27edc394c9c3 d1d200883f29
-file-summary 1b0f3deae30f f68b364cb12c
-fix-with-test caee5463af5b 7ab4349174c9
-github-issue-body e5dfd0a52b95 477bb405d75d
-maintainer-reply e1a90860db89 c9444a457a08
-maintainer-review-reply 55a995310078 200da2e4317a
-pr-description 3e1e6d59be14 4426d3be28da
-pr-review-reply b5f619d7e7f5 3997496bc2ab
-release-announcement de7023f9c4c4 cbf5d01878fd
-summarise-issue 0616dde6488e 3c9b7cb7ef25'
+golden='bulk-classify 8468f9ad218c 7b63da5f5be8
+code-draft 1ce7c3fd334f 015fe4d5f44c
+commit-message e7b6b95155b9 a20e93b62bab
+doc-section 13541efde1bb d1d200883f29
+file-summary 33900e387386 f68b364cb12c
+fix-with-test eb261fac13b2 7ab4349174c9
+github-issue-body 008a8495fbfc 477bb405d75d
+maintainer-reply 0064a926a646 c9444a457a08
+maintainer-review-reply 15884b87bbf4 200da2e4317a
+pr-description 83ffa6f010e5 4426d3be28da
+pr-review-reply 66a83a31b44b 3997496bc2ab
+release-announcement cacce8316052 cbf5d01878fd
+summarise-issue d316bdee43af 3c9b7cb7ef25'
 
 skipped=0
 while read -r name file_sha want; do

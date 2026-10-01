@@ -1,0 +1,11 @@
+# Calibration history for [`prompts/release-announcement.md`](../../prompts/release-announcement.md)
+
+## Calibration notes
+
+Graduated 2026-06-16 from observed recurring bare-delegation usage rather than from a recorded HIT. A 2026-06-15 analysis of the session-transcript corpus found the release-intro / TL;DR narrative shape recurring (notably across teams-for-linux releases) with no recipe — adjacent to `release-note` but a different output shape (a narrative intro, not a single CHANGELOG bullet), so it fell back to the bare `prose` tier each time with the no-puffery and no-em-dash directives re-specified by hand.
+
+The prompt skeleton is lifted from the actual bare prompts used, which had converged on the same guards: "warm and grounded, no marketing puffery, no exclamation marks, no em dashes", "Do not begin with a warm greeting; this is a release note, not a reply", "keep the issue/PR numbers", and "End the second paragraph without a trailing summary sentence that restates the point." Those hand-specified guards are what this recipe makes permanent. The two observed variants — a narrative two-paragraph intro and a TL;DR-with-`**Highlights**`-list — share this prose skeleton; for the list variant, steer the bullet structure through the trailing prompt rather than the recipe (the recipe defaults to the headings-free narrative).
+
+### 2026-06-16 — first dogfood (HIT)
+
+First dogfood against `qwen3.6:35b-a3b-q8_0` (prose tier, Ollama): a two-theme-plus-heads-up highlights block for a delegate-local release. Output was a HIT — two short flowing-prose paragraphs, no headings or bullets, themes referred to by name, the heads-up folded into the second paragraph, the version string cited verbatim, no greeting opener, no puffery, no exclamation marks, no em dashes, and no closing flourish. The verbatim-preservation guard held visibly: a `(#several)` placeholder deliberately left in the input was reproduced character-for-character rather than expanded into an invented PR number. Recorded HIT via `delegate-feedback.sh --source agent`; no recipe change was needed. If a later MISS surfaces a puffery or padding shape not enumerated above, extend the blocklist or the anti-padding anchor with a contrastive one-shot grounded in the failing output, per the library convention.

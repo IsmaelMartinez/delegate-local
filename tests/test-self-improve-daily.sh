@@ -115,6 +115,7 @@ assert_contains "--allowedTools" "$cargs" "claude gets an explicit tool allowlis
 assert_contains "Bash(gh pr merge *)" "$cargs" "merging is on the deny list"
 assert_contains "docs/self-improvement-loop.md" "$cargs" "the prompt names the procedure"
 assert_contains $'\nEdit(prompts/**)\n' "$cargs" "edits are confined to prompts/"
+assert_contains $'\nEdit(docs/calibration/**)\n' "$cargs" "the calibration history is editable (#569)"
 assert_not_contains $'\nEdit\n' "$cargs" "no unscoped Edit"
 assert_not_contains $'\nWrite\n' "$cargs" "no unscoped Write"
 assert_not_contains "Bash(bash tests/*)" "$cargs" "no wildcard over runnable test files"

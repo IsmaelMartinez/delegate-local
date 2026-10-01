@@ -1,0 +1,15 @@
+# Calibration history for [`prompts/github-issue-body.md`](../../prompts/github-issue-body.md)
+
+## Calibration notes
+
+Graduated 2026-06-16 from observed recurring bare-delegation usage rather than from a recorded HIT. A 2026-06-15 analysis of the session-transcript corpus (the bare, no-`--recipe` `delegate.sh` invocations across all projects) found drafting a new GitHub issue body from facts to be one of the highest-recurrence task shapes with no recipe — distinct from `pr-description` (no diff) and `maintainer-reply` (a comment, not a body) — so it fell back to the bare `prose` tier each time, the weaker trigger surface, with the structure and anti-drift directives re-specified by hand.
+
+The prompt skeleton is lifted from the actual bare prompts used in those sessions, which had already converged on the load-bearing guards independently: an explicit ordered heading list ("Output sections in this order: ## Summary ... ## Suggested fixes"), "invent nothing", "British spelling", "Output ONLY the markdown sections, no preamble or closing summary", and "Stop after the content sentences. Do not add a closing sentence that restates the point." Those hand-specified guards are what this recipe makes permanent.
+
+This recipe also closes the matching interception gap: `gh issue create` is the one delegatable boundary `scripts/delegate-boundary-hook.sh` did not previously match (commit, PR-create, release-create, and comment-reply were covered; new-issue bodies were not). The boundary hook's `issue-create` branch (added in the same change) suggests this recipe when a `gh issue create` with an inline `--body`/`--body-file` is about to run with no recent local delegation.
+
+### 2026-06-16 — first dogfood: MISS → fix → HIT
+
+First dogfood against `qwen3.6:35b-a3b-q8_0` (prose tier, Ollama) surfaced a recipe-design MISS the structural tests cannot catch. The original `{{sections}}` convention put each heading and its content-note on one line (`## Summary — one paragraph framing the problem`); the model echoed the whole line into the heading, emitting `## Summary — one paragraph naming the gap` instead of `## Summary`. Recorded MISS via `delegate-feedback.sh --source agent`.
+
+The fix changed the sections convention to two lines per section — a `##` heading line to reproduce verbatim, then a `(content: ...)` note line that is guidance, not output — and added a Wrong/Correct heading anchor (`Wrong heading: ## Summary (content: ...)` / `Correct heading: ## Summary`) grounded in the observed failure. Re-run on the same facts produced clean `## Summary` / `## Why this matters` / `## Suggested fix` headings with no note-echo, content tracing to the facts, British spelling, no title line, and no closing summary. Recorded HIT. The load-bearing learning: a heading and its content-note on one input line are indistinguishable to the prose tier; separating them onto adjacent lines is what binds the heading-verbatim rule. If a later MISS surfaces a drift not enumerated above, extend the directives with a contrastive Wrong/Correct one-shot grounded in the failing output (domain-neutral Correct content) per the library convention.
