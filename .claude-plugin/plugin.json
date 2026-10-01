@@ -1,6 +1,6 @@
 {
   "name": "delegate-local",
-  "description": "Offload summarisation, triage, classification, and bulk-text tasks from Claude Code to locally-installed models. Saves Anthropic API tokens and keeps content on-device.",
+  "description": "Offload summarisation, drafting, triage, classification and other non-reasoning text work from Claude Code to locally-installed models (MLX, Docker Model Runner or Ollama), keeping content on-device and the main context window free. Saving API tokens is a side effect, not the point.",
   "version": "0.44.0",
   "author": {
     "name": "Ismael Martinez"
@@ -15,7 +15,7 @@
     "summarisation",
     "delegation",
     "skill",
-    "tokens-saving",
+    "privacy",
     "on-device"
   ]
 }

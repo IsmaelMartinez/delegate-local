@@ -4,11 +4,7 @@ Date: 2026-06-18
 
 ## Status
 
-Accepted. Productionises the prototype recorded in ADR 0019 (verify-and-escalate, PR #318) as an opt-in gate inside `scripts/delegate.sh`. Follows ADR 0018 (the fan-out negative result, PR #317), which is what redirected the quality work from sampling-ensembles to escalation in the first place. If 0018 and 0019 land under different numbers, renumber this in lock-step; the dependency is on the findings, not the integers.
-
-> Superseded — the implementation was archived in the 2026-06-19 lean-core reset (recoverable from tag pre-cleanup-2026-06-19). See ROADMAP.md.
-
-
+Superseded by the 2026-06-19 lean-core reset, which archived the implementation out of main (recoverable from tag `pre-cleanup-2026-06-19`; see ROADMAP.md). Original status: Productionises the prototype recorded in ADR 0019 (verify-and-escalate, PR #318) as an opt-in gate inside `scripts/delegate.sh`. Follows ADR 0018 (the fan-out negative result, PR #317), which is what redirected the quality work from sampling-ensembles to escalation in the first place. If 0018 and 0019 land under different numbers, renumber this in lock-step; the dependency is on the findings, not the integers.
 
 ## Context
 

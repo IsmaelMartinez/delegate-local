@@ -4,11 +4,7 @@ Date: 2026-06-19
 
 ## Status
 
-Accepted as a measured prototype tool (`scripts/grounding-check.sh`) with a unit suite. Wiring it into `delegate.sh` as an opt-in `grounding` check is the documented follow-on (it depends on, and composes with, the ADR 0020 escalation gate, PR #319). Builds on ADR 0016 (the quality re-review that sized the faithfulness bucket) and ADR 0020 (which explicitly left faithfulness out of the gate's reach).
-
-> Superseded — the implementation was archived in the 2026-06-19 lean-core reset (recoverable from tag pre-cleanup-2026-06-19). See ROADMAP.md.
-
-
+Superseded by the 2026-06-19 lean-core reset, which archived the implementation out of main (recoverable from tag `pre-cleanup-2026-06-19`; see ROADMAP.md). Original status: Accepted as a measured prototype tool (`scripts/grounding-check.sh`) with a unit suite. Wiring it into `delegate.sh` as an opt-in `grounding` check is the documented follow-on (it depends on, and composes with, the ADR 0020 escalation gate, PR #319). Builds on ADR 0016 (the quality re-review that sized the faithfulness bucket) and ADR 0020 (which explicitly left faithfulness out of the gate's reach).
 
 ## Context
 

@@ -4,11 +4,7 @@ Date: 2026-06-18
 
 ## Status
 
-Accepted. Records a positive prototype result and recommends a gated production implementation. Complements ADR 0018 (fan-out, negative).
-
-> Superseded — the implementation was archived in the 2026-06-19 lean-core reset (recoverable from tag pre-cleanup-2026-06-19). See ROADMAP.md.
-
-
+Superseded by the 2026-06-19 lean-core reset, which archived the implementation out of main (recoverable from tag `pre-cleanup-2026-06-19`; see ROADMAP.md). Original status: Records a positive prototype result and recommends a gated production implementation. Complements ADR 0018 (fan-out, negative).
 
 ## Context
 
