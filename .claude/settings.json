@@ -22,7 +22,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/post-edit-validate.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-edit-validate.sh"
           }
         ]
       }

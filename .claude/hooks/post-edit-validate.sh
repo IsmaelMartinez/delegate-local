@@ -9,16 +9,20 @@ input=$(cat)
 file=$(jq -r '.tool_input.file_path // empty' <<<"$input" 2>/dev/null)
 [[ -z "$file" ]] && exit 0
 
+# Absolute, so the hook does not depend on the session's cwd. Only this
+# repo's own SKILL.md is the skill; the fixtures under tests/ are not.
+repo="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+
 case "$file" in
-  *SKILL.md)
-    bash scripts/validate-frontmatter.sh "$file" >&2 || exit 2
-    bash scripts/validate-skill-content.sh "$file" >&2 || exit 2
+  "$repo/SKILL.md")
+    bash "$repo/scripts/validate-frontmatter.sh" "$file" >&2 || exit 2
+    bash "$repo/scripts/validate-skill-content.sh" "$file" >&2 || exit 2
     ;;
   *scripts/*.sh|*tests/*.sh)
     bash -n "$file" >&2 || exit 2
     ;;
-  *evals/eval-set.json)
-    bash scripts/eval-skill-triggers.sh >&2 || exit 2
+  "$repo/evals/eval-set.json")
+    (cd "$repo" && bash scripts/eval-skill-triggers.sh) >&2 || exit 2
     ;;
 esac
 exit 0

@@ -267,7 +267,7 @@ Two causes, both addressed here rather than by retiring the recipe. First, three
 
 Separately, three of the ten rewrites in the window were not quality failures at all but exit-4 refusals from the `flaky_on_models` gate. The gate's status banner claimed retirement on 2026-06-28, but the frontmatter block survived until `6a5c913` on 2026-07-20; refusals continued to 2026-07-26 and have stopped since. No action needed there — recorded so the 0/10 is not read as entirely quality-driven.
 
-Both new directives are pinned in `tests/test-prompts-library.sh`. Re-measure across ~10 real PRs before trusting; if the keep rate does not clear the library floor on MLX, retiring the recipe is the reasonable next step, since the shape it produces is cheap to hand-write.
+Both new directives were pinned in `tests/test-prompts-library.sh` until #566 left wording to the replay gate. Re-measure across ~10 real PRs before trusting; if the keep rate does not clear the library floor on MLX, retiring the recipe is the reasonable next step, since the shape it produces is cheap to hand-write.
 
 Provenance also lives in the `feedback_delegate_prose_prompt_anchoring.md` memory file.
 

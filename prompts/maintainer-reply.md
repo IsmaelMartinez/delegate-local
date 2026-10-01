@@ -216,7 +216,7 @@ The model rephrased the imperative into a question (`Could you check whether…?
 
 A metrics sweep over the rolling 30-day window put the recipe at 23% keep across 21 calls, against 93% across 16 calls before 2026-07-04. Splitting by project isolated it: `delegate-local` moved 92% → 71% (a dip), while `teams-for-linux` moved 3/3 → 0/13. The model (`mlx-community/Qwen3.6-35B-A3B-8bit`), the backend (MLX) and the template were all unchanged across the two eras, so the regression is task shape, not drift — the recipe met a wave of multi-ask reporter replies it was never scoped for, and the two-sentence cap merged or dropped the asks every time.
 
-Rather than re-assert the "one ask per call" scope note that callers had already ignored 13 times, multi-ask became a supported shape via MULTI-ASK-SPLIT, with NO-FACT-DROP added because one MISS showed the cap discarding a supplied fact outright rather than merely compressing. Both are pinned in `tests/test-prompts-library.sh` so a later simplification pass cannot quietly drop them. Re-measure over the next ~10 `teams-for-linux` replies before trusting the fix.
+Rather than re-assert the "one ask per call" scope note that callers had already ignored 13 times, multi-ask became a supported shape via MULTI-ASK-SPLIT, with NO-FACT-DROP added because one MISS showed the cap discarding a supplied fact outright rather than merely compressing. Both were pinned in `tests/test-prompts-library.sh` so a later simplification pass could not quietly drop them, until #566 left wording to the replay gate. Re-measure over the next ~10 `teams-for-linux` replies before trusting the fix.
 
 ### 2026-08-26 — the examples were being returned as the answer
 
@@ -382,7 +382,7 @@ the supplied thanks), so the 26 "no thanks opener" mentions in the window are
 rows recorded before the callers passed `--var opener`; that fix is working
 and is left alone.
 
-Two named blocks, both pinned in `tests/test-prompts-library.sh`.
+Two named blocks, both pinned in `tests/test-prompts-library.sh` until #566.
 STATED-NOT-ASKED: every fact is a statement, every question is one of the
 caller's asks and nothing else is a question, outside the supplied opener,
 sign-off and anchors. Its first wording called "the asks written out as a
