@@ -33,14 +33,14 @@ trap 'rm -rf "$tmp"' EXIT
 # pinning the reader's behaviour after every recipe has moved on.
 golden='bulk-classify 8468f9ad218c 7b63da5f5be8
 code-draft 1ce7c3fd334f 015fe4d5f44c
-commit-message e7b6b95155b9 a20e93b62bab
-doc-section 13541efde1bb d1d200883f29
+commit-message b3aa9e994d4d a20e93b62bab
+doc-section b76ea0f2d48e d1d200883f29
 file-summary 33900e387386 f68b364cb12c
 fix-with-test eb261fac13b2 7ab4349174c9
 github-issue-body 008a8495fbfc 477bb405d75d
 maintainer-reply 0064a926a646 c9444a457a08
-maintainer-review-reply 15884b87bbf4 200da2e4317a
-pr-description 83ffa6f010e5 4426d3be28da
+maintainer-review-reply 6b8ece46ac1b 200da2e4317a
+pr-description 72bbe1905655 4426d3be28da
 pr-review-reply 66a83a31b44b 3997496bc2ab
 release-announcement cacce8316052 cbf5d01878fd
 summarise-issue d316bdee43af 3c9b7cb7ef25'

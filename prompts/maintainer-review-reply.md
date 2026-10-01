@@ -134,7 +134,7 @@ bash scripts/delegate.sh --recipe maintainer-review-reply \
 - "If an opener is given below, begin with it verbatim, then the verdict" plus "Never write thanks of your own" — the 2026-08-26 reasons were "opened by thanking and restating, gave no verdict" and "dropped the verdict and the thanks entirely", so the recipe forbade an opening thanks outright. By 2026-09-11, 39 of 97 rejections wanted exactly that thanks ("no thanks opener", "opened with the verdict instead of thanks"). The two are reconciled the way `signoff` already works: the caller supplies the opener verbatim, so the model never invents gratitude and never restates, and with no opener the verdict still comes first.
 - "Prose sentences and paragraphs. No bullet list, no numbered list" with the two-or-more exception — "emitted a numbered list despite an explicit no-list instruction", "rendered a single request as a numbered list" (twice the same day). The exception is scoped tightly so the fix does not simply invert the defect.
 - "Do NOT hedge a verdict the facts state plainly" — a verdict softened into a maybe reads as no verdict at all, and the reader then has to ask again.
-- Angle-bracket skeletons rather than written-out example sentences — see the `maintainer-reply.md` 2026-08-26 calibration note: a fluent example sentence is something the model returns verbatim when the real input is long. `no_example_echo` (ADR 0029) backstops it.
+- Angle-bracket skeletons rather than written-out example sentences — see the 2026-08-26 entry in `docs/calibration/maintainer-reply.md`: a fluent example sentence is something the model returns verbatim when the real input is long. `no_example_echo` (ADR 0029) backstops it.
 
 ## Expected output shape
 

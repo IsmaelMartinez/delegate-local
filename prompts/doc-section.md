@@ -113,7 +113,7 @@ Verify before recording the verdict (`bash scripts/delegate-feedback.sh` followe
 - The final sentence introduces material content rather than restating an earlier sentence in different words.
 - No bullets, no headings, no `**bold**`, no inline code fences around plain prose.
 
-If the final sentence trips any of the above, hand-strip it and record the verdict as `miss` with a reason naming the specific trigger so the recipe's calibration notes can grow.
+If the final sentence trips any of the above, hand-strip it and record the verdict as `miss` with a reason naming the specific trigger so the recipe's calibration history (`docs/calibration/doc-section.md`) can grow.
 
 ## Calibration notes
 
