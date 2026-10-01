@@ -260,7 +260,8 @@ fi
 rm -rf "$tmp"
 
 # 3b. The legacy DELEGATE_TO_OLLAMA_* names are no longer read (#567): the row
-# is written and the meta line printed although both are set.
+# is written and the meta line and the verdict reminder printed although the
+# three opt-outs are set.
 tmp=$(mktemp -d)
 make_mock_curl_ok "$tmp"
 metrics=$(mktemp); rm -f "$metrics"
@@ -268,11 +269,28 @@ EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_TO_OLLAMA_NO_METRICS=1 DELEGATE_TO_OLLAMA_NO_META=1 \
+  DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "legacy alias: exits 0"
 assert_eq 1 "$(cat "$metrics" 2>/dev/null | grep -c '"source":"delegate"')" "legacy alias: DELEGATE_TO_OLLAMA_NO_METRICS is ignored"
 assert_contains "delegate-meta:" "$out" "legacy alias: DELEGATE_TO_OLLAMA_NO_META is ignored"
+assert_contains "record verdict" "$out" "legacy alias: DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE is ignored"
 rm -rf "$tmp" "$metrics"
+
+# 3c. The legacy fd name is not validated either: an FD of 0, which the
+# DELEGATE_LOCAL_ name refuses with exit 2, leaves the reminder on stderr.
+tmp=$(mktemp -d)
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); rm -f "$metrics"
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=0 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "legacy alias: DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=0 is not validated"
+assert_contains "record verdict" "$(cat "$stderr_file")" "legacy alias: the reminder stays on stderr"
+rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 4. pick-model failure (no matching model served) is reflected in metrics +
 # exit. The mock serves a model no tier prefers rather than nothing: without a
