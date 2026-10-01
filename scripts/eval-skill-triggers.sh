@@ -18,6 +18,7 @@
 # Usage:  eval-skill-triggers.sh [--api | --local [model]] [--eval-set path] [--skill path]
 # Env:    ANTHROPIC_API_KEY (required for --api)
 #         DELEGATE_BASE_URL (optional for --local; pick-model.sh owns the default)
+#         DELEGATE_THINK=true (optional for --local; enable_thinking, default off as in delegate.sh)
 # Exit:   0 pass, 1 threshold breach / shape error, 2 usage / config / parse / transport error.
 
 set -uo pipefail
@@ -180,14 +181,20 @@ score_batch() {
       ;;
     local)
       # One chat-completions envelope, so the local gate is not wired to one
-      # daemon's native API.
-      payload=$(jq -nc --arg model "$scoring_model" --arg sys "$system_prompt" --arg user "$user_payload" --argjson max "$out_budget" '{
+      # daemon's native API. enable_thinking mirrors delegate.sh (off unless
+      # DELEGATE_THINK=true): a thinking model otherwise spends the whole
+      # max_tokens budget reasoning and returns finish_reason "length" with
+      # no answer.
+      local think="false"
+      [[ "${DELEGATE_THINK:-false}" == "true" ]] && think="true"
+      payload=$(jq -nc --arg model "$scoring_model" --arg sys "$system_prompt" --arg user "$user_payload" --argjson max "$out_budget" --argjson et "$think" '{
         model: $model,
         messages: [{role:"system", content:$sys}, {role:"user", content:$user}],
         temperature: 0,
         max_tokens: $max,
         response_format: {type: "json_object"},
-        stream: false
+        stream: false,
+        chat_template_kwargs: {enable_thinking: $et}
       }')
       resp=$(post_json "$local_base/chat/completions" "$payload" 120) || return 1
       text=$(jq -r '.choices[0].message.content // empty' <<<"$resp")

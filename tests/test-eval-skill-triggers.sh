@@ -5,23 +5,8 @@
 
 set -u
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/assert.sh"
 SCRIPT="$REPO/scripts/eval-skill-triggers.sh"
-SAFE_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
-
-pass=0
-fail=0
-
-assert_eq() {
-  local expected="$1" actual="$2" name="$3"
-  if [[ "$expected" == "$actual" ]]; then echo "  PASS  $name"; pass=$((pass+1))
-  else echo "  FAIL  $name (expected '$expected', got '$actual')"; fail=$((fail+1)); fi
-}
-assert_contains() {
-  local needle="$1" haystack="$2" name="$3"
-  if [[ "$haystack" == *"$needle"* ]]; then echo "  PASS  $name"; pass=$((pass+1))
-  else echo "  FAIL  $name (missing '$needle' in '$haystack')"; fail=$((fail+1)); fi
-}
 
 # Build a minimal eval-set fixture in $1/eval-set.json with 8 positives and
 # 8 negatives. Ids start with `p` for positives and `n` for negatives — mocks
@@ -341,7 +326,8 @@ make_skill "$tmp"
 sniff="$tmp/sniff.txt"
 make_mock_curl_batched "$tmp" "$sniff" local all-trigger
 EC=0
-(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || EC=$?
+# env -u: the default-off assertion below must not inherit the runner's DELEGATE_THINK.
+(cd "$tmp" && env -u DELEGATE_THINK PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || EC=$?
 first_body=$(head -1 "$sniff")
 assert_contains '"model":"mock-model"' "$first_body" "--local body: model field"
 assert_contains '"role":"system"' "$first_body" "--local body: system message carries the trigger prompt"
@@ -353,6 +339,15 @@ assert_contains '"max_tokens":480' "$first_body" "--local body: max_tokens scale
 assert_contains "delegate-local" "$first_body" "--local body: skill description leaks through"
 assert_contains "summarise this log" "$first_body" "--local body: query in prompt"
 assert_contains '\"id\":\"p01\"' "$first_body" "--local body: ids in batched payload"
+# Thinking off by default, as delegate.sh sends it: a Qwen3 thinking model
+# otherwise spends the whole max_tokens budget reasoning and returns no score.
+assert_eq "false" "$(jq -c '.chat_template_kwargs.enable_thinking' <<<"$first_body")" "--local body: enable_thinking false by default"
+: > "$sniff"
+(cd "$tmp" && PATH="$tmp:$SAFE_PATH" DELEGATE_THINK=true bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || true
+assert_eq "true" "$(head -1 "$sniff" | jq -c '.chat_template_kwargs.enable_thinking')" "--local body: DELEGATE_THINK=true turns enable_thinking on"
+: > "$sniff"
+(cd "$tmp" && PATH="$tmp:$SAFE_PATH" DELEGATE_THINK=yes bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || true
+assert_eq "false" "$(head -1 "$sniff" | jq -c '.chat_template_kwargs.enable_thinking')" "--local body: any DELEGATE_THINK other than true keeps thinking off"
 rm -rf "$tmp"
 
 # 10. OLLAMA_HOST steers the scoring call through pick-model.sh's default
@@ -396,6 +391,7 @@ assert_contains "scoring: backend=anthropic" "$out" "--api: backend label"
 assert_contains "recall=1.000 negative-precision=1.000" "$out" "--api perfect: 1.000/1.000"
 url_line=$(head -1 "$tmp/url-sniff.txt")
 assert_contains "https://api.anthropic.com/v1/messages" "$url_line" "--api: hits Anthropic URL"
+assert_eq "false" "$(head -1 "$sniff" | jq -c 'has("chat_template_kwargs")')" "--api body: no chat_template_kwargs (Anthropic payload unchanged)"
 rm -rf "$tmp"
 
 # 11b. --api non-200: the status and the start of the body are printed, not
@@ -529,6 +525,4 @@ assert_contains "recall=1.000 negative-precision=1.000" "$out" "gate:false: diag
 assert_contains "diagnostic (non-gating, embedded sub-step): dtp=1 dfn=1 embedded-recall=0.500" "$out" "gate:false: diagnostic line reports embedded-recall"
 rm -rf "$tmp"
 
-echo
-echo "$pass passed, $fail failed"
-[[ $fail -eq 0 ]]
+finish
