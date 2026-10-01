@@ -116,6 +116,17 @@ else
   echo "  FAIL  fixture: a checks edit changes template_sha"; fail=$((fail+1))
 fi
 
+# The delimiter lines are hashed as written, and an unclosed frontmatter
+# hashes the whole file with no template, as on main before #559: both
+# values were computed with main's recipe_template_sha, so a custom recipe
+# with `--- ` keeps its hash.
+printf -- '--- \ntier: prose\ninput_quality:\n  why: no_diff\n---\t\n# x\n\n## Prompt template\n\n```\nSay {{stdin}}.\n```\n' > "$tmp/trail.md"
+assert_eq "872a96670125" "$(recipe_template_sha "$tmp/trail.md")" \
+  "fixture: trailing whitespace on the delimiters is hashed as written"
+printf -- '---\ntier: prose\ninput_quality:\n  why: no_diff\n# x\n\n## Prompt template\n\n```\nSay {{stdin}}.\n```\n' > "$tmp/unclosed.md"
+assert_eq "40c7b42bc92c" "$(recipe_template_sha "$tmp/unclosed.md")" \
+  "fixture: an unclosed frontmatter hashes as it did on main"
+
 # --- the readers every caller shares (#559) --------------------------------
 assert_eq "stdin string"$'\n'"why string?" "$(recipe_required_inputs "$tmp/fx.md")" \
   "recipe_required_inputs: one 'key type' line per input, the optional '?' kept"

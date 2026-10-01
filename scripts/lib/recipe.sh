@@ -67,16 +67,16 @@ recipe_tier() { # file
 # its value for every recipe. Empty where shasum is missing.
 recipe_template_sha() { # file
   command -v shasum >/dev/null 2>&1 || return 0
+  # The delimiter lines go in as written, trailing whitespace and all, and an
+  # unclosed frontmatter runs to the end of the file with no template after
+  # it (awk exits 1), so no recipe's hash moved when the readers were shared.
   {
-    if head -n 1 "$1" 2>/dev/null | grep -q '^---[[:space:]]*$'; then
-      echo '---'
-      recipe_fm_block "$1" | awk '
-        /^input_quality:[[:space:]]*$/ { in_iq=1; next }
-        in_iq && /^[[:space:]]+[^[:space:]]/ { next }
-        { in_iq=0; print }
-      '
-      echo '---'
-    fi
-    recipe_template "$1"
+    awk '
+      NR==1 { if (/^---[[:space:]]*$/) { in_fm=1; print; next } exit }
+      /^input_quality:[[:space:]]*$/ { in_iq=1; next }
+      in_iq && /^[[:space:]]+[^[:space:]]/ { next }
+      { in_iq=0; print; if (/^---[[:space:]]*$/) { closed=1; exit } }
+      END { if (in_fm && !closed) exit 1 }
+    ' "$1" 2>/dev/null && recipe_template "$1"
   } | shasum -a 256 | cut -c1-12
 }
