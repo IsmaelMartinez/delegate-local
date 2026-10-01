@@ -40,6 +40,11 @@ fi
 
 command -v jq >/dev/null || { echo "jq not on PATH" >&2; exit 2; }
 
+# The verdict model (join, outcome, window, percentages) is scripts/lib/pair.jq,
+# shared with self-improve.sh and replay-recipe.sh (#564). -L takes an
+# absolute path.
+lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib" && pwd)"
+
 # The cutoff is resolved in jq (now / fromdateiso8601), not `date` arithmetic,
 # so there is no BSD-vs-GNU epoch split. Matching rows are filtered once into
 # a temp file that every downstream pass reads.
@@ -57,7 +62,7 @@ if [[ -n "$since" || -n "$days" ]]; then
     # Epoch and ISO form from one jq pass; a generated cutoff cannot be
     # invalid, so the error path below is --since-only.
     IFS=$'\t' read -r cutoff_epoch cutoff_iso \
-      < <(jq -rn --argjson d "$days" '((now | floor) - ($d * 86400)) | [., todateiso8601] | @tsv')
+      < <(jq -L "$lib_dir" -rn --argjson d "$days" 'include "pair"; cutoff($d) | [., todateiso8601] | @tsv')
   else
     case "$since" in
       [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) cutoff_iso="${since}T00:00:00Z" ;;
@@ -70,8 +75,8 @@ if [[ -n "$since" || -n "$days" ]]; then
   filtered=$(mktemp "${TMPDIR:-/tmp}/delegate-metrics.XXXXXX") \
     || { echo "cannot create temp file for the metrics window" >&2; exit 2; }
   trap 'rm -f "$filtered"' EXIT
-  jq -c --argjson cutoff "$cutoff_epoch" \
-    'select(((.ts // "") | fromdateiso8601?) >= $cutoff)' "$metrics_file" > "$filtered"
+  jq -L "$lib_dir" -c --argjson cutoff "$cutoff_epoch" \
+    'include "pair"; select(in_window($cutoff))' "$metrics_file" > "$filtered"
   metrics_file="$filtered"
   window_active=1
 fi
@@ -123,51 +128,40 @@ echo "Tokens avoided (≈):  $total_avoided"
 # every percentage guards a non-zero denominator, since jq aborts on
 # divide-by-zero and under `set -uo pipefail` the section would vanish.
 #
-# The feedback join is defined once and interpolated into every jq program
-# that needs a delegate row's current verdict, so the sections cannot
-# disagree. Keyed on otel_span_id first and ts second (#481): ts is
-# second-precision and a ts-only map handed one verdict to both same-second
-# siblings. A feedback row with neither key is skipped, since indexing by
-# null aborts the jq. Latest verdict per key wins; sort_by(.ts) guards
-# against a concurrent or backfilled append.
+# Every section that needs a delegate row's current verdict reads it from
+# `verdict_index` in scripts/lib/pair.jq, the one join self-improve.sh and
+# replay-recipe.sh read too (#564): one verdict per delegation, the latest,
+# whether it was pinned by otel_span_id or by ts, and a ts-only verdict on a
+# shared second lands on one delegation, not on every row in that second.
 #
-# A verdict whose final was already in the piped stdin (final_preexisting,
-# #588) is its own class, "ritual": the caller posted text it had before the
-# delegation, so the draft never had a chance. Every verdict rate leaves it
-# out of n and prints it as ritual=, and every rate prints sessions=, the distinct
-# sessions its rows come from, since two sessions made most of one template's
-# rejections. A final `self-improve.sh --quarantine` listed in
-# suspect-finals.tsv beside the metrics file is not what shipped (#587), so a
-# stored final_preexisting on it is not trusted: `$suspects`, passed to every
-# program that interpolates verdict_join, is that list's first column.
-suspects_json='[]'
-if [[ -f "$(dirname "$display_file")/suspect-finals.tsv" ]]; then
-  suspects_json=$(jq -Rnc '[inputs | split("\t")[0] | select(. != "")]' < "$(dirname "$display_file")/suspect-finals.tsv" 2>/dev/null) || suspects_json='[]'
-fi
-verdict_join='
-  def fbv: if (.final_preexisting // false) and ((.final_file // "") as $f | any($suspects[]; . == $f) | not) then "ritual" elif (.scaffold // false) then "scaffold" elif .kept then "hit" else "miss" end;
-  def sessions: map(.session // "" | select(. != "")) | unique | length;
-  def ritual_col($rows): ($rows | map(select(.v == "ritual")) | length) as $r | if $r > 0 then "  ritual=\($r)" else "" end;
-  def fbkey: if (.ref_id // "") != "" then "id:" + .ref_id else "ts:" + .ref_ts end;
-  (reduce ([.[] | select((.source // "delegate") == "feedback" and (.ref_id != null or .ref_ts != null))] | sort_by(.ts) | .[]) as $i
-     ({}; .[$i | fbkey] = ($i | fbv))) as $vmap
-  | def verdict: $vmap["id:" + (.otel_span_id // "")] // $vmap["ts:" + .ts];
-'
-jq -rs --argjson suspects "$suspects_json" '
-  def src: .source // "delegate";
-  # One decimal always, so the column does not go ragged on a whole number.
-  def pct($n; $d):
-    if $d > 0 then ((($n * 1000 / $d) | round) as $t | "\($t / 10 | floor).\($t % 10)")
-    else "0.0" end;
-  '"$verdict_join"'
-  (map(select(src == "delegate"))) as $dl
-  | ($dl | map(select((.exit_status // 0) != 0))) as $bad
-  | ($dl | map(select((.exit_status // 0) == 0))
-        | map({t: (.estimated_tokens_avoided // 0), v: (verdict // "none")})) as $ok
+# A verdict whose final was already in the piped stdin (#588) is its own
+# class, "ritual": the caller posted text it had before the delegation, so the
+# draft never had a chance. It is the stored final_preexisting tag, or for a
+# verdict recorded before the field, the measurement `self-improve.sh
+# --ritual` wrote to ritual-verdicts.tsv beside the metrics file; reading the
+# sidecar keeps this script cheap and read-only. A final
+# `self-improve.sh --quarantine` listed in suspect-finals.tsv is not what
+# shipped (#587), so it is never ritual. Every verdict rate leaves ritual out
+# of n and prints it as ritual=, and every rate prints sessions=, the
+# distinct sessions its rows come from, since two sessions made most of one
+# template's rejections. Both sidecars go to every program as --rawfile.
+suspect_file="$(dirname "$display_file")/suspect-finals.tsv"
+[[ -f "$suspect_file" ]] || suspect_file=/dev/null
+ritual_file="$(dirname "$display_file")/ritual-verdicts.tsv"
+[[ -f "$ritual_file" ]] || ritual_file=/dev/null
+# The ritual= column, when there is anything to put in it.
+ritual_col='def ritual_col: if .ritual > 0 then "  ritual=\(.ritual)" else "" end;'
+jq -L "$lib_dir" -rs --rawfile sl "$suspect_file" --rawfile rl "$ritual_file" '
+  include "pair";
+  verdict_index($sl; $rl) as $vi
+  | delegates as $dl
+  | ($dl | map(select(ok | not))) as $bad
+  | ($dl | map(select(ok))
+        | map({t: (.estimated_tokens_avoided // 0), v: ($vi[dkey] // "none")})) as $ok
   | ($ok | map(.t) | add // 0) as $ok_tok
   | (def bucket($k): ($ok | map(select(.v == $k)));
-     [ ["shipped as-is",   "hit"],
-       ["rewritten",       "miss"],
+     [ ["shipped as-is",   "kept"],
+       ["rewritten",       "rewrote"],
        ["used as scaffold","scaffold"],
        ["no verdict",      "none"] ]
      + (if any($ok[]; .v == "ritual") then [["ritual (own text)", "ritual"]] else [] end)
@@ -289,19 +283,18 @@ if (( n_feedback > 0 )); then
     | select($by_hand[$stem] != true)
     | $stem
   ' --slurpfile all "$display_file" "$metrics_file")
-  jq -rs --argjson suspects "$suspects_json" --argjson show_scaffold "$show_scaffold" --argjson hook_captured "$hook_captured" '
-    def src: .source // "delegate";
-    # fbv checks scaffold first because it also carries kept:false; verdict
-    # looks a delegate row up by otel_span_id, then ts.
-    '"$verdict_join"'
-    (map(select(src == "delegate" and (.exit_status // 0) == 0) | {recipe, tier, session, v: verdict})) as $d
+  jq -L "$lib_dir" -rs --rawfile sl "$suspect_file" --rawfile rl "$ritual_file" --argjson show_scaffold "$show_scaffold" --argjson hook_captured "$hook_captured" '
+    include "pair";
+    '"$ritual_col"'
+    verdict_index($sl; $rl) as $vi
+    | (delegates | map(select(ok) | {recipe, tier, session, u: $vi[dkey]})) as $d
     | ($d | map(select(.recipe != null))) as $rx_all
-    | ($rx_all | map(select(.v != "ritual"))) as $rx
+    | ($rx_all | map(select(.u != "ritual"))) as $rx
     | ($d | map(select(.recipe == null))) as $raw
-    | ($rx | length) as $rn
+    | ($rx_all | tally) as $t
     | ($raw | length) as $wn
-    | "  Recipe delegations (calibration signal): n=\($rn)  hits=\($rx|map(select(.v=="hit"))|length)  misses=\($rx|map(select(.v=="miss"))|length)" + (if $show_scaffold then "  scaffold=\($rx|map(select(.v=="scaffold"))|length)" else "" end) + "  untracked=\($rx|map(select(.v==null))|length)" + ritual_col($rx_all) + (if $rn > 0 then "  coverage=\((($rx|map(select(.v!=null))|length) * 100 / $rn) | floor)%  sessions=\($rx | sessions)" else "" end),
-      ($rx | group_by(.tier) | map({tier:.[0].tier, n:length, hits:(map(select(.v=="hit"))|length), misses:(map(select(.v=="miss"))|length), scaffold:(map(select(.v=="scaffold"))|length), untracked:(map(select(.v==null))|length)}) | sort_by(-.n) | .[] | "    \(.tier | . + (" " * (14 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + "  untracked=\(.untracked)"),
+    | "  Recipe delegations (calibration signal): n=\($t.n)  hits=\($t.kept)  misses=\($t.rewrote)" + (if $show_scaffold then "  scaffold=\($t.scaffold)" else "" end) + "  untracked=\($t.untracked)" + ($t | ritual_col) + (if $t.n > 0 then "  coverage=\(rate($t.n - $t.untracked; $t.n))%  sessions=\($t.sessions)" else "" end),
+      ($rx | group_by(.tier) | map({tier: .[0].tier} + tally) | sort_by(-.n) | .[] | "    \(.tier | . + (" " * (14 - length)))  n=\(.n)  hits=\(.kept)  misses=\(.rewrote)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + "  untracked=\(.untracked)"),
       # Captured-pair coverage, counted over feedback ROWS (a delegation can
       # carry more than one verdict). inferred= is adoption: the verdict took
       # the final the hook wrote, as no --final was passed (final_source:"posted").
@@ -313,7 +306,7 @@ if (( n_feedback > 0 )); then
        | if ($rej | length) > 0 then
            "  Captured pairs (rejections with the shipped text stored): n=\($cap|length)/\($rej|length)  inferred=\($cap|map(select(.final_source == "posted"))|length)  by-hand=\($cap|map(select(.final_source != "posted"))|length)  hook-captured=\($hook_captured)"
          else empty end),
-      (if $wn > 0 then "  Raw / no-recipe (verdicts optional — experiments, audits, ad-hoc): n=\($wn)  tracked=\($raw|map(select(.v!=null))|length)  untracked=\($raw|map(select(.v==null))|length)" else empty end)
+      (if $wn > 0 then "  Raw / no-recipe (verdicts optional — experiments, audits, ad-hoc): n=\($wn)  tracked=\($raw|map(select(.u!=null))|length)  untracked=\($raw|map(select(.u==null))|length)" else empty end)
   ' "$metrics_file"
   echo
 fi
@@ -330,28 +323,19 @@ n_projects=$(jq -rs '
 ' "$metrics_file")
 if (( n_projects > 1 )); then
   echo "Per-project (delegate):"
-  jq -rs --argjson suspects "$suspects_json" --argjson show_scaffold "$show_scaffold" '
-    def src: .source // "delegate";
+  jq -L "$lib_dir" -rs --rawfile sl "$suspect_file" --rawfile rl "$ritual_file" --argjson show_scaffold "$show_scaffold" '
+    include "pair";
     '"$pct_def"'
-    '"$verdict_join"'
-    map(select(src == "delegate" and (.exit_status // 0) == 0) | {ts, project: (.project // ""), session, duration_ms, v: verdict})
+    '"$ritual_col"'
+    verdict_index($sl; $rl) as $vi
+    | delegates | map(select(ok) | {project: (.project // ""), session, duration_ms, u: $vi[dkey]})
     | group_by(.project)
-    | map(. as $all | map(select(.v != "ritual")) | {
-        project: $all[0].project,
-        n: length,
-        hits: (map(select(.v == "hit")) | length),
-        misses: (map(select(.v == "miss")) | length),
-        scaffold: (map(select(.v == "scaffold")) | length),
-        untracked: (map(select(.v == null)) | length),
-        ritual: ritual_col($all),
-        sessions: sessions,
-        # Latency is every delegation the project ran, ritual ones included:
-        # only the verdict counts leave them out.
-        p50: ($all | map(.duration_ms) | pct(50) // 0)
-      })
+    # Latency is every delegation the project ran, ritual ones included:
+    # only the verdict counts leave them out.
+    | map({project: .[0].project, p50: (map(.duration_ms) | pct(50) // 0)} + tally)
     | sort_by((.project == ""), -.n)
     | .[]
-    | "  \((if .project == "" then "(no project)" else .project end) | . + (" " * (20 - length)))  n=\(.n)  hits=\(.hits)  misses=\(.misses)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + "  untracked=\(.untracked)\(.ritual)  p50=\(.p50)ms  sessions=\(.sessions)"
+    | "  \((if .project == "" then "(no project)" else .project end) | . + (" " * (20 - length)))  n=\(.n)  hits=\(.kept)  misses=\(.rewrote)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + "  untracked=\(.untracked)\(ritual_col)  p50=\(.p50)ms  sessions=\(.sessions)"
   ' "$metrics_file"
   echo
 fi
@@ -364,12 +348,12 @@ n_recipe=$(jq -rs '
 ' "$metrics_file")
 if (( n_recipe > 0 )); then
   echo "Per-recipe (delegate):"
-  jq -rs --argjson suspects "$suspects_json" --argjson show_scaffold "$show_scaffold" '
-    def src: .source // "delegate";
-    '"$verdict_join"'
-    def counts: . as $all | map(select(.v != "ritual"))
-      | "n=\(length)  hits=\(map(select(.v == "hit")) | length)  misses=\(map(select(.v == "miss")) | length)" + (if $show_scaffold then "  scaffold=\(map(select(.v == "scaffold")) | length)" else "" end) + "  untracked=\(map(select(.v == null)) | length)" + ritual_col($all) + "  sessions=\(sessions)";
-    map(select(src == "delegate" and .recipe != null and (.exit_status // 0) == 0) | {ts, recipe, session, iq: (.input_quality // []), v: verdict})
+  jq -L "$lib_dir" -rs --rawfile sl "$suspect_file" --rawfile rl "$ritual_file" --argjson show_scaffold "$show_scaffold" '
+    include "pair";
+    '"$ritual_col"'
+    def counts: tally | "n=\(.n)  hits=\(.kept)  misses=\(.rewrote)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + "  untracked=\(.untracked)" + ritual_col + "  sessions=\(.sessions)";
+    verdict_index($sl; $rl) as $vi
+    | delegates | map(select(.recipe != null and ok) | {recipe, session, iq: (.input_quality // []), u: $vi[dkey]})
     | group_by(.recipe)
     | sort_by(-length)
     | .[]

@@ -57,7 +57,14 @@ because a draft the agent edited and shipped did most of its job, while a
 recipe whose drafts are all thrown away is a different and worse problem, and
 a kept-only rate cannot tell the two apart. `commit-message` read 0% kept and
 80% usable on the same 25 rows the day this changed. Ignore a 0% on `n=1`; one
-delegation is not a signal.
+delegation is not a signal. The window is on the delegation's own time and the
+verdict join is `scripts/lib/pair.jq`, so these counts are the ones
+`metrics-summary.sh --days N` prints for the same N (#564). A ritual verdict
+(`ritual=`, the caller posted text it already had) is the tag stored on the
+verdict or, for one recorded before the tag existed, the measurement
+`self-improve.sh --ritual` wrote to `ritual-verdicts.tsv`; rerun `--ritual`
+without `--peek` after the corpus gains such verdicts, since the rates never
+measure on their own.
 
 The **per-template outcomes** section appears only for a recipe that ran
 under more than one template in the window: one line per template, newest

@@ -173,13 +173,14 @@ cases_tmp="$work_tmp/cases"
 : > "$cases_tmp"
 
 if [[ -f "$metrics_file" ]]; then
-  # `$d` is parent_join's delegate index; the drafts dir gets its own name.
+  # The join is latest_verdicts in lib/pair.jq, the one every rollup reads
+  # (#564).
   # Only verdicts pinned by ref_id: a ts-only verdict on a second two
   # delegations share would pair the other one's inputs and final with this
   # case, and a replay decides on cases, so it takes none it cannot be sure
   # of.
-  jq -rs --arg recipe "$recipe" --arg ddir "$drafts_dir" '
-    '"$parent_join"'
+  jq -L "$script_dir/lib" -rs --arg recipe "$recipe" --arg ddir "$drafts_dir" '
+    include "pair";
     latest_verdicts
     | map(select((.ref_id // "") != ""
                  and parent != null
