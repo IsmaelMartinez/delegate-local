@@ -41,7 +41,7 @@ and `--ritual` judges that adopted final for ritual as it does a named one.
 Six sections, in the order you should read them.
 
 The **verdict tally** is the headline: how many of the verdicts recorded since
-the watermark were kept, used as a scaffold, or rewritten, and the usable rate
+the watermark were kept, edited and shipped (scaffold), or rewritten, and the usable rate
 over all of them, each delegation counted once under its latest verdict.
 Every verdict is the agent's own record of what it did with its draft, and
 that is the one tier there is (ADR 0030): the agent that used or rewrote the

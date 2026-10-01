@@ -41,7 +41,7 @@ same two tiers, and the Stop hook told the agent to leave unrecognised rows
 ## Decision
 
 There is one verdict tier, and the agent records it. A verdict is `hit` (the
-draft shipped as-is), `scaffold` (discarded but built on) or `miss` (rewritten
+draft shipped as-is), `scaffold` (edited and shipped) or `miss` (rewritten
 or thrown away); `scaffold` and `miss` require a reason, and the stored
 draft/final pair (ADR 0029) sits beside it. That triple — verdict, reason,
 pair — is the quality signal a recipe edit is calibrated from. The headline

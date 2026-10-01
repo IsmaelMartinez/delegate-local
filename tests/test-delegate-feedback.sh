@@ -1353,7 +1353,7 @@ assert_eq 0 "$(grep -c ':-human}' "$REPO/scripts/lib/otel.sh")" \
 assert_eq 2 "$(grep -c 'verdict_source="\${\(9\|11\):-agent}"' "$REPO/scripts/lib/otel.sh")" \
   "FB-SRC10: both emit_otel_feedback_span entry points default verdict_source to agent"
 
-# --- Scaffold verdict: the draft was discarded but useful. The row carries
+# --- Scaffold verdict: the draft was edited and shipped. The row carries
 # kept:false (so kept-only readers never inflate hit-rate) plus scaffold:true,
 # and it is not a miss for the recurrence nudge ---
 

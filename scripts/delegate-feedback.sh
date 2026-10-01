@@ -47,9 +47,8 @@ usage() {
   cat >&2 <<'EOF'
 usage: delegate-feedback.sh [--id <otel_span_id>|--ts <iso8601>] [--source agent]
                            [--final <path>|-] hit|miss|scaffold [reason words...]
-  hit = output kept as-is; miss = rewritten/discarded as useless; scaffold =
-  discarded but genuinely useful (a divergent or executable draft that improved
-  the final result). scaffold is recorded distinct from both and never fires the
+  hit = output kept as-is; miss = rewritten or discarded; scaffold =
+  edited and shipped. scaffold is recorded distinct from both and never fires the
   MISS-recurrence nudge. A miss or scaffold REQUIRES a reason: the agent
   recording its own just-finished delegation always knows why it rewrote the
   draft, and a rejection with no reason counts in every denominator while
@@ -512,7 +511,7 @@ if [[ "$verdict" == "miss" && "${DELEGATE_FEEDBACK_NO_NUDGE:-0}" != "1" && -n "$
       next unless ref $j eq "HASH";
       next unless ($j->{source} // "") eq "feedback";
       next if  $j->{kept};                      # only MISS rows
-      next if  $j->{scaffold};                  # scaffold is useful, not a miss
+      next if  $j->{scaffold};                  # scaffold is edited and shipped, not a miss
       next unless $j->{ts};
       next if $j->{ts} eq $self_ts;             # skip the just-appended row
       if ($window_secs > 0 && $j->{ts} =~ /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/) {
