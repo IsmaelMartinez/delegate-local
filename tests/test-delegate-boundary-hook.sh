@@ -2431,6 +2431,23 @@ out=$(payload_id "gh pr comment other-branch --body \"$body300\"" "$tmpcwd" sess
 assert_contains '"permissionDecision":"deny"' "$out" "#563 target: a reply to another branch's PR is another target"
 out=$(payload_id "gh pr comment my-branch --body \"$body300\"" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK")
 assert_eq "" "$out" "#563 target: ...while the retry to the same branch's PR reuses its credit"
+# Value-taking flags are per command: on `gh pr review` -r and -a are the
+# booleans --request-changes and --approve, and on `gh release create` -p is
+# --prerelease, so the word after them is not swallowed as their value and
+# a retry with another body still reaches its marker.
+retry563() { # boundary first-cmd retry-cmd recipe name
+  reset497; seed_draft "$4" d563.draft.txt
+  confirm 'ls' "$tmpcwd" sess-A toolu-0
+  payload_id "$2" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+  out=$(payload_id "$3" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK")
+  assert_eq " toolu-2" "$out $(marker_id "sess-A.$1.$proj")" "#563 target: $5"
+}
+retry563 pr-review-body "gh pr review 12 -r --body \"first $body300\"" "gh pr review 12 -r --body \"second $body300\"" \
+  maintainer-review-reply "gh pr review -r is boolean, so the retry with another body reuses the marker"
+retry563 pr-review-body "gh pr review 12 -a --body \"first $body300\"" "gh pr review 12 -a --body \"second $body300\"" \
+  maintainer-review-reply "gh pr review -a is boolean, so the retry with another body reuses the marker"
+retry563 release-create "gh release create v1 -p --notes \"first $body300\"" "gh release create v1 -p --notes \"second $body300\"" \
+  release-note "gh release create -p is boolean, so the retry with other notes reuses the marker"
 rm -rf "$pending" "$METRICS_DIR/drafts"
 
 # 92 (#563). The common path spawns no jq: the boundary hook pre-filters the

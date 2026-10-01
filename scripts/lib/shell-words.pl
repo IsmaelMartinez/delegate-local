@@ -194,17 +194,35 @@ my @W = @{ $sg->{w} };
 # `gh api` endpoint), its --repo, and the `gh api` fields that pick a
 # thread. Values of the options that take one (bodies, files, titles,
 # headers) and redirections are skipped, as are words before the command
-# (env assignments, sudo, timeout).
-my %takes_value = map { $_ => 1 } qw(-b --body -F --body-file -t --title -m --message
-  -f --field --raw-field -R --repo -X --method -H --header --head -B --base -l --label
-  -a --assignee -r --reviewer -p --project -M --milestone -n --notes --notes-file
-  -T --template -q --jq --input --target);
+# (env assignments, sudo, timeout). Which options take a value is per
+# command, as `gh <cmd> --help` and `glab <cmd> --help` list them: a short
+# flag is overloaded (`-r` is --reviewer on `gh pr create` but the boolean
+# --request-changes on `gh pr review`, `-p` --project there but the boolean
+# --prerelease on `gh release create`), so one global table swallowed the
+# word after a boolean as its value. An unlisted command knows only --repo.
+my %value_flags = (
+  'gh pr create'      => '-a --assignee --attach -B --base -b --body -F --body-file -H --head -l --label -m --milestone -p --project --recover -r --reviewer -T --template -t --title -R --repo',
+  'gh pr comment'     => '--attach -b --body -F --body-file -R --repo',
+  'gh pr review'      => '-b --body -F --body-file -R --repo',
+  'gh issue create'   => '-a --assignee --attach --blocked-by --blocking -b --body -F --body-file -l --label -m --milestone --parent -p --project --recover -T --template -t --title --type -R --repo',
+  'gh issue comment'  => '--attach -b --body -F --body-file -R --repo',
+  'gh release create' => '--discussion-category -n --notes -F --notes-file --notes-start-tag --target -t --title -R --repo',
+  'gh api'            => '--cache -F --field -H --header --hostname --input -q --jq -X --method -p --preview -f --raw-field -t --template',
+  'glab mr create'    => '-a --assignee --attach -d --description --description-file -H --head -l --label -m --milestone --recover -i --related-issue -R --repo --reviewer -s --source-branch -b --target-branch --template -t --title',
+  'glab mr note'      => '--attach --file --line -m --message --old-line --reply -R --repo',
+  'glab issue note'   => '--attach -m --message -R --repo',
+);
 my @tgt;
 my $c = 0;
 $c++ while $c < @W && $W[$c][0] !~ m{(?:\A|/)(?:git|gh|glab)\z};
 if ($c < @W && $W[$c][0] =~ m{(?:\A|/)(?:gh|glab)\z}) {
-  my $k = $c + (($c + 1 < @W && $W[$c + 1][0] eq 'api') ? 2 : 3);
+  my $tool = $W[$c][0] =~ m{glab\z} ? 'glab' : 'gh';
+  my $api = $c + 1 < @W && $W[$c + 1][0] eq 'api';
+  my $k = $c + ($api ? 2 : 3);
+  my $cmd = $api ? 'gh api' : join(' ', $tool, map { $k - 2 + $_ < @W ? $W[$k - 2 + $_][0] : '' } 0, 1);
   $k++ if $k < @W && $W[$k][0] eq 'note' && $W[$k - 1][0] eq 'discussion';
+  $k++ if $cmd eq 'glab mr note' && $k < @W && $W[$k][0] eq 'create';
+  my %takes_value = map { $_ => 1 } split ' ', ($value_flags{$cmd} // '-R --repo');
   for (; $k < @W; $k++) {
     my $t = $W[$k][0];
     if ($t =~ /\A--repo=/) { push @tgt, 'repo=' . substr($t, 7); next }
