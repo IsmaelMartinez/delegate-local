@@ -154,7 +154,7 @@ ritual_col='def ritual_col: if .ritual > 0 then "  ritual=\(.ritual)" else "" en
 jq -L "$lib_dir" -rs --rawfile sl "$suspect_file" --rawfile rl "$ritual_file" '
   include "pair";
   verdict_index($sl; $rl) as $vi
-  | (map(select(src == "delegate"))) as $dl
+  | delegates as $dl
   | ($dl | map(select(ok | not))) as $bad
   | ($dl | map(select(ok))
         | map({t: (.estimated_tokens_avoided // 0), v: ($vi[dkey] // "none")})) as $ok
@@ -287,7 +287,7 @@ if (( n_feedback > 0 )); then
     include "pair";
     '"$ritual_col"'
     verdict_index($sl; $rl) as $vi
-    | (map(select(src == "delegate" and ok) | {recipe, tier, session, u: $vi[dkey]})) as $d
+    | (delegates | map(select(ok) | {recipe, tier, session, u: $vi[dkey]})) as $d
     | ($d | map(select(.recipe != null))) as $rx_all
     | ($rx_all | map(select(.u != "ritual"))) as $rx
     | ($d | map(select(.recipe == null))) as $raw
@@ -328,7 +328,7 @@ if (( n_projects > 1 )); then
     '"$pct_def"'
     '"$ritual_col"'
     verdict_index($sl; $rl) as $vi
-    | map(select(src == "delegate" and ok) | {project: (.project // ""), session, duration_ms, u: $vi[dkey]})
+    | delegates | map(select(ok) | {project: (.project // ""), session, duration_ms, u: $vi[dkey]})
     | group_by(.project)
     # Latency is every delegation the project ran, ritual ones included:
     # only the verdict counts leave them out.
@@ -353,7 +353,7 @@ if (( n_recipe > 0 )); then
     '"$ritual_col"'
     def counts: tally | "n=\(.n)  hits=\(.kept)  misses=\(.rewrote)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + "  untracked=\(.untracked)" + ritual_col + "  sessions=\(.sessions)";
     verdict_index($sl; $rl) as $vi
-    | map(select(src == "delegate" and .recipe != null and ok) | {recipe, session, iq: (.input_quality // []), u: $vi[dkey]})
+    | delegates | map(select(.recipe != null and ok) | {recipe, session, iq: (.input_quality // []), u: $vi[dkey]})
     | group_by(.recipe)
     | sort_by(-length)
     | .[]

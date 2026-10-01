@@ -11,16 +11,20 @@ def ok: (.exit_status // 0) == 0;
 # share one key.
 def referenced: .source == "feedback" and (.ref_id != null or .ref_ts != null);
 
-# A delegate row's key: otel_span_id when it has one, else its ts (#481). ts
-# is second-precision, so two rows in one second are told apart by id only.
-def dkey: if .otel_span_id != null then "id:" + .otel_span_id else "ts:" + .ts end;
+# The delegate rows, each with its position in the input as `_i`.
+def delegates: [to_entries[] | select(.value | src == "delegate") | .value + {_i: .key}];
+
+# A delegate row's key: otel_span_id when it has one (#481), else its
+# position, so two legacy rows without an id in one second stay two
+# delegations. Only rows from `delegates` carry the position.
+def dkey: if .otel_span_id != null then "id:" + .otel_span_id else "row:\(._i)" end;
 
 # Every referenced feedback row with its delegate row attached as `parent`:
 # looked up by ref_id first, then ref_ts. A ts-only verdict on a second
 # several delegations share lands on the last of them in the file, one
 # delegation and not all of them.
 def parent_join:
-  (map(select(src == "delegate" and .ts != null))) as $dl
+  (delegates | map(select(.ts != null))) as $dl
   | (($dl | INDEX("ts:" + .ts)) + ($dl | map(select(.otel_span_id != null)) | INDEX("id:" + .otel_span_id))) as $d
   | [.[] | select(referenced) | . + {_p: ($d["id:" + (.ref_id // "")] // $d["ts:" + (.ref_ts // "")])}];
 def parent: ._p;

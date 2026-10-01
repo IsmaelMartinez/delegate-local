@@ -29,7 +29,9 @@
 #                      measured now for a verdict recorded before it; with
 #                      --since, delegations on or after that date only. The
 #                      measured ritual verdicts go to ritual-verdicts.tsv
-#                      beside the metrics file, which every rate here and in
+#                      beside the metrics file, merged with what it already
+#                      held (pruned files cannot be measured again), which
+#                      every rate here and in
 #                      metrics-summary.sh reads (#564); with --peek nothing
 #                      is written. Never the watermark or a metrics row.
 #   --peek            report without advancing the watermark
@@ -285,9 +287,14 @@ if (( ritual_only == 1 )); then
       (group_by(.sha) | sort_by(-(map(select(.t.r)) | length)) | .[] | "    template=\(.[0].sha)  \(line)")
   ' "$metrics_file"
   # The measured ritual verdicts, every one and not only --since's, are the
-  # sidecar the rates read: fkey TAB the final measured.
+  # sidecar the rates read: fkey TAB the final measured. Drafts, inputs and
+  # finals are pruned after DELEGATE_DRAFT_RETENTION_DAYS, so an entry this run
+  # could not measure again is kept from the existing sidecar; a verdict it
+  # did measure takes this run's result. A quarantined final is left out at
+  # read time, so a kept entry cannot outlive a later quarantine.
   if (( peek == 0 )); then
-    awk -F '\t' '$2 == "measured" && $3 == "true" { printf "%s\t%s\n", $1, $4 }' "$rt_file" > "$ritual_file.tmp" \
+    awk -F '\t' 'FILENAME == ARGV[1] { if ($2 == "measured") { seen[$1] = 1; if ($3 == "true") printf "%s\t%s\n", $1, $4 }; next }
+         $1 != "" && !($1 in seen) { seen[$1] = 1; print }' "$rt_file" "$ritual_list" > "$ritual_file.tmp" \
       && mv "$ritual_file.tmp" "$ritual_file" \
       && echo "written: $ritual_file ($(grep -c '' "$ritual_file") measured ritual verdicts)" \
       || { echo "self-improve: could not write $ritual_file" >&2; exit 2; }
