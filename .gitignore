@@ -45,3 +45,8 @@ metrics.loki-sync
 # DELEGATE_METRICS_FILE back here would recreate them, and they are per-session
 # scratch, never content.
 .verdict-stop-markers/
+
+# Other agents' local instruction files. The maintainer keeps an untracked
+# AGENTS.md and .codex/ beside this checkout; CLAUDE.md is the tracked one.
+AGENTS.md
+.codex/

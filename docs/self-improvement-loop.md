@@ -27,9 +27,14 @@ Exit 2 is a real error (no metrics file, no `jq`) and is worth surfacing.
 
 Running it advances a watermark, so the next run sees only what is new. Use
 `--peek` when you want to look without consuming the window. The watermark is
-the newest `ts` in the file, and the verdict sections read each verdict's own
-`ts`, so a verdict recorded after a run on a delegation that run already saw
-still reaches the next bundle (#553).
+the newest `ts` in the file, verdicts included, and every since-watermark
+section counts a delegation once under its latest verdict and reads that
+verdict's own `ts`, so a verdict recorded after a run on a delegation that run
+already saw, or on a delegate row appended out of `ts` order (a row is stamped
+when its call starts), still reaches the next bundle (#553). A verdict that
+names no final is paired with the hook-written `<stem>.final.txt` beside its
+draft unless `suspect-finals.tsv` lists it (see "Quarantined finals" below),
+and `--ritual` judges that adopted final for ritual as it does a named one.
 
 ## What the bundle gives you
 
@@ -117,10 +122,14 @@ against the draft alone:
   rules, 40-character floor) run after the fact, so a rejection that says
   "restated the facts" carries the sentences it means.
 
-The recipe's own template lines are subtracted from the input before either
-is computed, so an example path or issue number the recipe carries is never
-reported as a supplied anchor. Rows from before the input was captured print
-as they always did.
+The recipe's own pre-substitution template is read from `prompts/`
+(`DELEGATE_PROMPTS_DIR` overrides) and its lines are subtracted from the input,
+as exact whole lines (`grep -Fxv`, with none of the normalisation
+`no_example_echo` applies), before either signal is
+computed, so `commit-message`'s example `#73` and `delegate.sh` are never
+reported as supplied anchors. A line that carried a placeholder differs from
+its template line and survives, which is the caller's value on it. Rows from
+before #516 have no input and print as they always did.
 
 The **capture coverage** line says how much of that you actually have. Drafts
 and inputs are captured automatically. The shipped text arrives either because
@@ -128,10 +137,24 @@ a caller passed `--final` to `delegate-feedback.sh`, or because the boundary hoo
 the post: when a `gh`/`glab` post is credited to a delegation, that post is
 that delegation's shipped form, so the hook stores it under the draft's own
 stem and the verdict adopts it. A final that arrived that way is marked
-`captured from the post` in the bundle, because the hook runs BEFORE the post
-and therefore stores what was about to go out rather than what demonstrably
-did. If coverage is low, raising it is a more valuable fix than any recipe
-edit, because everything downstream depends on it.
+`captured from the post` in the bundle. Since #587 it is stored by the
+`PostToolUse` confirm hook once the post has succeeded, so it is what shipped
+rather than what was about to; `docs/boundary-hook.md` has the capture rules.
+The line counts `with input=` between the draft and final counts, so the
+rejections with no stored input are visible. If coverage is low, raising it is
+a more valuable fix than any recipe edit, because everything downstream
+depends on it.
+
+## Quarantined finals
+
+`bash scripts/self-improve.sh --quarantine` lists the finals that are not
+their draft's shipped text in `suspect-finals.tsv` beside the metrics file
+(`--peek` prints the list without writing it): an empty final, one
+byte-identical to an earlier stem's, or one sharing under a fifth of its
+words with its own draft and more with the draft of the delegation before or
+after it in the same recipe, project and session. The bundle and
+`replay-recipe.sh` skip the listed pairs, and nothing is deleted (#587); on
+2026-09-30 it listed 125 of 1299 finals.
 
 ## Choose one fix
 
@@ -211,7 +234,46 @@ verdict at INCONCLUSIVE exactly as a rise in failed checks does.
 The champion is the recipe as committed on `main`, read out of git into a
 temp dir, not the file in your checkout: you edit on a branch in this same
 checkout, so the working file is the candidate. Pass `--champion DIR` to
-compare against something else.
+compare against something else, or set `DELEGATE_REPLAY_BASE` to read the
+champion from another ref.
+
+What a case is, and how the arms run (ADR 0031 as amended 2026-09-19):
+
+- The stored inputs are `<stem>.inputs.json`: the piped stdin, each `--var` as
+  passed (a key passed twice keeps its first value, the one the substitution
+  used), the resolved tier and the positional prompt, named on the row as
+  `inputs_file`. They share the draft's retention, byte cap and
+  `DELEGATE_NO_DRAFT_CAPTURE=1` opt-out, except that over the cap the JSON is
+  not written at all rather than cut, because a cut JSON is unreadable. The
+  rendered `input.txt` cannot be un-rendered, which is why this exists: the
+  2026-09-16 spike could not replay its 18 `maintainer-reply` cases under the
+  post-#517 template because their `lead` values were never stored.
+- `template_sha` is a 12-character sha256 of the recipe's frontmatter
+  (without its `input_quality:` block, which judges the caller's inputs and
+  not the template) and prompt block, computed by `recipe_template_sha` in
+  `scripts/lib/recipe.sh` and stamped on every recipe row whether or not
+  capture is on, so a dated calibration note does not start a new bucket.
+  Where `shasum` is not installed the function returns empty and the row
+  carries no `template_sha`. `tests/test-recipe-lib.sh` pins it for every
+  recipe (#559).
+- A case is a successful recipe row with a valid `inputs_file` and a verdict
+  pinned by `ref_id`; a verdict pinned only by `ts` is never a case, kept or
+  not, since two delegations can share a second. The reference is the stored
+  final, or the draft itself when the verdict is kept. `--seed FILE` adds cases in the spike's JSON schema.
+  Ritual verdicts and quarantined finals are skipped.
+- Each case runs through `delegate.sh` on its own tier with metrics, canary
+  and nudge off. The model is resolved once from the recipe's tier
+  (`DELEGATE_REPLAY_MODEL` pins it). A candidate whose frontmatter and prompt
+  block equal the champion's is reported without a run.
+- Scoring uses the bundle's own `salient` and `sentences` helpers
+  (`scripts/lib/pair-score.sh`, with the verdict join in `scripts/lib/pair.jq`),
+  and the shipped text is read through `body_only`, so trailer lines count
+  toward no column.
+- Outputs are cached under `<data dir>/replay/<id>.<sha>.<model>.out.txt`
+  (umask 077, pruned on `DELEGATE_DRAFT_RETENTION_DAYS`), written beside a
+  checks sidecar so an interrupted run leaves nothing that reads as a result.
+  A case whose row hash and model equal the champion's is scored from its
+  stored draft without a call unless that draft was cut at the byte cap.
 
 ```bash
 bash scripts/replay-recipe.sh --recipe maintainer-reply --candidate /path/to/worktree/prompts
@@ -219,7 +281,8 @@ bash scripts/replay-recipe.sh --recipe maintainer-reply --candidate /path/to/wor
 
 Read the verdict line. `ACCEPT` is more wins than losses at p < 0.05 on a
 one-sided sign test with no rise in failed checks: six wins to none, eight to
-one, ten to two. `REJECT` is the mirror. `INCONCLUSIVE` means the edit did
+one, ten to two. `REJECT` is the mirror. `INCONCLUSIVE` is everything else,
+including any run where a case failed to run. It means the edit did
 not separate the arms on the cases there are, and the right response is
 usually to leave the recipe alone: the edit is not wrong, it is unmeasured,
 and the commonest cause is that it targets a defect the cases do not carry.
@@ -303,8 +366,9 @@ clone at `origin/main`, with the bundle on stdin and this document as its
 instructions, and advances the watermark to the bundle's `Newest row` only
 when that session exits 0. A failed session leaves the window for the next
 day, and the session's own commit and PR delegations land after the
-watermark, so the next bundle judges them. A lock under the data dir keeps
-two runs from overlapping, and a lock whose owner has died is taken over.
+watermark, so the next bundle judges them. A lock under the data dir (a
+symlink whose target is the owner's pid) keeps two runs from overlapping, and
+a lock whose owner has died is taken over.
 Everything the runner and the session print goes to
 `<data dir>/self-improve-daily.log`.
 
@@ -353,3 +417,86 @@ Stop it with:
 launchctl bootout gui/$(id -u)/com.delegate-local.self-improve
 rm ~/Library/LaunchAgents/com.delegate-local.self-improve.plist
 ```
+
+## Reference: recording a verdict
+
+`scripts/delegate-feedback.sh` records what happened to a draft: `hit` (kept
+as-is), `scaffold "<reason>"` (edited and shipped) or `miss "<reason>"`
+(rewritten or discarded). The agent that used or rewrote the draft records it,
+and that is the only verdict tier (ADR 0030): every feedback row carries
+`verdict_source:"agent"`, `--source agent` is the default, `--source human` is
+refused, and a miss or scaffold needs a reason.
+
+Pin the verdict with `--id`, the value the `delegate-meta:` line printed as
+`id="..."`: the row's `otel_span_id`, the one key two delegations cannot
+share. `--ts` is kept for older callers and refuses when two rows share that
+second. Without a pin the verdict attaches to the one delegate row inside the
+last 5 minutes (`DELEGATE_FEEDBACK_STALE_SECONDS`, default 300), and the
+script refuses when there is none or more than one (#474). The verdict
+appends a `source:"feedback"` row to the same metrics JSONL, keyed by `ref_ts`
+and `ref_id` to the delegate event and carrying that row's `project`.
+
+`--final <path|->` stores the text that actually shipped beside the draft
+(ADR 0029). `delegate.sh` already stores the generated draft as
+`<data dir>/drafts/<stem>.draft.txt` and names it on the row; without the
+final a rejection carries only a prose description of a draft nobody can look
+at again, which is the ceiling the loop hit on 2026-08-26. Since #516 a recipe
+call also stores the rendered input the model saw (the template with every
+placeholder substituted, the piped context inside it, and the retry notice
+when a retry produced the draft) as `<stem>.input.txt`, named on the row as
+`input_file`. A bare call stores no input, because there is no recipe for the
+pair to calibrate. ADR 0029 had declined this as too large and too sensitive;
+the 2026-09-16 spike then spent twenty minutes and 220k tokens mining 42 of
+135 inputs back out of session transcripts and could not recover the other
+93. Draft, input and inputs share `DELEGATE_DRAFT_MAX_BYTES`,
+`DELEGATE_DRAFT_RETENTION_DAYS` and the `DELEGATE_NO_DRAFT_CAPTURE=1` opt-out;
+the input inherits the sensitivity of everything piped in, so a host with
+sensitive traffic tunes the retention or opts out. When no `--final` is
+passed, a final the boundary hook captured from the post is adopted; the
+adoption, numbering and ritual rules are in `docs/boundary-hook.md`.
+
+`--id`, `--ts` and `--final` may appear anywhere on the line, including after
+the reason words; parsing used to stop at the verdict, so three rejections in
+the corpus recorded a reason ending `--final /path` and stored nothing. Put
+`--` before the verdict when the reason itself has to name a flag.
+
+After a miss, the script scans earlier miss rows in a rolling 30-day window
+for token-overlap matches and, on the third or later similar reason, prints a
+draft `gh issue create` command for a `prompt-pattern` issue; it never opens
+the issue itself (README "Calibration feedback loop" has the diagram and the
+defaults of `DELEGATE_FEEDBACK_NUDGE_AT`, `DELEGATE_FEEDBACK_NUDGE_WINDOW_DAYS`
+and `DELEGATE_FEEDBACK_SIMILAR_THRESHOLD`; `DELEGATE_FEEDBACK_NO_NUDGE=1`
+silences it). A miss or scaffold whose reason is byte-identical to another
+rejection's on a different delegation inside the last 10 minutes
+(`DELEGATE_FEEDBACK_REPEAT_WINDOW_SECONDS`, default 600, `0` switches it off)
+is warned about on stderr with the count and still written, because a sweep
+pasting one verdict across 16 rows taught the loop one fact on 2026-09-13 and
+a refused verdict would teach it none (#487).
+
+## Reference: the metrics rollup
+
+`scripts/metrics-summary.sh` reads the metrics JSONL and prints volume,
+latency and tokens-avoided rollups, the boundary trigger rate
+(`docs/boundary-hook.md` "Reading the trigger rate"), and per-project and
+per-recipe hit-rate sections (the per-project one only with two or more
+distinct projects, the per-recipe one only with at least one recipe row),
+listing projectless rows on one `(no project)` line after the per-project
+ones. The verdict join, one latest verdict per delegation whether pinned by
+id or by ts, and its outcome are `scripts/lib/pair.jq`, loaded with `jq -L` on
+an absolute path by `metrics-summary.sh`, `self-improve.sh` and
+`replay-recipe.sh` alike, so the per-recipe counts `metrics-summary.sh --days
+N` and `self-improve.sh --days N` print agree (`tests/test-verdict-model.sh`,
+#564). `--since YYYY-MM-DD` and `--days N` window every section to rows at or
+after the cutoff, resolved in jq via `now`/`fromdateiso8601` so there is no
+BSD-versus-GNU `date` split, and the matching rows are filtered once into a
+temp file every later pass reads. The script is read-only.
+
+The feedback block carries a captured-pair line that splits the rejections
+that stored their shipped half into `inferred` (the verdict adopted the final
+the boundary hook wrote, `final_source:"posted"`) and `by-hand` (the caller
+passed `--final`), beside `hook-captured`, the rejections whose draft has a
+hook-written `<stem>.final.txt` in the drafts dir (#552). `inferred` measures
+adoption, not capture: callers now pass `--final`, so it sits near 0 while
+the hook keeps writing finals, and `hook-captured=0` is what a capture that
+never fires looks like. An absent field on every row looks the same as having
+no reply traffic at all, which is how #457 stayed broken for eleven days.
