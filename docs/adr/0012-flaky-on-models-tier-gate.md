@@ -6,6 +6,8 @@ Date: 2026-05-24
 
 Accepted. The gate mechanism stands. Its `pr-description` worked example was later superseded by **ADR 0027 (2026-06-28)**: a controlled re-measurement falsified the "35B-class models generation-stall on this recipe" premise (the model produces grade-A output in ~6 s once warm; the blocker is a one-time cold-load, which is the canary's exit-3 domain, not the gate's exit-4 domain), so that recipe's `flaky_on_models` entry was retired. The convention itself — and the `release-note` / `long-thread-distillation` entries — are unaffected.
 
+Superseded by #568 (2026-10-01): the flaky-model gate and the `release-note` and `long-thread-distillation` recipes were removed, since no remaining recipe declared `flaky_on_models`.
+
 ## Context
 
 `prompts/pr-description.md` accumulated calibration evidence between 2026-05-10 and 2026-05-13 that the recipe stalls or produces massive hallucinations on 35B-class prose-tier models regardless of body size — measured on Ollama and on MLX, on inputs ranging from 612 bytes to 5.2 KB. Issue [#110](https://github.com/IsmaelMartinez/delegate-local/issues/110) documented stalls of 6-10 minutes on the resolved prose-tier model; subsequent comments narrowed the discriminator to model parameter count at recipe-sized prompts. The recipe's calibration notes named hand-writing as the active mitigation since 2026-05-10. The Phase 11 round-3 retrospective surfaced `pr-description` as the standout weak recipe in the 22-day trend report at a 45% hit rate (5 HIT / 6 MISS across 11 verdicts); the documented mitigation existed but the wiring to enforce it did not.

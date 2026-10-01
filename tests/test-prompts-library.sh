@@ -208,8 +208,7 @@ assert_contains "Generated with" "$pr_description_gather" \
   "pr-description.md gather block strips the generated-by footer from each example"
 
 # Every dispatchable recipe declares a frontmatter `tier:` (#411); README.md
-# and the shell-pipeline semantic-search.md are not dispatchable. The
-# vocabulary is read from pick-model.sh's TIERS line so this cannot drift.
+# is not dispatchable. The vocabulary is read from pick-model.sh's TIERS line so this cannot drift.
 VALID_TIERS=$(sed -n 's/^TIERS="\(.*\)"$/\1/p' "$REPO/scripts/pick-model.sh" | tr '|' ' ')
 if [[ -z "$VALID_TIERS" ]]; then
   echo "  FAIL  could not read TIERS from scripts/pick-model.sh"; fail=$((fail+1))
@@ -217,7 +216,6 @@ fi
 for recipe_file in "$PROMPTS_DIR"/*.md; do
   base=$(basename "$recipe_file" .md)
   [[ "$base" == "README" ]] && continue
-  [[ "$base" == "semantic-search" ]] && continue
   if [[ "$(head -1 "$recipe_file")" != "---" ]]; then
     if grep -q '^## Prompt template' "$recipe_file"; then
       echo "  FAIL  $base.md is dispatchable but has no frontmatter to declare tier: in"; fail=$((fail+1))

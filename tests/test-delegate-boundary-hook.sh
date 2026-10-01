@@ -173,11 +173,10 @@ assert_nudge "$out" "pr-create && rm -rf: additionalContext and no permissionDec
 payload 'glab mr create --fill' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq pr-create "$(jq -r .boundary <<<"$(last_row)")" "glab mr create: boundary"
 
-# 8. gh release create -> release-note recipe.
+# 8. gh release create is not a boundary since release-note was retired (#568).
 : > "$METRICS"
-payload 'gh release create v1.0.0 --notes x' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
-assert_eq release-create "$(jq -r .boundary <<<"$(last_row)")" "release-create: boundary"
-assert_eq release-note "$(jq -r .suggested_recipe <<<"$(last_row)")" "release-create: recipe"
+out=$(payload 'gh release create v1.0.0 --notes x' "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK")
+assert_eq "0 " "$(wc -l < "$METRICS" | tr -d ' ') $out" "gh release create: no row and no nudge (#568)"
 
 # 8h. gh issue create WITH an inline body -> issue-create / github-issue-body.
 : > "$METRICS"
@@ -2432,9 +2431,9 @@ assert_contains '"permissionDecision":"deny"' "$out" "#563 target: a reply to an
 out=$(payload_id "gh pr comment my-branch --body \"$body300\"" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK")
 assert_eq "" "$out" "#563 target: ...while the retry to the same branch's PR reuses its credit"
 # Value-taking flags are per command: on `gh pr review` -r and -a are the
-# booleans --request-changes and --approve, and on `gh release create` -p is
-# --prerelease, so the word after them is not swallowed as their value and
-# a retry with another body still reaches its marker.
+# booleans --request-changes and --approve, so the word after them is not
+# swallowed as their value and a retry with another body still reaches its
+# marker.
 retry563() { # boundary first-cmd retry-cmd recipe name
   reset497; seed_draft "$4" d563.draft.txt
   confirm 'ls' "$tmpcwd" sess-A toolu-0
@@ -2446,8 +2445,6 @@ retry563 pr-review-body "gh pr review 12 -r --body \"first $body300\"" "gh pr re
   maintainer-review-reply "gh pr review -r is boolean, so the retry with another body reuses the marker"
 retry563 pr-review-body "gh pr review 12 -a --body \"first $body300\"" "gh pr review 12 -a --body \"second $body300\"" \
   maintainer-review-reply "gh pr review -a is boolean, so the retry with another body reuses the marker"
-retry563 release-create "gh release create v1 -p --notes \"first $body300\"" "gh release create v1 -p --notes \"second $body300\"" \
-  release-note "gh release create -p is boolean, so the retry with other notes reuses the marker"
 retry563 comment-reply "glab mr discussion note 4 --message \"first $body300\"" "glab mr discussion note 4 --message \"second $body300\"" \
   maintainer-reply "glab mr discussion note reads glab mr note's flags, so a rewritten --message retry reuses the marker"
 # A command with no flag table of its own still never keys on a body-ish

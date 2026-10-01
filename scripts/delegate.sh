@@ -33,8 +33,6 @@
 #   DELEGATE_BASE_URL=<urls>            ordered OpenAI-compatible base URLs; the
 #                                       default list lives in pick-model.sh
 #   MLX_HOST / DOCKER_MODEL_HOST / OLLAMA_HOST   feed that default list
-#   DELEGATE_FORCE_FLAKY=1              send a recipe its frontmatter marks flaky
-#                                       on the resolved model (else exit 4)
 #   DELEGATE_LOCAL_DATA_DIR             per-user data (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE=<path>        override the metrics destination
 #   DELEGATE_PROJECT=<name>             the project the delegation is FOR, when
@@ -379,7 +377,7 @@ start_epoch_ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
 otel_trace_id=$(otel_gen_id 32)
 otel_span_id=$(otel_gen_id 16)
 
-# One metrics row + span for an early-exit failure (pick-model, flaky gate,
+# One metrics row + span for an early-exit failure (pick-model or the
 # canary): zero output chars, the elapsed time attributed to generation_ms.
 emit_failure() {
   local fstatus="$1" fmodel="$2" fs_temp="${3:-}"
@@ -389,9 +387,9 @@ emit_failure() {
   fp=$(( recipe_template_chars + ${#prompt} ))
   fc=${#context}
   ftoks=$(compute_tokens_local "$fp" "$fc" 0)
-  # A failed recipe row still names its template (arg 24), so a stall or a
-  # flaky refusal is attributed to the template that was live; the eight
-  # check and capture fields between are empty, as nothing was generated.
+  # A failed recipe row still names its template (arg 24), so a stall is
+  # attributed to the template that was live; the eight check and capture
+  # fields between are empty, as nothing was generated.
   log_metric "$ts_start" "$tier" "$fmodel" "$fp" "$fc" 0 "$fdur" "$fstatus" "$recipe" 0 "$fdur" "$otel_trace_id" "$otel_span_id" "$fs_temp" "$delegate_project" \
     "" "" "" "" "" "" "" "" "${template_sha:-}"
   emit_otel_span "$start_epoch_ms" "$fdur" "$fstatus" "$otel_trace_id" "$otel_span_id" "$fmodel" "$backend" "$tier" "$recipe" "$fp" "$fc" 0 0 "$fdur" "$ftoks" "${recipe_template}${prompt}" "$context" "" "$delegate_project"
@@ -832,47 +830,6 @@ if [[ $pick_rc -ne 0 ]]; then
     echo "         still broken? file a bug: https://github.com/${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}/issues/new?template=bug_report.md"
   } >&2
   exit 1
-fi
-
-# Recipe-level flaky-on-model gate: a frontmatter `flaky_on_models:` list of
-# case-insensitive substrings refuses (exit 4) on a matching model unless
-# DELEGATE_FORCE_FLAKY=1. Before the canary: no point probing a model the
-# recipe already classifies as unreliable.
-if [[ -n "$recipe" ]] && [[ "${DELEGATE_FORCE_FLAKY:-}" != "1" ]]; then
-  flaky_list=$(recipe_fm_block "$recipe_file" | awk '
-    /^flaky_on_models:[[:space:]]*$/ { in_flaky=1; next }
-    in_flaky && /^[[:space:]]+-[[:space:]]+[^[:space:]]/ {
-      sub(/^[[:space:]]+-[[:space:]]+/, "")
-      sub(/[[:space:]]+$/, "")
-      print
-      next
-    }
-    in_flaky && /^[a-zA-Z_]/ { in_flaky=0 }
-  ')
-  if [[ -n "$flaky_list" ]]; then
-    model_lower=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
-    matched_pat=""
-    while IFS= read -r pat; do
-      [[ -z "$pat" ]] && continue
-      pat_lower=$(printf '%s' "$pat" | tr '[:upper:]' '[:lower:]')
-      if [[ "$model_lower" == *"$pat_lower"* ]]; then
-        matched_pat="$pat"
-        break
-      fi
-    done <<< "$flaky_list"
-    if [[ -n "$matched_pat" ]]; then
-      emit_failure 4 "$model"
-      {
-        echo "delegate: recipe '$recipe' is flagged as flaky on model '$model'"
-        echo "         (matched frontmatter pattern '$matched_pat'; see prompts/$recipe.md calibration notes)"
-        echo "         Options:"
-        echo "         - hand-write the output (recommended — the recipe documents this as the active mitigation)"
-        echo "         - route to a different tier (e.g. --tier code) and retry"
-        echo "         - override with DELEGATE_FORCE_FLAKY=1 (sends the request; expect known-flaky behaviour)"
-      } >&2
-      exit 4
-    fi
-  fi
 fi
 
 # Sampler profile: greedy (temperature 0) for every model. The

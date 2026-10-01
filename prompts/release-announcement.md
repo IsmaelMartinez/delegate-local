@@ -12,9 +12,9 @@ checks:
 
 You are drafting the narrative intro for a software release announcement — the warm, grounded paragraph or two at the top of a GitHub release page or announcement post that frames what the release is about, from grouped highlights you already have. The output is one or two short flowing-prose paragraphs referring to the major themes by name, no headings and no bullets, in a plain maintainer voice.
 
-Distinct from `release-note.md`, which drafts a *single CHANGELOG bullet* for one merged PR. This recipe writes the human-facing intro narrative across the whole release; `release-note` writes the per-change bullets that sit below it. A typical release uses both: this recipe for the opening narrative, `release-note` (per PR) for the changelog list.
+This recipe writes the human-facing intro narrative across the whole release, not the per-change bullets that sit below it. For those, use a bare `prose`-tier delegation per change, as SKILL.md describes for a shape with no recipe.
 
-Not for: the full changelog itself (that is per-PR `release-note` work), or marketing copy with hype and calls to action (the recipe deliberately forbids puffery — a release intro is informative, not promotional).
+Not for: the full changelog itself (per-change bullets are a bare `prose`-tier delegation), or marketing copy with hype and calls to action (the recipe deliberately forbids puffery — a release intro is informative, not promotional).
 
 ## Context to gather first
 
@@ -98,7 +98,7 @@ Verify before recording verdict: one or two short paragraphs, no headings, no bu
 
 ## Calibration notes
 
-Graduated 2026-06-16 from observed recurring bare-delegation usage rather than from a recorded HIT. A 2026-06-15 analysis of the session-transcript corpus found the release-intro / TL;DR narrative shape recurring (notably across teams-for-linux releases) with no recipe — adjacent to `release-note.md` but a different output shape (a narrative intro, not a single CHANGELOG bullet), so it fell back to the bare `prose` tier each time with the no-puffery and no-em-dash directives re-specified by hand.
+Graduated 2026-06-16 from observed recurring bare-delegation usage rather than from a recorded HIT. A 2026-06-15 analysis of the session-transcript corpus found the release-intro / TL;DR narrative shape recurring (notably across teams-for-linux releases) with no recipe — adjacent to `release-note` but a different output shape (a narrative intro, not a single CHANGELOG bullet), so it fell back to the bare `prose` tier each time with the no-puffery and no-em-dash directives re-specified by hand.
 
 The prompt skeleton is lifted from the actual bare prompts used, which had converged on the same guards: "warm and grounded, no marketing puffery, no exclamation marks, no em dashes", "Do not begin with a warm greeting; this is a release note, not a reply", "keep the issue/PR numbers", and "End the second paragraph without a trailing summary sentence that restates the point." Those hand-specified guards are what this recipe makes permanent. The two observed variants — a narrative two-paragraph intro and a TL;DR-with-`**Highlights**`-list — share this prose skeleton; for the list variant, steer the bullet structure through the trailing prompt rather than the recipe (the recipe defaults to the headings-free narrative).
 
