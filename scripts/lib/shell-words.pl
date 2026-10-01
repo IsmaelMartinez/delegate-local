@@ -52,9 +52,9 @@ sub heredoc {
 sub cat_heredoc {
   my ($i) = @_;
   pos($s) = $i;
-  return (0) unless $s =~ /\G\$\([ \t]*cat[ \t]+<<(-?)[ \t]*(?:'([^']*)'|"([^"]*)"|\\?(\w+))[ \t]*\n/gc;
-  my ($dash, $quoted) = ($1, !defined $4);
-  my $delim = defined $2 ? $2 : defined $3 ? $3 : $4;
+  return (0) unless $s =~ /\G\$\([ \t]*cat[ \t]+<<(-?)[ \t]*(?:'([^']*)'|"([^"]*)"|(\\?)(\w+))[ \t]*\n/gc;
+  my ($dash, $quoted) = ($1, !defined $5 || $4 ne '');
+  my $delim = defined $2 ? $2 : defined $3 ? $3 : $5;
   my ($body, $p, $found) = heredoc(pos($s), $delim, $dash);
   return (0) unless $found;
   pos($s) = $p;
@@ -142,8 +142,8 @@ while ($i < $n) {
   if (substr($s, $i, 3) eq '<<<') { endword(); $i += 3; next }
   if ($c2 eq '<<') {
     endword(); pos($s) = $i;
-    if ($s =~ /\G<<(-?)[ \t]*(?:'([^']*)'|"([^"]*)"|\\?(\w+))/gc) {
-      push @pend, [scalar(@segs), $1, defined $2 ? $2 : defined $3 ? $3 : $4, !defined $4];
+    if ($s =~ /\G<<(-?)[ \t]*(?:'([^']*)'|"([^"]*)"|(\\?)(\w+))/gc) {
+      push @pend, [scalar(@segs), $1, defined $2 ? $2 : defined $3 ? $3 : $5, !defined $5 || $4 ne ''];
       $i = pos($s); next;
     }
     $i += 2; next;

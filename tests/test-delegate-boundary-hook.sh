@@ -2369,6 +2369,16 @@ payload 'gh api repos/o/r/pulls/12/comments/99/replies -f body="thanks, fixed"' 
 assert_eq pr-review-comment "$(jq -r '.boundary // "none"' <<<"$(last_row)")" \
   "#562: gh api .../replies -f body= without -X POST is a pr-review-comment"
 : > "$METRICS"
+payload "gh api repos/o/r/pulls/12/comments/99/replies -f 'body=thanks, fixed'" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq pr-review-comment "$(jq -r '.boundary // "none"' <<<"$(last_row)")" \
+  "#562: a quoted -f 'body=...' field without -X POST is a pr-review-comment"
+# `<<\EOF` quotes the delimiter as `<<'EOF'` does, so `$` in the body is literal.
+assert_eq 16 "$(chars562 "$(printf 'gh issue comment 1 --body-file - <<\\EOF\nit costs $5 now\nEOF')")" \
+  "#562: a <<\\EOF stdin heredoc with a \$ is literal and measured"
+assert_eq 13 "$(chars562 "$(printf 'git commit -m "$(cat <<\\EOF\nfix: $x thing\nEOF\n)"')")" \
+  "#562: a \$(cat <<\\EOF ...) message with a \$ is literal and measured"
+: > "$METRICS"
 payload 'gh api -X GET repos/o/r/pulls/12/comments -f body=x' "$tmpcwd" \
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq 0 "$(nrows)" "#562: an explicit -X GET with a body field is still not a post"

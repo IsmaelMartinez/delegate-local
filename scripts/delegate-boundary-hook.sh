@@ -173,14 +173,16 @@ boundary="" recipe=""
 # the file exists yet: the command itself may write it, so its text is only
 # the shipped text once the call has run (#587), and the confirm hook reads
 # it then. Here it is read for the length checks only.
-body_text="" body_chars="" body_measurable=false body_read=false body_file=""
+body_text="" body_chars="" body_measurable=false body_read=false body_file="" body_kind=""
 read_posted_body() { # segment-index (0-based)
   local out first kind flag path
   body_text="" body_chars="" body_measurable=false body_read=true body_file=""
+  body_kind=""
   # The trailing X survives command-substitution newline stripping.
   out=$(perl "$tokenizer" "$1" <<<"$cmd" 2>/dev/null; printf X); out=${out%X}
   first=${out%%$'\n'*}
   IFS=$'\t' read -r kind flag <<<"$first"
+  body_kind="$kind"
   if [[ "$kind" == "FILE" ]]; then
     path=$(resolve_env_prefix "$flag")
     # A leading `cd <path> &&` moves relative paths again.
@@ -239,10 +241,18 @@ git_commit_seg() { # blanked-segment
 # True when a `gh api` segment sends a POST: an explicit -X/--method POST, or
 # no method at all and a body field, since gh api POSTs whenever a field is
 # given (`gh api …/replies -f body=…`, as /address-pr-comments posts a reply).
-gh_api_post() { # blanked-segment
+gh_api_post() { # blanked-segment segment-index
   grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$1" && return 0
-  ! grep -Eq -- '(^|[[:space:]])(-X|--method)' <<<"$1" \
-    && grep -Eq -- '(^|[[:space:]])(-[fF]|--field|--raw-field)([[:space:]]+|=)body=' <<<"$1"
+  ! grep -Eq -- '(^|[[:space:]])(-X|--method)' <<<"$1" && api_body_field "$2"
+}
+# True when the segment carries a body field, read from the tokenizer's body
+# record: the blanked surface loses a quoted `-f 'body=…'`. A segment that is
+# not the boundary must not keep its body as the matched one's, so a miss
+# clears body_read.
+api_body_field() { # segment-index
+  read_posted_body "$1"
+  [[ "$body_kind" == INLINE || "$body_kind" == FILE ]] && return 0
+  body_read=false; return 1
 }
 
 classify_segment() { # blanked-segment segment-index
@@ -278,15 +288,15 @@ classify_segment() { # blanked-segment segment-index
   # to intercept.
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+api([[:space:]]|$)' <<<"$seg" \
      && grep -Eq '/pulls/[0-9]+/reviews' <<<"$seg" \
-     && gh_api_post "$seg" \
-     && grep -Eq -- '(^|[[:space:]])(-[fF]|--field|--raw-field)([[:space:]]+|=)body=' <<<"$seg"; then
+     && gh_api_post "$seg" "$segi" \
+     && api_body_field "$segi"; then
     boundary="pr-review-body"; recipe="maintainer-review-reply"; return 0
   fi
   # Scoped to the pulls endpoint so an issues-comment POST is not misread, and
   # to a POST so the read-only fetch step is not a boundary.
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+api([[:space:]]|$)' <<<"$seg" \
      && grep -Eq '/pulls/[0-9]+/comments' <<<"$seg" \
-     && gh_api_post "$seg"; then
+     && gh_api_post "$seg" "$segi"; then
     boundary="pr-review-comment"; recipe="pr-review-reply"; return 0
   fi
   # Which recipe this names depends on how much is posted: maintainer-reply
