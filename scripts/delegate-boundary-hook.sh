@@ -369,13 +369,16 @@ while IFS= read -r seg; do
   case "$seg" in *git*|*gh*|*glab*) ;; *) continue ;; esac
   # Blanked line k of $scan is raw segment k (0-based in the array).
   if classify_segment "$seg" "$((seg_idx - 1))"; then
+    # The matched segment's body and target, read once (one already read is
+    # answered from the cache). A segment asking for its command's help
+    # (`--help` or `-h` as an option word, read by the tokenizer) posts
+    # nothing, so it is no boundary and a later segment may still be one.
+    read_posted_body "$((seg_idx - 1))"
+    if [[ "$body_kind" == HELP ]]; then boundary="" recipe=""; continue; fi
     matched_seg="$seg"; break
   fi
 done <<<"$scan"
 [[ -z "$boundary" ]] && exit 0
-# Every other boundary reads its body (and its target) here, once, from its
-# own segment; one already read is answered from the cache.
-read_posted_body "$((seg_idx - 1))"
 # PostToolUse reports the whole call, and its success is the boundary's own
 # only when the boundary is the last segment or is joined to everything after
 # it by `&&`: `cd x && git commit` and `git commit -F m && git push` both
