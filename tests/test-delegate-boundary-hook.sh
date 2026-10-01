@@ -2300,6 +2300,7 @@ done
 seed_two
 racedir=$(mktemp -d); mkdir -p "$racedir/lib"
 cp "$CONFIRM" "$racedir/confirm.sh"
+cp "$REPO/scripts/lib/hook.sh" "$racedir/lib/hook.sh"
 cat > "$racedir/lib/pair-score.sh" <<EOF
 best_draft() { printf 'rival' > "$METRICS_DIR/drafts/dA.final.txt"; printf 'dA.draft.txt'; }
 EOF
@@ -2391,6 +2392,66 @@ assert_eq 13 "$(chars562 "$(printf 'git commit -m "$(cat <<\\EOF\nfix: $x thing\
 payload 'gh api -X GET repos/o/r/pulls/12/comments -f body=x' "$tmpcwd" \
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq 0 "$(nrows)" "#562: an explicit -X GET with a body field is still not a post"
+
+# 91 (#563). A pending marker is the retry of the post it was left by, so it
+# is reused only by a post to the same target: the numbers, `key=number`
+# fields, API endpoints, URLs and `--repo` the command names. A refused reply
+# to PR 12 that was never retried must not credit a reply to PR 13.
+reset497; seed_draft maintainer-reply d563.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "gh pr comment 12 --body \"$body300\"" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+assert_eq toolu-1 "$(marker_id sess-A.comment-reply.$proj)" "#563 target: the credited reply to PR 12 is pending"
+out=$(payload_id "gh pr comment 13 --body \"$body300\"" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "#563 target: a reply to PR 13 is not the retry of the one to PR 12"
+assert_eq toolu-1 "$(marker_id sess-A.comment-reply.$proj)" "#563 target: ...and leaves the PR 12 marker in place"
+out=$(payload_id "gh pr comment 12 --repo o/r --body \"$body300\"" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "#563 target: the same number in a named --repo is another target"
+out=$(payload_id "gh pr comment 12 --body-file $tmpcwd/rr.txt" "$tmpcwd" sess-A toolu-4 | dflt bash "$HOOK")
+assert_eq "" "$out" "#563 target: the retry to PR 12 reuses its credit whatever its body flag"
+assert_eq toolu-4 "$(marker_id sess-A.comment-reply.$proj)" "#563 target: ...and re-arms the marker"
+rm -rf "$pending" "$METRICS_DIR/drafts"
+
+# 92 (#563). The common path spawns no jq: the boundary hook pre-filters the
+# raw payload before any jq, and the confirm hook globs the session's markers
+# before reading the payload with jq. A PATH-shadowed jq logs every call.
+JQLOG=$(mktemp -d)
+printf '#!/usr/bin/env bash\nprintf x >> %q/calls\nexec %q "$@"\n' "$JQLOG" "$REAL_JQ" > "$JQLOG/jq"
+chmod +x "$JQLOG/jq"
+jqcalls() { local n; n=$(wc -c < "$JQLOG/calls" 2>/dev/null) || n=0; echo $((n + 0)); }
+: > "$METRICS"; : > "$JQLOG/calls"
+p563=$(payload 'ls -la ~/projects/github && echo "done; high time"' "$tmpcwd")
+out=$(PATH="$JQLOG:$PATH" DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" <<<"$p563")
+assert_eq "0 " "$(jqcalls) $out" "#563 prefilter: a call naming no git/gh/glab spawns no jq and prints nothing"
+: > "$JQLOG/calls"
+out=$(payload 'git commit -m "fix: the prefilter still lets a boundary through"' "$tmpcwd" | PATH="$JQLOG:$PATH" dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "#563 prefilter: a boundary still reaches the classifier"
+assert_eq true "$( (( $(jqcalls) > 0 )) && echo true || echo false)" "#563 prefilter: ...and the shadowed jq logs the calls it makes"
+# A newline-separated command reaches the raw payload as `\ngit`, and a
+# wrapper script as `bash <path>`: both pass the raw pre-filter.
+: > "$METRICS"
+payload "$(printf 'cd %s\ngit commit -m "fix: after a newline"' "$tmpcwd")" "$tmpcwd" | dflt bash "$HOOK" >/dev/null
+assert_eq git-commit "$(jq -r '.boundary // "none"' <<<"$(last_row)")" "#563 prefilter: a boundary after an escaped newline is classified"
+wr563=$(mktemp -d); printf 'git commit -m "fix: from inside a wrapper script"\n' > "$wr563/w.sh"
+: > "$METRICS"
+payload "bash $wr563/w.sh" "$tmpcwd" | DELEGATE_BOUNDARY_WRAPPER_DIRS="$wr563" dflt bash "$HOOK" >/dev/null
+assert_eq git-commit "$(jq -r '.boundary // "none"' <<<"$(last_row)")" "#563 prefilter: a wrapper script with no git in its command line is still read"
+rm -rf "$wr563"
+# The confirm hook with no marker for the session: .seen is written, no jq.
+rm -rf "$pending"; : > "$JQLOG/calls"
+post_payload 'ls -la' "$tmpcwd" sess-F toolu-1 | PATH="$JQLOG:$PATH" dflt bash "$CONFIRM" 2>/dev/null
+assert_eq "0 present" "$(jqcalls) $([[ -e "$pending/sess-F.seen" ]] && echo present || echo absent)" \
+  "#563 confirm: no pending marker, no jq, and the session is still marked seen"
+post_payload 'ls -la' "$tmpcwd" sess-F toolu-1 PostToolUseFailure | PATH="$JQLOG:$PATH" dflt bash "$CONFIRM" 2>/dev/null
+assert_eq 0 "$(jqcalls)" "#563 confirm: a wrong event exits before any jq too"
+# ...and with one, the jq path confirms it as before.
+reset497; seed_draft maintainer-reply d563.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "gh pr comment 12 --body \"$body300\"" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+: > "$JQLOG/calls"
+post_payload "gh pr comment 12 --body \"$body300\"" "$tmpcwd" sess-A toolu-1 | PATH="$JQLOG:$PATH" dflt bash "$CONFIRM" 2>/dev/null
+assert_eq "absent" "$(pstate sess-A.comment-reply.$proj)" "#563 confirm: a pending marker is still confirmed"
+assert_eq "$body300" "$(cat "$METRICS_DIR/drafts/d563.final.txt" 2>/dev/null)" "#563 confirm: ...and its final stored"
+rm -rf "$pending" "$METRICS_DIR/drafts" "$JQLOG"
 
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"

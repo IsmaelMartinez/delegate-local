@@ -22,38 +22,67 @@
 
 set -uo pipefail
 
-# Resolved before the cd to the payload cwd, as in the boundary hook.
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || script_dir=""
+# Resolved before the cd to the payload cwd, as in the boundary hook, and by
+# parameter expansion: this runs on every Bash call.
+script_dir="${BASH_SOURCE[0]}"
+case "$script_dir" in */*) script_dir="${script_dir%/*}" ;; *) script_dir=. ;; esac
+[[ "$script_dir" == /* ]] || script_dir="$PWD/$script_dir"
+# shellcheck source=lib/hook.sh
+. "$script_dir/lib/hook.sh" 2>/dev/null || exit 0
 
-[[ -t 0 ]] && exit 0
-input=$(cat 2>/dev/null) || exit 0
+hook_read_input || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] || exit 0
-
-# Registered under PostToolUseFailure by mistake, this hook would confirm the
-# failed post and deny its retry, so the event is checked, not assumed. Unit
-# separator, not tab: tab is IFS whitespace, so an empty field would collapse
-# and shift the tool id into the session.
-IFS=$'\x1f' read -r event session_id tool_use_id interrupted hook_cwd < <(jq -r '
-  [(.hook_event_name // ""), (.session_id // ""), (.tool_use_id // ""),
-   ((.tool_response.interrupted // false) | tostring), (.cwd // "")] | join("\u001f")' <<<"$input" 2>/dev/null) || exit 0
-[[ "${event:-}" == "PostToolUse" && -n "${session_id:-}" ]] || exit 0
-
-# The boundary hook resolves a relative metrics path after chdir to the
-# payload cwd; the same chdir here keeps both on one pending directory.
-[[ -n "${hook_cwd:-}" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
-metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
-pending_dir="$(dirname "$metrics_file")/.boundary-pending"
 
 # The seen file is the boundary hook's evidence that this session has a
 # confirm hook: without it an unconfirmed marker means nothing, since a
 # PreToolUse-only install never confirms. One stat per call once it exists.
-seen="$pending_dir/$session_id.seen"
-if [[ ! -f "$seen" ]]; then
-  mkdir -p "$pending_dir" 2>/dev/null || exit 0
+mark_seen() {
+  seen="$pending_dir/$session_id.seen"
+  [[ -f "$seen" ]] && return 0
+  mkdir -p "$pending_dir" 2>/dev/null || return 1
   chmod 700 "$pending_dir" 2>/dev/null || true
-  : > "$seen" 2>/dev/null || exit 0
+  : > "$seen" 2>/dev/null
+}
+
+# --- the fast path: no marker for this session, no jq (#563) ----------------
+# Nearly every call confirms nothing, so the session and event are matched
+# off the raw payload and the session's markers globbed; with none there is
+# nothing to confirm and the hook exits having spawned no process. Anything
+# it cannot decide this way (a field it cannot read raw, a relative metrics
+# path that needs the payload cwd) falls through to the jq path below.
+if hook_json_str hook_event_name; then
+  # Registered under PostToolUseFailure by mistake, this hook would confirm
+  # the failed post and deny its retry, so the event is checked, not assumed.
+  [[ "$REPLY" == "PostToolUse" ]] || exit 0
+  if hook_json_str session_id && [[ -n "$REPLY" ]]; then
+    session_id="$REPLY"
+    hook_metrics_paths
+    if [[ "$metrics_file" == /* ]]; then
+      mark_seen || exit 0
+      _pending=false
+      for _m in "$pending_dir/$session_id".*; do
+        [[ -f "$_m" && "$_m" != "$seen" ]] || continue
+        case "$_m" in *.row|*.confirming.*) continue ;; esac
+        _pending=true; break
+      done
+      [[ "$_pending" == "true" ]] || exit 0
+    fi
+  fi
 fi
+
+# Unit separator, not tab: tab is IFS whitespace, so an empty field would
+# collapse and shift the tool id into the session.
+IFS=$'\x1f' read -r event session_id tool_use_id interrupted hook_cwd < <(jq -r '
+  [(.hook_event_name // ""), (.session_id // ""), (.tool_use_id // ""),
+   ((.tool_response.interrupted // false) | tostring), (.cwd // "")] | join("\u001f")' <<<"$hook_input" 2>/dev/null) || exit 0
+[[ "${event:-}" == "PostToolUse" && -n "${session_id:-}" ]] || exit 0
+
+# The boundary hook resolves a relative metrics path after chdir to the
+# payload cwd; the same chdir here keeps both on one pending directory.
+hook_chdir "${hook_cwd:-}"
+hook_metrics_paths
+mark_seen || exit 0
 
 # capture_final <marker> — a credited post's shipped text is stored here,
 # after the call succeeded, never at PreToolUse (#587): a final written
@@ -80,7 +109,7 @@ capture_final() {
   fi
   text=${text%X}
   [[ -n "$text" ]] || return 0
-  drafts_dir="$(dirname "$metrics_file")/drafts"
+  drafts_dir="$metrics_dir/drafts"
   IFS=',' read -r -a _raw <<<"${drafts_csv:-}"
   for d in ${_raw[@]+"${_raw[@]}"}; do
     case "$d" in */*|.*) continue ;; *.draft.txt) ;; *) continue ;; esac

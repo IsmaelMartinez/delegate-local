@@ -43,20 +43,34 @@ set -uo pipefail
 
 # Resolved BEFORE the cd to the payload cwd below: a relative $0 resolved
 # afterwards names the wrong tree and the recipe lookup silently finds nothing.
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || script_dir=""
+# Parameter expansion, not `cd "$(dirname …)" && pwd`: this line runs on every
+# Bash call, and those were three processes.
+script_dir="${BASH_SOURCE[0]}"
+case "$script_dir" in */*) script_dir="${script_dir%/*}" ;; *) script_dir=. ;; esac
+[[ "$script_dir" == /* ]] || script_dir="$PWD/$script_dir"
+# shellcheck source=lib/hook.sh
+. "$script_dir/lib/hook.sh" 2>/dev/null || exit 0
 
-# --- read the harness payload ---------------------------------------------
-# A TTY on stdin means the hook was run by hand; exit before `cat` blocks.
-[[ -t 0 ]] && exit 0
-input=$(cat 2>/dev/null) || exit 0
+# --- read the harness payload and pre-filter it (#563) ---------------------
+# The common path exits here, having spawned nothing but the `$(<…)` subshell:
+# one `[[ =~ ]]` over the raw payload, before any jq, cd or tokenizer.
+hook_read_input || exit 0
+[[ "$hook_input" =~ $hook_prefilter_re ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-cmd=$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null) || exit 0
+# One jq for every field. The command goes last, so a newline or a unit
+# separator inside it cannot shift the fields before it.
+_fields=$(jq -j '[(.cwd // "" | tostring), (.session_id // "" | tostring), (.tool_use_id // "" | tostring), (.tool_input.command // "" | tostring)] | join("\u001f")' <<<"$hook_input" 2>/dev/null) || exit 0
+hook_cwd="${_fields%%$'\x1f'*}"; _fields="${_fields#*$'\x1f'}"
+# The transcript UUID delegate.sh writes on its row as `session` (#479); it
+# scopes the projectless lookup below. The tool_use_id is what the PostToolUse
+# confirm hook matches a credited call by (#497).
+session_id="${_fields%%$'\x1f'*}"; _fields="${_fields#*$'\x1f'}"
+tool_use_id="${_fields%%$'\x1f'*}"; cmd="${_fields#*$'\x1f'}"
 [[ -z "$cmd" ]] && exit 0
-hook_cwd=$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null) || hook_cwd=""
 # Relative paths in the command (`--body-file reply.md`) are relative to where
 # the Bash tool will run, so chdir there before reading any body.
-[[ -n "$hook_cwd" && -d "$hook_cwd" ]] && cd "$hook_cwd" 2>/dev/null || true
+hook_chdir "$hook_cwd"
 # A path opening with `$NAME` or `${NAME}` is resolved by LOOKUP in
 # the hook's own environment (the Bash tool's, where drafts live under
 # `$CLAUDE_JOB_DIR/tmp`), never by expansion; an unset name, a non-absolute
@@ -91,15 +105,10 @@ if [[ "$cmd" =~ $_cd_sq ]] || [[ "$cmd" =~ $_cd_dq ]] || [[ "$cmd" =~ $_cd_bare 
   esac
   [[ -n "$cd_path" && -d "$cd_path" ]] || cd_path=""
 fi
-# The transcript UUID delegate.sh writes on its row as `session` (#479); it
-# scopes the projectless lookup below. The tool_use_id is what the PostToolUse
-# confirm hook matches a credited call by (#497).
-session_id=$(jq -r '.session_id // empty' <<<"$input" 2>/dev/null) || session_id=""
-tool_use_id=$(jq -r '.tool_use_id // empty' <<<"$input" 2>/dev/null) || tool_use_id=""
 
-# --- cheap pre-filter (the common path exits here) ------------------------
-# One linear-time grep over the raw string; it over-matches on purpose and the
-# segment-aware classifier below decides.
+# --- the command-level pre-filter -------------------------------------------
+# One linear-time grep over the command, once a wrapper is read; it
+# over-matches on purpose and the segment-aware classifier below decides.
 # A boundary command inside a wrapper script is invisible to the token
 # classifier, and a wrapper is what the worktree-isolation guard forces on a
 # substitution-bearing call (#469): a script run via bash/sh/zsh from a scratch
@@ -131,7 +140,10 @@ if [[ "$cmd" =~ $_wrapper_re ]]; then
 fi
 # `git[[:space:]].*commit` admits global options (`git -C x commit`, #546);
 # classify_segment decides whether `commit` is really the subcommand.
-grep -Eq 'git[[:space:]].*commit|gh[[:space:]]+(pr|issue|release|api)([[:space:]]|$)|glab[[:space:]]+(mr|issue)([[:space:]]|$)' <<<"$cmd" || exit 0
+# Matched over the whole command rather than line by line as grep did, which
+# only widens it (`.` and [[:space:]] cross a newline).
+_cmd_re='git[[:space:]].*commit|gh[[:space:]]+(pr|issue|release|api)([[:space:]]|$)|glab[[:space:]]+(mr|issue)([[:space:]]|$)'
+[[ "$cmd" =~ $_cmd_re ]] || exit 0
 
 # --- build the classification surface -------------------------------------
 # Only the leading tokens of a shell segment can BE a command: matching the raw
@@ -177,9 +189,13 @@ boundary="" recipe=""
 # the file exists yet: the command itself may write it, so its text is only
 # the shipped text once the call has run (#587), and the confirm hook reads
 # it then. Here it is read for the length checks only.
-body_text="" body_chars="" body_measurable=false body_read=false body_file="" body_kind=""
+# A segment already read is not read again (`body_seg`): the `gh api` review
+# branch asks for the same segment's body twice, and each read is a perl run.
+body_text="" body_chars="" body_measurable=false body_read=false body_file="" body_kind="" body_seg=""
 read_posted_body() { # segment-index (0-based)
   local out first kind flag path
+  if [[ "$body_seg" == "$1" ]]; then body_read=true; return 0; fi
+  body_seg="$1"
   body_text="" body_chars="" body_measurable=false body_read=true body_file=""
   body_kind=""
   # The trailing X survives command-substitution newline stripping.
@@ -242,12 +258,31 @@ git_commit_seg() { # blanked-segment
   return 1
 }
 
+# The classifier's patterns, matched with [[ =~ ]] rather than one grep
+# process each (#563): a segment cost up to ten of them. Kept in variables,
+# as bash 3.2 needs for a pattern holding parentheses or a `|`.
+_re_body_flag='(^|[[:space:]])(-[[:alnum:]]*[bF]|--body)'
+_re_comments='/pulls/[0-9]+/comments'
+_re_gh_api='(^|[^[:alnum:]_-])gh[[:space:]]+api([[:space:]]|$)'
+_re_gh_issue_comment='(^|[^[:alnum:]_-])gh[[:space:]]+issue[[:space:]]+comment([[:space:]]|$)'
+_re_gh_issue_create='(^|[^[:alnum:]_-])gh[[:space:]]+issue[[:space:]]+create([[:space:]]|$)'
+_re_gh_pr_comment='(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+comment([[:space:]]|$)'
+_re_gh_pr_create='(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'
+_re_gh_pr_review='(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+review([[:space:]]|$)'
+_re_gh_release_create='(^|[^[:alnum:]_-])gh[[:space:]]+release[[:space:]]+create([[:space:]]|$)'
+_re_glab_mr_create='(^|[^[:alnum:]_-])glab[[:space:]]+mr[[:space:]]+create([[:space:]]|$)'
+_re_glab_note='(^|[^[:alnum:]_-])glab[[:space:]]+(mr|issue)[[:space:]]+(discussion[[:space:]]+)?note([[:space:]]|$)'
+_re_method='(^|[[:space:]])(-X|--method)'
+_re_msg_flag='(^|[[:space:]])(-[[:alnum:]]*[mF]|--message|--file)'
+_re_post='(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)'
+_re_reviews='/pulls/[0-9]+/reviews'
+_re_web_flag='(^|[[:space:]])(-[[:alnum:]]*w|--web)([[:space:]]|$)'
 # True when a `gh api` segment sends a POST: an explicit -X/--method POST, or
 # no method at all and a body field, since gh api POSTs whenever a field is
 # given (`gh api …/replies -f body=…`, as /address-pr-comments posts a reply).
 gh_api_post() { # blanked-segment segment-index
-  grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$1" && return 0
-  ! grep -Eq -- '(^|[[:space:]])(-X|--method)' <<<"$1" && api_body_field "$2"
+  [[ "$1" =~ $_re_post ]] && return 0
+  ! [[ "$1" =~ $_re_method ]] && api_body_field "$2"
 }
 # True when the segment carries a body field, read from the tokenizer's body
 # record: the blanked surface loses a quoted `-f 'body=…'`. A segment that is
@@ -263,43 +298,43 @@ classify_segment() { # blanked-segment segment-index
   local seg="$1" segi="$2"
   # Inline message (-m/-F) only; --amend reuses a message, no drafting moment.
   if git_commit_seg "$seg" \
-     && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[mF]|--message|--file)' <<<"$seg" \
-     && ! grep -Eq -- '--amend' <<<"$seg"; then
+     && [[ "$seg" =~ $_re_msg_flag ]] \
+     && ! [[ "$seg" == *--amend* ]]; then
     boundary="git-commit"; recipe="commit-message"; return 0
   fi
-  if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' <<<"$seg" \
-     || grep -Eq '(^|[^[:alnum:]_-])glab[[:space:]]+mr[[:space:]]+create([[:space:]]|$)' <<<"$seg"; then
+  if [[ "$seg" =~ $_re_gh_pr_create ]] \
+     || [[ "$seg" =~ $_re_glab_mr_create ]]; then
     boundary="pr-create"; recipe="pr-description"; return 0
   fi
   # Inline body only; the editor and --web have no drafting moment.
-  if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+issue[[:space:]]+create([[:space:]]|$)' <<<"$seg" \
-     && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[bF]|--body)' <<<"$seg" \
-     && ! grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*w|--web)([[:space:]]|$)' <<<"$seg"; then
+  if [[ "$seg" =~ $_re_gh_issue_create ]] \
+     && [[ "$seg" =~ $_re_body_flag ]] \
+     && ! [[ "$seg" =~ $_re_web_flag ]]; then
     boundary="issue-create"; recipe="github-issue-body"; return 0
   fi
-  if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+release[[:space:]]+create([[:space:]]|$)' <<<"$seg"; then
+  if [[ "$seg" =~ $_re_gh_release_create ]]; then
     boundary="release-create"; recipe="release-note"; return 0
   fi
   # A PR REVIEW BODY is the evidence-led shape, which is maintainer-review-reply
   # rather than the two-sentence maintainer-reply below. Inline body required,
   # for the same reason as issue-create.
-  if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+review([[:space:]]|$)' <<<"$seg" \
-     && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[bF]|--body)' <<<"$seg" \
-     && ! grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*w|--web)([[:space:]]|$)' <<<"$seg"; then
+  if [[ "$seg" =~ $_re_gh_pr_review ]] \
+     && [[ "$seg" =~ $_re_body_flag ]] \
+     && ! [[ "$seg" =~ $_re_web_flag ]]; then
     boundary="pr-review-body"; recipe="maintainer-review-reply"; return 0
   fi
   # Same inline-body requirement: `-f event=APPROVE` with no body has no text
   # to intercept.
-  if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+api([[:space:]]|$)' <<<"$seg" \
-     && grep -Eq '/pulls/[0-9]+/reviews' <<<"$seg" \
+  if [[ "$seg" =~ $_re_gh_api ]] \
+     && [[ "$seg" =~ $_re_reviews ]] \
      && gh_api_post "$seg" "$segi" \
      && api_body_field "$segi"; then
     boundary="pr-review-body"; recipe="maintainer-review-reply"; return 0
   fi
   # Scoped to the pulls endpoint so an issues-comment POST is not misread, and
   # to a POST so the read-only fetch step is not a boundary.
-  if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+api([[:space:]]|$)' <<<"$seg" \
-     && grep -Eq '/pulls/[0-9]+/comments' <<<"$seg" \
+  if [[ "$seg" =~ $_re_gh_api ]] \
+     && [[ "$seg" =~ $_re_comments ]] \
      && gh_api_post "$seg" "$segi"; then
     boundary="pr-review-comment"; recipe="pr-review-reply"; return 0
   fi
@@ -308,9 +343,9 @@ classify_segment() { # blanked-segment segment-index
   # with what was verified under a word cap (80 by default, raised with
   # --var max_words=N for a longer post).
   # Pinning maintainer-reply unconditionally taught the wrong routing.
-  if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+comment([[:space:]]|$)' <<<"$seg" \
-     || grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+issue[[:space:]]+comment([[:space:]]|$)' <<<"$seg" \
-     || grep -Eq '(^|[^[:alnum:]_-])glab[[:space:]]+(mr|issue)[[:space:]]+(discussion[[:space:]]+)?note([[:space:]]|$)' <<<"$seg"; then
+  if [[ "$seg" =~ $_re_gh_pr_comment ]] \
+     || [[ "$seg" =~ $_re_gh_issue_comment ]] \
+     || [[ "$seg" =~ $_re_glab_note ]]; then
     boundary="comment-reply"
     # An unmeasurable body keeps the short shape: a failed measurement must
     # not promote a reply on no evidence.
@@ -353,7 +388,11 @@ done <<<"$scan"
 # or not. The last non-blank line of the scan is compared by the index the
 # loop stopped at; the separators between are the scan's own.
 boundary_last=false
-_last_seg=$(awk 'NF { n = NR } END { print n + 0 }' <<<"$scan")
+_last_seg=0 _n=0
+while IFS= read -r _l; do
+  _n=$((_n + 1))
+  [[ "$_l" == *[^[:blank:]]* ]] && _last_seg=$_n
+done <<<"$scan"
 if [[ "$seg_idx" == "$_last_seg" ]]; then
   boundary_last=true
 elif (( seg_idx < _last_seg )); then
@@ -379,14 +418,14 @@ fi
 # cwd could never match. $cd_path was parsed off the RAW command near the top.
 cd_project=""
 if [[ -n "$cd_path" ]]; then
-  # Derived inside a subshell that has chdir'd to the target: `git -C <path>
-  # rev-parse --git-common-dir` at a repo root returns the RELATIVE `.git`,
-  # which resolves against the hook's own cwd. Accepted only inside a git
-  # repository, so a `cd /tmp` does not file the boundary under `tmp`.
-  cd_project=$(cd -- "$cd_path" 2>/dev/null || exit
-    c=$(git rev-parse --git-common-dir 2>/dev/null) || exit
-    d=$(cd "$c" 2>/dev/null && pwd) || exit
-    basename "$(dirname "$d")")
+  # The same delegate_project_name, run in a subshell that has chdir'd to the
+  # target (#563): an inline copy of it here was the #476 drift pattern again.
+  # `git -C <path> rev-parse --git-common-dir` at a repo root returns the
+  # RELATIVE `.git`, which is why the subshell cds. Outside a git repository
+  # it prints nothing, so a `cd /tmp` does not file the boundary under `tmp`.
+  if declare -F delegate_project_name >/dev/null; then
+    cd_project=$(cd -- "$cd_path" 2>/dev/null && delegate_project_name 2>/dev/null) || cd_project=""
+  fi
 fi
 # DELEGATE_PROJECT outranks the cd target: delegate.sh run after that same
 # `cd` inherits it and records it.
@@ -411,6 +450,25 @@ if [[ "$matched_seg" =~ $_repo_flag_re ]]; then
   fi
 fi
 
+# --- what the post is aimed at (#563) ---------------------------------------
+# A pending marker is the retry of the post that left it, so it is reused
+# only by a post with the same target: the words of the matched segment that
+# name what it posts to — a PR or issue number, a `key=number` field
+# (`in_reply_to=99`), an API endpoint (`repos/…`) or a URL — and the
+# `--repo` value. Paths and body flags are left out, since a retry routinely
+# names its body file differently from the attempt the guard refused. A
+# commit names none, so its target is its project alone, as before.
+target="" _tw=()
+read -r -a _tw <<<"$matched_seg"
+for _t in ${_tw[@]+"${_tw[@]}"}; do
+  case "$_t" in
+    body=*) continue ;;
+    repos/*|/repos/*|http://*|https://*) target="$target $_t" ;;
+    *) [[ "$_t" =~ ^([A-Za-z_]+=)?[0-9]+$ ]] && target="$target $_t" ;;
+  esac
+done
+[[ -n "$repo_project" ]] && target="$repo_val$target"
+
 # --- #465: a body file is NOT evidence the drafting moment passed ---------
 # The hook cannot tell a pre-existing body file from one the agent wrote a
 # call earlier, so every boundary is counted the same way.
@@ -420,7 +478,7 @@ fi
 # commit-message delegation credits a later `gh pr create`. A bare (no-recipe)
 # delegation credits nothing. Runs for file-backed bodies too:
 # delegate-then-save-then-post is the workflow the nudge asks for.
-metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
+hook_metrics_paths
 # 480 rather than 10: a batch sweep delegates its drafts, waits for approval
 # and posts hours later. Safe because credits are CONSUMED below, one per
 # delegated:true row.
@@ -430,7 +488,6 @@ now_epoch=$(date -u +%s)
 # (#497). One is honoured for 300 s: the "just now" delegate-feedback.sh uses
 # for an unpinned verdict, against retries 5-13 s after the refusal in the
 # corpus, and the confirmation is what spends a credit for good.
-pending_dir="$(dirname "$metrics_file")/.boundary-pending"
 reuse_window=300
 reused=false pending="" pending_epoch="" pending_project="" pending_drafts=""
 
@@ -488,7 +545,7 @@ prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 # is OWNED by a pid+random token so a hook whose lock was broken does not
 # remove its replacement on EXIT. Taken only when metrics are on. Both limits
 # are env-tunable so the lock tests need not sleep through the defaults.
-lock_dir="$(dirname "$metrics_file")/.boundary-hook.lock"
+lock_dir="$metrics_dir/.boundary-hook.lock"
 lock_held=false lock_failed=false
 lock_token="$$-${RANDOM}${RANDOM}"
 lock_stale_sec="${DELEGATE_BOUNDARY_LOCK_STALE_SEC:-5}"
@@ -503,7 +560,7 @@ release_lock() {
   rm -rf "$lock_dir" 2>/dev/null; return 0
 }
 if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
-  mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
+  mkdir -p "$metrics_dir" 2>/dev/null || true
   lock_tries=0
   while ! mkdir "$lock_dir" 2>/dev/null; do
     # A hook killed between mkdir and writing `ts` leaves no `ts`, so the
@@ -658,7 +715,9 @@ if [[ -f "$metrics_file" ]]; then
   # the file is keyed by it too, so a credited post in another repository
   # does not overwrite it. The name is a basename or DELEGATE_PROJECT, so it
   # is reduced to a safe charset for the filename; a collision only makes the
-  # stored project mismatch, which denies as before.
+  # stored project mismatch, which denies as before. And only for the same
+  # target (#563): a refused reply to PR 12 that was never retried is not
+  # the retry of a later reply to PR 13, which must earn a credit of its own.
   #
   # One marker PER CALL, `<prefix>.<tool_use_id>` (#587): parallel subagents
   # share a session id, and a single marker per session and boundary let a
@@ -696,8 +755,8 @@ if [[ -f "$metrics_file" ]]; then
     for _m in "$pending".*; do
       [[ -f "$_m" ]] || continue
       case "$_m" in *.superseded|*.row|*.confirming.*) continue ;; esac
-      IFS=$'\x1f' read -r _e _p _ds < <(jq -r '[(.epoch // 0 | tostring), (.project // ""), ((.drafts // []) | map(strings) | join(","))] | join("\u001f")' "$_m" 2>/dev/null) || continue
-      [[ "${_e:-}" =~ ^[0-9]+$ && "${_p:-}" == "$project" ]] && (( now_epoch - _e <= reuse_window )) || continue
+      IFS=$'\x1f' read -r _e _p _tg _ds < <(jq -r '[(.epoch // 0 | tostring), (.project // ""), (.target // "" | tostring), ((.drafts // []) | map(strings) | join(","))] | join("\u001f")' "$_m" 2>/dev/null) || continue
+      [[ "${_e:-}" =~ ^[0-9]+$ && "${_p:-}" == "$project" && "${_tg-}" == "$target" ]] && (( now_epoch - _e <= reuse_window )) || continue
       if [[ -z "$claim" ]] || (( _e < claim_epoch )); then
         claim="$_m" claim_epoch="$_e"
         pending_epoch="$_e" pending_project="$_p" pending_drafts="$_ds"
@@ -731,7 +790,7 @@ safe_draft() { # name -> name, or nothing
     *.draft.txt) printf '%s' "$1" ;;
   esac
 }
-drafts_dir="$(dirname "$metrics_file")/drafts"
+drafts_dir="$metrics_dir/drafts"
 # The drafts this post can still be filed under: safe names whose stem holds
 # no final yet, since a final is never overwritten (a verdict's --final or an
 # earlier post already paired it). Oldest first, as the lookup emits them.
@@ -752,7 +811,7 @@ done
 # can be withdrawn when no credit could be recorded.
 append_row() {
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]] || return 0
-  mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
+  mkdir -p "$metrics_dir" 2>/dev/null || true
   row_json "$delegated" "$denied" "$enforce_skipped" >> "$metrics_file" 2>/dev/null
 }
 
@@ -785,9 +844,9 @@ write_pending() {
   [[ "$max" =~ ^[1-9][0-9]*$ ]] || max=65536
   [[ -z "$body_file" && -n "$body_text" ]] && text=$(printf '%s' "$body_text" | head -c "$max"; printf X) && text=${text%X}
   ( umask 077
-    jq -nc --arg id "$tool_use_id" --argjson epoch "$epoch" --arg project "$project" \
+    jq -nc --arg id "$tool_use_id" --argjson epoch "$epoch" --arg project "$project" --arg target "$target" \
        --arg drafts "$drafts_csv" --arg body_file "$body_file" --arg body_text "$text" \
-      '{id:$id, epoch:$epoch, project:$project, drafts:($drafts | split(",") | map(select(. != "")))}
+      '{id:$id, epoch:$epoch, project:$project, target:$target, drafts:($drafts | split(",") | map(select(. != "")))}
        + (if $body_file != "" then {body_file:$body_file} else {} end)
        + (if $body_text != "" then {body_text:$body_text} else {} end)' > "$marker"
   ) 2>/dev/null || rm -f "$marker" 2>/dev/null
