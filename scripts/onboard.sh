@@ -3,7 +3,10 @@
 # and derive-flavor.sh (git history -> profile.sh), presents each derived value
 # for confirm-or-edit, and writes only on explicit confirmation, backing up an
 # existing target as .bak.<ts> first. Writes are chmod 600 so the profile
-# passes load-flavor.sh's owner/mode check. Without a terminal it degrades to
+# passes load-flavor.sh's owner/mode check. It then reports which of the three
+# hooks (boundary, its confirm companion, verdict Stop) the Claude Code
+# settings file registers and, on confirmation, merges the missing entries
+# with jq after the same backup (#528). Without a terminal it degrades to
 # print-only and writes nothing.
 #
 # Interactive use (a terminal):
@@ -21,6 +24,8 @@
 #                               (default $DELEGATE_LOCAL_DATA_DIR/config.sh)
 #   DELEGATE_LOCAL_PROFILE      profile.sh target
 #                               (default $DELEGATE_LOCAL_DATA_DIR/profile.sh)
+#   DELEGATE_ONBOARD_SETTINGS   Claude Code settings file the hook step reads
+#                               and merges into (default ~/.claude/settings.json)
 #   DELEGATE_ONBOARD_ASSUME_TTY=1  test seam: read answers from stdin instead of
 #                               /dev/tty (a real pty can't be driven in CI)
 # Exit: 0 on the happy / print-only / quit paths; 2 on a usage error.
@@ -29,7 +34,7 @@ set -uo pipefail
 migrate_data=0
 while (($# > 0)); do
   case "$1" in
-    -h|--help) sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     --migrate-data) migrate_data=1; shift;;
     *) echo "onboard: unknown arg '$1'" >&2; exit 2;;
   esac
@@ -139,6 +144,70 @@ default_types="$FLAVOR_COMMIT_TYPES"
 prefill_subject_max="${derived_subject_max:-$default_subject_max}"
 prefill_types="${derived_types:-$default_types}"
 
+# --- Probe 3: the three hook entries in the Claude Code settings file (#528) --
+# The boundary hook (PreToolUse), its spend confirmation (PostToolUse) and the
+# verdict sweep (Stop). A boundary hook without its confirm hook is the
+# incomplete install #497 cannot work on: the confirm hook's .seen file is what
+# lets the boundary hook honour a pending marker. An entry counts as present
+# when a command under its event names the script, whatever the path, and for
+# the two Bash hooks only under a matcher that applies to Bash: absent, empty,
+# "*", or a |-separated list with a Bash alternative (string compares only, no
+# regex evaluation, so a regex matcher such as "Ba.*" reads as not covering Bash).
+settings_target="${DELEGATE_ONBOARD_SETTINGS:-$HOME/.claude/settings.json}"
+# Literal tilde on purpose: the documented install path, expanded by the
+# harness's shell, so the entry survives the skill moving under the symlink.
+# shellcheck disable=SC2088
+hook_dir='~/.claude/skills/delegate-local/scripts'
+hooks_jq_defs='
+def bash_matcher: . == null or . == "" or . == "*"
+  or ((strings | split("|") | index(["Bash"])) != null);
+def has(ev; s; bash): any((.hooks[ev] // [])[] | select((bash | not) or (.matcher | bash_matcher))
+  | (.hooks // [])[] | .command? | strings; contains(s));
+def entry(m; s; t): (if m == null then {} else {matcher: m} end)
+  + {hooks: [{type: "command", command: ("bash " + $dir + "/" + s), timeout: t}]};
+def add(ev; m; s; t): .hooks[ev] = ((.hooks[ev] // []) + [entry(m; s; t)]);
+'
+has_pre=0 has_post=0 has_stop=0
+hooks_note=""
+if ! command -v jq >/dev/null 2>&1; then
+  hooks_note="jq is not on PATH"
+elif [[ -f "$settings_target" ]]; then
+  hooks_state=$(jq -r --arg dir "$hook_dir" "$hooks_jq_defs"'
+    [has("PreToolUse"; "delegate-boundary-hook.sh"; true),
+     has("PostToolUse"; "delegate-boundary-confirm-hook.sh"; true),
+     has("Stop"; "delegate-verdict-stop-hook.sh"; false)]
+    | map(if . then "1" else "0" end) | join(" ")' "$settings_target" 2>/dev/null)
+  if [[ "$hooks_state" =~ ^[01]\ [01]\ [01]$ ]]; then
+    read -r has_pre has_post has_stop <<<"$hooks_state"
+  else
+    hooks_note="$settings_target is not valid JSON, or its hooks are not in the documented shape"
+  fi
+fi
+hooks_missing=$(( (1 - has_pre) + (1 - has_post) + (1 - has_stop) ))
+
+hooks_status() {
+  local p
+  printf 'Claude Code hooks in %s:\n' "$settings_target"
+  ((has_pre)) && p=present || p=absent; printf '  boundary hook (PreToolUse): %s\n' "$p"
+  ((has_post)) && p=present || p=absent; printf '  confirm hook (PostToolUse): %s\n' "$p"
+  ((has_stop)) && p=present || p=absent; printf '  verdict hook (Stop): %s\n' "$p"
+  if ((has_pre && ! has_post)); then
+    printf '  incomplete: the boundary hook runs without its confirm hook, so a post the harness refuses keeps its credit spent (#497).\n'
+  fi
+  ((hooks_missing)) || printf '  all three hooks are installed.\n'
+}
+
+# $1 = the settings JSON to merge into; prints it with the missing entries
+# appended to their event arrays, leaving every other key and entry as it was.
+hooks_merge() {
+  printf '%s' "$1" | jq --arg dir "$hook_dir" \
+    --argjson pre "$has_pre" --argjson post "$has_post" --argjson stop "$has_stop" \
+    "$hooks_jq_defs"'
+    (if $pre == 0 then add("PreToolUse"; "Bash"; "delegate-boundary-hook.sh"; 5) else . end)
+    | (if $post == 0 then add("PostToolUse"; "Bash"; "delegate-boundary-confirm-hook.sh"; 5) else . end)
+    | (if $stop == 0 then add("Stop"; null; "delegate-verdict-stop-hook.sh"; 10) else . end)'
+}
+
 build_profile_body() { # $1=subject_max-or-empty $2=types-or-empty
   printf '# delegate-local flavor profile — written by scripts/onboard.sh\n'
   [[ -n "$corpus_line" ]] && printf '# Source corpus: %s\n' "$corpus_line"
@@ -163,6 +232,16 @@ if (( ! interactive )); then
     printf '#   (derive-flavor found no usable git history here — shipped defaults shown; no profile needed)\n'
   fi
   build_profile_body "$prefill_subject_max" "$prefill_types"
+  printf '\n# ---- hooks — merge into: %s ----\n' "$settings_target"
+  if [[ -n "$hooks_note" ]]; then
+    printf '#   hook step skipped: %s\n' "$hooks_note"
+  else
+    hooks_status | sed 's/^/# /'
+    if ((hooks_missing)); then
+      printf '#   entries to add (docs/boundary-hook.md has the full install):\n'
+      hooks_merge '{}'
+    fi
+  fi
   echo "onboard: no interactive terminal — printed candidates only, wrote nothing. Run in a terminal to confirm-and-write." >&2
   exit 0
 fi
@@ -265,7 +344,41 @@ if [[ -n "$config_candidate" ]]; then
   esac
 fi
 
+# Merge the missing hook entries: backup first, write only on an explicit y,
+# and never touch a file that could not be parsed. The redirect writes through
+# a symlinked settings file and keeps its mode.
+wrote_hooks=0
 echo "" >&2
-echo "onboard: done — profile $( ((wrote_profile)) && echo written || echo unchanged ), routing override $( ((wrote_config)) && echo written || echo unchanged )." >&2
+if [[ -n "$hooks_note" ]]; then
+  echo "onboard: hook step skipped — $hooks_note; $settings_target left untouched." >&2
+else
+  hooks_status >&2
+  if ((hooks_missing)); then
+    printf 'install the missing hook entries into %s (a .bak copy is kept)? [y/N]: ' "$settings_target" >&2
+    _ans=""
+    read_answer || [[ -n "$_ans" ]] || _ans="n"
+    case "$_ans" in
+      y|Y)
+        current='{}'
+        [[ -f "$settings_target" ]] && current=$(cat "$settings_target")
+        if ! merged=$(hooks_merge "$current"); then
+          echo "  merge failed — $settings_target left untouched." >&2
+        elif [[ -f "$settings_target" ]] && ! cp -p "$settings_target" "$settings_target.bak.$(date +%Y%m%d%H%M%S)"; then
+          echo "  backup failed — $settings_target left untouched." >&2
+        # A new file is created 0600 (settings can carry env secrets); an
+        # existing one keeps its mode, since the redirect rewrites it in place.
+        elif ! mkdir -p "$(dirname "$settings_target")" || ! ( umask 077; printf '%s\n' "$merged" > "$settings_target" ); then
+          echo "  failed to write $settings_target" >&2
+        else
+          wrote_hooks=1
+          echo "  installed the missing hook entries in $settings_target" >&2
+        fi;;
+      *) echo "  hooks not installed ($settings_target untouched)." >&2;;
+    esac
+  fi
+fi
+
+echo "" >&2
+echo "onboard: done — profile $( ((wrote_profile)) && echo written || echo unchanged ), routing override $( ((wrote_config)) && echo written || echo unchanged ), hooks $( ((wrote_hooks)) && echo written || echo unchanged )." >&2
 echo "Next: pipe a task through the wrapper (e.g. git diff | bash $script_dir/delegate.sh --recipe commit-message ...)," >&2
 echo "record verdicts with delegate-feedback.sh (hit, scaffold \"<reason>\" or miss \"<reason>\"), and re-run onboard.sh as your history grows." >&2
