@@ -895,7 +895,9 @@ esac
 rm -f "$nullref"
 
 # Join by ref_id first, ref_ts second (#481): a --id verdict lands on its own
-# row only; a ref_ts-only row on a shared second reaches both siblings.
+# row only. A ref_ts-only row on a shared second counts once, on the last
+# sibling in the file, as self-improve.sh counts it (#564): one verdict is one
+# delegation, and naming both doubled it.
 sib=$(mktemp)
 cat > "$sib" <<'EOF'
 {"ts":"2026-06-01T09:00:00Z","source":"delegate","recipe":"commit-message","tier":"prose","project":"p","exit_status":0,"estimated_tokens_avoided":100,"otel_span_id":"aaaa000000000001"}
@@ -920,8 +922,8 @@ cat > "$sib2" <<'EOF'
 {"ts":"2026-06-01T10:00:00Z","source":"feedback","ref_ts":"2026-06-01T09:00:00Z","kept":true}
 EOF
 out=$(bash "$SCRIPT" --file "$sib2" 2>&1)
-assert_contains "Recipe delegations (calibration signal): n=2  hits=2  misses=0  untracked=0  coverage=100%" "$out" \
-  "ref_id join: a legacy ref_ts-only verdict on a shared second still reaches both siblings"
+assert_contains "Recipe delegations (calibration signal): n=2  hits=1  misses=0  untracked=1  coverage=50%" "$out" \
+  "ref_id join: a legacy ref_ts-only verdict on a shared second counts once, not on both siblings"
 rm -f "$sib2"
 
 # Captured-pair coverage (#461) splits verdicts that adopted the hook's final

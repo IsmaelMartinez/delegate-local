@@ -623,6 +623,17 @@ printf '%s\n' "$RT" > "$tmp/drafts/20260927T000002Z-m2.final.txt"
 jq -nc --arg s "Post this:
 $RT" '{recipe:"maintainer-reply", stdin:$s, vars:{}}' > "$tmp/drafts/20260927T000002Z-m2.inputs.json"
 printf 'My own reply, nothing like the facts.\n' > "$tmp/drafts/20260927T000003Z-m3.final.txt"
+# Before the --ritual backfill only the stored tag is ritual (#564): the rates
+# read the tag or ritual-verdicts.tsv, never a measurement of their own.
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
+assert_contains "  maintainer-reply  n=3  kept=1  scaffold=0  rewrote=2  usable=33%  ritual=1  sessions=3" "$out" \
+  "ritual: before the backfill the unstored verdict counts as the miss it recorded"
+bash "$SCRIPT" --ritual --peek --file "$tmp/m.jsonl" > /dev/null 2>&1
+assert_eq absent "$([[ -e "$tmp/ritual-verdicts.tsv" ]] && echo present || echo absent)" \
+  "ritual backfill: --peek writes no sidecar"
+bash "$SCRIPT" --ritual --file "$tmp/m.jsonl" > /dev/null 2>&1
+assert_eq "$(sed -n 4p "$tmp/m.jsonl" | jq -r .ts)|m2	20260927T000002Z-m2.final.txt" "$(cat "$tmp/ritual-verdicts.tsv")" \
+  "ritual backfill: the sidecar names only the measured ritual verdict, by its key, and its final"
 out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
 assert_contains "Verdicts recorded since watermark: n=2  kept=1  scaffold=0  rewrote=1  usable=50%  ritual=2  sessions=2" "$out" \
   "ritual: the since-watermark rate leaves ritual verdicts out and names its sessions"
@@ -794,6 +805,8 @@ printf 'A model draft about something else entirely.\n' > "$d/20260929T000003Z-f
 printf '%s\n' "$RT" > "$d/20260929T000003Z-f3.final.txt"
 jq -nc --arg s "Post this:
 $RT" '{recipe:"maintainer-reply", stdin:$s, vars:{}}' > "$d/20260929T000003Z-f3.inputs.json"
+# The adopted final is measured by the --ritual backfill, which the rates read.
+bash "$SCRIPT" --ritual --file "$tmp/m.jsonl" > /dev/null 2>&1
 out=$(bash "$SCRIPT" --peek --file "$tmp/m.jsonl" 2>&1)
 f1block=$(printf '%s\n' "$out" | sed -n '/fallback adopted/,/^$/p')
 assert_contains "$d/20260929T000001Z-f1.final.txt" "$f1block" "fallback: the stem's final is adopted when the verdict names none"

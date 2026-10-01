@@ -23,12 +23,15 @@
 #                      project and session) than its own. The bundle and replay-recipe.sh
 #                      skip the listed pairs; nothing is deleted. With --peek
 #                      the list is printed and no sidecar is written.
-#   --ritual           read-only backfill (#588): per recipe and template, the
+#   --ritual           the backfill (#588): per recipe and template, the
 #                      rejections whose shipped final was already in the
 #                      piped stdin, from the stored final_preexisting or
 #                      measured now for a verdict recorded before it; with
-#                      --since, delegations on or after that date only.
-#                      Writes nothing, the watermark included.
+#                      --since, delegations on or after that date only. The
+#                      measured ritual verdicts go to ritual-verdicts.tsv
+#                      beside the metrics file, which every rate here and in
+#                      metrics-summary.sh reads (#564); with --peek nothing
+#                      is written. Never the watermark or a metrics row.
 #   --peek            report without advancing the watermark
 #   --min-delegations  new delegations needed before there is anything to
 #                      report (default 1)
@@ -85,29 +88,25 @@ suspect_file="$(dirname "$metrics_file")/suspect-finals.tsv"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 
-# The feedback-to-delegation join (`parent_join`, interpolated into every jq
-# program below) and the pair scorers (`salient`, `list_markers`,
-# `sentences`, `word_overlap`) are shared with replay-recipe.sh, so a
-# rejection's DROPPED list and a replay's dropped count are one measurement.
+# The verdict model (the feedback-to-delegation join, one latest verdict per
+# delegation, its outcome, the window) is scripts/lib/pair.jq, the one
+# metrics-summary.sh and replay-recipe.sh read too, so the scripts' verdict
+# counts cannot disagree (#564). -L takes an absolute path. The pair scorers
+# (`salient`, `list_markers`, `sentences`, `word_overlap`) are shared with
+# replay-recipe.sh, so a rejection's DROPPED list and a replay's dropped count
+# are one measurement.
+lib_dir="$script_dir/lib"
 # shellcheck source=lib/pair-score.sh
 . "$script_dir/lib/pair-score.sh"
 
 # Ritual verdicts (#588): the shipped final was already in the stdin the
 # caller piped, so the verdict says nothing about the template. A verdict
 # row carries `final_preexisting` since #588; one recorded before it is
-# measured here the way delegate-feedback.sh measures it (bigram_containment
-# against the stdin in `inputs.json` only: the rendered input.txt carries the
-# template and the non-stdin vars, so a row without inputs.json is left
-# unjudged). A quarantined final is never judged, stored tag or not, since it
-# is not what shipped. `ritual_map <out>`
-# writes one JSON object, keyed by `fkey`, of {r: bool, how: stored|measured}
-# for every verdict with a final that could be judged; `ritual_def` reads it
-# as `ritual`, given `--slurpfile rt <out>`.
-ritual_def='
-  def fkey: (.ts // "") + "|" + (.ref_id // .ref_ts // "");
-  def ritual: ($rt[0][fkey].r // false);
-  def sessions_of: map(parent.session // "" | select(. != "")) | unique | length;
-'
+# measured by `--ritual`, which writes the ritual ones to ritual-verdicts.tsv
+# beside the metrics file, and every rate here and in metrics-summary.sh
+# reads the stored tag or that sidecar (`outcome` in lib/pair.jq), so the two
+# scripts count the same verdicts as ritual.
+ritual_file="$(dirname "$metrics_file")/ritual-verdicts.tsv"
 
 # The final a verdict is scored against (#553): the one its row names, else
 # the bare `<stem>.final.txt` beside its draft, which the boundary hook
@@ -118,7 +117,7 @@ ritual_def='
 # passed as `--rawfile fl` and `--rawfile sl`.
 final_def='
   ($fl | split("\n") | map(select(. != "") | {(.): true}) | add // {}) as $finals
-  | ($sl | split("\n") | map(select(. != "") | split("\t")[0] | {(.): true}) | add // {}) as $suspect
+  | ($sl | suspect_set) as $suspect
   | def stem_final: (parent.draft_file // "") as $df
       | if ($df | test("^[^./][^/]*\\.draft\\.txt$")) then ($df | sub("\\.draft\\.txt$"; ".final.txt")) else "" end;
   def eff_final:
@@ -127,45 +126,51 @@ final_def='
       | if $s != "" and ($finals[$s] // false) and (($suspect[$s] // false) | not) then $s else "" end
     end;
 '
-finals_list=$(mktemp); suspect_list=$(mktemp)
-trap 'rm -f "$finals_list" "$suspect_list"' EXIT
+finals_list=$(mktemp); suspect_list=$(mktemp); ritual_list=$(mktemp)
+trap 'rm -f "$finals_list" "$suspect_list" "$ritual_list"' EXIT
 (cd "$drafts_dir" 2>/dev/null && ls) 2>/dev/null | grep -E '^[^./][^/]*\.final\.txt$' > "$finals_list"
 [[ -f "$suspect_file" ]] && cat "$suspect_file" > "$suspect_list"
+[[ -f "$ritual_file" ]] && cat "$ritual_file" > "$ritual_list"
 
+# `ritual_map <out>` judges every verdict with a final, the way
+# delegate-feedback.sh judges one at record time (bigram_containment against
+# the stdin in `inputs.json` only: the rendered input.txt carries the
+# template and the non-stdin vars, so a row without inputs.json is left
+# unjudged), and writes `fkey TAB stored|measured TAB true|false TAB final`
+# per judged verdict to <out>. The final is the one the verdict names, else
+# the hook-written `<stem>.final.txt` beside its draft (#553). A quarantined
+# final is never judged, stored tag or not, since it is not what shipped.
 ritual_map() {
   local out="$1" key stored fin ij src
   local pairs keys
   pairs=$(mktemp); keys=$(mktemp)
-  : > "$out.tsv"
-  jq -rs --rawfile fl "$finals_list" --rawfile sl "$suspect_list" '
-    '"$parent_join"'
-    '"$ritual_def"'
+  : > "$out"
+  jq -L "$lib_dir" -rs --rawfile fl "$finals_list" --rawfile sl "$suspect_list" '
+    include "pair";
     '"$final_def"'
-    map(select(referenced and eff_final != "")) | .[]
-    | parent as $p
+    parent_join | map(select(eff_final != "")) | .[]
     | [fkey, (if has("final_preexisting") then (.final_preexisting | tostring) else "" end),
-       eff_final, ($p.inputs_file // "")]
+       eff_final, (parent.inputs_file // "")]
     | join("\u001f")
-  ' --slurpfile rt /dev/null "$metrics_file" 2>/dev/null \
+  ' "$metrics_file" 2>/dev/null \
   | while IFS=$'\037' read -r key stored fin ij; do
       case "$fin" in */*|.*|'') continue ;; esac
       [[ -z "$(suspect_reason "$suspect_file" "$fin")" ]] || continue
       if [[ "$stored" == true || "$stored" == false ]]; then
-        printf '%s\tstored\t%s\n' "$key" "$stored" >> "$out.tsv"; continue
+        printf '%s\tstored\t%s\t%s\n' "$key" "$stored" "$fin" >> "$out"; continue
       fi
       [[ -f "$drafts_dir/$fin" ]] || continue
       src=""
       case "$ij" in */*|.*) ;; *.inputs.json) [[ -f "$drafts_dir/$ij" ]] && src="$drafts_dir/$ij" ;; esac
       [[ -n "$src" ]] || continue
       printf '%s\t%s\n' "$drafts_dir/$fin" "$src" >> "$pairs"
-      printf '%s\n' "$key" >> "$keys"
+      printf '%s\t%s\n' "$key" "$fin" >> "$keys"
     done
   if [[ -s "$pairs" ]]; then
     bigram_containment < "$pairs" | paste "$keys" - \
-      | awk -F '\t' -v min="$ritual_min_pct" '$2 ~ /^[0-9]+$/ { printf "%s\tmeasured\t%s\n", $1, ($2 + 0 >= min ? "true" : "false") }' >> "$out.tsv"
+      | awk -F '\t' -v min="$ritual_min_pct" '$3 ~ /^[0-9]+$/ { printf "%s\tmeasured\t%s\t%s\n", $1, ($3 + 0 >= min ? "true" : "false"), $2 }' >> "$out"
   fi
-  jq -Rn '[inputs | split("\t") | {key: .[0], value: {how: .[1], r: (.[2] == "true")}}] | from_entries' < "$out.tsv" > "$out"
-  rm -f "$pairs" "$keys" "$out.tsv"
+  rm -f "$pairs" "$keys"
 }
 
 # ---------------------------------------------------------------------------
@@ -182,7 +187,7 @@ ritual_map() {
 # ---------------------------------------------------------------------------
 if (( quarantine == 1 )); then
   q_tmp=$(mktemp -d)
-  trap 'rm -rf "$q_tmp" "$finals_list" "$suspect_list"' EXIT
+  trap 'rm -rf "$q_tmp" "$finals_list" "$suspect_list" "$ritual_list"' EXIT
   [[ -d "$drafts_dir" ]] || { echo "self-improve: no drafts directory at $drafts_dir" >&2; exit 2; }
   # draft<TAB>previous<TAB>next, one line per delegation that stored a draft.
   jq -rs '
@@ -258,26 +263,35 @@ fi
 # rejected delegations (latest verdict, as every rate counts them), how many
 # had a final and an input to judge (`paired`), how many were ritual and
 # from how many sessions, and whether each tag was stored on the row or
-# measured now. Read-only: no watermark, no sidecar, no metrics row.
+# measured now. Writes ritual-verdicts.tsv unless --peek; no watermark, no
+# metrics row.
 # ---------------------------------------------------------------------------
 if (( ritual_only == 1 )); then
   rt_file=$(mktemp)
-  trap 'rm -f "$rt_file" "$finals_list" "$suspect_list"' EXIT
+  trap 'rm -f "$rt_file" "$finals_list" "$suspect_list" "$ritual_list"' EXIT
   ritual_map "$rt_file"
   echo "=== ritual delegations (#588): shipped final with >= ${ritual_min_pct}% of its word bigrams in the piped stdin ==="
   echo "Metrics: $metrics_file${since:+  (delegations since $since)}"
-  jq -rs --arg since "$since" --slurpfile rt "$rt_file" '
-    '"$parent_join"'
-    '"$ritual_def"'
-    def line: "rejections=\(length)  paired=\(map(select(.t != null)) | length)  ritual=\(map(select(.t.r)) | length)  sessions=\(map(select(.t.r) | .s | select(. != "")) | unique | length)";
+  jq -L "$lib_dir" -rs --arg since "$since" --rawfile rt "$rt_file" '
+    include "pair";
+    ([$rt | split("\n")[] | select(. != "") | split("\t") | {(.[0]): {how: .[1], r: (.[2] == "true")}}] | add // {}) as $tags
+    | def line: "rejections=\(length)  paired=\(map(select(.t != null)) | length)  ritual=\(map(select(.t.r)) | length)  sessions=\(map(select(.t.r) | .s | select(. != "")) | unique | length)";
     latest_verdicts
     | map(select((.kept | not) and parent != null and ($since == "" or (parent.ts // "") >= $since)))
-    | map({rec: (parent.recipe // "(bare)"), sha: (parent.template_sha // "(unhashed)"), s: (parent.session // ""), t: $rt[0][fkey]})
+    | map({rec: (parent.recipe // "(bare)"), sha: (parent.template_sha // "(unhashed)"), s: (parent.session // ""), t: $tags[fkey]})
     | group_by(.rec) | sort_by(-(map(select(.t.r)) | length), -length)
     | .[]
     | "  \(.[0].rec)  \(line)  (stored=\(map(select(.t.how == "stored")) | length) measured=\(map(select(.t.how == "measured")) | length))",
       (group_by(.sha) | sort_by(-(map(select(.t.r)) | length)) | .[] | "    template=\(.[0].sha)  \(line)")
   ' "$metrics_file"
+  # The measured ritual verdicts, every one and not only --since's, are the
+  # sidecar the rates read: fkey TAB the final measured.
+  if (( peek == 0 )); then
+    awk -F '\t' '$2 == "measured" && $3 == "true" { printf "%s\t%s\n", $1, $4 }' "$rt_file" > "$ritual_file.tmp" \
+      && mv "$ritual_file.tmp" "$ritual_file" \
+      && echo "written: $ritual_file ($(grep -c '' "$ritual_file") measured ritual verdicts)" \
+      || { echo "self-improve: could not write $ritual_file" >&2; exit 2; }
+  fi
   exit 0
 fi
 
@@ -308,10 +322,8 @@ if (( new_count < min_delegations )); then
 fi
 
 # Every rate below leaves ritual verdicts out of n, names them as ritual=,
-# and names the distinct sessions its verdicts come from (#588).
-rt_file=$(mktemp)
-trap 'rm -f "$rt_file" "$finals_list" "$suspect_list"' EXIT
-ritual_map "$rt_file"
+# and names the distinct sessions its verdicts come from (#588): `tally` over
+# `latest_outcomes` in lib/pair.jq, given the two sidecars as $sl and $rl.
 
 # ---------------------------------------------------------------------------
 # Section 1 — what happened since the last run.
@@ -340,59 +352,26 @@ echo
 # metrics-summary.sh counts it, and is new when that verdict was recorded
 # after the watermark, whenever the delegation ran (#553). `usable` is kept
 # plus scaffold over n, the same ranking key the per-recipe section uses.
-jq -rs --arg prev "$prev_ts" --slurpfile rt "$rt_file" '
-  '"$parent_join"'
-  '"$ritual_def"'
-  latest_verdicts
-  | map(select($prev == "" or .ts > $prev))
-  | (map(select(ritual)) | length) as $ritual
-  | map(select(ritual | not))
-  | (map(select(.kept)) | length) as $kept
-  | (map(select(.scaffold)) | length) as $scaffold
-  | (map(select((.kept | not) and (.scaffold | not))) | length) as $rewrote
-  | "Verdicts recorded since watermark: n=\(length)"
-    + (if length > 0
-       then "  kept=\($kept)  scaffold=\($scaffold)  rewrote=\($rewrote)  usable=\((($kept + $scaffold) * 100 / length) | floor)%"
+jq -L "$lib_dir" -rs --arg prev "$prev_ts" --rawfile sl "$suspect_list" --rawfile rl "$ritual_list" '
+  include "pair";
+  latest_outcomes($sl; $rl)
+  | map(select($prev == "" or .ts > $prev) | {u, session: (parent.session // "")})
+  | tally
+  | "Verdicts recorded since watermark: n=\(.n)"
+    + (if .n > 0
+       then "  kept=\(.kept)  scaffold=\(.scaffold)  rewrote=\(.rewrote)  usable=\(rate(.kept + .scaffold; .n))%"
        else ""
        end)
-    + (if $ritual > 0 then "  ritual=\($ritual)" else "" end)
-    + (if length > 0 then "  sessions=\(sessions_of)" else "" end)
+    + (if .ritual > 0 then "  ritual=\(.ritual)" else "" end)
+    + (if .n > 0 then "  sessions=\(.sessions)" else "" end)
 ' "$metrics_file"
 echo
 
 # ---------------------------------------------------------------------------
 # Section 2 — per-recipe keep rate over the rolling window: the ranking that
 # says which recipe is worth the session's time. Worst first, ties by volume.
-# ---------------------------------------------------------------------------
-echo "--- per-recipe outcomes, last ${window_days}d (worst usable-rate first) ---"
-jq -rs --argjson days "$window_days" --slurpfile rt "$rt_file" '
-  (now - ($days * 86400)) as $cut
-  | '"$parent_join"'
-  '"$ritual_def"'
-  latest_verdicts
-  | map(select(((parent.ts // "") | if . == "" then 0 else (fromdateiso8601? // 0) end) > $cut))
-  | map({r: (parent.recipe // "(bare)"), s: (parent.session // ""),
-         u: (if ritual then "ritual" elif .kept then "kept" elif .scaffold then "scaffold" else "rewrote" end)})
-  | group_by(.r)
-  | map({recipe: .[0].r,
-         ritual: (map(select(.u == "ritual")) | length)}
-        + (map(select(.u != "ritual"))
-           | {n: length,
-              kept: (map(select(.u == "kept")) | length),
-              scaffold: (map(select(.u == "scaffold")) | length),
-              rewrote: (map(select(.u == "rewrote")) | length),
-              sessions: (map(.s | select(. != "")) | unique | length)}))
-  # Ranked on kept+scaffold: a recipe whose drafts are all thrown away is a
-  # worse problem than one whose drafts get edited, and kept alone cannot tell.
-  | map(. + {rate: (if .n > 0 then ((.kept + .scaffold) * 100 / .n | floor) else 0 end)})
-  | sort_by(.rate, -.n)
-  | .[]
-  | "  \(.recipe)  n=\(.n)  kept=\(.kept)  scaffold=\(.scaffold)  rewrote=\(.rewrote)  usable=\(.rate)%"
-    + (if .ritual > 0 then "  ritual=\(.ritual)" else "" end) + "  sessions=\(.sessions)"
-' "$metrics_file"
-echo
-
-# ---------------------------------------------------------------------------
+# The window is on the delegation's ts, as metrics-summary.sh --days reads
+# it, so both report the same per-recipe counts (#564).
 # Section 2b — the same outcomes split by the template that produced them,
 # for every recipe that ran under more than one template in the window: the
 # online half of the replay gate (docs/self-improvement-loop.md, "Revert").
@@ -400,38 +379,32 @@ echo
 # `(unhashed)`, so the pre-edit baseline sits beside the first hashed
 # template rather than vanishing. Silent when no recipe changed template.
 # ---------------------------------------------------------------------------
-template_lines=$(jq -rs --argjson days "$window_days" --slurpfile rt "$rt_file" '
-  (now - ($days * 86400)) as $cut
-  | '"$parent_join"'
-  '"$ritual_def"'
-  latest_verdicts
-  | map(select(((parent.ts // "") | if . == "" then 0 else (fromdateiso8601? // 0) end) > $cut))
-  | map({r: (parent.recipe // "(bare)"),
-         sha: (parent.template_sha // "(unhashed)"),
-         ts: (parent.ts // ""), s: (parent.session // ""),
-         u: (if ritual then "ritual" elif .kept then "kept" elif .scaffold then "scaffold" else "rewrote" end)})
-  | group_by(.r)
-  | map(select((map(.sha) | unique | length) > 1))
-  | map(.[0].r as $r
-        | group_by(.sha)
-        | map({recipe: $r, sha: .[0].sha, since: (map(.ts) | min),
-               ritual: (map(select(.u == "ritual")) | length)}
-              + (map(select(.u != "ritual"))
-                 | {n: length,
-                    kept: (map(select(.u == "kept")) | length),
-                    scaffold: (map(select(.u == "scaffold")) | length),
-                    rewrote: (map(select(.u == "rewrote")) | length),
-                    sessions: (map(.s | select(. != "")) | unique | length)}))
-        | sort_by(.since) | reverse)
-  | .[] | .[]
-  | "  \(.recipe)  template=\(.sha)  since=\(.since)  n=\(.n)  kept=\(.kept)  scaffold=\(.scaffold)  rewrote=\(.rewrote)  usable=\(if .n > 0 then ((.kept + .scaffold) * 100 / .n | floor) else 0 end)%"
-    + (if .ritual > 0 then "  ritual=\(.ritual)" else "" end) + "  sessions=\(.sessions)"
-' "$metrics_file")
-if [[ -n "$template_lines" ]]; then
-  echo "--- per-template outcomes, last ${window_days}d (recipes that changed template, newest first) ---"
-  echo "$template_lines"
-  echo
-fi
+echo "--- per-recipe outcomes, last ${window_days}d (worst usable-rate first) ---"
+jq -L "$lib_dir" -rs --argjson days "$window_days" --rawfile sl "$suspect_list" --rawfile rl "$ritual_list" '
+  include "pair";
+  def line: "n=\(.n)  kept=\(.kept)  scaffold=\(.scaffold)  rewrote=\(.rewrote)  usable=\(rate(.kept + .scaffold; .n))%"
+    + (if .ritual > 0 then "  ritual=\(.ritual)" else "" end) + "  sessions=\(.sessions)";
+  cutoff($days) as $cut
+  | latest_outcomes($sl; $rl)
+  | map(select(parent != null and (parent | ok and in_window($cut)))
+        | {u, r: (parent.recipe // "(bare)"), sha: (parent.template_sha // "(unhashed)"),
+           ts: parent.ts, session: (parent.session // "")})
+  | group_by(.r) as $by
+  # Ranked on kept+scaffold: a recipe whose drafts are all thrown away is a
+  # worse problem than one whose drafts get edited, and kept alone cannot tell.
+  | ($by | map({recipe: .[0].r} + tally) | sort_by(rate(.kept + .scaffold; .n), -.n)
+     | .[] | "  \(.recipe)  \(line)"),
+    "",
+    ([$by[] | select((map(.sha) | unique | length) > 1)
+      | .[0].r as $r | group_by(.sha)
+      | map({recipe: $r, sha: .[0].sha, since: (map(.ts) | min)} + tally)
+      | sort_by(.since) | reverse | .[]] as $t
+     | if ($t | length) > 0 then
+         "--- per-template outcomes, last \($days)d (recipes that changed template, newest first) ---",
+         ($t[] | "  \(.recipe)  template=\(.sha)  since=\(.since)  \(line)"),
+         ""
+       else empty end)
+' "$metrics_file"
 
 # ---------------------------------------------------------------------------
 # Section 3 — deterministic check failures. These need no interpretation: the
@@ -439,10 +412,10 @@ fi
 # cluster here is the cheapest possible fix target.
 # ---------------------------------------------------------------------------
 echo "--- deterministic check failures, last ${window_days}d ---"
-check_lines=$(jq -rs --argjson days "$window_days" '
-  (now - ($days * 86400)) as $cut
-  | map(select((.source // "delegate") == "delegate"))
-  | map(select((.ts | fromdateiso8601? // 0) > $cut))
+check_lines=$(jq -L "$lib_dir" -rs --argjson days "$window_days" '
+  include "pair";
+  cutoff($days) as $cut
+  | map(select(src == "delegate" and in_window($cut)))
   | map(select(.checks_failed_names != null))
   | map({r: (.recipe // "(bare)"), names: .checks_failed_names})
   | map(.r as $r | .names | map({r: $r, name: .})) | add // []
@@ -492,18 +465,17 @@ supplied() {
 supplied_tmp=$(mktemp)
 body_tmp=$(mktemp)
 sal_dir=$(mktemp -d)
-trap 'rm -f "$supplied_tmp" "$body_tmp" "$rt_file" "$finals_list" "$suspect_list"; rm -rf "$sal_dir"' EXIT
+trap 'rm -f "$supplied_tmp" "$body_tmp" "$finals_list" "$suspect_list" "$ritual_list"; rm -rf "$sal_dir"' EXIT
 
 # One record per rejected delegation. The separator is US (\u001f), not a tab: tab is IFS
 # whitespace, so `read` would collapse the frequently-empty draft_file /
 # final_file fields and shift every later field left.
 # A delegation is a rejection when its LATEST verdict is, as the tally counts
 # it, and is new when that verdict was recorded after the watermark (#553).
-jq -rs --arg prev "$prev_ts" --slurpfile rt "$rt_file" --rawfile fl "$finals_list" --rawfile sl "$suspect_list" '
-  '"$parent_join"'
-  '"$ritual_def"'
+jq -L "$lib_dir" -rs --arg prev "$prev_ts" --rawfile fl "$finals_list" --rawfile sl "$suspect_list" --rawfile rl "$ritual_list" '
+  include "pair";
   '"$final_def"'
-  latest_verdicts
+  latest_outcomes($sl; $rl)
   | map(select((.kept | not) and ($prev == "" or .ts > $prev)))
   | sort_by(.ts)
   | .[]
@@ -521,7 +493,7 @@ jq -rs --arg prev "$prev_ts" --slurpfile rt "$rt_file" --rawfile fl "$finals_lis
       $fin,
       (if (.final_file // "") == "" and $fin != "" then "adopted" else (.final_source // "") end),
       (if .scaffold then "scaffold" else "rewrote" end),
-      (if ritual then "ritual" else "-" end),
+      (if .u == "ritual" then "ritual" else "-" end),
       ((.reason // "(no reason recorded)") | gsub("[[:cntrl:]]"; " ")) ]
   | join("\u001f")
 ' "$metrics_file" | while IFS=$'\037' read -r rts proj rec draft final fsrc verdict rit reason; do
@@ -645,8 +617,8 @@ echo
 # blind spot goes on optimising the half it can see.
 # ---------------------------------------------------------------------------
 echo "--- capture coverage since watermark ---"
-jq -rs --arg prev "$prev_ts" --rawfile fl "$finals_list" --rawfile sl "$suspect_list" '
-  '"$parent_join"'
+jq -L "$lib_dir" -rs --arg prev "$prev_ts" --rawfile fl "$finals_list" --rawfile sl "$suspect_list" '
+  include "pair";
   '"$final_def"'
   latest_verdicts
   | map(select((.kept | not) and ($prev == "" or .ts > $prev)))

@@ -2,27 +2,8 @@
 # Pair-scoring helpers shared by self-improve.sh (the evidence bundle) and
 # replay-recipe.sh (the offline gate), so a rejection's DROPPED list and a
 # replay's dropped count are the same measurement. Sourcing has no side
-# effects. bash 3.2 portable: awk, grep -E, sed -E only.
-
-# The feedback-to-delegation join, interpolated into every jq program that
-# reads verdicts. Keyed on otel_span_id first and ts second (#481): ts is
-# second-precision and INDEX(.ts) kept one row per second, so a verdict on
-# the other sibling was filed under the wrong recipe. `pkey` collapses
-# several verdicts on one delegation to the latest. A feedback row with
-# neither ref_id nor ref_ts is skipped everywhere (`referenced`), as
-# metrics-summary.sh skips it: keyed on the empty reference, every such row
-# would share one pkey.
-parent_join='
-  def referenced: .source == "feedback" and (.ref_id != null or .ref_ts != null);
-  (map(select((.source // "delegate") == "delegate" and .ts != null))) as $dl
-  | (($dl | INDEX("ts:" + .ts)) + ($dl | map(select(.otel_span_id != null)) | INDEX("id:" + .otel_span_id))) as $d
-  | def parent: $d["id:" + (.ref_id // "")] // $d["ts:" + (.ref_ts // "")];
-  def pkey: parent as $p
-    | if $p == null then (if (.ref_id // "") != "" then "id:" + .ref_id else "ts:" + .ref_ts end)
-      elif $p.otel_span_id != null then "id:" + $p.otel_span_id
-      else "ts:" + $p.ts end;
-  def latest_verdicts: [.[] | select(referenced)] | sort_by(.ts) | INDEX(pkey) | [.[]];
-'
+# effects. bash 3.2 portable: awk, grep -E, sed -E only. The
+# feedback-to-delegation join is not here but in lib/pair.jq (#564).
 
 # salient <file> — one salient token per line, deduped, lowercased: a
 # backticked span, an issue ref, a dotted identifier or path, or a number of
