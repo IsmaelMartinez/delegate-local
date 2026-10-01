@@ -124,7 +124,8 @@ against the draft alone:
 
 The recipe's own pre-substitution template is read from `prompts/`
 (`DELEGATE_PROMPTS_DIR` overrides) and its lines are subtracted from the input,
-whole-line and literal as `no_example_echo` compares, before either signal is
+as exact whole lines (`grep -Fxv`, with none of the normalisation
+`no_example_echo` applies), before either signal is
 computed, so `commit-message`'s example `#73` and `delegate.sh` are never
 reported as supplied anchors. A line that carried a placeholder differs from
 its template line and survives, which is the caller's value on it. Rows from
@@ -247,14 +248,18 @@ What a case is, and how the arms run (ADR 0031 as amended 2026-09-19):
   rendered `input.txt` cannot be un-rendered, which is why this exists: the
   2026-09-16 spike could not replay its 18 `maintainer-reply` cases under the
   post-#517 template because their `lead` values were never stored.
-- `template_sha` is a 12-character sha256 of the recipe's frontmatter and
-  prompt block, computed by `recipe_template_sha` in `scripts/lib/recipe.sh`
-  and stamped on every recipe row whether or not capture is on, so a dated
-  calibration note does not start a new bucket. `tests/test-recipe-lib.sh`
-  pins it for every recipe (#559).
-- A case is a recipe row with a valid `inputs_file` and either a verdict
-  pinned by `ref_id` with a stored final, or a kept verdict, whose draft is
-  then the reference. `--seed FILE` adds cases in the spike's JSON schema.
+- `template_sha` is a 12-character sha256 of the recipe's frontmatter
+  (without its `input_quality:` block, which judges the caller's inputs and
+  not the template) and prompt block, computed by `recipe_template_sha` in
+  `scripts/lib/recipe.sh` and stamped on every recipe row whether or not
+  capture is on, so a dated calibration note does not start a new bucket.
+  Where `shasum` is not installed the function returns empty and the row
+  carries no `template_sha`. `tests/test-recipe-lib.sh` pins it for every
+  recipe (#559).
+- A case is a successful recipe row with a valid `inputs_file` and a verdict
+  pinned by `ref_id`; a verdict pinned only by `ts` is never a case, kept or
+  not, since two delegations can share a second. The reference is the stored
+  final, or the draft itself when the verdict is kept. `--seed FILE` adds cases in the spike's JSON schema.
   Ritual verdicts and quarantined finals are skipped.
 - Each case runs through `delegate.sh` on its own tier with metrics, canary
   and nudge off. The model is resolved once from the recipe's tier
