@@ -31,7 +31,7 @@ trap 'rm -rf "$tmp"' EXIT
 # editing a recipe changes its hash by design, so an edited recipe is
 # skipped here rather than failing, and the synthetic fixture below keeps
 # pinning the reader's behaviour after every recipe has moved on.
-golden='bulk-classify 2fcabf0529a7 7b63da5f5be8
+golden='bulk-classify 690496210bc0 7b63da5f5be8
 code-draft 58b48fdb7d43 015fe4d5f44c
 commit-message 87b9afcb1078 a20e93b62bab
 doc-section 27edc394c9c3 d1d200883f29
@@ -42,7 +42,7 @@ maintainer-reply e1a90860db89 c9444a457a08
 maintainer-review-reply 55a995310078 200da2e4317a
 pr-description 3e1e6d59be14 4426d3be28da
 pr-review-reply b5f619d7e7f5 3997496bc2ab
-release-announcement c74a6d19645c cbf5d01878fd
+release-announcement de7023f9c4c4 cbf5d01878fd
 summarise-issue 0616dde6488e 3c9b7cb7ef25'
 
 skipped=0

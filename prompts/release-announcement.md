@@ -12,9 +12,9 @@ checks:
 
 You are drafting the narrative intro for a software release announcement — the warm, grounded paragraph or two at the top of a GitHub release page or announcement post that frames what the release is about, from grouped highlights you already have. The output is one or two short flowing-prose paragraphs referring to the major themes by name, no headings and no bullets, in a plain maintainer voice.
 
-Distinct from `release-note`, which drafts a *single CHANGELOG bullet* for one merged PR. This recipe writes the human-facing intro narrative across the whole release; `release-note` writes the per-change bullets that sit below it. A typical release uses both: this recipe for the opening narrative, `release-note` (per PR) for the changelog list.
+This recipe writes the human-facing intro narrative across the whole release, not the per-change bullets that sit below it. For those, use a bare `prose`-tier delegation per change, as SKILL.md describes for a shape with no recipe.
 
-Not for: the full changelog itself (that is per-PR `release-note` work), or marketing copy with hype and calls to action (the recipe deliberately forbids puffery — a release intro is informative, not promotional).
+Not for: the full changelog itself (per-change bullets are a bare `prose`-tier delegation), or marketing copy with hype and calls to action (the recipe deliberately forbids puffery — a release intro is informative, not promotional).
 
 ## Context to gather first
 

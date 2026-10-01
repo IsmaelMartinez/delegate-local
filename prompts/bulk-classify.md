@@ -11,9 +11,9 @@ inputs:
 
 You have a list of items — open issues, TODO comments, backlog tickets, log lines, changed files — and want each one assigned to exactly one category from a fixed set you supply, one structured line of output per item. The work is closed-form classification into a caller-defined taxonomy: no narrative, no cross-item reasoning, one verdict each. SKILL.md names this shape directly ("Classify each TODO as P0/P1/P2") as a closed prompt local models handle reliably.
 
-Distinct from `ci-log-triage`, which triages a *single* failure log into five fixed fields. This recipe classifies *many* items into one caller-supplied category each. Pick `ci-log-triage` for "what broke in this one log"; pick this for "sort these N things into these buckets".
+This recipe classifies *many* items into one caller-supplied category each. For "what broke in this one log", a single failure log into a few fixed fields, use a bare `reasoning`-tier delegation instead; pick this for "sort these N things into these buckets".
 
-Not for: classification that needs the model to invent the taxonomy ("group these however makes sense" — that is `miss-theme-cluster`'s job, not a fixed-set assignment), or classification that depends on cross-referencing items against each other (one-item-at-a-time independent assignment is what scales down to local models; cross-reference rules need reasoning-architecture preservation — see SKILL.md's v6 finding).
+Not for: classification that needs the model to invent the taxonomy ("group these however makes sense" is theme induction, a bare `reasoning`-tier delegation, not a fixed-set assignment), or classification that depends on cross-referencing items against each other (one-item-at-a-time independent assignment is what scales down to local models; cross-reference rules need reasoning-architecture preservation — see SKILL.md's v6 finding).
 
 ## Context to gather first
 

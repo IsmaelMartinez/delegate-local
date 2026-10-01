@@ -6,6 +6,8 @@ Date: 2026-06-28
 
 Accepted. Supersedes the `pr-description`-specific premise of ADR 0012 (the worked example of the `flaky_on_models` gate) and ADR 0013 Topic E (pr-description stays hand-written). The `flaky_on_models` gate mechanism (ADR 0012) and the `release-note` / `long-thread-distillation` entries are unaffected.
 
+Superseded by #568 (2026-10-01): the flaky-model gate and the `release-note` and `long-thread-distillation` recipes were removed, since no remaining recipe declared `flaky_on_models`.
+
 ## Context
 
 Since the 2026-05-24 `flaky_on_models` gate shipped, every `pr-description` call on this MLX host has exited 4 — the gate refuses the recipe whenever the resolved prose-tier model matches `qwen3.6:35b` or `qwen3-next:80b`. The gate rested on a premise accumulated across 2026-05-10/11/12/13 and recorded in ADR 0012 and ADR 0013 Topic E: that 35B-class prose-tier models *generation*-stall on recipe-shaped prompts, "hanging six to ten minutes producing the 2–3 KB of structured markdown a PR body needs, regardless of input size." On that premise the failure was classified as structural (the gate's exit-4 domain, "this model class cannot do this recipe") rather than dynamic (the canary's exit-3 domain, "the model did not respond in time").
