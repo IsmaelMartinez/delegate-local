@@ -137,6 +137,10 @@ grep -Eq 'git[[:space:]].*commit|gh[[:space:]]+(pr|issue|release|api)([[:space:]
 # prefix (`sudo`, `VAR=x`) still classifies. The raw segments follow a 0x1e,
 # split on 0x02 (0x01 is CTLESC, which bash eats in process substitution) with
 # a terminal marker because bash 3.2 `read -a` drops a trailing empty field.
+tokenizer="$script_dir/lib/shell-words.pl"
+if [[ "${DELEGATE_BOUNDARY_TOKENIZER:-}" == "1" ]]; then
+  scan_all=$(perl "$tokenizer" <<<"$cmd" 2>/dev/null) || exit 0
+else
 scan_all=$(awk 'BEGIN{RS="\1"} {
   n = length($0); q = ""; out = ""; nseg = 0; segstart = 1;
   # O(n) per character on every Bash call that clears the pre-filter; no real
@@ -186,6 +190,7 @@ scan_all=$(awk 'BEGIN{RS="\1"} {
   for (s = 1; s <= nseg; s++) printf "%s\002", rawseg[s];
   printf ".";
 }' <<<"$cmd" 2>/dev/null) || exit 0
+fi
 scan="${scan_all%%$'\x1e'*}"
 [[ -z "$scan" ]] && exit 0
 # The separator that ended each segment, one character per segment in order
@@ -369,11 +374,15 @@ _posted_body_scan() {
 # the shipped text once the call has run (#587), and the confirm hook reads
 # it then. Here it is read for the length checks only.
 body_text="" body_chars="" body_measurable=false body_read=false body_file=""
-read_posted_body() { # raw-segment
+read_posted_body() { # segment-index (0-based)
   local out first kind flag path
   body_text="" body_chars="" body_measurable=false body_read=true body_file=""
   # The trailing X survives command-substitution newline stripping.
-  out=$(_posted_body_scan "$1"; printf X); out=${out%X}
+  if [[ "${DELEGATE_BOUNDARY_TOKENIZER:-}" == "1" ]]; then
+    out=$(perl "$tokenizer" "$1" <<<"$cmd" 2>/dev/null; printf X); out=${out%X}
+  else
+    out=$(_posted_body_scan "${rawsegs[$1]-}"; printf X); out=${out%X}
+  fi
   first=${out%%$'\n'*}
   IFS=$'\t' read -r kind flag <<<"$first"
   if [[ "$kind" == "FILE" ]]; then
@@ -431,8 +440,17 @@ git_commit_seg() { # blanked-segment
   return 1
 }
 
-classify_segment() { # blanked-segment raw-segment
-  local seg="$1" rawseg="$2"
+# True when a `gh api` segment sends a POST: an explicit -X/--method POST, or
+# no method at all and a body field, since gh api POSTs whenever a field is
+# given (`gh api …/replies -f body=…`, as /address-pr-comments posts a reply).
+gh_api_post() { # blanked-segment
+  grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$1" && return 0
+  ! grep -Eq -- '(^|[[:space:]])(-X|--method)' <<<"$1" \
+    && grep -Eq -- '(^|[[:space:]])(-[fF]|--field|--raw-field)([[:space:]]+|=)body=' <<<"$1"
+}
+
+classify_segment() { # blanked-segment segment-index
+  local seg="$1" segi="$2"
   # Inline message (-m/-F) only; --amend reuses a message, no drafting moment.
   if git_commit_seg "$seg" \
      && grep -Eq -- '(^|[[:space:]])(-[[:alnum:]]*[mF]|--message|--file)' <<<"$seg" \
@@ -464,15 +482,15 @@ classify_segment() { # blanked-segment raw-segment
   # to intercept.
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+api([[:space:]]|$)' <<<"$seg" \
      && grep -Eq '/pulls/[0-9]+/reviews' <<<"$seg" \
-     && grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$seg" \
+     && gh_api_post "$seg" \
      && grep -Eq -- '(^|[[:space:]])(-[fF]|--field|--raw-field)([[:space:]]+|=)body=' <<<"$seg"; then
     boundary="pr-review-body"; recipe="maintainer-review-reply"; return 0
   fi
   # Scoped to the pulls endpoint so an issues-comment POST is not misread, and
-  # to an explicit POST so the read-only fetch step is not a boundary.
+  # to a POST so the read-only fetch step is not a boundary.
   if grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+api([[:space:]]|$)' <<<"$seg" \
      && grep -Eq '/pulls/[0-9]+/comments' <<<"$seg" \
-     && grep -Eq -- '(-X[[:space:]]*=?POST|--method([[:space:]]+|=)POST)' <<<"$seg"; then
+     && gh_api_post "$seg"; then
     boundary="pr-review-comment"; recipe="pr-review-reply"; return 0
   fi
   # Which recipe this names depends on how much is posted: maintainer-reply
@@ -486,7 +504,7 @@ classify_segment() { # blanked-segment raw-segment
     boundary="comment-reply"
     # An unmeasurable body keeps the short shape: a failed measurement must
     # not promote a reply on no evidence.
-    read_posted_body "$rawseg"
+    read_posted_body "$segi"
     if [[ "$body_measurable" == "true" ]] && (( body_chars >= long_body_chars )); then
       recipe="maintainer-review-reply"
     else
@@ -497,7 +515,7 @@ classify_segment() { # blanked-segment raw-segment
   return 1
 }
 
-matched_seg="" matched_raw="" seg_idx=0
+matched_seg="" seg_idx=0
 while IFS= read -r seg; do
   seg_idx=$((seg_idx + 1))
   [[ -z "$seg" ]] && continue
@@ -505,13 +523,13 @@ while IFS= read -r seg; do
   # every branch needs a literal git/gh/glab.
   case "$seg" in *git*|*gh*|*glab*) ;; *) continue ;; esac
   # Blanked line k of $scan is raw segment k (0-based in the array).
-  if classify_segment "$seg" "${rawsegs[$((seg_idx - 1))]-}"; then
-    matched_seg="$seg"; matched_raw="${rawsegs[$((seg_idx - 1))]-}"; break
+  if classify_segment "$seg" "$((seg_idx - 1))"; then
+    matched_seg="$seg"; break
   fi
 done <<<"$scan"
 [[ -z "$boundary" ]] && exit 0
 # Every other boundary reads its body here, once, from its own segment.
-[[ "$body_read" == "true" ]] || read_posted_body "$matched_raw"
+[[ "$body_read" == "true" ]] || read_posted_body "$((seg_idx - 1))"
 # PostToolUse reports the whole call, and its success is the boundary's own
 # only when the boundary is the last segment or is joined to everything after
 # it by `&&`: `cd x && git commit` and `git commit -F m && git push` both

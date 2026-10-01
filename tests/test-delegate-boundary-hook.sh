@@ -6,7 +6,11 @@
 set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HOOK="$REPO/scripts/delegate-boundary-hook.sh"
+# BOUNDARY_HOOK_UNDER_TEST lets test-boundary-tokenizer-diff.sh run every call
+# here through its differential shim; the concurrency tests time the hook
+# itself, so they call HOOK_SELF.
+HOOK_SELF="$REPO/scripts/delegate-boundary-hook.sh"
+HOOK="${BOUNDARY_HOOK_UNDER_TEST:-$HOOK_SELF}"
 
 pass=0
 fail=0
@@ -1716,8 +1720,8 @@ assert_contains '"permissionDecision":"deny"' "$out" "per-boundary floor: the gl
 # mkdir lock so both cannot spend the same credit.
 for i in 1 2 3; do
   : > "$METRICS"; seed_delegation "$proj" commit-message
-  payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK" >/dev/null &
-  payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK" >/dev/null &
+  payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK_SELF" >/dev/null &
+  payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK_SELF" >/dev/null &
   wait
   assert_eq 1 "$(grep -c '"delegated":true' "$METRICS")" "lock: run $i — one credit is spent exactly once"
   assert_eq 2 "$(grep -c '"source":"opportunity"' "$METRICS")" "lock: run $i — both boundaries are recorded"
@@ -1774,10 +1778,10 @@ SLOWA=$(mktemp -d); slow_jq "$SLOWA" 9
 SLOWB=$(mktemp -d); slow_jq "$SLOWB" 3
 slow() { PATH="$1:$PATH" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "${@:2}"; }
 : > "$METRICS"; rm -rf "$lockdir"
-payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWA" bash "$HOOK" >/dev/null &
+payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWA" bash "$HOOK_SELF" >/dev/null &
 pid_a=$!
 sleep 7
-payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWB" bash "$HOOK" >/dev/null &
+payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWB" bash "$HOOK_SELF" >/dev/null &
 pid_b=$!
 wait "$pid_a"
 assert_eq "present" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock owner: A's exit leaves B's replacement lock in place"
@@ -1793,10 +1797,10 @@ SLOWC=$(mktemp -d)
 slowc() { PATH="$SLOWC:${PATH#$MOCKDIR:}" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "$@"; }
 : > "$METRICS"; rm -rf "$lockdir"
 t0=$(date +%s)
-payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK" >/dev/null &
+payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK_SELF" >/dev/null &
 pid_a=$!
 sleep 1
-payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK" >/dev/null &
+payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK_SELF" >/dev/null &
 pid_b=$!
 wait "$pid_a" "$pid_b"
 elapsed=$(( $(date +%s) - t0 ))
@@ -2329,6 +2333,48 @@ assert_eq absent "$(dfinal_state d587)" "; chain: the call's success is not the 
 chain_run "git commit -F msg.txt || true" toolu-1
 assert_eq absent "$(dfinal_state d587)" "|| chain: the call's success is not the commit's, so no final"
 rm -rf "$pending" "$METRICS_DIR/drafts" "$tmpcwd/msg.txt"
+
+# 90 (#562). One shell-word tokenizer reads the body the shell would pass:
+# concatenated quoting, an attached `--body=`/`--message=`/`-m"x"` value and
+# `$'...'` are measured whole, a `<<-` heredoc does not swallow the segments
+# after its tab-indented terminator, and a stdin heredoc is the body.
+export DELEGATE_BOUNDARY_TOKENIZER=1
+chars562() { # cmd -> body_chars on the row, or "absent"
+  : > "$METRICS"
+  payload "$1" "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+  jq -r '.body_chars // "absent"' <<<"$(last_row)"
+}
+assert_eq 12 "$(chars562 "gh pr comment 12 --body 'it'\\''s a reply'")" \
+  "#562: concatenated quoting is one body ('it'\\''s a reply)"
+assert_eq 11 "$(chars562 'gh pr comment 12 --body="hello world"')" \
+  "#562: an attached --body= value is measured"
+assert_eq 12 "$(chars562 'git commit --message="fix: a thing"')" \
+  "#562: an attached --message= value is measured"
+assert_eq 12 "$(chars562 'git commit -m"fix: a thing"')" \
+  "#562: an attached -m\"x\" value is measured"
+assert_eq 17 "$(chars562 "gh pr comment 12 --body \$'line one\\nline two'")" \
+  "#562: a \$'...' body is measured with its escapes resolved"
+assert_eq absent "$(chars562 'gh pr comment 12 --body "$REPLY"')" \
+  "#562: a body the shell would expand stays unmeasurable"
+assert_eq 12 "$(chars562 "$(printf 'gh issue comment 1 --body-file - <<%s\nhello there\nEOF' "'EOF'")")" \
+  "#562: a --body-file - heredoc is the posted body"
+: > "$METRICS"
+payload "$(printf 'cat <<-EOF > notes.md\n\tsome notes\n\tEOF\ngh pr comment 12 --body "after the heredoc"')" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq comment-reply "$(jq -r '.boundary // "none"' <<<"$(last_row)")" \
+  "#562: a <<-EOF heredoc does not hide the segment after its terminator"
+# gh api sends a POST whenever a field is given and no method is named, which
+# is how /address-pr-comments posts a reply.
+: > "$METRICS"
+payload 'gh api repos/o/r/pulls/12/comments/99/replies -f body="thanks, fixed"' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq pr-review-comment "$(jq -r '.boundary // "none"' <<<"$(last_row)")" \
+  "#562: gh api .../replies -f body= without -X POST is a pr-review-comment"
+: > "$METRICS"
+payload 'gh api -X GET repos/o/r/pulls/12/comments -f body=x' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq 0 "$(nrows)" "#562: an explicit -X GET with a body field is still not a post"
+unset DELEGATE_BOUNDARY_TOKENIZER
 
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
