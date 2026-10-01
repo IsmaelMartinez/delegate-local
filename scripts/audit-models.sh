@@ -94,13 +94,17 @@ is_installed() {
 # Ollama library under the same name.
 FIRST_PARTY_FILTER='["alibaba","qwen","google","meta","microsoft","deepseek","mistralai","mistral","zhipu","openai"]'
 
-# Per-tier llmfit JSON cached once, shared by the top-5 and pull-suggestion loops.
+# llmfit JSON cached once per use-case (three tiers share "general"), shared by
+# the top-5 and pull-suggestion loops, which read it back through $tier.json.
 cache_dir=$(mktemp -d)
 trap 'rm -rf "$cache_dir"' EXIT
 for tier in code prose reasoning long-context; do
   uc=$(tier_to_usecase "$tier")
-  llmfit recommend --use-case "$uc" --min-fit good -n 20 --json > "$cache_dir/$tier.json" 2>/dev/null \
-    || echo '{"models":[]}' > "$cache_dir/$tier.json"
+  if [[ ! -f "$cache_dir/uc-$uc.json" ]]; then
+    llmfit recommend --use-case "$uc" --min-fit good -n 20 --json > "$cache_dir/uc-$uc.json" 2>/dev/null \
+      || echo '{"models":[]}' > "$cache_dir/uc-$uc.json"
+  fi
+  cp "$cache_dir/uc-$uc.json" "$cache_dir/$tier.json"
 done
 
 echo "=== Top llmfit recommendations per tier (for this hardware) ==="
