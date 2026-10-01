@@ -357,7 +357,7 @@
       "id": 40,
       "type": "stat",
       "title": "Scaffold",
-      "description": "Drafts the agent discarded but built on: the divergence or the executable feedback improved the result (delegate-feedback.sh scaffold).",
+      "description": "Drafts the agent edited and shipped (delegate-feedback.sh scaffold).",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -418,7 +418,7 @@
       "id": 37,
       "type": "stat",
       "title": "Misses",
-      "description": "Drafts the agent rewrote or discarded, scaffold excluded (delegate-feedback.sh: scaffold is useful, not a miss).",
+      "description": "Drafts the agent rewrote or discarded, scaffold excluded (delegate-feedback.sh: scaffold is edited and shipped, a miss is rewritten or discarded).",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -1235,7 +1235,7 @@
       "id": 41,
       "type": "logs",
       "title": "Recent scaffolds",
-      "description": "Drafts discarded but built on. The reason says what the draft taught.",
+      "description": "Drafts edited and shipped. The reason says what the agent changed.",
       "datasource": {
         "type": "loki",
         "uid": "loki"

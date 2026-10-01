@@ -41,7 +41,7 @@ and `--ritual` judges that adopted final for ritual as it does a named one.
 Six sections, in the order you should read them.
 
 The **verdict tally** is the headline: how many of the verdicts recorded since
-the watermark were kept, used as a scaffold, or rewritten, and the usable rate
+the watermark were kept, edited and shipped (scaffold), or rewritten, and the usable rate
 over all of them, each delegation counted once under its latest verdict.
 Every verdict is the agent's own record of what it did with its draft, and
 that is the one tier there is (ADR 0030): the agent that used or rewrote the
@@ -425,7 +425,7 @@ rm ~/Library/LaunchAgents/com.delegate-local.self-improve.plist
 
 `scripts/delegate-feedback.sh` records what happened to a draft: `hit` (kept
 as-is), `scaffold "<reason>"` (edited and shipped) or `miss "<reason>"`
-(rewritten or discarded). The agent that used or rewrote the draft records it,
+(rewritten or discarded). Cutover 2026-10-01 (#624, ADR 0030): On 2026-10-01 (#624) the verdict definitions were unified: `scaffold` means the draft was edited and shipped, and a rewritten or discarded draft is a `miss` however useful it was. Before that date a scaffold verdict on any recipe may mean discarded-but-useful, because the `delegate-feedback.sh` usage text defined it that way globally, and nothing is migrated. Measured read-only since the 2026-08-19 reset, about 12 of 1160 scaffold reasons mention a discard (a keyword estimate, so the upper bound) and 0 came from `code-draft` or `fix-with-test`. The agent that used or rewrote the draft records it,
 and that is the only verdict tier (ADR 0030): every feedback row carries
 `verdict_source:"agent"`, `--source agent` is the default, `--source human` is
 refused, and a miss or scaffold needs a reason.

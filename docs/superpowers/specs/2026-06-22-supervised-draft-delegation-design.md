@@ -1,7 +1,7 @@
 # Supervised draft delegation for code — design spec
 
 Date: 2026-06-22
-Status: approved design, pre-implementation
+Status: Historical (implemented; scaffold superseded by ADR 0030 / #624 on 2026-10-01: scaffold now means edited and shipped). Originally: approved design, pre-implementation
 Topic: let Claude use the local `code` tier as a divergent, executable draft generator under a verify loop, without making the skill the handler for coding tasks.
 
 ## Problem

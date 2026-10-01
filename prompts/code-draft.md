@@ -90,9 +90,8 @@ sed -n '40,80p' src/widget.py | bash scripts/delegate.sh --recipe code-draft \
 
 After the call, apply the snippet yourself, run the named VERIFICATION, and
 record the honest verdict: `delegate-feedback.sh --source agent hit` if you kept
-the draft as-is, `miss "<reason>"` if it was useless, or
-`scaffold "<what it taught>"` if you discarded the code but the divergence or
-the executable feedback genuinely improved your final result.
+the draft as-is, `miss "<reason>"` if you rewrote or discarded it, however useful, or
+`scaffold "<reason>"` if you edited the draft and shipped it.
 
 ## Anti-hallucination guards (each line addresses a documented code-delegation failure mode)
 
