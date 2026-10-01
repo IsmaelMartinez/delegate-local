@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.45.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.45.0...v0.45.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **eval:** send enable_thinking false on --local scoring ([#625](https://github.com/IsmaelMartinez/delegate-local/issues/625)) ([1657958](https://github.com/IsmaelMartinez/delegate-local/commit/16579582ef89e5955d359045aafc98728396a4b1))
+* **hook:** treat --help and -h on a boundary command as no boundary ([#626](https://github.com/IsmaelMartinez/delegate-local/issues/626)) ([dab63ef](https://github.com/IsmaelMartinez/delegate-local/commit/dab63ef0fa4d8d12e57989ef88599d3659588873))
+
+
+### Documentation
+
+* define scaffold as edited and shipped everywhere ([#624](https://github.com/IsmaelMartinez/delegate-local/issues/624)) ([10da29d](https://github.com/IsmaelMartinez/delegate-local/commit/10da29d3a84946f4f3c12d91cb701862504c4af9))
+
 ## [0.45.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.44.0...v0.45.0) (2026-10-01)
 
 
