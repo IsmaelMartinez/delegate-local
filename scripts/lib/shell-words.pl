@@ -218,7 +218,9 @@ my %value_flags = (
 # the TARGET line in place of a body. `--help` or `-h` counts only as an
 # option word of its own: `-h` is help on every classified gh, glab and git
 # commit command, while the value of a flag that takes one (`--body --help`,
-# `-m -h`) is posted text, and anything after `--` is an argument.
+# `-m -h`, or a cluster ending in one such as `-dt --help`) is posted text,
+# and anything after `--` is an argument. A cluster holding h (`-dh`) is
+# left a boundary: failing closed costs a nudge, failing open a bypass.
 my @tgt;
 my $help = 0;
 my $c = 0;
@@ -257,6 +259,18 @@ if ($c < @W && $W[$c][0] =~ m{(?:\A|/)git\z}) {
     if ($t =~ /\A[0-9]*(?:<<?|>>?)&?\z/) { $k++; next }   # a bare redirection and its target
     next if $t =~ /\A[0-9]*[<>]/;                        # an attached one
     if (substr($t, 0, 1) eq '-') {
+      # A shorthand cluster parses as pflag does: booleans, then at most one
+      # flag that takes a value, which takes the rest of the cluster or, when
+      # it ends the cluster, the next word (`-dt --help` is a title).
+      if ($t =~ /\A-([A-Za-z]{2,})\z/) {
+        my $s = $1;
+        my $at = -1;
+        for my $i (0 .. length($s) - 1) {
+          if ($takes_value{'-' . substr($s, $i, 1)}) { $at = $i; last }
+        }
+        next unless $at == length($s) - 1;
+        $t = '-' . substr($s, $at, 1);
+      }
       next if index($t, '=') >= 0 || !$takes_value{$t} || $k + 1 >= @W;
       my $v = $W[++$k][0];
       if ($t eq '-R' || $t eq '--repo') { push @tgt, "repo=$v" }

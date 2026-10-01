@@ -2534,6 +2534,19 @@ help_boundary 'git commit -m -h' git-commit "-h as the value of -m"
 help_boundary 'git commit -am --help' git-commit "--help as the value of the -am cluster"
 help_boundary 'git commit -m "fix: a message long enough to be drafted" -- --help' git-commit "--help after -- (a pathspec)"
 help_boundary "gh pr comment --help; gh pr comment 12 --body \"$body300\"" comment-reply "a later segment after a help segment"
+# A short-option cluster ending in a flag that takes a value takes the next
+# word as that value, as pflag and git parse it (`-d` is boolean --draft and
+# `-t` --title on gh pr create, so `-dt --help` titles the PR "--help").
+help_boundary "gh pr create -dt --help -b \"$body300\"" pr-create "--help as the value of the -dt cluster"
+help_boundary "gh pr comment 12 -eb --help" comment-reply "--help as the value of the -eb cluster"
+help_boundary "gh pr review 12 -cb -h" pr-review-body "-h as the value of the -cb cluster"
+help_boundary "gh issue create -wt -h -b \"$body300\"" issue-create "-h as the value of the -wt cluster"
+help_boundary "glab mr create -ft --help" pr-create "--help as the value of glab's -ft cluster"
+help_boundary "glab mr note 4 -m --help" comment-reply "--help as the value of glab mr note -m"
+help_boundary 'git commit -am -h' git-commit "-h as the value of the -am cluster"
+# A value letter before the end of a cluster takes the rest as its value, so
+# the word after it is an option again.
+help_none "gh pr create -dtTitle --help" "gh pr create --help after an attached -dtTitle"
 
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
