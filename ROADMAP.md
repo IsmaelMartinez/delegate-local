@@ -53,8 +53,9 @@ finals, ritual tagging, scorer fixes, input-quality labels), the shared
 libraries (`lib/recipe.sh`, `lib/checks.sh`, `lib/text.sh`, `lib/hook.sh`) and a
 single verdict model replaced duplicated code, and v0.44.0 removed `init.sh`,
 the legacy `DELEGATE_TO_OLLAMA_*` aliases and the sampler overrides. Wave 4 is
-in progress: #568 (the recipe keep list) and #571 (CLAUDE.md to about 3k tokens)
-are merged.
+merged: the recipe keep list (#568), CLAUDE.md to about 3k tokens (#571),
+calibration history out of the recipe files (#569), the SKILL.md body halved
+(#570), and this file, the docs tree and the env-var table (#572).
 
 The OpenTelemetry → Loki/Grafana observability pipeline stays in the core:
 `scripts/lib/otel.sh` span emission (opt-in via `DELEGATE_OTEL_ENDPOINT`), the
