@@ -29,6 +29,8 @@ done
 exit 7
 EOF
 chmod +x "$mock/curl"
+# The hook step merges with jq, which SAFE_PATH may not hold.
+ln -s "$(command -v jq)" "$mock/jq"
 
 # Corpus repo: subject lengths 7,7,9,10,14,17 (P90 max 14); types feat x3 +
 # fix x2 (docs once, dropped by the >=2 rule). No tie, since sort(1)'s
@@ -51,12 +53,14 @@ run_onboard() {
   local answers="$1" profile="$2" config="$3"; shift 3
   ( cd "$corpus" && printf '%b' "$answers" | \
     env PATH="$mock:$SAFE_PATH" DELEGATE_ONBOARD_ASSUME_TTY=1 \
+        DELEGATE_ONBOARD_SETTINGS="$tmp/no-settings.json" \
         DELEGATE_LOCAL_PROFILE="$profile" DELEGATE_LOCAL_CONFIG="$config" "$@" \
         bash "$SCRIPT" 2>&1 )
 }
 
 # --- T1: non-interactive -> print-only, nothing written ----------------------
 out=$( cd "$corpus" && env PATH="$mock:$SAFE_PATH" \
+  DELEGATE_ONBOARD_SETTINGS="$tmp/no-settings.json" \
   DELEGATE_LOCAL_PROFILE="$tmp/t1p.sh" DELEGATE_LOCAL_CONFIG="$tmp/t1c.sh" \
   bash "$SCRIPT" </dev/null 2>&1 ); ec=$?
 assert_eq "0" "$ec" "T1: print-only exits 0"
@@ -115,6 +119,7 @@ assert_eq "ok" "$r" "T7: skip-both wrote no profile"
 # --- T8: non-git cwd -> shipped defaults as prefill, still exits 0 -----------
 empty="$tmp/empty"; mkdir -p "$empty"
 out=$( cd "$empty" && env PATH="$mock:$SAFE_PATH" \
+  DELEGATE_ONBOARD_SETTINGS="$tmp/no-settings.json" \
   DELEGATE_LOCAL_PROFILE="$tmp/t8p.sh" DELEGATE_LOCAL_CONFIG="$tmp/t8c.sh" \
   bash "$SCRIPT" </dev/null 2>&1 ); ec=$?
 assert_eq "0" "$ec" "T8: non-git cwd exits 0"
@@ -126,6 +131,7 @@ assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=72" "$out" "T8: shipped default becom
 out=$( cd "$corpus" && env PATH="$SAFE_PATH" \
   MLX_HOST=http://localhost:1 DOCKER_MODEL_HOST=http://localhost:2 \
   OLLAMA_HOST=http://localhost:3 \
+  DELEGATE_ONBOARD_SETTINGS="$tmp/no-settings.json" \
   DELEGATE_LOCAL_PROFILE="$tmp/t9p.sh" DELEGATE_LOCAL_CONFIG="$tmp/t9c.sh" \
   bash "$SCRIPT" </dev/null 2>&1 ); ec=$?
 assert_eq "0" "$ec" "T9: no provider reachable exits 0"
@@ -153,6 +159,126 @@ assert_contains "unknown arg" "$out" "T12: names the bad flag"
 # only fire on a truly empty read.
 out=$(run_onboard '\n\ny' "$tmp/t13p.sh" "$tmp/t13c.sh")
 assert_contains 'case "$tier" in' "$(cat "$tmp/t13c.sh")" "T13: config written from an unterminated trailing y"
+
+# --- H: the hook step (#528) — boundary/confirm/Stop entries in settings.json.
+# Every run points DELEGATE_ONBOARD_SETTINGS at a temp file; the real
+# ~/.claude/settings.json is never read or written here. Answers: skip both
+# flavor keys, decline the routing override, then the hook answer.
+hooks_cmd='bash ~/.claude/skills/delegate-local/scripts'
+pre_entry="{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"$hooks_cmd/delegate-boundary-hook.sh\",\"timeout\":5}]}"
+post_entry="{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"$hooks_cmd/delegate-boundary-confirm-hook.sh\",\"timeout\":5}]}"
+stop_entry="{\"hooks\":[{\"type\":\"command\",\"command\":\"$hooks_cmd/delegate-verdict-stop-hook.sh\",\"timeout\":10}]}"
+# Unrelated hooks, matchers and keys every merge must leave exactly as they were.
+unrelated='{
+  "env": {"FOO": "bar"},
+  "permissions": {"allow": ["Bash(git status)"]},
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "Read", "hooks": [{"type": "command", "command": "bash ~/.claude/hooks/smart-reads-inject.sh"}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "bash .claude/hooks/post-edit-validate.sh", "timeout": 30}]}
+    ],
+    "SessionStart": [
+      {"matcher": "*", "hooks": [{"type": "command", "command": "bash ~/.claude/hooks/herdr.sh session"}]}
+    ]
+  }
+}'
+run_hooks() { # <answers> <settings> -> combined output
+  run_onboard "$1" "$tmp/hp.sh" "$tmp/hc.sh" DELEGATE_ONBOARD_SETTINGS="$2"
+}
+jqs() { jq -S . "$1"; }
+
+# H1 (a): boundary hook and Stop hook present, no confirm hook -> reported
+# incomplete; confirming adds only the PostToolUse confirm entry.
+s="$tmp/h1.json"
+printf '%s\n' "$unrelated" | jq --argjson pre "$pre_entry" --argjson stop "$stop_entry" \
+  '.hooks.PreToolUse += [$pre] | .hooks.Stop = [$stop]' > "$s"
+cp "$s" "$tmp/h1.orig"
+out=$(run_hooks 's\ns\nn\ny\n' "$s")
+assert_contains "boundary hook (PreToolUse): present" "$out" "H1: reports the boundary hook present"
+assert_contains "confirm hook (PostToolUse): absent" "$out" "H1: reports the confirm hook absent"
+assert_contains "verdict hook (Stop): present" "$out" "H1: reports the Stop hook present"
+assert_contains "incomplete" "$out" "H1: a boundary hook without its confirm hook is incomplete"
+assert_eq "$(jq -c --argjson e "$post_entry" '.hooks.PostToolUse + [$e]' "$tmp/h1.orig")" \
+  "$(jq -c '.hooks.PostToolUse' "$s")" "H1: the confirm entry is appended after the existing PostToolUse matcher"
+assert_eq "$(jqs "$tmp/h1.orig")" "$(jq -S 'del(.hooks.PostToolUse[-1])' "$s")" \
+  "H1: everything but the confirm entry is unchanged"
+bak=$(ls "$s".bak.* 2>/dev/null | head -1)
+if [[ -n "$bak" ]] && cmp -s "$bak" "$tmp/h1.orig"; then
+  echo "  PASS  H1: a byte-identical backup is kept"; pass=$((pass+1))
+else echo "  FAIL  H1: no byte-identical backup of the settings file"; fail=$((fail+1)); fi
+
+# H2 (b)+(d): none of the three present -> all reported absent; confirming
+# installs the pair plus the Stop hook, unrelated entries preserved.
+s="$tmp/h2.json"
+printf '%s\n' "$unrelated" | jq . > "$s"
+cp "$s" "$tmp/h2.orig"
+out=$(run_hooks 's\ns\nn\ny\n' "$s")
+assert_contains "boundary hook (PreToolUse): absent" "$out" "H2: reports the boundary hook absent"
+assert_contains "confirm hook (PostToolUse): absent" "$out" "H2: reports the confirm hook absent"
+assert_contains "verdict hook (Stop): absent" "$out" "H2: reports the Stop hook absent"
+assert_eq "$(jq -c --argjson e "$pre_entry" '.hooks.PreToolUse + [$e]' "$tmp/h2.orig")" \
+  "$(jq -c '.hooks.PreToolUse' "$s")" "H2: boundary entry appended to PreToolUse"
+assert_eq "$(jq -c --argjson e "$post_entry" '.hooks.PostToolUse + [$e]' "$tmp/h2.orig")" \
+  "$(jq -c '.hooks.PostToolUse' "$s")" "H2: confirm entry appended to PostToolUse"
+assert_eq "[$stop_entry]" "$(jq -c '.hooks.Stop' "$s")" "H2: Stop array created with the verdict entry"
+assert_eq "$(jqs "$tmp/h2.orig")" \
+  "$(jq -S 'del(.hooks.Stop) | del(.hooks.PreToolUse[-1]) | del(.hooks.PostToolUse[-1])' "$s")" \
+  "H2: unrelated hooks, matchers and keys preserved"
+# Outside the added entries the bytes are the input's own (it is jq-formatted).
+assert_eq "$(cat "$tmp/h2.orig")" \
+  "$(jq 'del(.hooks.Stop) | del(.hooks.PreToolUse[-1]) | del(.hooks.PostToolUse[-1])' "$s")" \
+  "H2: bytes outside the added entries unchanged"
+
+# H3: a complete install reports all present and asks nothing.
+cp "$s" "$tmp/h3.orig"
+out=$(run_hooks 's\ns\nn\ny\n' "$s")
+assert_contains "all three hooks are installed" "$out" "H3: a complete install says so"
+assert_absent "install the missing hook" "$out" "H3: nothing to install, no prompt"
+cmp -s "$s" "$tmp/h3.orig" && r=ok || r=changed
+assert_eq "ok" "$r" "H3: a complete install is not rewritten"
+
+# H4 (c): a decline writes nothing and keeps no backup.
+s="$tmp/h4.json"
+printf '%s\n' "$unrelated" > "$s"
+cp "$s" "$tmp/h4.orig"
+out=$(run_hooks 's\ns\nn\nn\n' "$s")
+assert_contains "hooks not installed" "$out" "H4: explains the decline"
+cmp -s "$s" "$tmp/h4.orig" && r=ok || r=changed
+assert_eq "ok" "$r" "H4: declined settings file byte-identical"
+[[ -z "$(ls "$s".bak.* 2>/dev/null)" ]] && r=ok || r=bak
+assert_eq "ok" "$r" "H4: no backup created on decline"
+
+# H5 (e): a malformed settings file is reported and never overwritten.
+s="$tmp/h5.json"
+printf '{"hooks": [\n' > "$s"
+cp "$s" "$tmp/h5.orig"
+out=$(run_hooks 's\ns\nn\ny\n' "$s")
+assert_contains "not valid JSON" "$out" "H5: malformed settings reported"
+cmp -s "$s" "$tmp/h5.orig" && r=ok || r=changed
+assert_eq "ok" "$r" "H5: malformed settings never overwritten"
+[[ -z "$(ls "$s".bak.* 2>/dev/null)" ]] && r=ok || r=bak
+assert_eq "ok" "$r" "H5: no backup of a malformed file"
+
+# H6: no settings file yet -> confirming creates one holding all three.
+s="$tmp/h6dir/settings.json"
+out=$(run_hooks 's\ns\nn\ny\n' "$s")
+assert_eq "[$pre_entry]|[$post_entry]|[$stop_entry]" \
+  "$(jq -c '.hooks.PreToolUse' "$s" 2>/dev/null)|$(jq -c '.hooks.PostToolUse' "$s" 2>/dev/null)|$(jq -c '.hooks.Stop' "$s" 2>/dev/null)" \
+  "H6: a missing settings file is created with the three entries"
+
+# H7: without a terminal the hook status is printed and nothing is written.
+s="$tmp/h7.json"
+cp "$tmp/h1.orig" "$s"
+out=$( cd "$corpus" && env PATH="$mock:$SAFE_PATH" DELEGATE_ONBOARD_SETTINGS="$s" \
+  DELEGATE_LOCAL_PROFILE="$tmp/h7p.sh" DELEGATE_LOCAL_CONFIG="$tmp/h7c.sh" \
+  bash "$SCRIPT" </dev/null 2>&1 )
+assert_contains "confirm hook (PostToolUse): absent" "$out" "H7: print-only reports the missing confirm hook"
+assert_contains "incomplete" "$out" "H7: print-only flags the incomplete install"
+assert_contains "delegate-boundary-confirm-hook.sh" "$out" "H7: print-only shows the entry to add"
+cmp -s "$s" "$tmp/h1.orig" && r=ok || r=changed
+assert_eq "ok" "$r" "H7: print-only leaves the settings file untouched"
 
 # --- M0: the data directory may not exist yet, so writing creates it (#360) --
 deep="$tmp/fresh/.local/share/delegate-local"

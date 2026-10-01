@@ -18,7 +18,7 @@ The project comes from the same `delegate_project_name` function (`scripts/lib/o
 
 ## Install
 
-The hook ships with the skill but is not wired up automatically — enabling a global `PreToolUse` hook is your decision, so it is opt-in. Add the following to your global `~/.claude/settings.json`, merging the `Bash` matchers into your existing `PreToolUse` and `PostToolUse` arrays if you already have them. The `PostToolUse` entry is the spend confirmation described below (#497); install both, because without it a post the harness refuses keeps its credit spent and the retry is denied:
+The hook ships with the skill but is not wired up automatically — enabling a global `PreToolUse` hook is your decision, so it is opt-in. The install path is `bash ~/.claude/skills/delegate-local/scripts/onboard.sh` in a terminal (#528): after the flavor and routing steps it reads `~/.claude/settings.json` (`DELEGATE_ONBOARD_SETTINGS` points it elsewhere), prints which of this hook, its `PostToolUse` confirm companion and the verdict `Stop` hook below are registered, calls a boundary hook without its confirm hook incomplete, and on an explicit `y` keeps a `settings.json.bak.<ts>` copy and appends the missing entries with `jq`, leaving every other key, hook and matcher as it was (jq rewrites the whitespace, which the backup keeps). A file that is not valid JSON is reported and never written, and without a terminal it prints the status and the entries to add and writes nothing. To install by hand instead, add the following to your global `~/.claude/settings.json`, merging the `Bash` matchers into your existing `PreToolUse` and `PostToolUse` arrays if you already have them. The `PostToolUse` entry is the spend confirmation described below (#497); install both, because without it a post the harness refuses keeps its credit spent and the retry is denied:
 
 ```json
 {
@@ -91,7 +91,7 @@ These verdicts carry `verdict_source:"agent"`, and they are the calibration sign
 
 ## Install
 
-Like the boundary hook, this is opt-in. Add a `Stop` entry to your global `~/.claude/settings.json` (alongside the `PreToolUse` boundary-hook entry if you use it):
+Like the boundary hook, this is opt-in, and `scripts/onboard.sh` installs it alongside the boundary pair. To install it by hand, add a `Stop` entry to your global `~/.claude/settings.json` (alongside the `PreToolUse` boundary-hook entry if you use it):
 
 ```json
 {
