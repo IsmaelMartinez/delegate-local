@@ -86,17 +86,18 @@ else
   fi
 fi
 
-# 14. The post-edit hook calls the validator only inside its *SKILL.md) case branch.
+# 14. The post-edit hook calls the validator only inside the case branch for
+# this repo's own SKILL.md ("$repo/SKILL.md"), not any file named SKILL.md.
 HOOK="$REPO/.claude/hooks/post-edit-validate.sh"
 HOOK_INVOCATIONS=$(grep -nE 'validate-skill-content\.sh' "$HOOK" | grep -v '^[[:space:]]*#' || true)
 if [[ -z "$HOOK_INVOCATIONS" ]]; then
   echo "  FAIL  post-edit hook has no validate-skill-content.sh invocation"; fail=$((fail+1))
 else
-  # Extract line numbers and verify each falls between the *SKILL.md) and the
-  # next ;; in the case statement.
-  skill_open=$(grep -nE '\*SKILL\.md\)' "$HOOK" | head -1 | cut -d: -f1)
+  # Extract line numbers and verify each falls between the "$repo/SKILL.md")
+  # and the next ;; in the case statement.
+  skill_open=$(grep -nF '"$repo/SKILL.md")' "$HOOK" | head -1 | cut -d: -f1)
   if [[ -z "$skill_open" ]]; then
-    echo "  FAIL  post-edit hook lacks a *SKILL.md) case branch"; fail=$((fail+1))
+    echo "  FAIL  post-edit hook lacks a \"\$repo/SKILL.md\") case branch"; fail=$((fail+1))
   else
     skill_close=$(awk -v start="$skill_open" 'NR > start && /;;/ {print NR; exit}' "$HOOK")
     bad=""
@@ -106,10 +107,10 @@ else
       fi
     done <<<"$HOOK_INVOCATIONS"
     if [[ -z "$bad" ]]; then
-      echo "  PASS  post-edit hook only invokes validate-skill-content.sh inside *SKILL.md) branch"
+      echo "  PASS  post-edit hook only invokes validate-skill-content.sh inside the repo SKILL.md branch"
       pass=$((pass+1))
     else
-      echo "  FAIL  post-edit hook invokes validate-skill-content.sh outside *SKILL.md) branch at line(s): $bad"
+      echo "  FAIL  post-edit hook invokes validate-skill-content.sh outside the repo SKILL.md branch at line(s): $bad"
       fail=$((fail+1))
     fi
   fi

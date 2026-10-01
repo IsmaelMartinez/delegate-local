@@ -1737,12 +1737,18 @@ assert_eq "absent" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock
 # A live lock never released fails open after the timeout and is never
 # removed by a non-owner.
 mkdir -p "$lockdir"; printf '%s' "$(date -u +%s)" > "$lockdir/ts"; printf 'someone-else' > "$lockdir/owner"
+# DELEGATE_BOUNDARY_LOCK_WAIT_MS shortens the default 2 s wait.
 : > "$METRICS"
-out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK")
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_LOCK_WAIT_MS=200 dflt bash "$HOOK")
 assert_nudge "$out" "lock: an unobtainable lock fails open"
 assert_eq lock-timeout "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "lock: ...recording enforce_skipped=lock-timeout"
 assert_eq "present" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock: a live lock is not removed by a non-owner"
 assert_eq "someone-else" "$(cat "$lockdir/owner" 2>/dev/null)" "lock: ...and its owner file is untouched"
+# A leading zero is decimal, not octal: 08 is an 8 ms wait (one try), not an
+# arithmetic abort that skips the boundary.
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_LOCK_WAIT_MS=08 DELEGATE_BOUNDARY_LOCK_STALE_SEC=09 dflt bash "$HOOK" 2>&1)
+assert_eq lock-timeout "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "lock: a zero-padded wait (08) is decimal and still times out"
 rm -rf "$lockdir"
 
 # 76. An empty measurable body is a known 0-character post, not an unknown
@@ -1765,21 +1771,24 @@ assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "empty body: an unm
 
 # 75. Lock ownership: a lock broken as stale must not be removed by its
 # original holder's exit cleanup. The slow holder is a jq wrapper sleeping
-# on the lookup's `-rs` slurp: A holds 9 s, B starts at 7 s (A reads stale)
-# and holds 3 s; the lock must survive A's exit and vanish when B finishes.
+# on the lookup's `-rs` slurp. DELEGATE_BOUNDARY_LOCK_STALE_SEC=0 makes any
+# lock from an earlier second stale, so A holds 3 s, B starts at 1.5 s (A's
+# lock reads stale; B's now_epoch is at least one second past A's ts) and
+# holds 3 s; the lock must survive A's exit and vanish when B finishes. Under
+# the default 5 s threshold B would wait out the 2 s timeout and never take it.
 REAL_JQ=$(command -v jq)
 slow_jq() { # dir seconds
   mkdir -p "$1"
   printf '#!/usr/bin/env bash\ncase " $* " in *" -rs "*) sleep %s ;; esac\nexec %q "$@"\n' "$2" "$REAL_JQ" > "$1/jq"
   chmod +x "$1/jq"
 }
-SLOWA=$(mktemp -d); slow_jq "$SLOWA" 9
+SLOWA=$(mktemp -d); slow_jq "$SLOWA" 3
 SLOWB=$(mktemp -d); slow_jq "$SLOWB" 3
-slow() { PATH="$1:$PATH" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "${@:2}"; }
+slow() { PATH="$1:$PATH" DELEGATE_BOUNDARY_LOCK_STALE_SEC=0 DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "${@:2}"; }
 : > "$METRICS"; rm -rf "$lockdir"
 payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWA" bash "$HOOK" >/dev/null &
 pid_a=$!
-sleep 7
+sleep 1.5
 payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWB" bash "$HOOK" >/dev/null &
 pid_b=$!
 wait "$pid_a"
@@ -1789,21 +1798,21 @@ assert_eq "absent" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock
 assert_eq 2 "$(grep -c '"denied":true' "$METRICS")" "lock owner: both boundaries were judged (denied, no credit)"
 rm -rf "$SLOWA" "$SLOWB"
 
-# 75b. The provider probe runs outside the lock: two 3 s probes started 1 s
+# 75b. The provider probe runs outside the lock: two 2 s probes started 0.5 s
 # apart finish in about one probe's time.
 SLOWC=$(mktemp -d)
-{ printf '#!/usr/bin/env bash\nsleep 3\n'; sed '1d;/^: >> /d' "$MOCKDIR/curl"; } > "$SLOWC/curl"; chmod +x "$SLOWC/curl"
+{ printf '#!/usr/bin/env bash\nsleep 2\n'; sed '1d;/^: >> /d' "$MOCKDIR/curl"; } > "$SLOWC/curl"; chmod +x "$SLOWC/curl"
 slowc() { PATH="$SLOWC:${PATH#$MOCKDIR:}" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "$@"; }
 : > "$METRICS"; rm -rf "$lockdir"
 t0=$(date +%s)
 payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK" >/dev/null &
 pid_a=$!
-sleep 1
+sleep 0.5
 payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK" >/dev/null &
 pid_b=$!
 wait "$pid_a" "$pid_b"
 elapsed=$(( $(date +%s) - t0 ))
-assert_eq "yes" "$([[ $elapsed -le 5 ]] && echo yes || echo "no (${elapsed}s)")" "probe outside lock: two slow probes overlap instead of queueing on the lock"
+assert_eq "yes" "$([[ $elapsed -le 4 ]] && echo yes || echo "no (${elapsed}s)")" "probe outside lock: two slow probes overlap instead of queueing on the lock"
 assert_eq 2 "$(grep -c '"denied":true' "$METRICS")" "probe outside lock: both boundaries were judged"
 rm -rf "$SLOWC"
 

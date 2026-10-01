@@ -26,6 +26,10 @@
 #                                 but neither nudged nor denied (default 20 for
 #                                 git-commit, 120 for the rest)
 #   DELEGATE_BOUNDARY_WINDOW_MIN  look-back window for a prior delegation (default 480)
+#   DELEGATE_BOUNDARY_LOCK_STALE_SEC age in whole seconds past which the metrics
+#                                 lock is a killed hook's and is broken (default 5)
+#   DELEGATE_BOUNDARY_LOCK_WAIT_MS how long to wait for the lock, in 50 ms steps,
+#                                 before failing open as lock-timeout (default 2000)
 #   DELEGATE_BOUNDARY_WRAPPER_DIRS colon-separated directories whose scripts are
 #                                 read when run via bash/sh/zsh (default
 #                                 $CLAUDE_JOB_DIR, $TMPDIR, /tmp, /private/tmp,
@@ -482,10 +486,16 @@ prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 # on macOS). A lock older than 5 s is a killed hook and is broken; one that
 # cannot be taken in 2 s fails OPEN as enforce_skipped:"lock-timeout". The lock
 # is OWNED by a pid+random token so a hook whose lock was broken does not
-# remove its replacement on EXIT. Taken only when metrics are on.
+# remove its replacement on EXIT. Taken only when metrics are on. Both limits
+# are env-tunable so the lock tests need not sleep through the defaults.
 lock_dir="$(dirname "$metrics_file")/.boundary-hook.lock"
 lock_held=false lock_failed=false
 lock_token="$$-${RANDOM}${RANDOM}"
+lock_stale_sec="${DELEGATE_BOUNDARY_LOCK_STALE_SEC:-5}"
+[[ "$lock_stale_sec" =~ ^[0-9]+$ ]] && lock_stale_sec=$(( 10#$lock_stale_sec )) || lock_stale_sec=5
+lock_wait_ms="${DELEGATE_BOUNDARY_LOCK_WAIT_MS:-2000}"
+[[ "$lock_wait_ms" =~ ^[0-9]+$ ]] && lock_wait_ms=$(( 10#$lock_wait_ms )) || lock_wait_ms=2000
+lock_max_tries=$(( lock_wait_ms / 50 ))
 release_lock() {
   [[ "$lock_held" == "true" ]] || return 0
   lock_held=false
@@ -504,11 +514,11 @@ if [[ "${DELEGATE_LOCAL_NO_METRICS:-}" != "1" ]]; then
     if [[ ! "$lock_ts" =~ ^[0-9]+$ ]]; then
       lock_ts=$(stat -c %Y "$lock_dir" 2>/dev/null || stat -f %m "$lock_dir" 2>/dev/null)
     fi
-    if [[ "$lock_ts" =~ ^[0-9]+$ && $(( now_epoch - lock_ts )) -gt 5 ]]; then
+    if [[ "$lock_ts" =~ ^[0-9]+$ && $(( now_epoch - lock_ts )) -gt lock_stale_sec ]]; then
       rm -rf "$lock_dir" 2>/dev/null; continue
     fi
     lock_tries=$((lock_tries + 1))
-    if (( lock_tries >= 40 )); then lock_failed=true; break; fi
+    if (( lock_tries >= lock_max_tries )); then lock_failed=true; break; fi
     sleep 0.05
   done
   if [[ "$lock_failed" != "true" ]]; then
