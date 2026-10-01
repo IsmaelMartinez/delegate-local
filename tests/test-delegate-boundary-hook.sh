@@ -6,11 +6,7 @@
 set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# BOUNDARY_HOOK_UNDER_TEST lets test-boundary-tokenizer-diff.sh run every call
-# here through its differential shim; the concurrency tests time the hook
-# itself, so they call HOOK_SELF.
-HOOK_SELF="$REPO/scripts/delegate-boundary-hook.sh"
-HOOK="${BOUNDARY_HOOK_UNDER_TEST:-$HOOK_SELF}"
+HOOK="$REPO/scripts/delegate-boundary-hook.sh"
 
 pass=0
 fail=0
@@ -1461,15 +1457,20 @@ out=$(payload "gh pr comment 12 --body \"$body300\"" "$tmpcwd" | dflt bash "$HOO
 assert_contains '"permissionDecision":"deny"' "$out" "floor: a ${#body300}-char reply is enforced"
 assert_eq "${#body300}" "$(jq -r '.body_chars // empty' <<<"$(last_row)")" "floor: over-floor row records body_chars"
 assert_eq false "$(jq 'has("below_floor")' <<<"$(last_row)")" "floor: over-floor row carries no below_floor field"
-# A commit whose message arrives on stdin (`-F -`) has no measurable body:
-# no body_chars, and enforced.
+# A commit whose message the shell would expand has no measurable body: no
+# body_chars, and enforced.
+: > "$METRICS"
+out=$(payload 'git commit -m "$MSG"' "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "floor: a commit with no measurable body is enforced"
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "floor: no measurable body, no body_chars field"
+# A message on stdin (`-F -`) from a heredoc is that heredoc, measured (#562).
 : > "$METRICS"
 out=$(payload "git commit -F - <<'EOF'
 $body300
 EOF" "$tmpcwd" | dflt bash "$HOOK")
-assert_contains '"permissionDecision":"deny"' "$out" "floor: a commit with no measurable body is enforced"
-assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "floor: no measurable body, no body_chars field"
-assert_eq false "$(jq 'has("below_floor")' <<<"$(last_row)")" "floor: no measurable body, no below_floor field"
+assert_contains '"permissionDecision":"deny"' "$out" "floor: a -F - heredoc commit over the floor is enforced"
+assert_eq "$(( ${#body300} + 1 ))" "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "floor: a -F - heredoc commit records its length"
+assert_eq false "$(jq 'has("below_floor")' <<<"$(last_row)")" "floor: a -F - heredoc commit over the floor carries no below_floor field"
 # A credited post under the floor keeps both facts.
 : > "$METRICS"; seed_delegation "$proj" maintainer-reply
 out=$(payload "gh pr comment 12 --body \"$body40\"" "$tmpcwd" | dflt bash "$HOOK")
@@ -1720,8 +1721,8 @@ assert_contains '"permissionDecision":"deny"' "$out" "per-boundary floor: the gl
 # mkdir lock so both cannot spend the same credit.
 for i in 1 2 3; do
   : > "$METRICS"; seed_delegation "$proj" commit-message
-  payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK_SELF" >/dev/null &
-  payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK_SELF" >/dev/null &
+  payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK" >/dev/null &
+  payload "git commit -m \"$body300\"" "$tmpcwd" | dflt bash "$HOOK" >/dev/null &
   wait
   assert_eq 1 "$(grep -c '"delegated":true' "$METRICS")" "lock: run $i — one credit is spent exactly once"
   assert_eq 2 "$(grep -c '"source":"opportunity"' "$METRICS")" "lock: run $i — both boundaries are recorded"
@@ -1757,12 +1758,10 @@ out=$(payload "gh issue create --title t --body-file $tmpcwd/empty.md" "$tmpcwd"
 assert_eq "" "$out" "empty body: an empty --body-file is neither nudged nor denied"
 assert_eq 0 "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "empty body: an empty --body-file records body_chars:0"
 assert_eq true "$(jq -r '.below_floor // false' <<<"$(last_row)")" "empty body: an empty --body-file is below_floor"
-# ...while a command with no body flag at all is still unmeasurable.
+# ...while a body the shell would expand is still unmeasurable.
 : > "$METRICS"
-out=$(payload "git commit -F - <<'EOF'
-$body300
-EOF" "$tmpcwd" | dflt bash "$HOOK")
-assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "empty body: no body flag is still no body_chars"
+out=$(payload 'git commit -F "$MSG_FILE"' "$tmpcwd" | dflt bash "$HOOK")
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "empty body: an unmeasurable body is still no body_chars"
 
 # 75. Lock ownership: a lock broken as stale must not be removed by its
 # original holder's exit cleanup. The slow holder is a jq wrapper sleeping
@@ -1778,10 +1777,10 @@ SLOWA=$(mktemp -d); slow_jq "$SLOWA" 9
 SLOWB=$(mktemp -d); slow_jq "$SLOWB" 3
 slow() { PATH="$1:$PATH" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "${@:2}"; }
 : > "$METRICS"; rm -rf "$lockdir"
-payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWA" bash "$HOOK_SELF" >/dev/null &
+payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWA" bash "$HOOK" >/dev/null &
 pid_a=$!
 sleep 7
-payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWB" bash "$HOOK_SELF" >/dev/null &
+payload "git commit -m \"$body300\"" "$tmpcwd" | slow "$SLOWB" bash "$HOOK" >/dev/null &
 pid_b=$!
 wait "$pid_a"
 assert_eq "present" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock owner: A's exit leaves B's replacement lock in place"
@@ -1797,10 +1796,10 @@ SLOWC=$(mktemp -d)
 slowc() { PATH="$SLOWC:${PATH#$MOCKDIR:}" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "$@"; }
 : > "$METRICS"; rm -rf "$lockdir"
 t0=$(date +%s)
-payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK_SELF" >/dev/null &
+payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK" >/dev/null &
 pid_a=$!
 sleep 1
-payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK_SELF" >/dev/null &
+payload "git commit -m \"$body300\"" "$tmpcwd" | slowc bash "$HOOK" >/dev/null &
 pid_b=$!
 wait "$pid_a" "$pid_b"
 elapsed=$(( $(date +%s) - t0 ))
@@ -2338,7 +2337,6 @@ rm -rf "$pending" "$METRICS_DIR/drafts" "$tmpcwd/msg.txt"
 # concatenated quoting, an attached `--body=`/`--message=`/`-m"x"` value and
 # `$'...'` are measured whole, a `<<-` heredoc does not swallow the segments
 # after its tab-indented terminator, and a stdin heredoc is the body.
-export DELEGATE_BOUNDARY_TOKENIZER=1
 chars562() { # cmd -> body_chars on the row, or "absent"
   : > "$METRICS"
   payload "$1" "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
@@ -2374,7 +2372,6 @@ assert_eq pr-review-comment "$(jq -r '.boundary // "none"' <<<"$(last_row)")" \
 payload 'gh api -X GET repos/o/r/pulls/12/comments -f body=x' "$tmpcwd" \
   | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
 assert_eq 0 "$(nrows)" "#562: an explicit -X GET with a body field is still not a post"
-unset DELEGATE_BOUNDARY_TOKENIZER
 
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"

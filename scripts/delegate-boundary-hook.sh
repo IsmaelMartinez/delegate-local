@@ -131,74 +131,21 @@ grep -Eq 'git[[:space:]].*commit|gh[[:space:]]+(pr|issue|release|api)([[:space:]
 
 # --- build the classification surface -------------------------------------
 # Only the leading tokens of a shell segment can BE a command: matching the raw
-# string let a heredoc mentioning `gh pr create` classify (#342). One awk pass
-# skips heredoc bodies, blanks quoted spans and breaks segments on `; & | ( ) { }`
-# and newlines. The greps below do NOT anchor at segment start, so a wrapper or
-# prefix (`sudo`, `VAR=x`) still classifies. The raw segments follow a 0x1e,
-# split on 0x02 (0x01 is CTLESC, which bash eats in process substitution) with
-# a terminal marker because bash 3.2 `read -a` drops a trailing empty field.
+# string let a heredoc mentioning `gh pr create` classify (#342). One pass of
+# lib/shell-words.pl reads the command as the shell would (quotes, escapes,
+# `$'…'`, heredoc bodies by a line scan, `<<-` included) without expanding
+# anything, blanks quoted spans and comments, and breaks segments on
+# `; & | ( )`, a bare `{ }` and newlines (#562). The greps below do NOT anchor
+# at segment start, so a wrapper or prefix (`sudo`, `VAR=x`) still classifies.
+# The surface ends at a 0x1e, followed by the separators and another 0x1e.
 tokenizer="$script_dir/lib/shell-words.pl"
-if [[ "${DELEGATE_BOUNDARY_TOKENIZER:-}" == "1" ]]; then
-  scan_all=$(perl "$tokenizer" <<<"$cmd" 2>/dev/null) || exit 0
-else
-scan_all=$(awk 'BEGIN{RS="\1"} {
-  n = length($0); q = ""; out = ""; nseg = 0; segstart = 1;
-  # O(n) per character on every Bash call that clears the pre-filter; no real
-  # command line is decided by anything past 32KB.
-  if (n > 32768) n = 32768;
-  for (i = 1; i <= n; i++) {
-    c = substr($0, i, 1);
-    # A backslash escapes the next character except inside single quotes,
-    # where the shell takes it literally; otherwise \" flips quote parity.
-    if (q != "\047" && c == "\\") { i++; continue }
-    if (q != "") { if (c == q) { q = ""; } continue }
-    if (c == "\047" || c == "\"") { q = c; out = out " "; continue }
-    if (c == "<" && substr($0, i + 1, 1) == "<") {
-      # Skip only the heredoc body and resume after the terminator: a
-      # write-then-post (`cat > b.md <<EOF ... EOF` then `gh issue create
-      # --body-file b.md`) is a genuine opportunity.
-      j = i + 2;
-      if (substr($0, j, 1) == "-") j++;
-      if (substr($0, j, 1) == "<") { i = j; continue }   # <<< here-string: no body
-      while (j <= n && substr($0, j, 1) == " ") j++;
-      delim = ""; dq = substr($0, j, 1);
-      if (dq == "\"" || dq == "\047") {
-        j++;
-        while (j <= n && substr($0, j, 1) != dq) { delim = delim substr($0, j, 1); j++ }
-        j++;
-      } else {
-        while (j <= n && substr($0, j, 1) ~ /[A-Za-z0-9_]/) { delim = delim substr($0, j, 1); j++ }
-      }
-      if (delim == "") break;
-      term = "\n" delim;
-      p = index(substr($0, j), term);
-      if (p == 0) break;                                # unterminated: rest is data
-      i = j + p + length(term) - 2;
-      continue;
-    }
-    if (c == ";" || c == "\n" || c == "&" || c == "|" \
-        || c == "(" || c == ")" || c == "{" || c == "}") {
-      out = out "\n";
-      rawseg[++nseg] = substr($0, segstart, i - segstart); segstart = i + 1;
-      seps = seps c;
-      continue
-    }
-    out = out c;
-  }
-  rawseg[++nseg] = substr($0, segstart, n - segstart + 1);
-  printf "%s\036%s\036", out, seps;
-  for (s = 1; s <= nseg; s++) printf "%s\002", rawseg[s];
-  printf ".";
-}' <<<"$cmd" 2>/dev/null) || exit 0
-fi
+scan_all=$(perl "$tokenizer" <<<"$cmd" 2>/dev/null) || exit 0
 scan="${scan_all%%$'\x1e'*}"
 [[ -z "$scan" ]] && exit 0
 # The separator that ended each segment, one character per segment in order
 # (`&&` is two, with an empty segment between them).
 _scan_rest="${scan_all#*$'\x1e'}"
 seps="${_scan_rest%%$'\x1e'*}"
-rawsegs=()
-IFS=$'\x02' read -r -d '' -a rawsegs < <(printf '%s' "${_scan_rest#*$'\x1e'}") || true
 
 # --- is this a delegatable boundary? --------------------------------------
 # Segments are classified independently and the first match wins, so a flag
@@ -206,164 +153,17 @@ IFS=$'\x02' read -r -d '' -a rawsegs < <(printf '%s' "${_scan_rest#*$'\x1e'}") |
 boundary="" recipe=""
 # Any command word added to classify_segment must also appear in the pre-filter
 # grep above, or the branch is dead code that never fires.
-# The text a boundary is about to publish, read ONCE from the raw text of the
-# MATCHED segment (never $scan, which blanks quoted runs, never the whole
-# command) and shared by the length split, the floor and the ADR 0029 capture.
-# Nothing here is executed. A body file wins over an inline body; repeated
-# inline bodies are joined with a blank line as git does with `-m`. Unresolved
-# shell (`$`, backtick, `$( … )`) makes a body unmeasurable, except the
-# `-m "$(cat <<'EOF' … EOF\n)"` shape, whose heredoc body is the message.
-_posted_body_scan() {
-  local raw="$1"
-  # One left-to-right pass: each flag at a word boundary, then its argument (a
-  # quoted one taken whole, a bare one stopping at whitespace or shell
-  # punctuation). Output is FILE\t<path>, NONE, or INLINE\t<literal 0|1>\n<text>.
-  # (No apostrophes in the comments below: the program sits inside a
-  # single-quoted bash string.)
-  awk 'BEGIN { RS="\1" } {
-    n = length($0); if (n > 32768) n = 32768;
-    body = ""; nbody = 0; lit = 1; file = ""; i = 1; prev = " ";
-    while (i <= n) {
-      c = substr($0, i, 1);
-      # A quoted span that is not a flag argument is data: prose that merely
-      # mentions a flag must not count.
-      if (c == "\"" || c == "\047") {
-        j = i + 1;
-        while (j <= n && substr($0, j, 1) != c) {
-          if (c == "\"" && substr($0, j, 1) == "\\") j++;
-          j++;
-        }
-        prev = "x"; i = j + 1; continue;
-      }
-      if (prev ~ /[[:space:]]/) {
-        # -f/-F and their long forms are gh api FIELD flags whose argument is
-        # key=value, and only the body key is a body (#461). -F keeps its file
-        # meaning without an =, being also the short --body-file. -m/-am are
-        # git commit and glab note; no gh command takes them.
-        f = 0; isfile = 0; isfield = 0;
-        if (substr($0, i, 12) == "--body-file ")      { f = 12; isfile = 1 }
-        else if (substr($0, i, 12) == "--raw-field ") { f = 12; isfield = 1 }
-        else if (substr($0, i, 8) == "--field ")      { f = 8;  isfield = 1 }
-        else if (substr($0, i, 3) == "-F ")           { f = 3;  isfile = 1; isfield = 1 }
-        else if (substr($0, i, 3) == "-f ")           { f = 3;  isfield = 1 }
-        else if (substr($0, i, 7) == "--body ")         f = 7;
-        else if (substr($0, i, 10) == "--message ")     f = 10;
-        else if (substr($0, i, 3) == "-b ")             f = 3;
-        else if (substr($0, i, 3) == "-m ")             f = 3;
-        else if (substr($0, i, 4) == "-am ")            f = 4;
-        if (f > 0) {
-          j = i + f;
-          while (j <= n && substr($0, j, 1) == " ") j++;
-          # The key is read before the value so a quote opening the value is
-          # still seen: -f body="two words" is one body.
-          key = "";
-          if (isfield) {
-            k = j;
-            while (k <= n && substr($0, k, 1) ~ /[A-Za-z0-9_-]/) { key = key substr($0, k, 1); k++ }
-            if (key != "" && substr($0, k, 1) == "=") j = k + 1; else key = "";
-          }
-          # `body=@path` names a file, and the `@` sits before any quote:
-          # `body=@"$DIR/reply.md"` read bare kept the quotes in the path and
-          # never named a readable file (#489).
-          atfile = 0;
-          if (isfield && key == "body" && substr($0, j, 1) == "@") { atfile = 1; j++ }
-          d = substr($0, j, 1); v = ""; vlit = 1;
-          if (d == "\"" || d == "\047") {
-            j++;
-            while (j <= n && substr($0, j, 1) != d) {
-              # Inside double quotes a $( … ) is opaque to the shell. The one
-              # shape resolved is -m "$(cat <<EOF … EOF\n)" as the WHOLE value;
-              # any other substitution is consumed to its closing paren to keep
-              # quote parity and makes the body unmeasurable. Checked before the
-              # backslash rule so an escaped \$( stays literal.
-              if (d == "\"" && substr($0, j, 2) == "$(") {
-                shape = 0;
-                if (v == "") {
-                  k = j + 2; while (k <= n && substr($0, k, 1) == " ") k++;
-                  if (substr($0, k, 6) == "cat <<") {
-                    k += 6; if (substr($0, k, 1) == "-") k++;
-                    while (k <= n && substr($0, k, 1) == " ") k++;
-                    hq = substr($0, k, 1); hd = "";
-                    if (hq == "\"" || hq == "\047") {
-                      k++;
-                      while (k <= n && substr($0, k, 1) != hq) { hd = hd substr($0, k, 1); k++ }
-                      k++;
-                    } else {
-                      hq = "";
-                      while (k <= n && substr($0, k, 1) ~ /[A-Za-z0-9_]/) { hd = hd substr($0, k, 1); k++ }
-                    }
-                    while (k <= n && substr($0, k, 1) == " ") k++;
-                    if (hd != "" && substr($0, k, 1) == "\n") {
-                      k++;
-                      ht = "\n" hd; hp = index(substr($0, k), ht);
-                      if (hp > 0) {
-                        hbody = substr($0, k, hp - 1);
-                        m = k + hp + length(ht) - 1;
-                        while (m <= n && (substr($0, m, 1) == " " || substr($0, m, 1) == "\n")) m++;
-                        if (substr($0, m, 1) == ")" && substr($0, m + 1, 1) == d) {
-                          shape = 1; v = hbody; j = m + 1;
-                          if (hq == "" && hbody ~ /[$`]/) vlit = 0;
-                        }
-                      }
-                    }
-                  }
-                }
-                if (!shape) {
-                  vlit = 0; depth = 1; v = v "$("; j += 2;
-                  while (j <= n && depth > 0) {
-                    ch = substr($0, j, 1);
-                    if (ch == "(") depth++; else if (ch == ")") depth--;
-                    v = v ch; j++;
-                  }
-                }
-                continue;
-              }
-              # A backslash escapes only inside double quotes.
-              if (d == "\"" && substr($0, j, 1) == "\\") { j++; v = v substr($0, j, 1); j++; continue }
-              ch = substr($0, j, 1);
-              if (d == "\"" && (ch == "$" || ch == "`")) vlit = 0;
-              v = v ch; j++;
-            }
-            j++;
-          } else {
-            while (j <= n && substr($0, j, 1) !~ /[[:space:];,&|)]/) {
-              ch = substr($0, j, 1);
-              if (ch == "$" || ch == "`") vlit = 0;
-              v = v ch; j++;
-            }
-          }
-          # A field flag with any key but body is neither a file nor a body:
-          # -f event=COMMENT and -F in_reply_to=99 are not posted text (#461).
-          asfile = 0; asbody = 0;
-          # The `@` may also sit inside the quotes (`body="@file"`), or the
-          # whole pair may (`'body=@file'`); the shell hands gh the same bytes.
-          if (isfield && key == "" && substr(v, 1, 5) == "body=") { key = "body"; v = substr(v, 6) }
-          if (isfield && key == "body" && !atfile && substr(v, 1, 1) == "@") { atfile = 1; v = substr(v, 2) }
-          if (isfield && key != "") {
-            if (key == "body") { if (atfile) asfile = 1; else asbody = 1 }
-          }
-          else if (isfile) asfile = 1;
-          else if (!isfield) asbody = 1;
-          if (asfile) { if (file == "") file = v }
-          else if (asbody) {
-            if (nbody++ > 0) body = body "\n\n";
-            body = body v;
-            if (!vlit) lit = 0;
-          }
-          prev = " "; i = j; continue;
-        }
-      }
-      prev = c; i++;
-    }
-    # NONE means no body flag at all; INLINE with empty text is a known
-    # 0-character post, which the caller must not confuse with no body.
-    if (file != "") { printf "FILE\t%s\n", file }
-    else if (nbody == 0) { printf "NONE\n" }
-    else { printf "INLINE\t%d\n", lit; printf "%s", body }
-  }' <<<"$raw"
-}
-
-# Sets body_text (capped at 64 KB: this runs on every Bash call), body_chars
+# The text a boundary is about to publish, read ONCE from the MATCHED segment
+# (never $scan, which blanks quoted runs, never the whole command) and shared
+# by the length split, the floor and the ADR 0029 capture. The tokenizer, given
+# the segment's index, prints FILE\t<path>, NONE, or INLINE\t<literal 0|1>\n
+# <text>. Nothing here is executed. A body file wins over an inline body;
+# repeated inline bodies are joined with a blank line as git does with `-m`.
+# Unresolved shell (`$`, backtick, `$( … )`) makes a body unmeasurable, except
+# the `-m "$(cat <<'EOF' … EOF\n)"` shape, whose heredoc body is the message,
+# and a `--body-file -` (or `-F -`) heredoc, which is the body itself.
+#
+# read_posted_body sets body_text (capped at 64 KB: this runs on every Bash call), body_chars
 # ("" when unmeasurable) and body_measurable. Only a regular file is read:
 # `head -c` on /dev/zero would hang the hook. Measurable means the scan
 # SUCCEEDED, not that the text is non-empty: `--body ""` records body_chars:0
@@ -378,11 +178,7 @@ read_posted_body() { # segment-index (0-based)
   local out first kind flag path
   body_text="" body_chars="" body_measurable=false body_read=true body_file=""
   # The trailing X survives command-substitution newline stripping.
-  if [[ "${DELEGATE_BOUNDARY_TOKENIZER:-}" == "1" ]]; then
-    out=$(perl "$tokenizer" "$1" <<<"$cmd" 2>/dev/null; printf X); out=${out%X}
-  else
-    out=$(_posted_body_scan "${rawsegs[$1]-}"; printf X); out=${out%X}
-  fi
+  out=$(perl "$tokenizer" "$1" <<<"$cmd" 2>/dev/null; printf X); out=${out%X}
   first=${out%%$'\n'*}
   IFS=$'\t' read -r kind flag <<<"$first"
   if [[ "$kind" == "FILE" ]]; then
