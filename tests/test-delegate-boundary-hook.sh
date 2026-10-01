@@ -2547,6 +2547,16 @@ help_boundary 'git commit -am -h' git-commit "-h as the value of the -am cluster
 # A value letter before the end of a cluster takes the rest as its value, so
 # the word after it is an option again.
 help_none "gh pr create -dtTitle --help" "gh pr create --help after an attached -dtTitle"
+# Fail closed: a short flag or cluster with a letter the command's table does
+# not know as on/off may take the next word as its value, so a help flag
+# straight after it keeps the call a boundary. Only known on/off letters
+# (`-d`/`-w` on gh pr create, `-a` on gh pr review) let it read as help.
+help_boundary "gh pr create -zt --help -b \"$body300\"" pr-create "--help after the unknown-letter cluster -zt"
+help_boundary "gh pr create -zd --help" pr-create "--help after the unknown-letter cluster -zd"
+help_boundary "gh pr comment 12 -z --help" comment-reply "--help after an unknown short flag"
+help_boundary "glab mr note 4 -x -h" comment-reply "-h after a short flag glab mr note does not know"
+help_none "gh pr create -dw --help" "gh pr create --help after the known on/off cluster -dw"
+help_none "gh pr review 12 -a --help -b \"$body300\"" "gh pr review --help after the known on/off -a"
 
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"

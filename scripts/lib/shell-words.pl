@@ -221,6 +221,20 @@ my %value_flags = (
 # `-m -h`, or a cluster ending in one such as `-dt --help`) is posted text,
 # and anything after `--` is an argument. A cluster holding h (`-dh`) is
 # left a boundary: failing closed costs a nudge, failing open a bypass.
+# The shorthands each command lists as on/off (no value), from the same
+# `--help` output. A short flag or cluster holding any other letter may take
+# the next word as its value, so that word is never read as help: failing
+# closed costs a nudge, failing open lets a post through unrecorded. A
+# command with no entry knows none.
+my %bool_flags = (
+  'gh pr create'     => '-d -e -f -w',
+  'gh pr comment'    => '-e -w',
+  'gh pr review'     => '-a -c -r',
+  'gh issue create'  => '-e -w',
+  'gh issue comment' => '-e -w',
+  'gh api'           => '-i',
+  'glab mr create'   => '-f -w -y',
+);
 my @tgt;
 my $help = 0;
 my $c = 0;
@@ -250,26 +264,27 @@ if ($c < @W && $W[$c][0] =~ m{(?:\A|/)git\z}) {
   # A command with no table still never keys on a body-ish value.
   my %takes_value = map { $_ => 1 } split ' ',
     ($value_flags{$cmd} // '-R --repo --body --message --notes --title --field --raw-field');
-  my $ended = 0;
+  my %is_bool = map { $_ => 1 } split ' ', ($bool_flags{$cmd} // '');
+  my ($ended, $maybe_value) = (0, -1);
   for (; $k < @W; $k++) {
     my $t = $W[$k][0];
-    $help = 1 if !$ended && ($t eq '--help' || $t eq '-h');
+    $help = 1 if !$ended && $k != $maybe_value && ($t eq '--help' || $t eq '-h');
     $ended = 1 if $t eq '--';
     if ($t =~ /\A--repo=/) { push @tgt, 'repo=' . substr($t, 7); next }
     if ($t =~ /\A[0-9]*(?:<<?|>>?)&?\z/) { $k++; next }   # a bare redirection and its target
     next if $t =~ /\A[0-9]*[<>]/;                        # an attached one
     if (substr($t, 0, 1) eq '-') {
-      # A shorthand cluster parses as pflag does: booleans, then at most one
-      # flag that takes a value, which takes the rest of the cluster or, when
-      # it ends the cluster, the next word (`-dt --help` is a title).
-      if ($t =~ /\A-([A-Za-z]{2,})\z/) {
+      # A shorthand or cluster parses as pflag does: on/off letters, then at
+      # most one flag that takes a value, which takes the rest of the cluster
+      # or, when it ends it, the next word (`-dt --help` is a title). A
+      # letter that is neither leaves the next word a possible value.
+      if ($t =~ /\A-([A-Za-z]+)\z/ && !$takes_value{$t}) {
         my $s = $1;
-        my $at = -1;
         for my $i (0 .. length($s) - 1) {
-          if ($takes_value{'-' . substr($s, $i, 1)}) { $at = $i; last }
+          my $f = '-' . substr($s, $i, 1);
+          if ($takes_value{$f}) { $t = $f if $i == length($s) - 1; last }
+          if (!$is_bool{$f}) { $maybe_value = $k + 1; last }
         }
-        next unless $at == length($s) - 1;
-        $t = '-' . substr($s, $at, 1);
       }
       next if index($t, '=') >= 0 || !$takes_value{$t} || $k + 1 >= @W;
       my $v = $W[++$k][0];
