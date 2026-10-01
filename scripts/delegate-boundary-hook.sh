@@ -142,7 +142,7 @@ fi
 # classify_segment decides whether `commit` is really the subcommand.
 # Matched over the whole command rather than line by line as grep did, which
 # only widens it (`.` and [[:space:]] cross a newline).
-_cmd_re='git[[:space:]].*commit|gh[[:space:]]+(pr|issue|release|api)([[:space:]]|$)|glab[[:space:]]+(mr|issue)([[:space:]]|$)'
+_cmd_re='git[[:space:]].*commit|gh[[:space:]]+(pr|issue|api)([[:space:]]|$)|glab[[:space:]]+(mr|issue)([[:space:]]|$)'
 [[ "$cmd" =~ $_cmd_re ]] || exit 0
 
 # --- build the classification surface -------------------------------------
@@ -273,7 +273,6 @@ _re_gh_issue_create='(^|[^[:alnum:]_-])gh[[:space:]]+issue[[:space:]]+create([[:
 _re_gh_pr_comment='(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+comment([[:space:]]|$)'
 _re_gh_pr_create='(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'
 _re_gh_pr_review='(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+review([[:space:]]|$)'
-_re_gh_release_create='(^|[^[:alnum:]_-])gh[[:space:]]+release[[:space:]]+create([[:space:]]|$)'
 _re_glab_mr_create='(^|[^[:alnum:]_-])glab[[:space:]]+mr[[:space:]]+create([[:space:]]|$)'
 _re_glab_note='(^|[^[:alnum:]_-])glab[[:space:]]+(mr|issue)[[:space:]]+(discussion[[:space:]]+)?note([[:space:]]|$)'
 _re_method='(^|[[:space:]])(-X|--method)'
@@ -315,9 +314,6 @@ classify_segment() { # blanked-segment segment-index
      && [[ "$seg" =~ $_re_body_flag ]] \
      && ! [[ "$seg" =~ $_re_web_flag ]]; then
     boundary="issue-create"; recipe="github-issue-body"; return 0
-  fi
-  if [[ "$seg" =~ $_re_gh_release_create ]]; then
-    boundary="release-create"; recipe="release-note"; return 0
   fi
   # A PR REVIEW BODY is the evidence-led shape, which is maintainer-review-reply
   # rather than the two-sentence maintainer-reply below. Inline body required,

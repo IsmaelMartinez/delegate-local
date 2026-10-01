@@ -11,9 +11,9 @@ inputs:
 
 You have a list of items — open issues, TODO comments, backlog tickets, log lines, changed files — and want each one assigned to exactly one category from a fixed set you supply, one structured line of output per item. The work is closed-form classification into a caller-defined taxonomy: no narrative, no cross-item reasoning, one verdict each. SKILL.md names this shape directly ("Classify each TODO as P0/P1/P2") as a closed prompt local models handle reliably.
 
-Distinct from `ci-log-triage.md`, which triages a *single* failure log into five fixed fields. This recipe classifies *many* items into one caller-supplied category each. Pick `ci-log-triage` for "what broke in this one log"; pick this for "sort these N things into these buckets".
+Distinct from `ci-log-triage`, which triages a *single* failure log into five fixed fields. This recipe classifies *many* items into one caller-supplied category each. Pick `ci-log-triage` for "what broke in this one log"; pick this for "sort these N things into these buckets".
 
-Not for: classification that needs the model to invent the taxonomy ("group these however makes sense" — that is `miss-theme-cluster.md`'s job, not a fixed-set assignment), or classification that depends on cross-referencing items against each other (one-item-at-a-time independent assignment is what scales down to local models; cross-reference rules need reasoning-architecture preservation — see SKILL.md's v6 finding).
+Not for: classification that needs the model to invent the taxonomy ("group these however makes sense" — that is `miss-theme-cluster`'s job, not a fixed-set assignment), or classification that depends on cross-referencing items against each other (one-item-at-a-time independent assignment is what scales down to local models; cross-reference rules need reasoning-architecture preservation — see SKILL.md's v6 finding).
 
 ## Context to gather first
 
@@ -74,12 +74,12 @@ bash scripts/delegate-feedback.sh hit   # or: miss "<reason>"
 
 ## Anti-hallucination guards (each line addresses a recurring miss-mode)
 
-- "The category ... MUST be one of the CATEGORIES verbatim. Never invent a synonym" — the highest-volume failure mode on closed-set classification: the model emits a plausible near-synonym (`config` for `configuration-cli`, `urgent` for `P0`) that breaks any downstream parser. The verbatim-from-the-list discipline is the same closed-list rule `ci-log-triage.md` applies to its FAILURE_TYPE enum.
+- "The category ... MUST be one of the CATEGORIES verbatim. Never invent a synonym" — the highest-volume failure mode on closed-set classification: the model emits a plausible near-synonym (`config` for `configuration-cli`, `urgent` for `P0`) that breaks any downstream parser. The verbatim-from-the-list discipline is the same closed-list rule `ci-log-triage` applies to its FAILURE_TYPE enum.
 - "one line per input item, in the same order ... do not skip an item, do not merge two" — on a long list the prose tier drops or coalesces items, especially near-duplicate ones. The one-line-per-item-in-order rule keeps the output count equal to the input count so a mismatch is immediately visible.
 - "If an item begins with its own identifier ... reproduce that identifier verbatim ... do NOT replace it with a sequential ... index" — a 2026-06-16 cross-model probe on `qwq:32b` renumbered `#412`/`#418` issues as `1, 2, 3` in the NUMBER field, breaking the link back to the source item. The primary reasoning model (`deepseek-r1:32b`) preserved the identifiers; the guard hardens the weaker-model path so the output stays joinable to its input.
 - "if an item fits none well, use the closest listed category (or the explicit catch-all ...)" — the closed-list escape hatch. Without a defined fallback the model invents a new bucket for the awkward item; naming `other` (when the caller lists it) gives the awkward items a predictable home, per the REFUSE/escape-hatch pattern in SKILL.md.
 - "Output ONLY the per-item lines. No header row, no preamble, no trailing summary" — reasoning-tier models otherwise wrap the output in a `## Classification` header or close with a count summary, which the parser then has to strip.
-- The `reasoning` tier (not `prose`) is intentional, the same argument `ci-log-triage.md` makes: classification is filtering and assignment, not prose generation. Per SKILL.md's 2026-05-03 v7 finding, independent per-item classification with priority-ordered keyword rules scales down well to local reasoning models; spell the category boundaries out as hard rules in `--var categories` if the default assignment drifts.
+- The `reasoning` tier (not `prose`) is intentional, the same argument `ci-log-triage` makes: classification is filtering and assignment, not prose generation. Per SKILL.md's 2026-05-03 v7 finding, independent per-item classification with priority-ordered keyword rules scales down well to local reasoning models; spell the category boundaries out as hard rules in `--var categories` if the default assignment drifts.
 
 ## Expected output shape
 
@@ -93,7 +93,7 @@ Verify before recording verdict: exactly one output line per input item, in inpu
 
 ## Calibration notes
 
-Graduated 2026-06-16 from observed recurring bare-delegation usage rather than from a recorded HIT. A 2026-06-15 analysis of the session-transcript corpus found fixed-taxonomy classification of a list to be a recurring task shape with no recipe — the closest, `ci-log-triage.md`, handles a single log into five fields, not N items into one caller-supplied category each. The shape fell back to the bare `reasoning`/`prose` tier each time, with the closed-list and output-format directives re-specified by hand.
+Graduated 2026-06-16 from observed recurring bare-delegation usage rather than from a recorded HIT. A 2026-06-15 analysis of the session-transcript corpus found fixed-taxonomy classification of a list to be a recurring task shape with no recipe — the closest, `ci-log-triage`, handles a single log into five fields, not N items into one caller-supplied category each. The shape fell back to the bare `reasoning`/`prose` tier each time, with the closed-list and output-format directives re-specified by hand.
 
 The prompt skeleton is lifted from the actual bare prompts used, which had converged on the same guards independently: "Classify each issue below into exactly one category from this list: [taxonomy]. Output format: one line per issue as 'NUMBER | CATEGORY | one-sentence summary'. No headers, no commentary. Stop after the last issue line." and the P0/P1/P2 TODO variant "Output exactly one line per input: '<P0|P1|P2>: <verbatim todo>'. No commentary." The verbatim-category and one-line-per-item rules are what this recipe makes permanent.
 

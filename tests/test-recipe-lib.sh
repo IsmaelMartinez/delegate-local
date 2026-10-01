@@ -26,32 +26,23 @@ trap 'rm -rf "$tmp"' EXIT
 
 # --- golden template_sha for every recipe in prompts/ ----------------------
 # <recipe> <sha256 of the whole file, 12> <template_sha>, computed on main @
-# 26ebba6. A pin applies only while the file is the one it was computed on:
+# 26ebba6 (bulk-classify, commit-message and release-announcement file shas
+# refreshed in #568 after prose-only edits; template_sha unchanged). A pin applies only while the file is the one it was computed on:
 # editing a recipe changes its hash by design, so an edited recipe is
 # skipped here rather than failing, and the synthetic fixture below keeps
 # pinning the reader's behaviour after every recipe has moved on.
-golden='bulk-classify 775def0c320b 7b63da5f5be8
-bulk-file-summary c8f6902ce370 fb912cffa833
-ci-log-triage efb2e95a6f72 f080363ef100
+golden='bulk-classify 2fcabf0529a7 7b63da5f5be8
 code-draft 58b48fdb7d43 015fe4d5f44c
-commit-message d18922411c42 a20e93b62bab
+commit-message 87b9afcb1078 a20e93b62bab
 doc-section 27edc394c9c3 d1d200883f29
 file-summary 1b0f3deae30f f68b364cb12c
 fix-with-test caee5463af5b 7ab4349174c9
 github-issue-body e5dfd0a52b95 477bb405d75d
-jira-ticket-description 4b78b6c6b42d 4bdce242d3e8
-long-thread-distillation b2db51c09a48 b2db43b9755e
 maintainer-reply e1a90860db89 c9444a457a08
 maintainer-review-reply 55a995310078 200da2e4317a
-miss-theme-cluster a1d7bb36d719 94032a3cd78d
-plan-section-intro 3b0f8bc167d2 aa1388882d79
 pr-description 3e1e6d59be14 4426d3be28da
 pr-review-reply b5f619d7e7f5 3997496bc2ab
-release-announcement 12765cfc23da cbf5d01878fd
-release-note f018a8de746e 48c1596477d7
-roadmap-entry eb06d3894a7f 861d66baccd9
-roadmap-status 796e0c868b83 396719894140
-semantic-search 2976d489f5fc c6ca70fb8c50
+release-announcement c74a6d19645c cbf5d01878fd
 summarise-issue 0616dde6488e 3c9b7cb7ef25'
 
 skipped=0

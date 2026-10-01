@@ -25,7 +25,7 @@ surface looks textual.
 Shipped and stable. The skill installs via `npx skills add` (or `cp -r`), routes
 across the `code` / `prose` / `reasoning` / `long-context` tiers (with `vision`,
 `embedding`, `premium-general`, and `reasoning-vision` scaffolded), auto-selects
-Ollama or MLX, ships 21 calibrated recipes led by `commit-message`, records
+Ollama or MLX, ships 13 calibrated recipes led by `commit-message`, records
 hit/miss verdicts that feed `metrics-summary.sh`, and gates every PR on a
 frontmatter + content + trigger-eval CI pipeline plus the bash test suite.
 
