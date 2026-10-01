@@ -4332,6 +4332,14 @@ run_recipe DELEGATE_DRAFT_RETENTION_DAYS=1 capvar --var who=carol >/dev/null
 assert_eq 0 "$(ls "$data/drafts" | grep -c "^$old_stem")" \
   "inputs-capture: retention removes the expired inputs file with its draft"
 unset recipe_stdin
+# mock_curl carries any content: an apostrophe, a double quote, a dollar
+# sign, a backslash and a newline all reach the draft as the model sent them.
+awkward=$'it\'s a "quoted" $HOME \\ path\nsecond line'
+mock_curl "$tmp" "$(printf '%s' "$awkward" | jq -Rs . | sed 's/^"//; s/"$//')"
+run_recipe cap >/dev/null
+draft_name=$(tail -1 "$metrics" | jq -r '.draft_file // ""')
+assert_eq "$awkward" "$(cat "$data/drafts/$draft_name" 2>/dev/null)" \
+  "mock_curl: content with ' \" \$ \\ and a newline round-trips to the draft"
 
 # --- 42-45. One wired case per check: the failure reaches stderr and the
 # row. The rest of each check's cases are in tests/test-checks.sh ---

@@ -89,6 +89,9 @@ MOCK_MODELS='qwen3.6:35b-a3b'
 # answering a synthetic 0.001 s (queue_wait_ms=1).
 mock_curl() {
   local dir="$1" content="${2:-mock-model-output: ok\\n}" sniff="${3:-/dev/null}" argv_sniff="${4:-/dev/null}"
+  # The body is a data file, not text spliced into the script, so content
+  # with quotes, $ or backslashes cannot break the mock.
+  printf '{"choices":[{"message":{"content":"%s"},"finish_reason":"stop"}]}' "$content" > "$dir/curl.body"
   cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
 for _a in "\$@"; do
@@ -105,11 +108,10 @@ while (( \$# > 0 )); do
   esac
 done
 cat > "${sniff}"
-body='{"choices":[{"message":{"content":"${content}"},"finish_reason":"stop"}]}'
 if [[ -n "\$out_file" ]]; then
-  printf '%s' "\$body" > "\$out_file"
+  cat "$dir/curl.body" > "\$out_file"
 else
-  printf '%s' "\$body"
+  cat "$dir/curl.body"
 fi
 if [[ -n "\$write_out" ]]; then
   printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
