@@ -5,23 +5,8 @@
 
 set -u
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/assert.sh"
 SCRIPT="$REPO/scripts/eval-skill-triggers.sh"
-SAFE_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
-
-pass=0
-fail=0
-
-assert_eq() {
-  local expected="$1" actual="$2" name="$3"
-  if [[ "$expected" == "$actual" ]]; then echo "  PASS  $name"; pass=$((pass+1))
-  else echo "  FAIL  $name (expected '$expected', got '$actual')"; fail=$((fail+1)); fi
-}
-assert_contains() {
-  local needle="$1" haystack="$2" name="$3"
-  if [[ "$haystack" == *"$needle"* ]]; then echo "  PASS  $name"; pass=$((pass+1))
-  else echo "  FAIL  $name (missing '$needle' in '$haystack')"; fail=$((fail+1)); fi
-}
 
 # Build a minimal eval-set fixture in $1/eval-set.json with 8 positives and
 # 8 negatives. Ids start with `p` for positives and `n` for negatives — mocks
@@ -341,7 +326,8 @@ make_skill "$tmp"
 sniff="$tmp/sniff.txt"
 make_mock_curl_batched "$tmp" "$sniff" local all-trigger
 EC=0
-(cd "$tmp" && PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || EC=$?
+# env -u: the default-off assertion below must not inherit the runner's DELEGATE_THINK.
+(cd "$tmp" && env -u DELEGATE_THINK PATH="$tmp:$SAFE_PATH" bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || EC=$?
 first_body=$(head -1 "$sniff")
 assert_contains '"model":"mock-model"' "$first_body" "--local body: model field"
 assert_contains '"role":"system"' "$first_body" "--local body: system message carries the trigger prompt"
@@ -539,6 +525,4 @@ assert_contains "recall=1.000 negative-precision=1.000" "$out" "gate:false: diag
 assert_contains "diagnostic (non-gating, embedded sub-step): dtp=1 dfn=1 embedded-recall=0.500" "$out" "gate:false: diagnostic line reports embedded-recall"
 rm -rf "$tmp"
 
-echo
-echo "$pass passed, $fail failed"
-[[ $fail -eq 0 ]]
+finish
