@@ -1,0 +1,15 @@
+# Calibration history for [`prompts/bulk-classify.md`](../../prompts/bulk-classify.md)
+
+## Calibration notes
+
+Graduated 2026-06-16 from observed recurring bare-delegation usage rather than from a recorded HIT. A 2026-06-15 analysis of the session-transcript corpus found fixed-taxonomy classification of a list to be a recurring task shape with no recipe — the closest, `ci-log-triage`, handles a single log into five fields, not N items into one caller-supplied category each. The shape fell back to the bare `reasoning`/`prose` tier each time, with the closed-list and output-format directives re-specified by hand.
+
+The prompt skeleton is lifted from the actual bare prompts used, which had converged on the same guards independently: "Classify each issue below into exactly one category from this list: [taxonomy]. Output format: one line per issue as 'NUMBER | CATEGORY | one-sentence summary'. No headers, no commentary. Stop after the last issue line." and the P0/P1/P2 TODO variant "Output exactly one line per input: '<P0|P1|P2>: <verbatim todo>'. No commentary." The verbatim-category and one-line-per-item rules are what this recipe makes permanent.
+
+### 2026-06-16 — first dogfood (HIT)
+
+First dogfood against `deepseek-r1:32b` (reasoning tier, Ollama): four `#NNN`-prefixed teams-for-linux issues into a seven-category set. Output was a clean HIT on mechanics — exactly one line per item in input order, every category drawn verbatim from the supplied set, the `NUMBER | CATEGORY | one-sentence summary` format exact, no header, preamble, or trailing summary. Recorded HIT via `delegate-feedback.sh --source agent`. The one arguable call was `#430 "Add a setting to disable the tray icon"` landing in `configuration-cli` rather than `enhancement` — a defensible read (a setting is configuration), and exactly the category-boundary ambiguity this recipe's guards anticipate rather than a format failure. Per SKILL.md's v5/v7 calibration history, the established fix for boundary drift is to spell the boundary out as a priority-ordered hard rule inside `--var categories` and add a one-shot example, not to loosen the verbatim-category constraint. No recipe change was needed from this dogfood.
+
+### 2026-06-16 — cross-model effectiveness probe + identifier hardening
+
+A two-model effectiveness probe (2 varied inputs each, scored against the verify-criteria) ran the recipe on the primary reasoning model (`deepseek-r1:32b`) and a different-architecture second model (`qwq:32b`). Both held the format and one-line-per-item discipline. The probe surfaced one cross-model weakness the line-count check missed: `qwq` renumbered the `#412`/`#418` issue identifiers as a sequential `1, 2, 3` in the NUMBER field, breaking the join back to the source items, while `deepseek-r1` preserved them. The carry-the-item's-own-identifier directive (and its guard) were added in response, so the output stays joinable to its input on the weaker-model path. The P0/P1/P2 and issue-area taxonomies both classified sensibly on the primary model (the path-traversal TODO correctly went P0).

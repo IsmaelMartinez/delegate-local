@@ -308,9 +308,11 @@ is the separate live clone at `~/.local/share/delegate-local-live`, not this
 checkout, so a merged fix reaches other sessions only after
 `git -C ~/.local/share/delegate-local-live pull --ff-only`.
 
-Every recipe edit gets a dated entry in that recipe's `## Calibration notes`
-saying what was observed, how many times, and what changed. That section is
-how the next session knows a defect has already been attacked and with what.
+Every recipe edit gets a dated entry in that recipe's calibration history,
+`docs/calibration/<recipe>.md`, saying what was observed, how many times, and
+what changed; the recipe's own `## Calibration notes` is a one-line pointer to
+that file and stays one (#569). That history is how the next session knows a
+defect has already been attacked and with what.
 
 Run the suites the change touches (`tests/test-delegate.sh`,
 `tests/test-prompts-library.sh`, `tests/test-self-improve.sh`), open a PR, and
@@ -330,8 +332,8 @@ inside 24 hours.
 If the new template's usable rate sits below the previous one's by more than
 the margin that n can resolve (at thirty rows a side, roughly twenty-five
 points; the replay's sign test was the fine instrument, this is the coarse
-one), open a revert PR, and write the failure into the recipe's calibration
-notes as a dated entry naming both hashes, the n on each side and the rates,
+one), open a revert PR, and write the failure into the recipe's
+`docs/calibration/<recipe>.md` as a dated entry naming both hashes, the n on each side and the rates,
 so the next session does not try the same edit again. A revert is a normal
 outcome of the loop, not an incident. When the online read agrees with the
 replay, say so in the next bundle and move on.

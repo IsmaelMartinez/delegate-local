@@ -53,9 +53,11 @@ the verdict via `bash scripts/delegate-feedback.sh` followed by `hit`,
 scaffold and miss).
 
 ## Calibration notes
-Provenance: which session's HIT validated this recipe, and what specific
-guard each line addresses (links to the metrics ts when possible). New
-guards added when a follow-up MISS surfaces a new failure mode.
+A one-line pointer to docs/calibration/<task>.md, which holds the dated
+provenance: which session's HIT validated this recipe, what specific guard
+each line addresses (links to the metrics ts when possible), and every later
+edit. The history lives outside the recipe so the file stays the size of
+what the caller needs (#569).
 ```
 
 ## How `--recipe` and `--var` work
@@ -68,8 +70,9 @@ When you spot a recurring task pattern that doesn't have a recipe yet:
 
 1. Use the skill on the task with hand-crafted anchoring (verbatim recent examples, explicit guards), then call `bash scripts/delegate-feedback.sh hit "<reason>"` if the output was usable verbatim or with trivial edits.
 2. Distil the working prompt into the four sections above. Keep it short — the recipe is the minimum context that consistently produces HIT, not a manifesto.
-3. Add an entry to the SKILL.md "Recipes" pointer so the agent knows the recipe exists.
-4. Where it makes sense, mirror the task shape into `evals/eval-set.json` as a positive paraphrase so the trigger eval ensures the description still fires on the pattern.
+3. Start `docs/calibration/<task>.md` with the provenance of that first HIT, and end the recipe with a `## Calibration notes` heading whose one line points at it. Every later edit to the recipe adds a dated entry to that file, never to the recipe; `tests/test-prompts-library.sh` checks the pointer and the file.
+4. Add an entry to the SKILL.md "Recipes" pointer so the agent knows the recipe exists.
+5. Where it makes sense, mirror the task shape into `evals/eval-set.json` as a positive paraphrase so the trigger eval ensures the description still fires on the pattern.
 
 ### Optional conventions for new recipes (Phase 12 Track B, #161)
 
@@ -138,7 +141,7 @@ A concrete adoption candidate is `prompts/file-summary.md` extended for multi-pa
 
 The hit/miss log is single-machine. When a MISS surfaces a task shape this library does not yet cover, the cross-machine path is a `prompt-pattern` issue (`.github/ISSUE_TEMPLATE/prompt-pattern.md`). The template captures the task shape, tier and resolved model, the verbatim prompt and model output, and — when known — the prompt that turned the MISS into a HIT. The diff between broken and working prompt is the calibration signal a maintainer needs to draft a recipe without re-running the original session.
 
-The maintainer (or a future PR-bot) graduates a `prompt-pattern` issue by drafting `prompts/<new>.md` from the working prompt, paired with an `evals/eval-set.json` positive that asserts the trigger surface still fires on the task shape, then closing the issue with a link to the merging PR. Every recurring miss becomes both a test case and a fix, instead of evaporating after one conversation. Issues that name an existing recipe but flag a new failure mode update that recipe's `## Calibration notes` rather than spawning a new file.
+The maintainer (or a future PR-bot) graduates a `prompt-pattern` issue by drafting `prompts/<new>.md` from the working prompt, paired with an `evals/eval-set.json` positive that asserts the trigger surface still fires on the task shape, then closing the issue with a link to the merging PR. Every recurring miss becomes both a test case and a fix, instead of evaporating after one conversation. Issues that name an existing recipe but flag a new failure mode add a dated entry to that recipe's `docs/calibration/<task>.md` rather than spawning a new file.
 
 ## Current recipes
 
@@ -178,7 +181,7 @@ Microsoft [Prompty](https://github.com/microsoft/prompty) is a format-cousin to 
 
 ### fabric's "produce N items at M words each" item-count discipline
 
-[fabric](https://github.com/danielmiessler/fabric) ships 255 patterns; many specify caps like "20-50 ideas at 16 words each". The T4 calibration history captured in `prompts/commit-message.md` calibration notes and `experiments/score-t4.sh` PADDING_REGEXES shows that the small-model failures this skill actually sees are shape failures (participial padding, declarative restating), not count failures. Importing fabric's count discipline would invite the model to fabricate-to-fill the prescribed item count, creating a new MISS class the calibration loop would then have to absorb — net negative. The skill's existing `## Expected output shape` block already encodes structural limits (e.g., commit-message's 72-char subject cap) without inviting the fabricate-to-fill failure mode.
+[fabric](https://github.com/danielmiessler/fabric) ships 255 patterns; many specify caps like "20-50 ideas at 16 words each". The T4 calibration history captured in `docs/calibration/commit-message.md` (and the T4 scorer's padding regexes, archived out of `main` in 22395b2) shows that the small-model failures this skill actually sees are shape failures (participial padding, declarative restating), not count failures. Importing fabric's count discipline would invite the model to fabricate-to-fill the prescribed item count, creating a new MISS class the calibration loop would then have to absorb — net negative. The skill's existing `## Expected output shape` block already encodes structural limits (e.g., commit-message's 72-char subject cap) without inviting the fabricate-to-fill failure mode.
 
 The companion list of patterns this library DOES adopt lives in Track B (#161), which imports only the flat `key: type` `inputs:` block convention from Prompty for declarative type validation.
 

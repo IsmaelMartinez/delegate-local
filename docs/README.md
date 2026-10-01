@@ -6,6 +6,10 @@ This index organises the documentation files to help you find the right resource
 
 [`adr/`](adr/) holds the load-bearing design decisions, numbered in the order they were made. Read the relevant ADR before proposing a change that contradicts one — they explain *why* the skill is shaped the way it is (direct shell piping over a framework, static tier preference lists, the optional MCP server, the OTLP schema, and more).
 
+## Recipe calibration history — `calibration/`
+
+[`calibration/`](calibration/) holds one file per recipe in [`../prompts/`](../prompts/): the dated record of what each recipe edit observed, measured and changed, moved out of the recipes in #569 so a recipe stays the size of what its caller reads. Every recipe edit adds an entry here.
+
 ## Install guides
 
 Per-tool and per-backend setup, one file each:

@@ -102,6 +102,24 @@ for recipe in "$PROMPTS_DIR"/*.md; do
   for section in "${required_sections[@]}"; do
     assert_contains "$section" "$body" "$base: contains '$section'"
   done
+  # The dated history lives in docs/calibration/<task>.md (#569); the recipe
+  # keeps only a one-line pointer, so the section must stay that short.
+  calib="docs/calibration/${base%.md}.md"
+  if [[ -f "$REPO/$calib" ]]; then
+    echo "  PASS  $base: $calib exists"; pass=$((pass+1))
+  else
+    echo "  FAIL  $base: $calib missing"; fail=$((fail+1))
+  fi
+  calib_section=$(awk '
+    /^## Calibration notes[[:space:]]*$/ { s=1; next }
+    s && /^## / { exit }
+    s && NF { print }
+  ' "$recipe")
+  if [[ "$calib_section" == *"$calib"* && "$(printf '%s\n' "$calib_section" | grep -c '')" -eq 1 ]]; then
+    echo "  PASS  $base: '## Calibration notes' is a one-line pointer to $calib"; pass=$((pass+1))
+  else
+    echo "  FAIL  $base: '## Calibration notes' must be one line pointing at $calib"; fail=$((fail+1))
+  fi
   # Every {{placeholder}} except {{stdin}} must be documented under '## Variables'.
   template=$(extract_fenced "$recipe" "## Prompt template")
   if [[ -z "$template" ]]; then
