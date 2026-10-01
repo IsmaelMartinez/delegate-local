@@ -8,7 +8,8 @@
 # with every quoted span reduced to a space, one segment per line, then 0x1e,
 # the separator characters in order, then 0x1e. With a segment index N
 # (0-based) it prints a `TARGET\t<key>` line (what the segment posts to),
-# then the text that segment posts: `FILE\t<path>`, `NONE`, or
+# then the text that segment posts: `FILE\t<path>`, `NONE`, `HELP` (the
+# segment asks for its command's help and posts nothing), or
 # `INLINE\t<1 if literal, else 0>\n<text>`. A body is unmeasurable (literal 0)
 # when it carries `$` or a backtick the shell would expand; the one resolved
 # shape is `"$(cat <<EOF ... EOF\n)"`, whose heredoc is the text. Heredoc
@@ -212,10 +213,47 @@ my %value_flags = (
   'glab mr note'      => '--attach --file --line -m --message --old-line --reply -R --repo',
   'glab issue note'   => '--attach -m --message -R --repo',
 );
+#
+# A segment asking for its command's help posts nothing, so `HELP` follows
+# the TARGET line in place of a body. `--help` or `-h` counts only as an
+# option word of its own: `-h` is help on every classified gh, glab and git
+# commit command, while the value of a flag that takes one (`--body --help`,
+# `-m -h`, or a cluster ending in one such as `-dt --help`) is posted text,
+# and anything after `--` is an argument. A cluster holding h (`-dh`) is
+# left a boundary: failing closed costs a nudge, failing open a bypass.
+# The shorthands each command lists as on/off (no value), from the same
+# `--help` output. A short flag or cluster holding any other letter may take
+# the next word as its value, so that word is never read as help: failing
+# closed costs a nudge, failing open lets a post through unrecorded. A
+# command with no entry knows none.
+my %bool_flags = (
+  'gh pr create'     => '-d -e -f -w',
+  'gh pr comment'    => '-e -w',
+  'gh pr review'     => '-a -c -r',
+  'gh issue create'  => '-e -w',
+  'gh issue comment' => '-e -w',
+  'gh api'           => '-i',
+  'glab mr create'   => '-f -w -y',
+);
 my @tgt;
+my $help = 0;
 my $c = 0;
 $c++ while $c < @W && $W[$c][0] !~ m{(?:\A|/)(?:git|gh|glab)\z};
-if ($c < @W && $W[$c][0] =~ m{(?:\A|/)(?:gh|glab)\z}) {
+if ($c < @W && $W[$c][0] =~ m{(?:\A|/)git\z}) {
+  # git's global options, then commit's own; a short cluster takes the next
+  # word when its first value letter ends it (`-am msg`).
+  my %gv = map { $_ => 1 } qw(-C -c --git-dir --work-tree --namespace);
+  my %cv = map { $_ => 1 } qw(-m --message -F --file -c --reedit-message -C --reuse-message
+    --author --date --fixup --squash -t --template --cleanup --trailer --pathspec-from-file);
+  my $sub = 0;
+  for (my $k = $c + 1; $k < @W; $k++) {
+    my $t = $W[$k][0];
+    last if $t eq '--';
+    if ($t eq '--help' || $t eq '-h') { $help = 1; last }
+    if (substr($t, 0, 1) ne '-') { next if $sub; last if $t ne 'commit'; $sub = 1; next }
+    $k++ if $sub ? ($cv{$t} || $t =~ /\A-[^-mFcCt]*[mFcCt]\z/) : $gv{$t};
+  }
+} elsif ($c < @W && $W[$c][0] =~ m{(?:\A|/)(?:gh|glab)\z}) {
   my $tool = $W[$c][0] =~ m{glab\z} ? 'glab' : 'gh';
   my $api = $c + 1 < @W && $W[$c + 1][0] eq 'api';
   my $k = $c + ($api ? 2 : 3);
@@ -226,12 +264,28 @@ if ($c < @W && $W[$c][0] =~ m{(?:\A|/)(?:gh|glab)\z}) {
   # A command with no table still never keys on a body-ish value.
   my %takes_value = map { $_ => 1 } split ' ',
     ($value_flags{$cmd} // '-R --repo --body --message --notes --title --field --raw-field');
+  my %is_bool = map { $_ => 1 } split ' ', ($bool_flags{$cmd} // '');
+  my ($ended, $maybe_value) = (0, -1);
   for (; $k < @W; $k++) {
     my $t = $W[$k][0];
+    $help = 1 if !$ended && $k != $maybe_value && ($t eq '--help' || $t eq '-h');
+    $ended = 1 if $t eq '--';
     if ($t =~ /\A--repo=/) { push @tgt, 'repo=' . substr($t, 7); next }
     if ($t =~ /\A[0-9]*(?:<<?|>>?)&?\z/) { $k++; next }   # a bare redirection and its target
     next if $t =~ /\A[0-9]*[<>]/;                        # an attached one
     if (substr($t, 0, 1) eq '-') {
+      # A shorthand or cluster parses as pflag does: on/off letters, then at
+      # most one flag that takes a value, which takes the rest of the cluster
+      # or, when it ends it, the next word (`-dt --help` is a title). A
+      # letter that is neither leaves the next word a possible value.
+      if ($t =~ /\A-([A-Za-z]+)\z/ && !$takes_value{$t}) {
+        my $s = $1;
+        for my $i (0 .. length($s) - 1) {
+          my $f = '-' . substr($s, $i, 1);
+          if ($takes_value{$f}) { $t = $f if $i == length($s) - 1; last }
+          if (!$is_bool{$f}) { $maybe_value = $k + 1; last }
+        }
+      }
       next if index($t, '=') >= 0 || !$takes_value{$t} || $k + 1 >= @W;
       my $v = $W[++$k][0];
       if ($t eq '-R' || $t eq '--repo') { push @tgt, "repo=$v" }
@@ -244,6 +298,7 @@ if ($c < @W && $W[$c][0] =~ m{(?:\A|/)(?:gh|glab)\z}) {
 }
 my $key = join(' ', sort @tgt); $key =~ tr/\t\n/  /;
 print "TARGET\t$key\n";
+if ($help) { print "HELP\n"; exit 0 }
 my ($file, @body) = ('');
 my $blit = 1;
 for (my $k = 0; $k < @W; $k++) {

@@ -2495,6 +2495,69 @@ assert_eq "absent" "$(pstate sess-A.comment-reply.$proj)" "#563 confirm: a pendi
 assert_eq "$body300" "$(cat "$METRICS_DIR/drafts/d563.final.txt" 2>/dev/null)" "#563 confirm: ...and its final stored"
 rm -rf "$pending" "$METRICS_DIR/drafts" "$JQLOG"
 
+# 93. A boundary command asked for its help posts nothing, so it is no
+# boundary: no row, no nudge, no deny. `-h` is help on every classified gh,
+# glab and git commit command (none binds it to anything else), and the flag
+# is read from the tokenizer's words: as the value of a flag that takes one
+# (`--body --help`, `-m -h`), after `--`, or inside a quoted body it is text.
+help_none() { # cmd name
+  : > "$METRICS"
+  local out; out=$(payload "$1" "$tmpcwd" | dflt bash "$HOOK")
+  assert_eq "0 " "$(nrows) $out" "help: $2 writes no row and emits nothing"
+}
+help_none 'gh pr create --help' "gh pr create --help"
+help_none 'gh pr create "--help"' "a quoted --help word is still the flag"
+help_none 'gh pr comment -h' "gh pr comment -h"
+help_none "gh pr comment 12 --body \"$body300\" --help" "gh pr comment with a body and --help"
+help_none "gh pr review 12 --body \"$body300\" -h" "gh pr review with a body and -h"
+help_none "gh issue create --title t --body \"$body300\" --help" "gh issue create with a body and --help"
+help_none 'glab mr note --help' "glab mr note --help"
+help_none "glab mr note 4 -h --message \"$body300\"" "glab mr note -h before a message"
+help_none "glab mr create --help" "glab mr create --help"
+help_none 'gh api --help' "gh api --help"
+help_none "gh api repos/o/r/pulls/1/comments -X POST -f body=\"$body300\" --help" "gh api comment POST with --help"
+help_none "gh api repos/o/r/pulls/1/reviews -f body=\"$body300\" -h" "gh api review POST with -h"
+help_none 'git commit --help' "git commit --help"
+help_none 'git commit -m "fix: a message long enough to be drafted" --help' "git commit -m with --help"
+help_none 'git commit -h -m "fix: a message long enough to be drafted"' "git commit -h before -m"
+help_none 'git commit -am "fix: a message long enough to be drafted" -h' "git commit -am with -h"
+help_none 'git -C . commit -m "fix: a message long enough to be drafted" --help' "git -C . commit with --help"
+help_boundary() { # cmd boundary name
+  : > "$METRICS"
+  payload "$1" "$tmpcwd" | dflt bash "$HOOK" >/dev/null
+  assert_eq "$2" "$(jq -r '.boundary // "none"' <<<"$(last_row)" 2>/dev/null)" "help: $3 is still a boundary"
+}
+help_boundary "gh pr comment 12 --body \"see --help and -h for the flags. $body300\"" comment-reply "--help inside a quoted body"
+help_boundary 'git commit -m "docs: say that --help and -h print usage only"' git-commit "--help inside a quoted message"
+help_boundary 'gh pr comment 12 --body --help' comment-reply "--help as the value of --body"
+help_boundary 'git commit -m -h' git-commit "-h as the value of -m"
+help_boundary 'git commit -am --help' git-commit "--help as the value of the -am cluster"
+help_boundary 'git commit -m "fix: a message long enough to be drafted" -- --help' git-commit "--help after -- (a pathspec)"
+help_boundary "gh pr comment --help; gh pr comment 12 --body \"$body300\"" comment-reply "a later segment after a help segment"
+# A short-option cluster ending in a flag that takes a value takes the next
+# word as that value, as pflag and git parse it (`-d` is boolean --draft and
+# `-t` --title on gh pr create, so `-dt --help` titles the PR "--help").
+help_boundary "gh pr create -dt --help -b \"$body300\"" pr-create "--help as the value of the -dt cluster"
+help_boundary "gh pr comment 12 -eb --help" comment-reply "--help as the value of the -eb cluster"
+help_boundary "gh pr review 12 -cb -h" pr-review-body "-h as the value of the -cb cluster"
+help_boundary "gh issue create -wt -h -b \"$body300\"" issue-create "-h as the value of the -wt cluster"
+help_boundary "glab mr create -ft --help" pr-create "--help as the value of glab's -ft cluster"
+help_boundary "glab mr note 4 -m --help" comment-reply "--help as the value of glab mr note -m"
+help_boundary 'git commit -am -h' git-commit "-h as the value of the -am cluster"
+# A value letter before the end of a cluster takes the rest as its value, so
+# the word after it is an option again.
+help_none "gh pr create -dtTitle --help" "gh pr create --help after an attached -dtTitle"
+# Fail closed: a short flag or cluster with a letter the command's table does
+# not know as on/off may take the next word as its value, so a help flag
+# straight after it keeps the call a boundary. Only known on/off letters
+# (`-d`/`-w` on gh pr create, `-a` on gh pr review) let it read as help.
+help_boundary "gh pr create -zt --help -b \"$body300\"" pr-create "--help after the unknown-letter cluster -zt"
+help_boundary "gh pr create -zd --help" pr-create "--help after the unknown-letter cluster -zd"
+help_boundary "gh pr comment 12 -z --help" comment-reply "--help after an unknown short flag"
+help_boundary "glab mr note 4 -x -h" comment-reply "-h after a short flag glab mr note does not know"
+help_none "gh pr create -dw --help" "gh pr create --help after the known on/off cluster -dw"
+help_none "gh pr review 12 -a --help -b \"$body300\"" "gh pr review --help after the known on/off -a"
+
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
