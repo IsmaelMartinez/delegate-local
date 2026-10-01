@@ -492,9 +492,9 @@ lock_dir="$(dirname "$metrics_file")/.boundary-hook.lock"
 lock_held=false lock_failed=false
 lock_token="$$-${RANDOM}${RANDOM}"
 lock_stale_sec="${DELEGATE_BOUNDARY_LOCK_STALE_SEC:-5}"
-[[ "$lock_stale_sec" =~ ^[0-9]+$ ]] || lock_stale_sec=5
+[[ "$lock_stale_sec" =~ ^[0-9]+$ ]] && lock_stale_sec=$(( 10#$lock_stale_sec )) || lock_stale_sec=5
 lock_wait_ms="${DELEGATE_BOUNDARY_LOCK_WAIT_MS:-2000}"
-[[ "$lock_wait_ms" =~ ^[0-9]+$ ]] || lock_wait_ms=2000
+[[ "$lock_wait_ms" =~ ^[0-9]+$ ]] && lock_wait_ms=$(( 10#$lock_wait_ms )) || lock_wait_ms=2000
 lock_max_tries=$(( lock_wait_ms / 50 ))
 release_lock() {
   [[ "$lock_held" == "true" ]] || return 0

@@ -1744,6 +1744,11 @@ assert_nudge "$out" "lock: an unobtainable lock fails open"
 assert_eq lock-timeout "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "lock: ...recording enforce_skipped=lock-timeout"
 assert_eq "present" "$([[ -d "$lockdir" ]] && echo present || echo absent)" "lock: a live lock is not removed by a non-owner"
 assert_eq "someone-else" "$(cat "$lockdir/owner" 2>/dev/null)" "lock: ...and its owner file is untouched"
+# A leading zero is decimal, not octal: 08 is an 8 ms wait (one try), not an
+# arithmetic abort that skips the boundary.
+: > "$METRICS"
+out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | DELEGATE_BOUNDARY_LOCK_WAIT_MS=08 DELEGATE_BOUNDARY_LOCK_STALE_SEC=09 dflt bash "$HOOK" 2>&1)
+assert_eq lock-timeout "$(jq -r '.enforce_skipped // empty' <<<"$(last_row)")" "lock: a zero-padded wait (08) is decimal and still times out"
 rm -rf "$lockdir"
 
 # 76. An empty measurable body is a known 0-character post, not an unknown
