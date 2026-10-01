@@ -1457,15 +1457,20 @@ out=$(payload "gh pr comment 12 --body \"$body300\"" "$tmpcwd" | dflt bash "$HOO
 assert_contains '"permissionDecision":"deny"' "$out" "floor: a ${#body300}-char reply is enforced"
 assert_eq "${#body300}" "$(jq -r '.body_chars // empty' <<<"$(last_row)")" "floor: over-floor row records body_chars"
 assert_eq false "$(jq 'has("below_floor")' <<<"$(last_row)")" "floor: over-floor row carries no below_floor field"
-# A commit whose message arrives on stdin (`-F -`) has no measurable body:
-# no body_chars, and enforced.
+# A commit whose message the shell would expand has no measurable body: no
+# body_chars, and enforced.
+: > "$METRICS"
+out=$(payload 'git commit -m "$MSG"' "$tmpcwd" | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "floor: a commit with no measurable body is enforced"
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "floor: no measurable body, no body_chars field"
+# A message on stdin (`-F -`) from a heredoc is that heredoc, measured (#562).
 : > "$METRICS"
 out=$(payload "git commit -F - <<'EOF'
 $body300
 EOF" "$tmpcwd" | dflt bash "$HOOK")
-assert_contains '"permissionDecision":"deny"' "$out" "floor: a commit with no measurable body is enforced"
-assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "floor: no measurable body, no body_chars field"
-assert_eq false "$(jq 'has("below_floor")' <<<"$(last_row)")" "floor: no measurable body, no below_floor field"
+assert_contains '"permissionDecision":"deny"' "$out" "floor: a -F - heredoc commit over the floor is enforced"
+assert_eq "$(( ${#body300} + 1 ))" "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "floor: a -F - heredoc commit records its length"
+assert_eq false "$(jq 'has("below_floor")' <<<"$(last_row)")" "floor: a -F - heredoc commit over the floor carries no below_floor field"
 # A credited post under the floor keeps both facts.
 : > "$METRICS"; seed_delegation "$proj" maintainer-reply
 out=$(payload "gh pr comment 12 --body \"$body40\"" "$tmpcwd" | dflt bash "$HOOK")
@@ -1753,12 +1758,10 @@ out=$(payload "gh issue create --title t --body-file $tmpcwd/empty.md" "$tmpcwd"
 assert_eq "" "$out" "empty body: an empty --body-file is neither nudged nor denied"
 assert_eq 0 "$(jq -r '.body_chars // "absent"' <<<"$(last_row)")" "empty body: an empty --body-file records body_chars:0"
 assert_eq true "$(jq -r '.below_floor // false' <<<"$(last_row)")" "empty body: an empty --body-file is below_floor"
-# ...while a command with no body flag at all is still unmeasurable.
+# ...while a body the shell would expand is still unmeasurable.
 : > "$METRICS"
-out=$(payload "git commit -F - <<'EOF'
-$body300
-EOF" "$tmpcwd" | dflt bash "$HOOK")
-assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "empty body: no body flag is still no body_chars"
+out=$(payload 'git commit -F "$MSG_FILE"' "$tmpcwd" | dflt bash "$HOOK")
+assert_eq false "$(jq 'has("body_chars")' <<<"$(last_row)")" "empty body: an unmeasurable body is still no body_chars"
 
 # 75. Lock ownership: a lock broken as stale must not be removed by its
 # original holder's exit cleanup. The slow holder is a jq wrapper sleeping
@@ -2329,6 +2332,56 @@ assert_eq absent "$(dfinal_state d587)" "; chain: the call's success is not the 
 chain_run "git commit -F msg.txt || true" toolu-1
 assert_eq absent "$(dfinal_state d587)" "|| chain: the call's success is not the commit's, so no final"
 rm -rf "$pending" "$METRICS_DIR/drafts" "$tmpcwd/msg.txt"
+
+# 90 (#562). One shell-word tokenizer reads the body the shell would pass:
+# concatenated quoting, an attached `--body=`/`--message=`/`-m"x"` value and
+# `$'...'` are measured whole, a `<<-` heredoc does not swallow the segments
+# after its tab-indented terminator, and a stdin heredoc is the body.
+chars562() { # cmd -> body_chars on the row, or "absent"
+  : > "$METRICS"
+  payload "$1" "$tmpcwd" | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+  jq -r '.body_chars // "absent"' <<<"$(last_row)"
+}
+assert_eq 12 "$(chars562 "gh pr comment 12 --body 'it'\\''s a reply'")" \
+  "#562: concatenated quoting is one body ('it'\\''s a reply)"
+assert_eq 11 "$(chars562 'gh pr comment 12 --body="hello world"')" \
+  "#562: an attached --body= value is measured"
+assert_eq 12 "$(chars562 'git commit --message="fix: a thing"')" \
+  "#562: an attached --message= value is measured"
+assert_eq 12 "$(chars562 'git commit -m"fix: a thing"')" \
+  "#562: an attached -m\"x\" value is measured"
+assert_eq 17 "$(chars562 "gh pr comment 12 --body \$'line one\\nline two'")" \
+  "#562: a \$'...' body is measured with its escapes resolved"
+assert_eq absent "$(chars562 'gh pr comment 12 --body "$REPLY"')" \
+  "#562: a body the shell would expand stays unmeasurable"
+assert_eq 12 "$(chars562 "$(printf 'gh issue comment 1 --body-file - <<%s\nhello there\nEOF' "'EOF'")")" \
+  "#562: a --body-file - heredoc is the posted body"
+: > "$METRICS"
+payload "$(printf 'cat <<-EOF > notes.md\n\tsome notes\n\tEOF\ngh pr comment 12 --body "after the heredoc"')" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq comment-reply "$(jq -r '.boundary // "none"' <<<"$(last_row)")" \
+  "#562: a <<-EOF heredoc does not hide the segment after its terminator"
+# gh api sends a POST whenever a field is given and no method is named, which
+# is how /address-pr-comments posts a reply.
+: > "$METRICS"
+payload 'gh api repos/o/r/pulls/12/comments/99/replies -f body="thanks, fixed"' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq pr-review-comment "$(jq -r '.boundary // "none"' <<<"$(last_row)")" \
+  "#562: gh api .../replies -f body= without -X POST is a pr-review-comment"
+: > "$METRICS"
+payload "gh api repos/o/r/pulls/12/comments/99/replies -f 'body=thanks, fixed'" "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq pr-review-comment "$(jq -r '.boundary // "none"' <<<"$(last_row)")" \
+  "#562: a quoted -f 'body=...' field without -X POST is a pr-review-comment"
+# `<<\EOF` quotes the delimiter as `<<'EOF'` does, so `$` in the body is literal.
+assert_eq 16 "$(chars562 "$(printf 'gh issue comment 1 --body-file - <<\\EOF\nit costs $5 now\nEOF')")" \
+  "#562: a <<\\EOF stdin heredoc with a \$ is literal and measured"
+assert_eq 13 "$(chars562 "$(printf 'git commit -m "$(cat <<\\EOF\nfix: $x thing\nEOF\n)"')")" \
+  "#562: a \$(cat <<\\EOF ...) message with a \$ is literal and measured"
+: > "$METRICS"
+payload 'gh api -X GET repos/o/r/pulls/12/comments -f body=x' "$tmpcwd" \
+  | DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq 0 "$(nrows)" "#562: an explicit -X GET with a body field is still not a post"
 
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
