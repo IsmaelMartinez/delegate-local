@@ -18,7 +18,7 @@
 #
 # Tiers: read from pick-model.sh, the single source of truth.
 #
-# Env (each DELEGATE_LOCAL_* accepts the old DELEGATE_TO_OLLAMA_* name when unset):
+# Env:
 #   DELEGATE_LOCAL_NO_METRICS=1         skip the metrics row (and the draft capture)
 #   DELEGATE_LOCAL_NO_VERDICT_NUDGE=1   silence the verdict reminder on stderr
 #   DELEGATE_LOCAL_VERDICT_NUDGE_FD=N   fd for the reminder, 1-9 (default 2); the
@@ -47,9 +47,8 @@
 #   DELEGATE_STRIP_THINK=1|0            strip a leading <think>...</think> trace;
 #                                       on by default for the reasoning tier
 #   DELEGATE_MAX_TOKENS=<int>           default 4096; not a positive integer exits 2
-#   DELEGATE_TEMPERATURE / DELEGATE_TOP_P / DELEGATE_TOP_K / DELEGATE_PRESENCE_PENALTY
-#                                       sampler overrides (default greedy,
-#                                       temperature 0); non-numeric exits 2
+#   DELEGATE_TEMPERATURE=<n>            sampler temperature (default 0, greedy);
+#                                       non-numeric exits 2
 #   DELEGATE_OTEL_ENDPOINT=<url>        POST one OTLP/HTTP span per call
 #                                       (synchronous: a hung collector adds up
 #                                       to DELEGATE_OTEL_TIMEOUT s of latency)
@@ -124,12 +123,6 @@ while (($# > 0)); do
       positional+=("$1"); shift;;
   esac
 done
-
-# Backwards compat: old env var names (rename delegate-to-ollama → delegate-local).
-DELEGATE_LOCAL_NO_METRICS="${DELEGATE_LOCAL_NO_METRICS:-${DELEGATE_TO_OLLAMA_NO_METRICS:-}}"
-DELEGATE_LOCAL_NO_VERDICT_NUDGE="${DELEGATE_LOCAL_NO_VERDICT_NUDGE:-${DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE:-}}"
-DELEGATE_LOCAL_VERDICT_NUDGE_FD="${DELEGATE_LOCAL_VERDICT_NUDGE_FD:-${DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD:-}}"
-DELEGATE_LOCAL_NO_META="${DELEGATE_LOCAL_NO_META:-${DELEGATE_TO_OLLAMA_NO_META:-}}"
 
 # Validated up-front so a bad value fails before the cold-load cost. 1-9 only:
 # bash 3.2 has no `{var}>file` form, so multi-digit FDs via `>&$N` are
@@ -313,10 +306,10 @@ capture_draft() {
 log_metric() {
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 1
   local ts="$1" tier="$2" model="$3" pchars="$4" cchars="$5" ochars="$6" dur_ms="$7" status="$8" recipe_name="${9:-}" qwait_ms="${10:-0}" gen_ms="${11:-0}" trace_id="${12:-}" span_id="${13:-}" \
-    s_temp="${14:-}" s_top_p="${15:-}" s_top_k="${16:-}" s_pp="${17:-}" project="${18:-}" \
-    checks_run="${19:-}" checks_failed="${20:-}" checks_autofixed="${21:-}" checks_failed_names="${22:-}" \
-    draft_file="${23:-}" retried="${24:-}" retry_chars="${25:-}" input_file="${26:-}" \
-    template_sha="${27:-}" inputs_file="${28:-}" retry_failed="${29:-}"
+    s_temp="${14:-}" project="${15:-}" \
+    checks_run="${16:-}" checks_failed="${17:-}" checks_autofixed="${18:-}" checks_failed_names="${19:-}" \
+    draft_file="${20:-}" retried="${21:-}" retry_chars="${22:-}" input_file="${23:-}" \
+    template_sha="${24:-}" inputs_file="${25:-}" retry_failed="${26:-}"
   local tokens_avoided
   tokens_avoided=$(compute_tokens_local "$pchars" "$cchars" "$(( ochars + ${retry_chars:-0} ))")
   mkdir -p "$(dirname "$metrics_file")" 2>/dev/null || true
@@ -326,13 +319,13 @@ log_metric() {
   # The otel ids are written unconditionally so feedback rows and backfills
   # join without a second lookup. jq builds the line because model ids come
   # from whatever a provider reports. Optional fields (recipe, project,
-  # session, sampling_*, input_quality) are present iff set, so the row shape
+  # session, sampling_temperature, input_quality) are present iff set, so the row shape
   # is stable. input_quality is read from the global the recipe block sets.
   jq -nc \
     --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" --arg model "$model" \
     --arg recipe "$recipe_name" --arg project "$project" --arg session "${CLAUDE_CODE_SESSION_ID:-}" \
     --arg trace_id "$trace_id" --arg span_id "$span_id" \
-    --arg s_temp "$s_temp" --arg s_top_p "$s_top_p" --arg s_top_k "$s_top_k" --arg s_pp "$s_pp" \
+    --arg s_temp "$s_temp" \
     --argjson pchars "$pchars" --argjson cchars "$cchars" --argjson ochars "$ochars" \
     --argjson dur_ms "$dur_ms" --argjson qwait_ms "$qwait_ms" --argjson gen_ms "$gen_ms" \
     --argjson status "$status" --argjson tokens_avoided "$tokens_avoided" \
@@ -348,9 +341,6 @@ log_metric() {
      + (if $trace_id != "" then {otel_trace_id:$trace_id} else {} end)
      + (if $span_id != "" then {otel_span_id:$span_id} else {} end)
      + (if $s_temp != "" then {sampling_temperature:($s_temp|tonumber)} else {} end)
-     + (if $s_top_p != "" then {sampling_top_p:($s_top_p|tonumber)} else {} end)
-     + (if $s_top_k != "" then {sampling_top_k:($s_top_k|tonumber)} else {} end)
-     + (if $s_pp != "" then {sampling_presence_penalty:($s_pp|tonumber)} else {} end)
      + (if ($crun != "" and ($crun|tonumber) > 0) then {checks_run:($crun|tonumber), checks_failed:($cfail|tonumber), checks_autofixed:($cfix|tonumber)} else {} end)
      + (if $cnames != "" then {checks_failed_names:($cnames|split(","))} else {} end)
      + (if $draft != "" then {draft_file:$draft} else {} end)
@@ -392,17 +382,17 @@ otel_span_id=$(otel_gen_id 16)
 # One metrics row + span for an early-exit failure (pick-model, flaky gate,
 # canary): zero output chars, the elapsed time attributed to generation_ms.
 emit_failure() {
-  local fstatus="$1" fmodel="$2" fs_temp="${3:-}" fs_top_p="${4:-}" fs_top_k="${5:-}" fs_pp="${6:-}"
+  local fstatus="$1" fmodel="$2" fs_temp="${3:-}"
   local fend fdur fp fc ftoks
   fend=$(perl -MTime::HiRes=time -e 'printf "%d\n", time*1000')
   fdur=$((fend - start_epoch_ms))
   fp=$(( recipe_template_chars + ${#prompt} ))
   fc=${#context}
   ftoks=$(compute_tokens_local "$fp" "$fc" 0)
-  # A failed recipe row still names its template (arg 27), so a stall or a
+  # A failed recipe row still names its template (arg 24), so a stall or a
   # flaky refusal is attributed to the template that was live; the eight
   # check and capture fields between are empty, as nothing was generated.
-  log_metric "$ts_start" "$tier" "$fmodel" "$fp" "$fc" 0 "$fdur" "$fstatus" "$recipe" 0 "$fdur" "$otel_trace_id" "$otel_span_id" "$fs_temp" "$fs_top_p" "$fs_top_k" "$fs_pp" "$delegate_project" \
+  log_metric "$ts_start" "$tier" "$fmodel" "$fp" "$fc" 0 "$fdur" "$fstatus" "$recipe" 0 "$fdur" "$otel_trace_id" "$otel_span_id" "$fs_temp" "$delegate_project" \
     "" "" "" "" "" "" "" "" "${template_sha:-}"
   emit_otel_span "$start_epoch_ms" "$fdur" "$fstatus" "$otel_trace_id" "$otel_span_id" "$fmodel" "$backend" "$tier" "$recipe" "$fp" "$fc" 0 0 "$fdur" "$ftoks" "${recipe_template}${prompt}" "$context" "" "$delegate_project"
 }
@@ -885,56 +875,27 @@ if [[ -n "$recipe" ]] && [[ "${DELEGATE_FORCE_FLAKY:-}" != "1" ]]; then
   fi
 fi
 
-# Sampler profile: greedy (temperature 0, no top_p/top_k/presence_penalty)
-# for every model. The Qwen-recommended profile was auto-applied once and
-# measured to regress commit-message output (temperature reintroduces the
-# padding tails the recipe guards reject), so non-greedy is opt-in via the
-# env vars.
-
-# The parallel `metric_*` set carries only what the caller explicitly opted
-# into, so a bare greedy call writes no sampling_* keys to the row.
+# Sampler profile: greedy (temperature 0) for every model. The
+# Qwen-recommended profile was auto-applied once and measured to regress
+# commit-message output (temperature reintroduces the padding tails the recipe
+# guards reject), so DELEGATE_TEMPERATURE is the one opt-in. Only an explicit
+# value reaches the row, so a bare greedy call writes no sampling_temperature.
 sampling_temperature="0"
-sampling_top_p=""
-sampling_top_k=""
-sampling_presence_penalty=""
 metric_sampling_temperature=""
-metric_sampling_top_p=""
-metric_sampling_top_k=""
-metric_sampling_presence_penalty=""
-
-validate_numeric() {
+if [[ -n "${DELEGATE_TEMPERATURE:-}" ]]; then
   # bash 3.2 =~ POSIX ERE: optional minus, then digits, digits.digits,
   # digits. or .digits. A permissive `case` pattern let `1-2` reach jq --argjson.
-  local name="$1" value="$2"
-  if ! [[ "$value" =~ ^-?([0-9]+(\.[0-9]*)?|\.[0-9]+)$ ]]; then
-    echo "delegate: $name='$value' is not numeric" >&2
+  if ! [[ "$DELEGATE_TEMPERATURE" =~ ^-?([0-9]+(\.[0-9]*)?|\.[0-9]+)$ ]]; then
+    echo "delegate: DELEGATE_TEMPERATURE='$DELEGATE_TEMPERATURE' is not numeric" >&2
     exit 2
   fi
-}
-
-if [[ -n "${DELEGATE_TEMPERATURE:-}" ]]; then
-  validate_numeric "DELEGATE_TEMPERATURE" "$DELEGATE_TEMPERATURE"
   sampling_temperature="$DELEGATE_TEMPERATURE"
   metric_sampling_temperature="$DELEGATE_TEMPERATURE"
 fi
-if [[ -n "${DELEGATE_TOP_P:-}" ]]; then
-  validate_numeric "DELEGATE_TOP_P" "$DELEGATE_TOP_P"
-  sampling_top_p="$DELEGATE_TOP_P"
-  metric_sampling_top_p="$DELEGATE_TOP_P"
-fi
-if [[ -n "${DELEGATE_TOP_K:-}" ]]; then
-  validate_numeric "DELEGATE_TOP_K" "$DELEGATE_TOP_K"
-  sampling_top_k="$DELEGATE_TOP_K"
-  metric_sampling_top_k="$DELEGATE_TOP_K"
-fi
-if [[ -n "${DELEGATE_PRESENCE_PENALTY:-}" ]]; then
-  validate_numeric "DELEGATE_PRESENCE_PENALTY" "$DELEGATE_PRESENCE_PENALTY"
-  sampling_presence_penalty="$DELEGATE_PRESENCE_PENALTY"
-  metric_sampling_presence_penalty="$DELEGATE_PRESENCE_PENALTY"
-fi
 # Validated here, not at dispatch: `4k` made jq --argjson fail, and curl then
 # posted an empty body (#547). A positive integer with no leading zero, not
-# validate_numeric: strict providers reject 4.0 and -1, and 04 is not JSON.
+# the temperature's numeric test: strict providers reject 4.0 and -1, and 04
+# is not JSON.
 # Not local: the dispatch-failure guidance reads it.
 max_tokens="${DELEGATE_MAX_TOKENS:-4096}"
 if ! [[ "$max_tokens" =~ ^[1-9][0-9]*$ ]]; then
@@ -958,7 +919,7 @@ if [[ -n "$recipe" ]] \
     -H 'Content-Type: application/json' --data-binary @- >/dev/null 2>&1 <<< "$canary_payload"
   canary_status=$?
   if (( canary_status != 0 )); then
-    emit_failure 3 "$model" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty"
+    emit_failure 3 "$model" "$metric_sampling_temperature"
     # 28 is --max-time, 7 is connection refused, 22 is --fail on a non-2xx.
     case "$canary_status" in
       28) canary_cause="did not return within ${preflight_timeout}s (curl --max-time fired)" ;;
@@ -1037,17 +998,13 @@ request_timeout="${DELEGATE_REQUEST_TIMEOUT:-600}"
 # the chat template and instruction-tuned models emit whitespace until
 # max_tokens. enable_thinking is passed so `content` carries the answer, not
 # the reasoning trace.
-# The payload carries only the sampler keys the caller opted into; with none
-# it is the bare {temperature:0} greedy shape. The input goes in on stdin
+# The only sampler key is temperature, 0 unless DELEGATE_TEMPERATURE set
+# it. The input goes in on stdin
 # (-Rs), never as an --arg: above ARG_MAX (1 MiB on macOS, 128 KiB per
 # argument on Linux) jq cannot start and the body came out empty (#547).
 payload=$(printf '%s' "$full_input" | jq -Rsc --arg m "$model" --argjson mt "$max_tokens" --argjson et "$think" \
   --argjson temp "$sampling_temperature" \
-  --arg top_p "$sampling_top_p" --arg top_k "$sampling_top_k" --arg pp "$sampling_presence_penalty" \
-  '{model:$m, messages:[{role:"user", content:.}], stream:false, temperature:$temp, max_tokens:$mt, chat_template_kwargs:{enable_thinking:$et}}
-    + (if $top_p != "" then {top_p:($top_p|tonumber)} else {} end)
-    + (if $top_k != "" then {top_k:($top_k|tonumber)} else {} end)
-    + (if $pp != "" then {presence_penalty:($pp|tonumber)} else {} end)')
+  '{model:$m, messages:[{role:"user", content:.}], stream:false, temperature:$temp, max_tokens:$mt, chat_template_kwargs:{enable_thinking:$et}}')
 # resolved_base already had one trailing slash stripped by pick-model.sh, so
 # the join cannot double up.
 chat_url="$resolved_base/chat/completions"
@@ -1265,7 +1222,7 @@ fi
 # row_written is what the meta line's ts/id and the verdict nudge are gated
 # on: they name the row this call wrote, so they are only true when one was.
 row_written=false
-log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$metric_sampling_top_p" "$metric_sampling_top_k" "$metric_sampling_presence_penalty" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}" "$input_file" "$template_sha" "$inputs_file" "$retry_failed" && row_written=true
+log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}" "$input_file" "$template_sha" "$inputs_file" "$retry_failed" && row_written=true
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project" "${retry_chars:-}"
 
 # The stderr line SKILL.md teaches the assistant to read after every

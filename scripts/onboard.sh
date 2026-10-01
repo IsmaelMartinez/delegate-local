@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Onboarding wizard (ADR 0013): wraps init.sh (installed models -> config.sh)
-# and derive-flavor.sh (git history -> profile.sh), presents each derived value
-# for confirm-or-edit, and writes only on explicit confirmation, backing up an
-# existing target as .bak.<ts> first. Writes are chmod 600 so the profile
+# Onboarding wizard (ADR 0013): wraps derive-flavor.sh (git history ->
+# profile.sh), presents each derived value for confirm-or-edit, and writes
+# only on explicit confirmation, backing up an existing target as .bak.<ts>
+# first. Writes are chmod 600 so the profile
 # passes load-flavor.sh's owner/mode check. It then reports which of the three
 # hooks (boundary, its confirm companion, verdict Stop) the Claude Code
 # settings file registers and, on confirmation, merges the missing entries
@@ -20,8 +20,6 @@
 # Env:
 #   DELEGATE_LOCAL_DATA_DIR     where per-user data lives
 #                               (default ~/.local/share/delegate-local)
-#   DELEGATE_LOCAL_CONFIG       config.sh target
-#                               (default $DELEGATE_LOCAL_DATA_DIR/config.sh)
 #   DELEGATE_LOCAL_PROFILE      profile.sh target
 #                               (default $DELEGATE_LOCAL_DATA_DIR/profile.sh)
 #   DELEGATE_ONBOARD_SETTINGS   Claude Code settings file the hook step reads
@@ -34,15 +32,13 @@ set -uo pipefail
 migrate_data=0
 while (($# > 0)); do
   case "$1" in
-    -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     --migrate-data) migrate_data=1; shift;;
     *) echo "onboard: unknown arg '$1'" >&2; exit 2;;
   esac
 done
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# The same resolution (legacy env name included) as the consumer, pick-model.sh.
-config_target="${DELEGATE_LOCAL_CONFIG:-${DELEGATE_TO_OLLAMA_CONFIG:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/config.sh}}"
 profile_target="${DELEGATE_LOCAL_PROFILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/profile.sh}"
 
 # --- --migrate-data: legacy skill directory -> data directory (#360) -------
@@ -107,16 +103,7 @@ interactive=0
 err_tmp=$(mktemp)
 trap 'rm -f "$err_tmp"' EXIT
 
-# --- Probe 1: environment (facts, no questions) ------------------------------
-# No reachable provider skips this section; flavor-only onboarding still works.
-config_candidate=""
-if ! config_candidate=$(bash "$script_dir/init.sh" 2>"$err_tmp"); then
-  config_candidate=""
-  reason=$(head -1 "$err_tmp")
-  echo "onboard: environment probe skipped (${reason:-init.sh failed})." >&2
-fi
-
-# --- Probe 2: flavor from the user's own git history -------------------------
+# --- Probe 1: flavor from the user's own git history -------------------------
 # Outside a repo (or with no commits) the shipped defaults become the prefill.
 derived=""
 if ! derived=$(bash "$script_dir/derive-flavor.sh" 2>"$err_tmp"); then
@@ -144,7 +131,7 @@ default_types="$FLAVOR_COMMIT_TYPES"
 prefill_subject_max="${derived_subject_max:-$default_subject_max}"
 prefill_types="${derived_types:-$default_types}"
 
-# --- Probe 3: the three hook entries in the Claude Code settings file (#528) --
+# --- Probe 2: the three hook entries in the Claude Code settings file (#528) --
 # The boundary hook (PreToolUse), its spend confirmation (PostToolUse) and the
 # verdict sweep (Stop). A boundary hook without its confirm hook is the
 # incomplete install #497 cannot work on: the confirm hook's .seen file is what
@@ -216,13 +203,8 @@ build_profile_body() { # $1=subject_max-or-empty $2=types-or-empty
   [[ -n "$2" ]] && printf 'FLAVOR_COMMIT_TYPES="%s"\n' "$2"
 }
 
-# --- Print-only mode (no terminal): show both candidates, write nothing ------
+# --- Print-only mode (no terminal): show the candidates, write nothing -------
 if (( ! interactive )); then
-  if [[ -n "$config_candidate" ]]; then
-    printf '# ---- routing override candidate — write to: %s ----\n' "$config_target"
-    printf '#   bash %s/init.sh > %s\n' "$script_dir" "$config_target"
-    printf '%s\n\n' "$config_candidate"
-  fi
   printf '# ---- flavor profile candidate — write to: %s ----\n' "$profile_target"
   # A shell redirect truncates the target BEFORE the command runs, so it is
   # only suggested when the probe succeeded.
@@ -332,18 +314,6 @@ else
   echo "onboard: both flavor keys skipped — profile not written (shipped defaults stay active)." >&2
 fi
 
-wrote_config=0
-if [[ -n "$config_candidate" ]]; then
-  printf '\nRouting override candidate (puts your installed models first per tier):\n%s\n' "$config_candidate" >&2
-  printf 'install routing override at %s? [y/N]: ' "$config_target" >&2
-  _ans=""
-  read_answer || [[ -n "$_ans" ]] || _ans="n"
-  case "$_ans" in
-    y|Y) write_confirmed "$config_target" "$config_candidate" "routing override" && wrote_config=1;;
-    *) echo "  routing override not installed (shipped preference lists stay active)." >&2;;
-  esac
-fi
-
 # Merge the missing hook entries: backup first, write only on an explicit y,
 # and never touch a file that could not be parsed. The redirect writes through
 # a symlinked settings file and keeps its mode.
@@ -379,6 +349,6 @@ else
 fi
 
 echo "" >&2
-echo "onboard: done — profile $( ((wrote_profile)) && echo written || echo unchanged ), routing override $( ((wrote_config)) && echo written || echo unchanged ), hooks $( ((wrote_hooks)) && echo written || echo unchanged )." >&2
+echo "onboard: done — profile $( ((wrote_profile)) && echo written || echo unchanged ), hooks $( ((wrote_hooks)) && echo written || echo unchanged )." >&2
 echo "Next: pipe a task through the wrapper (e.g. git diff | bash $script_dir/delegate.sh --recipe commit-message ...)," >&2
 echo "record verdicts with delegate-feedback.sh (hit, scaffold \"<reason>\" or miss \"<reason>\"), and re-run onboard.sh as your history grows." >&2

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit tests for pick-model.sh, init.sh and audit-models.sh, against mock
+# Unit tests for pick-model.sh and audit-models.sh, against mock
 # binaries on a restricted PATH.
 
 set -u
@@ -322,36 +322,18 @@ assert_contains "post-override" "$ERR" "dry-run surfaces post-override prefs"
 unset DELEGATE_LOCAL_CONFIG
 rm -rf "$tmp"
 
-echo
-echo "=== scripts/init.sh (Phase 9) ==="
-
-INIT="$SKILL_DIR/scripts/init.sh"
-
-# 25. No provider reachable -> exit 1 with hint.
-EC=0; run "$SAFE_PATH" bash "$INIT" || true
-assert_eq "1" "$EC" "init: no provider reachable -> exit 1"
-assert_contains "nothing to personalise" "$ERR" "init: no provider reachable -> hint message"
-
-# 26. Provider reachable but serving nothing -> exit 1 with the same hint.
-tmp=$(mktemp -d)
-make_mock_provider "$tmp" "1:"
-EC=0; run "$tmp:$SAFE_PATH" bash "$INIT" || true
-assert_eq "1" "$EC" "init: empty provider list -> exit 1"
-assert_contains "nothing to personalise" "$ERR" "init: empty list -> hint message"
-rm -rf "$tmp"
-
-# 27. init prints a bash override that round-trips through pick-model.sh.
+# 25. The legacy DELEGATE_TO_OLLAMA_CONFIG name is no longer read (#567): an
+# override it names would reorder prose to gemma4, and must not.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:qwen3.6:35b-a3b,gemma4:latest"
-EC=0; run "$tmp:$SAFE_PATH" bash "$INIT" || true
-assert_eq "0" "$EC" "init: happy path exits 0"
-assert_contains "case \"\$tier\" in" "$OUT" "init: emits a case-on-tier block"
-assert_contains "prose) prefs=(" "$OUT" "init: includes prose tier"
-echo "$OUT" > "$tmp/config.sh"
+cat > "$tmp/config.sh" <<'EOF'
+case "$tier" in
+  prose) prefs=("gemma4" "qwen3.6") ;;
+esac
+EOF
 EC=0
-DELEGATE_LOCAL_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
-assert_eq "qwen3.6:35b-a3b" "$OUT" "init: round-trip override picks the installed model"
-unset DELEGATE_LOCAL_CONFIG
+run "$tmp:$SAFE_PATH" env DELEGATE_TO_OLLAMA_CONFIG="$tmp/config.sh" bash "$PICK" prose || true
+assert_eq "qwen3.6:35b-a3b" "$OUT" "legacy DELEGATE_TO_OLLAMA_CONFIG is ignored"
 rm -rf "$tmp"
 
 echo

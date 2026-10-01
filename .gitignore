@@ -15,8 +15,8 @@ __pycache__/
 metrics.jsonl
 metrics.jsonl.*
 
-# Per-user overrides written by scripts/onboard.sh (or the init.sh /
-# derive-flavor.sh redirects). Same symlink-resolution story as metrics.jsonl
+# Per-user overrides: the hand-written config.sh, and the profile written by
+# scripts/onboard.sh (or the derive-flavor.sh redirect). Same symlink-resolution story as metrics.jsonl
 # above: the default paths land in the repo root for anyone developing the
 # skill while it's installed. Private to the user, never in git; the .bak
 # glob covers onboard.sh's timestamped pre-overwrite backups.

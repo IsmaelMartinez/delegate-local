@@ -178,6 +178,23 @@ else
 fi
 rm -rf "$tmp"
 
+# 7b. The legacy DELEGATE_TO_OLLAMA_NO_METRICS name is no longer read (#567).
+tmp=$(mktemp -d)
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); rm -f "$metrics"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_NO_METRICS=1 \
+  bash "$SCRIPT" --text "x" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "legacy alias: exit 0"
+if [[ -f "$metrics" ]]; then
+  echo "  PASS  legacy alias: DELEGATE_TO_OLLAMA_NO_METRICS is ignored"; pass=$((pass+1))
+else
+  echo "  FAIL  legacy alias: DELEGATE_TO_OLLAMA_NO_METRICS still suppresses the row"; fail=$((fail+1))
+fi
+rm -rf "$tmp" "$metrics"
+
 # 8. pick-model failure (no embedding model installed) -> exit 1, metrics
 # row with exit_status=1.
 tmp=$(mktemp -d)

@@ -180,9 +180,8 @@ trace "preferences=${prefs[*]}"
 # Per-user override: plain bash sourced after the defaults populate `prefs`,
 # which it may reassign. User-owned content executed in the user's own
 # context by design; the threat model assumes single-user dev. Path:
-# DELEGATE_LOCAL_CONFIG (or the legacy DELEGATE_TO_OLLAMA_CONFIG), else
-# <data dir>/config.sh.
-config="${DELEGATE_LOCAL_CONFIG:-${DELEGATE_TO_OLLAMA_CONFIG:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/config.sh}}"
+# DELEGATE_LOCAL_CONFIG, else <data dir>/config.sh.
+config="${DELEGATE_LOCAL_CONFIG:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/config.sh}"
 if [[ -f "$config" ]]; then
   # Skip an override not owned by the current user or group/world-writable.
   # BSD `stat` first (macOS), GNU fallback (Linux).

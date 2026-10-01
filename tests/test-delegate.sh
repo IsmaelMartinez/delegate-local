@@ -259,6 +259,39 @@ else
 fi
 rm -rf "$tmp"
 
+# 3b. The legacy DELEGATE_TO_OLLAMA_* names are no longer read (#567): the row
+# is written and the meta line and the verdict reminder printed although the
+# three opt-outs are set.
+tmp=$(mktemp -d)
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); rm -f "$metrics"
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_NO_METRICS=1 DELEGATE_TO_OLLAMA_NO_META=1 \
+  DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
+assert_eq 0 "$EC" "legacy alias: exits 0"
+assert_eq 1 "$(cat "$metrics" 2>/dev/null | grep -c '"source":"delegate"')" "legacy alias: DELEGATE_TO_OLLAMA_NO_METRICS is ignored"
+assert_contains "delegate-meta:" "$out" "legacy alias: DELEGATE_TO_OLLAMA_NO_META is ignored"
+assert_contains "record verdict" "$out" "legacy alias: DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE is ignored"
+rm -rf "$tmp" "$metrics"
+
+# 3c. The legacy fd name is not validated either: an FD of 0, which the
+# DELEGATE_LOCAL_ name refuses with exit 2, leaves the reminder on stderr.
+tmp=$(mktemp -d)
+make_mock_curl_ok "$tmp"
+metrics=$(mktemp); rm -f "$metrics"
+stderr_file=$(mktemp)
+EC=0
+out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
+  DELEGATE_METRICS_FILE="$metrics" \
+  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=0 \
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
+assert_eq 0 "$EC" "legacy alias: DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=0 is not validated"
+assert_contains "record verdict" "$(cat "$stderr_file")" "legacy alias: the reminder stays on stderr"
+rm -rf "$tmp" "$metrics" "$stderr_file"
+
 # 4. pick-model failure (no matching model served) is reflected in metrics +
 # exit. The mock serves a model no tier prefers rather than nothing: without a
 # mock, the real curl would reach a live daemon and resolve a real model.
@@ -3312,9 +3345,9 @@ case "$otel_body" in
 esac
 rm -rf "$tmp" "$metrics"
 
-# --- Sampler overrides (#193): greedy for every model by default; the four
-# DELEGATE_TEMPERATURE / TOP_P / TOP_K / PRESENCE_PENALTY env vars opt in per
-# call, and the row carries sampling_* keys only for those the caller set ---
+# --- Sampler override (#193, #567): greedy for every model by default;
+# DELEGATE_TEMPERATURE is the one opt-in, and the row carries
+# sampling_temperature only when the caller set it ---
 
 # QS1. A Qwen model with no overrides is greedy on the payload and the row.
 tmp=$(mktemp -d)
@@ -3397,7 +3430,8 @@ case "$line" in
 esac
 rm -rf "$tmp" "$metrics"
 
-# QS3. All four env vars set: the payload and the row carry each value.
+# QS3. DELEGATE_TEMPERATURE reaches the payload and the row; the three
+# sampler vars #567 removed are ignored even when set.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
 make_mock_curl_ok "$tmp" "$sniff"
@@ -3410,17 +3444,17 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_TOP_K=20 \
   DELEGATE_PRESENCE_PENALTY=1.3 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "QS3: full Qwen-profile opt-in exits 0"
+assert_eq 0 "$EC" "QS3: temperature opt-in exits 0"
 payload=$(cat "$sniff")
 assert_contains '"temperature":0.7' "$payload" "QS3: opt-in payload carries temperature=0.7"
-assert_contains '"top_p":0.8' "$payload" "QS3: opt-in payload carries top_p=0.8"
-assert_contains '"top_k":20' "$payload" "QS3: opt-in payload carries top_k=20"
-assert_contains '"presence_penalty":1.3' "$payload" "QS3: opt-in payload carries presence_penalty=1.3"
+assert_not_contains '"top_p"' "$payload" "QS3: DELEGATE_TOP_P is no longer read"
+assert_not_contains '"top_k"' "$payload" "QS3: DELEGATE_TOP_K is no longer read"
+assert_not_contains '"presence_penalty"' "$payload" "QS3: DELEGATE_PRESENCE_PENALTY is no longer read"
 line=$(cat "$metrics")
 assert_contains '"sampling_temperature":0.7' "$line" "QS3: opt-in metrics row carries sampling_temperature"
-assert_contains '"sampling_top_p":0.8' "$line" "QS3: opt-in metrics row carries sampling_top_p"
-assert_contains '"sampling_top_k":20' "$line" "QS3: opt-in metrics row carries sampling_top_k"
-assert_contains '"sampling_presence_penalty":1.3' "$line" "QS3: opt-in metrics row carries sampling_presence_penalty"
+assert_not_contains '"sampling_top_p"' "$line" "QS3: the row has no sampling_top_p"
+assert_not_contains '"sampling_top_k"' "$line" "QS3: the row has no sampling_top_k"
+assert_not_contains '"sampling_presence_penalty"' "$line" "QS3: the row has no sampling_presence_penalty"
 rm -rf "$tmp" "$metrics"
 
 # QS3b. Only DELEGATE_TEMPERATURE set: the others stay off the payload and the row.
@@ -3464,7 +3498,7 @@ assert_contains "DELEGATE_TEMPERATURE" "$stderr_content" "QS4: stderr names the 
 assert_contains "not numeric" "$stderr_content" "QS4: stderr names the failure mode"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
-# QS4b. Each override validates independently.
+# QS4b. The removed vars are not read, so a garbage value is not an error.
 for vname in DELEGATE_TOP_P DELEGATE_TOP_K DELEGATE_PRESENCE_PENALTY; do
   tmp=$(mktemp -d)
   make_mock_curl_ok "$tmp"
@@ -3475,8 +3509,8 @@ for vname in DELEGATE_TOP_P DELEGATE_TOP_K DELEGATE_PRESENCE_PENALTY; do
     DELEGATE_METRICS_FILE="$metrics" \
     "$vname"="garbage" \
     bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-  assert_eq 2 "$EC" "QS4b/$vname: non-numeric exits 2"
-  assert_contains "$vname" "$(cat "$stderr_file")" "QS4b/$vname: stderr names env var"
+  assert_eq 0 "$EC" "QS4b/$vname: ignored (exit 0)"
+  assert_not_contains "$vname" "$(cat "$stderr_file")" "QS4b/$vname: stderr does not name it"
   rm -rf "$tmp" "$metrics" "$stderr_file"
 done
 
@@ -3511,7 +3545,7 @@ for good in "0" "1" "-1" "0.7" "1.3" ".5" "1." "-42" "-0.5"; do
   rm -rf "$tmp" "$metrics"
 done
 
-# QS5. On MLX the overrides land as top-level keys (OpenAI shape), not in
+# QS5. On MLX the override lands as a top-level key (OpenAI shape), not in
 # an `options` object.
 tmp=$(mktemp -d)
 payload_sniff="$tmp/payload.json"
@@ -3521,16 +3555,10 @@ EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_TEMPERATURE=0.7 \
-  DELEGATE_TOP_P=0.8 \
-  DELEGATE_TOP_K=20 \
-  DELEGATE_PRESENCE_PENALTY=1.3 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "QS5: MLX + full opt-in exits 0"
+assert_eq 0 "$EC" "QS5: MLX + temperature opt-in exits 0"
 payload=$(cat "$payload_sniff")
 assert_contains '"temperature":0.7' "$payload" "QS5: MLX payload has opt-in temperature"
-assert_contains '"top_p":0.8' "$payload" "QS5: MLX payload has opt-in top_p"
-assert_contains '"top_k":20' "$payload" "QS5: MLX payload has opt-in top_k"
-assert_contains '"presence_penalty":1.3' "$payload" "QS5: MLX payload has opt-in presence_penalty"
 rm -rf "$tmp" "$metrics"
 
 # QS5b. A non-numeric override exits 2 on MLX too.
@@ -3541,10 +3569,10 @@ stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TOP_P=oops \
+  DELEGATE_TEMPERATURE=oops \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 2 "$EC" "QS5b: MLX + bad DELEGATE_TOP_P exits 2"
-assert_contains "DELEGATE_TOP_P" "$(cat "$stderr_file")" "QS5b: MLX validator stderr names env var"
+assert_eq 2 "$EC" "QS5b: MLX + bad DELEGATE_TEMPERATURE exits 2"
+assert_contains "DELEGATE_TEMPERATURE" "$(cat "$stderr_file")" "QS5b: MLX validator stderr names env var"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # QS6. The canary stays greedy regardless of the dispatch profile.

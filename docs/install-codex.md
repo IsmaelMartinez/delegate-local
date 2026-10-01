@@ -31,13 +31,7 @@ If Codex answers without delegating, check that `~/.codex/skills/delegate-local/
 
 ## Per-machine routing override
 
-Same as Claude Code's pattern — `init.sh` writes a starter override based on installed models. Path is `~/.codex/skills/delegate-local/config.sh`:
-
-```bash
-bash ~/.codex/skills/delegate-local/scripts/init.sh > ~/.codex/skills/delegate-local/config.sh
-```
-
-The default config path is the Claude Code one (`~/.claude/skills/...`). On a Codex-only host, set `DELEGATE_LOCAL_CONFIG=~/.codex/skills/delegate-local/config.sh` in your shell profile so `pick-model.sh` reads from the Codex location.
+Same as Claude Code's pattern: a hand-written `~/.local/share/delegate-local/config.sh` that reassigns `prefs` for the tiers you want reordered (see [`install-claude-code.md`](install-claude-code.md#per-machine-routing-override)). The path is the shared data directory whichever agent installed the skill; `DELEGATE_LOCAL_CONFIG` redirects it.
 
 ## Uninstall
 

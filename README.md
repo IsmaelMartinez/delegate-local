@@ -13,7 +13,7 @@ npx skills add IsmaelMartinez/delegate-local -a claude-code -g
 # 2. Confirm at least one local model is installed and see how tiers route
 bash ~/.claude/skills/delegate-local/scripts/audit-models.sh
 
-# 3. (optional) Personalise routing + commit style to this machine: it derives a
+# 3. (optional) Personalise commit style to this machine: it derives a
 #    profile from your own git history, has you confirm or edit each value, and
 #    writes nothing without confirmation. Run it from a repo that reflects your style.
 bash ~/.claude/skills/delegate-local/scripts/onboard.sh
@@ -117,21 +117,22 @@ case "$tier" in
 esac
 ```
 
-Recommended first step on any new machine or user: the onboarding wizard probes your environment (`init.sh`) and derives your commit-style flavor from your own git history (`derive-flavor.sh`), presents each value for confirm-or-edit, and writes both override files only on explicit confirmation (timestamped `.bak` before any overwrite). Run it from a repo whose history reflects your style:
+Nothing generates `config.sh`: write it by hand, and only for a tier whose shipped order is wrong for you. (`scripts/init.sh` used to print one, but its output was the shipped order with the installed models moved first, which `pick-model.sh` already does, and once installed it shadowed every later change to the shipped lists; it was removed in #567.)
+
+Recommended first step on any new machine or user: the onboarding wizard derives your commit-style flavor from your own git history (`derive-flavor.sh`), presents each value for confirm-or-edit, and writes the profile only on explicit confirmation (timestamped `.bak` before any overwrite). Run it from a repo whose history reflects your style:
 
 ```bash
 bash <install-path>/scripts/onboard.sh
 ```
 
-Without a terminal it degrades to print-only and writes nothing. The two probes also work standalone — each is read-only and prints to stdout, never auto-writes:
+Without a terminal it degrades to print-only and writes nothing. The probe also works standalone — it is read-only and prints to stdout, never auto-writes:
 
 ```bash
 mkdir -p ~/.local/share/delegate-local
-bash <install-path>/scripts/init.sh > ~/.local/share/delegate-local/config.sh
 bash <install-path>/scripts/derive-flavor.sh > ~/.local/share/delegate-local/profile.sh
 ```
 
-Set `DELEGATE_LOCAL_CONFIG=/some/other/path.sh` to redirect the routing-override path, and `DELEGATE_LOCAL_PROFILE=/some/other/profile.sh` to redirect the flavor-profile path (useful for testing or per-project overrides — `onboard.sh`, `pick-model.sh`, and `load-flavor.sh` all honour them).
+Set `DELEGATE_LOCAL_CONFIG=/some/other/path.sh` to redirect the routing-override path `pick-model.sh` reads, and `DELEGATE_LOCAL_PROFILE=/some/other/profile.sh` to redirect the flavor-profile path `onboard.sh` and `load-flavor.sh` use (useful for testing or per-project overrides).
 
 ## Where per-user data lives
 
@@ -186,7 +187,7 @@ each merge with `git -C ~/.local/share/delegate-local-live pull --ff-only`; `CLA
 
 The mechanisms are fork-friendly out of the box — routing, metrics, and the feedback loop are all driven by env vars and the per-user `config.sh` above. What needs repointing is a handful of author-specific defaults:
 
-1. **Run the onboarding wizard.** First step on any new machine or user (see [Personalising routing](#personalising-routing-recommended)) — it derives both your routing override and your commit-style flavor profile from what is actually installed and your own git history:
+1. **Run the onboarding wizard.** First step on any new machine or user (see [Personalising routing](#personalising-routing-recommended)) — it derives your commit-style flavor profile from your own git history and offers to install the delegate hooks:
 
    ```bash
    bash <install-path>/scripts/onboard.sh

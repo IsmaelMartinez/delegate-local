@@ -31,13 +31,7 @@ If OpenCode answers without delegating, check that the SKILL.md is reachable at 
 
 ## Per-machine routing override
 
-Same pattern as Claude Code — `init.sh` writes a starter override based on `ollama list`. Path is `~/.config/opencode/skills/delegate-local/config.sh`:
-
-```bash
-bash ~/.config/opencode/skills/delegate-local/scripts/init.sh > ~/.config/opencode/skills/delegate-local/config.sh
-```
-
-The default config path is the Claude Code one (`~/.claude/skills/...`). On an OpenCode-only host, set `DELEGATE_LOCAL_CONFIG=~/.config/opencode/skills/delegate-local/config.sh` in your shell profile so `pick-model.sh` reads from the OpenCode location.
+Same pattern as Claude Code: a hand-written `~/.local/share/delegate-local/config.sh` that reassigns `prefs` for the tiers you want reordered (see [`install-claude-code.md`](install-claude-code.md#per-machine-routing-override)). The path is the shared data directory whichever agent installed the skill; `DELEGATE_LOCAL_CONFIG` redirects it.
 
 ## Uninstall
 
