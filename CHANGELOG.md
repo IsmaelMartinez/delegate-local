@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.45.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.44.0...v0.45.0) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* release-note, long-thread-distillation, bulk-file-summary, plan-section-intro, roadmap-status, roadmap-entry, jira-ticket-description, ci-log-triage, miss-theme-cluster and the semantic-search recipe page are removed (recoverable from git; scripts/semantic-search.sh stays), and DELEGATE_FORCE_FLAKY no longer does anything.
+
+### Code Improvements
+
+* retire ten unused recipes and the flaky-on-models gate ([#616](https://github.com/IsmaelMartinez/delegate-local/issues/616)) ([a03b943](https://github.com/IsmaelMartinez/delegate-local/commit/a03b9439b13e1e989225a68d41c771ac60cfa19d))
+
+
+### Documentation
+
+* move recipe calibration notes to docs/calibration ([#621](https://github.com/IsmaelMartinez/delegate-local/issues/621)) ([5e44648](https://github.com/IsmaelMartinez/delegate-local/commit/5e446489f6174cdc0deea434b163b57d3df45b02))
+* refresh ROADMAP, docs index, ADR statuses and env-var table ([#620](https://github.com/IsmaelMartinez/delegate-local/issues/620)) ([246851c](https://github.com/IsmaelMartinez/delegate-local/commit/246851c1f76c6bb9117f57d3a9ec49a6cdc866b9))
+* rewrite SKILL.md to match current code and trim token count ([#619](https://github.com/IsmaelMartinez/delegate-local/issues/619)) ([b43b6bd](https://github.com/IsmaelMartinez/delegate-local/commit/b43b6bd3a0f908e3ff3256258f13e30bbcc07dcf))
+* trim CLAUDE.md to ~3k tokens and move detail to the docs that own it ([#618](https://github.com/IsmaelMartinez/delegate-local/issues/618)) ([ecdc604](https://github.com/IsmaelMartinez/delegate-local/commit/ecdc60419598bcaef3c678c106707a5aa74be21a))
+* update ROADMAP to reflect wave 4 merge and trigger-eval gate failure ([#622](https://github.com/IsmaelMartinez/delegate-local/issues/622)) ([1dfc1ea](https://github.com/IsmaelMartinez/delegate-local/commit/1dfc1ea0a2a26b44bf436798ee81f7d61d25fcf2))
+
 ## [0.44.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.43.0...v0.44.0) (2026-10-01)
 
 
