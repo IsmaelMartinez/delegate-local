@@ -70,7 +70,7 @@ Every `DELEGATE_*` variable a script under `scripts/` reads, listed once. All ar
 |---|---|---|---|
 | `DELEGATE_SELF_IMPROVE_STATE` | `<data dir>/self-improve.state` | Watermark file for the calibration gate. | `self-improve.sh`, `self-improve-daily.sh` |
 | `DELEGATE_REPLAY_BASE` | `main` | Git ref the champion recipe is materialised from. | `replay-recipe.sh` |
-| `DELEGATE_REPLAY_MODEL` | resolved from the recipe's tier | Pins the model replay runs against. | `replay-recipe.sh` |
+| `DELEGATE_REPLAY_MODEL` | resolved from the recipe's tier | The model replay expects and keys its cache on; it does not select the model, and a case whose wrapper ran on a different one fails. | `replay-recipe.sh` |
 | `DELEGATE_REPLAY_DELEGATE_SH` | `scripts/delegate.sh` | The wrapper replay invokes (a test seam). | `replay-recipe.sh` |
 
 ## Embeddings

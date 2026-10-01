@@ -75,7 +75,9 @@ task definition, in which case the recipes are narrowed or retired; that read
 now belongs to #573 and decision D9.
 
 The replay-gated self-improvement milestone (2026-09-19) gave the loop a
-measurement: every recipe row carries `template_sha` and its stored inputs,
+measurement: every recipe row carries `template_sha`, a successful recipe call
+stores its structured inputs unless metrics or capture are off or they exceed
+the byte cap,
 `replay-recipe.sh` decides an edit with a paired sign test before its PR, and
 `self-improve.sh` splits outcomes by template hash for the post-merge read. It
 closes once a full cycle has happened: an edit accepted by replay, merged, and

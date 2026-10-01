@@ -263,7 +263,8 @@ What a case is, and how the arms run (ADR 0031 as amended 2026-09-19):
   Ritual verdicts and quarantined finals are skipped.
 - Each case runs through `delegate.sh` on its own tier with metrics, canary
   and nudge off. The model is resolved once from the recipe's tier
-  (`DELEGATE_REPLAY_MODEL` pins it). A candidate whose frontmatter and prompt
+  (`DELEGATE_REPLAY_MODEL` overrides that expected model; it does not
+  select one, and a case the wrapper ran on a different model fails). A candidate whose frontmatter and prompt
   block equal the champion's is reported without a run.
 - Scoring uses the bundle's own `salient` and `sentences` helpers
   (`scripts/lib/pair-score.sh`, with the verdict join in `scripts/lib/pair.jq`),
