@@ -4,6 +4,8 @@
 # replay's dropped count are the same measurement. Sourcing has no side
 # effects. bash 3.2 portable: awk, grep -E, sed -E only. The
 # feedback-to-delegation join is not here but in lib/pair.jq (#564).
+# shellcheck source=text.sh
+. "$(dirname "${BASH_SOURCE[0]}")/text.sh"
 
 # salient <file> — one salient token per line, deduped, lowercased: a
 # backticked span, an issue ref, a dotted identifier or path, or a number of
@@ -47,7 +49,7 @@ absent_from() {
 # candidate file shares with <text>: the Jaccard index of the two word sets
 # as a whole percent, one line per candidate in argument order, `-` for a
 # candidate that cannot be read or when either set is empty. A word is the
-# unit content_words uses in delegate.sh, lowercased letters and hyphens of
+# unit content_words uses in lib/text.sh, lowercased letters and hyphens of
 # four or more starting with a letter, minus the same function words, so
 # "could" and "that" do not pair two unrelated texts. It pairs a shipped text with
 # the draft it came from (#587): the boundary hooks file a post under the
@@ -159,19 +161,11 @@ shape_mismatch() {
 
 # sentences — stdin to one sentence per line, terminator dropped, normalised,
 # under the 40-char floor discarded: the unit, normalisation and floor
-# no_context_echo applies in delegate.sh (split_sentences, echo_normalise,
+# no_context_echo applies in lib/checks.sh (split_sentences, echo_normalise,
 # echo_matches), so the sentence the bundle names is the one the wrapper
-# would have flagged. The sed is echo_normalise's, rule for rule and in its
-# order: trim, the Wrong:/Correct: label, the commit type prefix, a trailing
-# (#NNN). Not shared with delegate.sh because its helpers sit inside the
-# checks region.
+# would have flagged. The helpers are lib/text.sh's own, not a copy (#560).
 sentences() {
-  awk '{ gsub(/[.?!]+[[:space:]]+/, "\n"); sub(/[.?!]+[[:space:]]*$/, "") } 1' \
-    | sed -E -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-             -e 's/^[Ww]rong:[[:space:]]*//' -e 's/^[Cc]orrect:[[:space:]]*//' \
-             -e 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//' \
-             -e 's/[[:space:]]*\(#[0-9]+\)$//' \
-    | awk 'length($0) >= 40'
+  split_sentences | echo_normalise | awk 'length($0) >= 40'
 }
 
 # The share of its word bigrams a shipped final must find in the stdin the

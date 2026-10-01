@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # doc-section padding-tail benchmark: scores each paragraph for a trailing
 # padding clause and a sentence-cap violation. The padding detector is read
-# from delegate.sh's `padding_re` at runtime so it cannot drift. Usage:
+# from lib/checks.sh's `padding_re` at runtime so it cannot drift. Usage:
 #   [BENCH_BACKENDS="mlx ollama"] [BENCH_GATE=1] bash tests/bench-doc-section-padding.sh
 set -uo pipefail
 SKILL_DIR="${SKILL_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 DELEGATE="$SKILL_DIR/scripts/delegate.sh"; PICK="$SKILL_DIR/scripts/pick-model.sh"
+CHECKS="$SKILL_DIR/scripts/lib/checks.sh"
 FIX_DIR="$SKILL_DIR/tests/fixtures/doc-section"
 BACKENDS="${BENCH_BACKENDS:-mlx ollama}"
 fail=0
@@ -15,9 +16,9 @@ err_log=$(mktemp "${TMPDIR:-/tmp}/bench-docsec.XXXXXX") || { echo "bench: failed
 trap 'rm -f "$err_log"' EXIT
 
 # Single source of truth: pull the production padding regex straight out of
-# delegate.sh so this bench detects exactly what no_padding_tail detects.
-eval "$(grep -E '^[[:space:]]*padding_re=' "$DELEGATE" | head -1)"
-[[ -n "${padding_re:-}" ]] || { echo "bench: could not extract padding_re from $DELEGATE" >&2; exit 2; }
+# lib/checks.sh so this bench detects exactly what no_padding_tail detects.
+eval "$(grep -E '^[[:space:]]*padding_re=' "$CHECKS" | head -1)"
+[[ -n "${padding_re:-}" ]] || { echo "bench: could not extract padding_re from $CHECKS" >&2; exit 2; }
 
 # A trailing recap / participial-padding clause (production anchors the This-X /
 # in-summary arm to a sentence boundary, so a recap final sentence matches).
