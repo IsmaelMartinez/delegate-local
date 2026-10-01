@@ -95,13 +95,13 @@ not this file, is the source of truth for status, so read it first with
 `gh issue view 574`.
 
 As of 2026-10-01, waves 1 to 3 are merged and released (v0.40.1 to v0.44.0)
-and wave 4 batch 4a is merged (#568, #571). What remains, in order:
+and wave 4 is merged (#568, #569, #570, #571, #572). The wave-4 trigger-eval
+gate could not score: `eval-skill-triggers.sh --local` sends no
+`enable_thinking:false`, so the resident Qwen3.6 spends its output budget
+thinking and returns no score on main or the branch. #570 left the SKILL.md
+frontmatter byte-identical, so triggering cannot have moved, but the gate
+needs that fix before it can measure the next description edit. What remains:
 
-- Batch 4b: #569 (calibration history out of the recipe files), #570 (the
-  SKILL.md body halved and true to the code) and #572 (this file, the docs
-  tree, ADR statuses, `plugin.json` and the env-var table). The wave gate is a
-  `--local` trigger eval with recall and negative precision ≥ 0.9 on the
-  SKILL.md PRs, then a release.
 - Wave 5: #573, recipe-quality follow-ups after the #538 and #535
   per-template reads, one replay-gated edit at a time.
 
