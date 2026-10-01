@@ -191,16 +191,20 @@ boundary="" recipe=""
 # it then. Here it is read for the length checks only.
 # A segment already read is not read again (`body_seg`): the `gh api` review
 # branch asks for the same segment's body twice, and each read is a perl run.
-body_text="" body_chars="" body_measurable=false body_read=false body_file="" body_kind="" body_seg=""
+body_text="" body_chars="" body_measurable=false body_read=false body_file="" body_kind="" body_seg="" target=""
 read_posted_body() { # segment-index (0-based)
   local out first kind flag path
   if [[ "$body_seg" == "$1" ]]; then body_read=true; return 0; fi
   body_seg="$1"
   body_text="" body_chars="" body_measurable=false body_read=true body_file=""
-  body_kind=""
+  body_kind="" target=""
   # The trailing X survives command-substitution newline stripping.
   out=$(perl "$tokenizer" "$1" <<<"$cmd" 2>/dev/null; printf X); out=${out%X}
+  # The first line is the segment's target (#563), read by the same pass.
   first=${out%%$'\n'*}
+  if [[ "$first" == TARGET$'\t'* ]]; then
+    target=${first#TARGET$'\t'}; out=${out#*$'\n'}; first=${out%%$'\n'*}
+  fi
   IFS=$'\t' read -r kind flag <<<"$first"
   body_kind="$kind"
   if [[ "$kind" == "FILE" ]]; then
@@ -373,8 +377,9 @@ while IFS= read -r seg; do
   fi
 done <<<"$scan"
 [[ -z "$boundary" ]] && exit 0
-# Every other boundary reads its body here, once, from its own segment.
-[[ "$body_read" == "true" ]] || read_posted_body "$((seg_idx - 1))"
+# Every other boundary reads its body (and its target) here, once, from its
+# own segment; one already read is answered from the cache.
+read_posted_body "$((seg_idx - 1))"
 # PostToolUse reports the whole call, and its success is the boundary's own
 # only when the boundary is the last segment or is joined to everything after
 # it by `&&`: `cd x && git commit` and `git commit -F m && git push` both
@@ -451,23 +456,12 @@ if [[ "$matched_seg" =~ $_repo_flag_re ]]; then
 fi
 
 # --- what the post is aimed at (#563) ---------------------------------------
-# A pending marker is the retry of the post that left it, so it is reused
-# only by a post with the same target: the words of the matched segment that
-# name what it posts to — a PR or issue number, a `key=number` field
-# (`in_reply_to=99`), an API endpoint (`repos/…`) or a URL — and the
-# `--repo` value. Paths and body flags are left out, since a retry routinely
-# names its body file differently from the attempt the guard refused. A
-# commit names none, so its target is its project alone, as before.
-target="" _tw=()
-read -r -a _tw <<<"$matched_seg"
-for _t in ${_tw[@]+"${_tw[@]}"}; do
-  case "$_t" in
-    body=*) continue ;;
-    repos/*|/repos/*|http://*|https://*) target="$target $_t" ;;
-    *) [[ "$_t" =~ ^([A-Za-z_]+=)?[0-9]+$ ]] && target="$target $_t" ;;
-  esac
-done
-[[ -n "$repo_project" ]] && target="$repo_val$target"
+# `target` was set by read_posted_body from the tokenizer's words for the
+# matched segment: a gh/glab post's positional selector (number, URL, branch,
+# tag or `gh api` endpoint), its --repo and its thread-picking `gh api`
+# fields; never a body, file or title value or an env assignment. A commit
+# names none, so its target is its project alone. A pending marker is the
+# retry of the post that left it, so it is reused only for the same target.
 
 # --- #465: a body file is NOT evidence the drafting moment passed ---------
 # The hook cannot tell a pre-existing body file from one the agent wrote a

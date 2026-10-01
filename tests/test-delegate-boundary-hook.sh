@@ -2394,8 +2394,8 @@ payload 'gh api -X GET repos/o/r/pulls/12/comments -f body=x' "$tmpcwd" \
 assert_eq 0 "$(nrows)" "#562: an explicit -X GET with a body field is still not a post"
 
 # 91 (#563). A pending marker is the retry of the post it was left by, so it
-# is reused only by a post to the same target: the numbers, `key=number`
-# fields, API endpoints, URLs and `--repo` the command names. A refused reply
+# is reused only by a post to the same target: the selector, `gh api`
+# endpoint and thread fields and `--repo` the command names. A refused reply
 # to PR 12 that was never retried must not credit a reply to PR 13.
 reset497; seed_draft maintainer-reply d563.draft.txt
 confirm 'ls' "$tmpcwd" sess-A toolu-0
@@ -2409,6 +2409,28 @@ assert_contains '"permissionDecision":"deny"' "$out" "#563 target: the same numb
 out=$(payload_id "gh pr comment 12 --body-file $tmpcwd/rr.txt" "$tmpcwd" sess-A toolu-4 | dflt bash "$HOOK")
 assert_eq "" "$out" "#563 target: the retry to PR 12 reuses its credit whatever its body flag"
 assert_eq toolu-4 "$(marker_id sess-A.comment-reply.$proj)" "#563 target: ...and re-arms the marker"
+rm -rf "$pending" "$METRICS_DIR/drafts"
+# The target is the parsed destination, not every number-looking word: an
+# env assignment in front of a commit is not one (a commit's target is its
+# project alone), a numeric body is not one, and a branch selector is one.
+reset497; seed_draft commit-message d563.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "GIT_OPTIONAL_LOCKS=0 git commit -m \"$body300\"" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+out=$(payload_id "git commit -m \"$body300\"" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK")
+assert_eq "" "$out" "#563 target: an env assignment is not part of a commit's target, so the retry reuses the credit"
+reset497; seed_draft maintainer-reply d563.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id 'gh pr comment 12 --body 123' "$tmpcwd" sess-A toolu-1 | DELEGATE_BOUNDARY_MIN_CHARS=0 DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+payload_id 'gh pr comment 12 --body 456' "$tmpcwd" sess-A toolu-2 | DELEGATE_BOUNDARY_MIN_CHARS=0 DELEGATE_METRICS_FILE="$METRICS" bash "$HOOK" >/dev/null
+assert_eq "1 toolu-2" "$(grep -c '"source":"opportunity"' "$METRICS") $(marker_id sess-A.comment-reply.$proj)" \
+  "#563 target: a numeric body value is not part of the target, so the retry reuses the marker"
+reset497; seed_draft maintainer-reply d563.draft.txt
+confirm 'ls' "$tmpcwd" sess-A toolu-0
+payload_id "gh pr comment my-branch --body \"$body300\"" "$tmpcwd" sess-A toolu-1 | dflt bash "$HOOK" >/dev/null
+out=$(payload_id "gh pr comment other-branch --body \"$body300\"" "$tmpcwd" sess-A toolu-2 | dflt bash "$HOOK")
+assert_contains '"permissionDecision":"deny"' "$out" "#563 target: a reply to another branch's PR is another target"
+out=$(payload_id "gh pr comment my-branch --body \"$body300\"" "$tmpcwd" sess-A toolu-3 | dflt bash "$HOOK")
+assert_eq "" "$out" "#563 target: ...while the retry to the same branch's PR reuses its credit"
 rm -rf "$pending" "$METRICS_DIR/drafts"
 
 # 92 (#563). The common path spawns no jq: the boundary hook pre-filters the

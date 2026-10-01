@@ -7,7 +7,8 @@
 # With no argument it prints the classification surface: each segment's words
 # with every quoted span reduced to a space, one segment per line, then 0x1e,
 # the separator characters in order, then 0x1e. With a segment index N
-# (0-based) it prints the text that segment posts: `FILE\t<path>`, `NONE`, or
+# (0-based) it prints a `TARGET\t<key>` line (what the segment posts to),
+# then the text that segment posts: `FILE\t<path>`, `NONE`, or
 # `INLINE\t<1 if literal, else 0>\n<text>`. A body is unmeasurable (literal 0)
 # when it carries `$` or a backtick the shell would expand; the one resolved
 # shape is `"$(cat <<EOF ... EOF\n)"`, whose heredoc is the text. Heredoc
@@ -184,6 +185,44 @@ exit 0 unless $want =~ /\A[0-9]+\z/ && $want < @segs;
 # --body-file. -m and -am are git commit and glab note.
 my $sg = $segs[$want];
 my @W = @{ $sg->{w} };
+
+# Printed first: `TARGET\t<key>`, what the segment posts to (#563), so a
+# pending marker is reused only by a retry of the same post. Read from the
+# words, never a regex over the line: a git commit names no target (its
+# project is the key); a gh/glab post names its positional arguments after
+# the subcommand (a PR or issue number, URL or branch, a release tag, the
+# `gh api` endpoint), its --repo, and the `gh api` fields that pick a
+# thread. Values of the options that take one (bodies, files, titles,
+# headers) and redirections are skipped, as are words before the command
+# (env assignments, sudo, timeout).
+my %takes_value = map { $_ => 1 } qw(-b --body -F --body-file -t --title -m --message
+  -f --field --raw-field -R --repo -X --method -H --header --head -B --base -l --label
+  -a --assignee -r --reviewer -p --project -M --milestone -n --notes --notes-file
+  -T --template -q --jq --input --target);
+my @tgt;
+my $c = 0;
+$c++ while $c < @W && $W[$c][0] !~ m{(?:\A|/)(?:git|gh|glab)\z};
+if ($c < @W && $W[$c][0] =~ m{(?:\A|/)(?:gh|glab)\z}) {
+  my $k = $c + (($c + 1 < @W && $W[$c + 1][0] eq 'api') ? 2 : 3);
+  $k++ if $k < @W && $W[$k][0] eq 'note' && $W[$k - 1][0] eq 'discussion';
+  for (; $k < @W; $k++) {
+    my $t = $W[$k][0];
+    if ($t =~ /\A--repo=/) { push @tgt, 'repo=' . substr($t, 7); next }
+    if ($t =~ /\A[0-9]*(?:<<?|>>?)&?\z/) { $k++; next }   # a bare redirection and its target
+    next if $t =~ /\A[0-9]*[<>]/;                        # an attached one
+    if (substr($t, 0, 1) eq '-') {
+      next if index($t, '=') >= 0 || !$takes_value{$t} || $k + 1 >= @W;
+      my $v = $W[++$k][0];
+      if ($t eq '-R' || $t eq '--repo') { push @tgt, "repo=$v" }
+      elsif ($t =~ /\A(?:-f|-F|--field|--raw-field)\z/
+             && $v =~ /\A(?:in_reply_to|number|pull_number|issue_number|comment_id)=/) { push @tgt, $v }
+      next;
+    }
+    push @tgt, $t;
+  }
+}
+my $key = join(' ', sort @tgt); $key =~ tr/\t\n/  /;
+print "TARGET\t$key\n";
 my ($file, @body) = ('');
 my $blit = 1;
 for (my $k = 0; $k < @W; $k++) {
