@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.44.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.43.0...v0.44.0) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* DELEGATE_TOP_P, DELEGATE_TOP_K and DELEGATE_PRESENCE_PENALTY are no longer read (DELEGATE_TEMPERATURE remains); the DELEGATE_TO_OLLAMA_* names are ignored, so use the DELEGATE_LOCAL_* ones; scripts/init.sh is removed, so write config.sh by hand if a tier needs reordering.
+
+### Performance
+
+* pre-filter the raw payload before any jq in the boundary hooks ([#611](https://github.com/IsmaelMartinez/delegate-local/issues/611)) ([45cb57e](https://github.com/IsmaelMartinez/delegate-local/commit/45cb57ed8b18b1e2dce88ef31730113b60550e11))
+
+
+### Code Improvements
+
+* move the output checks into lib/checks.sh and lib/text.sh ([#612](https://github.com/IsmaelMartinez/delegate-local/issues/612)) ([f9985df](https://github.com/IsmaelMartinez/delegate-local/commit/f9985df41e30be46092f0dbc398d4cb7f4f3a932)), closes [#560](https://github.com/IsmaelMartinez/delegate-local/issues/560)
+* remove init.sh, the legacy env aliases and unused sampler overrides ([#614](https://github.com/IsmaelMartinez/delegate-local/issues/614)) ([e74f14f](https://github.com/IsmaelMartinez/delegate-local/commit/e74f14fdd77d1ab6a5710208b1ed2b99bc593201))
+
+
+### Testing
+
+* shared assert lib and check-only cases out of test-delegate.sh ([#615](https://github.com/IsmaelMartinez/delegate-local/issues/615)) ([a235452](https://github.com/IsmaelMartinez/delegate-local/commit/a235452a97ee730371c103aea657025c821ee90a))
+
 ## [0.43.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.42.0...v0.43.0) (2026-10-01)
 
 
