@@ -4,43 +4,9 @@
 
 set -u
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/assert.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/assert.sh"
 SCRIPT="$REPO/scripts/delegate.sh"
-SAFE_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
-
-pass=0
-fail=0
-
-assert_eq() {
-  local expected="$1" actual="$2" name="$3"
-  if [[ "$expected" == "$actual" ]]; then echo "  PASS  $name"; pass=$((pass+1))
-  else echo "  FAIL  $name (expected '$expected', got '$actual')"; fail=$((fail+1)); fi
-}
-assert_contains() {
-  local needle="$1" haystack="$2" name="$3"
-  if [[ "$haystack" == *"$needle"* ]]; then echo "  PASS  $name"; pass=$((pass+1))
-  else echo "  FAIL  $name (missing '$needle')"; fail=$((fail+1)); fi
-}
-assert_not_contains() {
-  local needle="$1" haystack="$2" name="$3"
-  if [[ "$haystack" != *"$needle"* ]]; then echo "  PASS  $name"; pass=$((pass+1))
-  else echo "  FAIL  $name (unexpectedly found '$needle')"; fail=$((fail+1)); fi
-}
-
-# Every mock curl answers GET {base}/models from this list: a mock that only
-# knew the dispatch call would fail to resolve a tier, or hang because the
-# discovery request carries no stdin. Tests set MOCK_MODELS before building a
-# mock and restore it afterwards.
-MOCK_MODELS='qwen3.6:35b-a3b'
-mock_models_json() {
-  local out="" id
-  for id in "$@"; do
-    [[ -n "$out" ]] && out="$out,"
-    out="$out{\"id\":\"${id//\"/\\\"}\",\"object\":\"model\"}"
-  done
-  printf '{"object":"list","data":[%s]}' "$out"
-}
-
 
 make_mock_curl_models_only() {
   # Serves GET {base}/models and refuses everything else. For tests where
@@ -54,42 +20,6 @@ for _a in "\$@"; do
 done
 echo "curl: connection refused" >&2
 exit 7
-EOF
-  chmod +x "$dir/curl"
-}
-
-make_mock_curl_ok() {
-  # Drains stdin, copies the JSON payload to a sniff file if asked, answers
-  # discovery with $MOCK_MODELS, and honours the -o body_file / -w
-  # "%{time_starttransfer}" pair delegate.sh uses for TTFB (a synthetic 0.001s
-  # becomes queue_wait_ms=1).
-  local dir="$1" sniff="${2:-/dev/null}"
-  cat > "$dir/curl" <<EOF
-#!/usr/bin/env bash
-out_file=""
-write_out=""
-saw_probe=0
-while (( \$# > 0 )); do
-  case "\$1" in
-    -o) out_file="\$2"; shift 2 ;;
-    -w) write_out="\$2"; shift 2 ;;
-    *"/v1/models"*) saw_probe=1; shift ;;
-    *) shift ;;
-  esac
-done
-if (( saw_probe == 1 )); then printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0; fi
-cat > "${sniff}"
-body='{"choices":[{"message":{"content":"mock-model-output: ok\\n"},"finish_reason":"stop"}]}'
-if [[ -n "\$out_file" ]]; then
-  printf '%s' "\$body" > "\$out_file"
-else
-  printf '%s' "\$body"
-fi
-if [[ -n "\$write_out" ]]; then
-  # Substitute %{time_starttransfer} with a synthetic 1-ms value so the
-  # delegate.sh awk-conversion exercises the float→int path.
-  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
-fi
 EOF
   chmod +x "$dir/curl"
 }
@@ -113,71 +43,6 @@ EOF
   chmod +x "$dir/curl"
 }
 
-make_mock_curl_think() {
-  # Like make_mock_curl_ok but the content is $2, a JSON-escaped string (use
-  # \n for newlines), for the <think> stripping tests.
-  local dir="$1" resp="$2"
-  cat > "$dir/curl" <<EOF
-#!/usr/bin/env bash
-out_file=""
-write_out=""
-saw_probe=0
-while (( \$# > 0 )); do
-  case "\$1" in
-    -o) out_file="\$2"; shift 2 ;;
-    -w) write_out="\$2"; shift 2 ;;
-    *"/v1/models"*) saw_probe=1; shift ;;
-    *) shift ;;
-  esac
-done
-if (( saw_probe == 1 )); then printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0; fi
-cat > /dev/null
-body='{"choices":[{"message":{"content":"${resp}"},"finish_reason":"stop"}]}'
-if [[ -n "\$out_file" ]]; then
-  printf '%s' "\$body" > "\$out_file"
-else
-  printf '%s' "\$body"
-fi
-if [[ -n "\$write_out" ]]; then
-  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
-fi
-EOF
-  chmod +x "$dir/curl"
-}
-
-make_mock_curl_argv() {
-  # Records its own argv to $2 as one space-joined line (so a test can assert
-  # "--max-time 600" as a unit), then behaves like make_mock_curl_ok.
-  local dir="$1" argv_file="$2"
-  cat > "$dir/curl" <<EOF
-#!/usr/bin/env bash
-printf '%s\n' "\$*" > "${argv_file}"
-out_file=""
-write_out=""
-saw_probe=0
-while (( \$# > 0 )); do
-  case "\$1" in
-    -o) out_file="\$2"; shift 2 ;;
-    -w) write_out="\$2"; shift 2 ;;
-    *"/v1/models"*) saw_probe=1; shift ;;
-    *) shift ;;
-  esac
-done
-if (( saw_probe == 1 )); then printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0; fi
-cat > /dev/null
-body='{"choices":[{"message":{"content":"mock-model-output: ok\\n"},"finish_reason":"stop"}]}'
-if [[ -n "\$out_file" ]]; then
-  printf '%s' "\$body" > "\$out_file"
-else
-  printf '%s' "\$body"
-fi
-if [[ -n "\$write_out" ]]; then
-  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
-fi
-EOF
-  chmod +x "$dir/curl"
-}
-
 # 1. Missing args -> exit 2.
 EC=0
 out=$(bash "$SCRIPT" 2>&1) || EC=$?
@@ -191,7 +56,7 @@ assert_eq 2 "$EC" "missing prompt -> exit 2"
 # parsed cleanly, metrics file has one line with all required fields.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -216,35 +81,20 @@ if [[ -s "$sniff" ]]; then
   # A bare call is greedy for every model: temperature:0 and no
   # top_p/top_k/presence_penalty; env vars opt in to sampling.
   assert_contains '"temperature":0' "$payload" "payload: bare greedy temperature:0"
-  case "$payload" in
-    *'"top_p"'*) echo "  FAIL  payload: bare greedy must NOT carry top_p"; fail=$((fail+1));;
-    *) echo "  PASS  payload: bare greedy omits top_p"; pass=$((pass+1));;
-  esac
-  case "$payload" in
-    *'"top_k"'*) echo "  FAIL  payload: bare greedy must NOT carry top_k"; fail=$((fail+1));;
-    *) echo "  PASS  payload: bare greedy omits top_k"; pass=$((pass+1));;
-  esac
-  case "$payload" in
-    *'"presence_penalty"'*) echo "  FAIL  payload: bare greedy must NOT carry presence_penalty"; fail=$((fail+1));;
-    *) echo "  PASS  payload: bare greedy omits presence_penalty"; pass=$((pass+1));;
-  esac
+  assert_not_contains '"top_p"' "$payload" "payload: bare greedy omits top_p"
+  assert_not_contains '"top_k"' "$payload" "payload: bare greedy omits top_k"
+  assert_not_contains '"presence_penalty"' "$payload" "payload: bare greedy omits presence_penalty"
 else
   echo "  FAIL  payload sniff: file empty"; fail=$((fail+1))
 fi
 # A bare call writes no sampling_* keys to the row.
-case "$line" in
-  *'"sampling_temperature"'*) echo "  FAIL  metrics: bare greedy must omit sampling_temperature"; fail=$((fail+1));;
-  *) echo "  PASS  metrics: bare greedy omits sampling_temperature"; pass=$((pass+1));;
-esac
-case "$line" in
-  *'"sampling_top_p"'*) echo "  FAIL  metrics: bare greedy must omit sampling_top_p"; fail=$((fail+1));;
-  *) echo "  PASS  metrics: bare greedy omits sampling_top_p"; pass=$((pass+1));;
-esac
+assert_not_contains '"sampling_temperature"' "$line" "metrics: bare greedy omits sampling_temperature"
+assert_not_contains '"sampling_top_p"' "$line" "metrics: bare greedy omits sampling_top_p"
 rm -rf "$tmp" "$metrics"
 
 # 3. Opt-out env var suppresses metrics writing.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); rm -f "$metrics"  # ensure file does not exist
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -263,7 +113,7 @@ rm -rf "$tmp"
 # is written and the meta line and the verdict reminder printed although the
 # three opt-outs are set.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); rm -f "$metrics"
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -280,7 +130,7 @@ rm -rf "$tmp" "$metrics"
 # 3c. The legacy fd name is not validated either: an FD of 0, which the
 # DELEGATE_LOCAL_ name refuses with exit 2, leaves the reminder on stderr.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); rm -f "$metrics"
 stderr_file=$(mktemp)
 EC=0
@@ -310,7 +160,7 @@ rm -rf "$tmp" "$metrics"
 
 # 5. Stdin context is included in metrics char count.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -325,7 +175,7 @@ rm -rf "$tmp" "$metrics"
 # 6. DELEGATE_THINK=true overrides default false in payload.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -340,7 +190,7 @@ rm -rf "$tmp" "$metrics"
 # (so a jq parse error can't kill the delegation).
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -371,7 +221,7 @@ rm -rf "$tmp" "$metrics"
 # prompts/NAME.md, substitutes --var values into {{key}}, and tags the row.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 prompts="$tmp/prompts"
 mkdir -p "$prompts"
@@ -413,7 +263,7 @@ rm -rf "$tmp" "$metrics"
 
 # 9. --recipe with an unknown name fails with a clear error and exit 2.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 EC=0
@@ -427,7 +277,7 @@ rm -rf "$tmp" "$metrics"
 
 # 10. Unsubstituted placeholders are a hard error (exit 2, names listed).
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/incomplete.md" <<'EOF'
@@ -458,7 +308,7 @@ rm -rf "$tmp" "$metrics"
 # stdin is NOT also appended after the recipe (would otherwise duplicate).
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/stdin-recipe.md" <<'EOF'
@@ -499,7 +349,7 @@ rm -rf "$tmp" "$metrics"
 # 12. --recipe makes the prompt arg optional (recipe carries the instruction).
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/no-prompt.md" <<'EOF'
@@ -530,7 +380,7 @@ rm -rf "$tmp" "$metrics"
 # substitution intact (argv-driven, not shell-re-evaluated).
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/multiline.md" <<'EOF'
@@ -566,7 +416,7 @@ rm -rf "$tmp" "$metrics"
 # such option, so on it this passes with or without the fix.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/amp.md" <<'EOF'
@@ -601,7 +451,7 @@ rm -rf "$tmp" "$metrics"
 
 # 14. --var without '=' is rejected.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/x.md" <<'EOF'
@@ -631,7 +481,7 @@ rm -rf "$tmp" "$metrics"
 # 14a. --var key with glob metacharacters is rejected: the key goes into a
 # bash pattern replacement, where it would match wider than the literal {{key}}.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/x.md" <<'EOF'
@@ -662,7 +512,7 @@ rm -rf "$tmp" "$metrics"
 # still substitutes normally after the key-shape guard.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/ident.md" <<'EOF'
@@ -693,7 +543,7 @@ rm -rf "$tmp" "$metrics"
 # placeholder guard, which checks the template's placeholders, not the result.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/curly-content.md" <<'EOF'
@@ -723,7 +573,7 @@ rm -rf "$tmp" "$metrics"
 # 16. A markdown heading inside the fenced block must not end the section.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/heading-in-block.md" <<'EOF'
@@ -758,7 +608,7 @@ rm -rf "$tmp" "$metrics"
 
 # 17. prompt_chars includes the recipe template length.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/sized.md" <<'EOF'
@@ -791,7 +641,7 @@ rm -rf "$tmp" "$metrics"
 # counts only the template around it, so estimated_tokens_avoided does not
 # count the context twice (#550).
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/wrap.md" <<'EOF'
@@ -826,52 +676,12 @@ rm -rf "$tmp" "$metrics"
 
 # 12. MLX: dispatches to /v1/chat/completions, parses
 # .choices[0].message.content, and tags the metrics line with backend:"mlx".
-make_mock_curl_mlx_ok() {
-  # Answers discovery and dispatch in the chat-completions shape. The argv
-  # sniff holds the last invocation, which is always the dispatch.
-  local dir="$1" payload_sniff="${2:-/dev/null}" argv_sniff="${3:-/dev/null}"
-  cat > "$dir/curl" <<EOF
-#!/usr/bin/env bash
-for arg in "\$@"; do
-  case "\$arg" in
-    *"/v1/models"*)
-      # Probe: drain stdin, emit a minimal models-list response, exit 0.
-      cat > /dev/null
-      printf '%s' '$(mock_models_json $MOCK_MODELS)'
-      exit 0
-      ;;
-  esac
-done
-printf '%s\n' "\$*" > "${argv_sniff}"
-out_file=""
-write_out=""
-while (( \$# > 0 )); do
-  case "\$1" in
-    -o) out_file="\$2"; shift 2 ;;
-    -w) write_out="\$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-cat > "${payload_sniff}"
-body='{"choices":[{"message":{"role":"assistant","content":"mlx-output-ok"},"finish_reason":"stop"}]}'
-if [[ -n "\$out_file" ]]; then
-  printf '%s' "\$body" > "\$out_file"
-else
-  printf '%s' "\$body"
-fi
-if [[ -n "\$write_out" ]]; then
-  printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
-fi
-EOF
-  chmod +x "$dir/curl"
-}
-
 # 12a. Happy path with the MLX backend.
 tmp=$(mktemp -d)
 payload_sniff="$tmp/payload.json"
 argv_sniff="$tmp/argv.txt"
 MOCK_MODELS='mlx-community/Qwen3.6-35B-A3B-Instruct-4bit'
-make_mock_curl_mlx_ok "$tmp" "$payload_sniff" "$argv_sniff"
+mock_curl "$tmp" 'mlx-output-ok' "$payload_sniff" "$argv_sniff"
 MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 EC=0
@@ -888,49 +698,28 @@ assert_contains '"tier":"prose"' "$line" "MLX metrics: tier field"
 # instruction-tuned models.
 argv=$(cat "$argv_sniff")
 assert_contains "/v1/chat/completions" "$argv" "MLX dispatch hits /v1/chat/completions"
-case "$argv" in
-  *"/api/generate"*) echo "  FAIL  MLX dispatch must not hit /api/generate"; fail=$((fail+1));;
-  *) echo "  PASS  MLX dispatch does not hit /api/generate"; pass=$((pass+1));;
-esac
-case "$argv" in
-  *"/v1/completions"*) echo "  FAIL  MLX dispatch must not hit raw /v1/completions"; fail=$((fail+1));;
-  *) echo "  PASS  MLX dispatch does not hit raw /v1/completions"; pass=$((pass+1));;
-esac
+assert_not_contains "/api/generate" "$argv" "MLX dispatch does not hit /api/generate"
+assert_not_contains "/v1/completions" "$argv" "MLX dispatch does not hit raw /v1/completions"
 # enable_thinking:false mirrors Ollama's think:false so the answer lands in
 # .content rather than .reasoning.
 payload=$(cat "$payload_sniff")
 assert_contains '"model":"mlx-community/Qwen3.6-35B-A3B-Instruct-4bit"' "$payload" "MLX payload: model field"
 assert_contains '"max_tokens":' "$payload" "MLX payload: max_tokens (OpenAI shape)"
 assert_contains '"temperature":0' "$payload" "MLX payload: bare greedy temperature=0"
-case "$payload" in
-  *'"top_p"'*) echo "  FAIL  MLX payload: bare greedy must NOT carry top_p"; fail=$((fail+1));;
-  *) echo "  PASS  MLX payload: bare greedy omits top_p"; pass=$((pass+1));;
-esac
-case "$payload" in
-  *'"top_k"'*) echo "  FAIL  MLX payload: bare greedy must NOT carry top_k"; fail=$((fail+1));;
-  *) echo "  PASS  MLX payload: bare greedy omits top_k"; pass=$((pass+1));;
-esac
-case "$payload" in
-  *'"presence_penalty"'*) echo "  FAIL  MLX payload: bare greedy must NOT carry presence_penalty"; fail=$((fail+1));;
-  *) echo "  PASS  MLX payload: bare greedy omits presence_penalty"; pass=$((pass+1));;
-esac
+assert_not_contains '"top_p"' "$payload" "MLX payload: bare greedy omits top_p"
+assert_not_contains '"top_k"' "$payload" "MLX payload: bare greedy omits top_k"
+assert_not_contains '"presence_penalty"' "$payload" "MLX payload: bare greedy omits presence_penalty"
 assert_contains '"messages":' "$payload" "MLX payload: messages array (chat-completions shape)"
 assert_contains '"role":"user"' "$payload" "MLX payload: user-role message"
 assert_contains '"enable_thinking":false' "$payload" "MLX payload: enable_thinking:false by default (mirrors Ollama think:false)"
-case "$payload" in
-  *'"think":'*) echo "  FAIL  MLX payload must not carry Ollama-only think field"; fail=$((fail+1));;
-  *) echo "  PASS  MLX payload omits Ollama-only think field"; pass=$((pass+1));;
-esac
-case "$payload" in
-  *'"prompt":'*) echo "  FAIL  MLX payload must not carry raw prompt field"; fail=$((fail+1));;
-  *) echo "  PASS  MLX payload omits raw prompt field"; pass=$((pass+1));;
-esac
+assert_not_contains '"think":' "$payload" "MLX payload omits Ollama-only think field"
+assert_not_contains '"prompt":' "$payload" "MLX payload omits raw prompt field"
 rm -rf "$tmp" "$metrics"
 
 # 12d. MLX_HOST override is honoured by the dispatch URL.
 tmp=$(mktemp -d)
 argv_sniff="$tmp/argv.txt"
-make_mock_curl_mlx_ok "$tmp" "/dev/null" "$argv_sniff"
+mock_curl "$tmp" 'mlx-output-ok' "/dev/null" "$argv_sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -944,7 +733,7 @@ rm -rf "$tmp" "$metrics"
 # 12e. DELEGATE_MAX_TOKENS overrides the MLX max_tokens default.
 tmp=$(mktemp -d)
 payload_sniff="$tmp/payload.json"
-make_mock_curl_mlx_ok "$tmp" "$payload_sniff"
+mock_curl "$tmp" 'mlx-output-ok' "$payload_sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -958,7 +747,7 @@ rm -rf "$tmp" "$metrics"
 # 12e1. A non-numeric DELEGATE_MAX_TOKENS is refused up front (#547): `4k`
 # used to make jq --argjson fail and curl post an empty body.
 tmp=$(mktemp -d)
-make_mock_curl_mlx_ok "$tmp"
+mock_curl "$tmp" 'mlx-output-ok'
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -973,7 +762,7 @@ rm -rf "$tmp" "$metrics"
 # 4.0 and -1, and 04 is not valid JSON, so jq --argjson fails on it.
 for bad_mt in 4.0 -1 04; do
   tmp=$(mktemp -d)
-  make_mock_curl_mlx_ok "$tmp"
+  mock_curl "$tmp" 'mlx-output-ok'
   metrics=$(mktemp)
   EC=0
   out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -991,7 +780,7 @@ done
 tmp=$(mktemp -d)
 payload_sniff="$tmp/payload.json"
 argv_sniff="$tmp/argv.txt"
-make_mock_curl_mlx_ok "$tmp" "$payload_sniff" "$argv_sniff"
+mock_curl "$tmp" 'mlx-output-ok' "$payload_sniff" "$argv_sniff"
 metrics=$(mktemp)
 big_ctx="$tmp/big.txt"
 head -c 1153434 /dev/zero | tr '\0' 'a' > "$big_ctx"
@@ -1014,7 +803,7 @@ rm -rf "$tmp" "$metrics"
 # A jq shim fails only on the chat-payload build.
 tmp=$(mktemp -d)
 argv_sniff="$tmp/argv.txt"
-make_mock_curl_mlx_ok "$tmp" "/dev/null" "$argv_sniff"
+mock_curl "$tmp" 'mlx-output-ok' "/dev/null" "$argv_sniff"
 real_jq=$(PATH="$SAFE_PATH" command -v jq)
 cat > "$tmp/jq" <<EOF
 #!/usr/bin/env bash
@@ -1039,7 +828,7 @@ rm -rf "$tmp" "$metrics"
 # 12f. DELEGATE_THINK=true on MLX flips chat_template_kwargs.enable_thinking.
 tmp=$(mktemp -d)
 payload_sniff="$tmp/payload.json"
-make_mock_curl_mlx_ok "$tmp" "$payload_sniff"
+mock_curl "$tmp" 'mlx-output-ok' "$payload_sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -1054,7 +843,7 @@ rm -rf "$tmp" "$metrics"
 # pick-model returns whatever a provider reports.
 tmp=$(mktemp -d)
 MOCK_MODELS='qwen3.6:35b"weird-name'
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 EC=0
@@ -1077,7 +866,7 @@ rm -rf "$tmp" "$metrics"
 
 # 14. Verdict nudge prints to stderr on a successful call.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
@@ -1112,17 +901,13 @@ case "$stderr_content" in
   *) echo "  PASS  verdict-nudge: no human-tier hand-off"; pass=$((pass+1));;
 esac
 # stdout holds only the model output so downstream pipes keep working.
-if echo "$out" | grep -q "record verdict"; then
-  echo "  FAIL  verdict-nudge: leaked into stdout"; fail=$((fail+1))
-else
-  echo "  PASS  verdict-nudge: stdout unaffected"; pass=$((pass+1))
-fi
+assert_not_contains "record verdict" "$out" "verdict-nudge: stdout unaffected"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 14a. A non-TTY caller still gets the nudge (#149): a `[[ -t 2 ]]` gate would
 # silence it for Agent SDK tool calls, routines and `2>logfile` redirects.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
@@ -1146,7 +931,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # the rest of the behaviour intact (metrics row still written, model
 # output still on stdout). For users who genuinely don't want the noise.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
@@ -1156,17 +941,13 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge opt-out: still exits 0"
 stderr_content=$(cat "$stderr_file")
-if echo "$stderr_content" | grep -q "record verdict"; then
-  echo "  FAIL  verdict-nudge opt-out: nudge still printed"; fail=$((fail+1))
-else
-  echo "  PASS  verdict-nudge opt-out: silenced"; pass=$((pass+1))
-fi
+assert_not_contains "record verdict" "$stderr_content" "verdict-nudge opt-out: silenced"
 assert_eq 1 "$(grep -c '^' "$metrics")" "verdict-nudge opt-out: metrics row still written"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 16. NO_METRICS=1 also silences the nudge: there is no row to verdict.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); rm -f "$metrics"
 stderr_file=$(mktemp)
 EC=0
@@ -1176,11 +957,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge NO_METRICS: still exits 0"
 stderr_content=$(cat "$stderr_file")
-if echo "$stderr_content" | grep -q "record verdict"; then
-  echo "  FAIL  verdict-nudge NO_METRICS: nudge printed despite no metrics row"; fail=$((fail+1))
-else
-  echo "  PASS  verdict-nudge NO_METRICS: silenced"; pass=$((pass+1))
-fi
+assert_not_contains "record verdict" "$stderr_content" "verdict-nudge NO_METRICS: silenced"
 rm -rf "$tmp" "$stderr_file"
 
 # 17. A non-zero exit also silences the nudge: there is no output to judge.
@@ -1196,11 +973,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 1 "$EC" "verdict-nudge on failure: still exits 1"
 stderr_content=$(cat "$stderr_file")
-if echo "$stderr_content" | grep -q "record verdict"; then
-  echo "  FAIL  verdict-nudge on failure: nudge printed despite non-zero exit"; fail=$((fail+1))
-else
-  echo "  PASS  verdict-nudge on failure: silenced"; pass=$((pass+1))
-fi
+assert_not_contains "record verdict" "$stderr_content" "verdict-nudge on failure: silenced"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 17a. DELEGATE_LOCAL_VERDICT_NUDGE_FD=N redirects the nudge to fd N, for
@@ -1208,7 +981,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 17a-1. fd 3 redirected to a file: nudge lands there, not on fd 2.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 nudge_file=$(mktemp)
@@ -1220,24 +993,16 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "verdict-nudge FD=3: happy path exits 0"
 stderr_content=$(cat "$stderr_file")
 nudge_content=$(cat "$nudge_file")
-if echo "$stderr_content" | grep -q "record verdict"; then
-  echo "  FAIL  verdict-nudge FD=3: nudge leaked into fd 2 instead of fd 3"; fail=$((fail+1))
-else
-  echo "  PASS  verdict-nudge FD=3: fd 2 stays clean"; pass=$((pass+1))
-fi
+assert_not_contains "record verdict" "$stderr_content" "verdict-nudge FD=3: fd 2 stays clean"
 assert_contains "delegate: record verdict" "$nudge_content" "verdict-nudge FD=3: nudge lands on fd 3"
-if echo "$out" | grep -q "record verdict"; then
-  echo "  FAIL  verdict-nudge FD=3: nudge leaked into stdout"; fail=$((fail+1))
-else
-  echo "  PASS  verdict-nudge FD=3: stdout unaffected"; pass=$((pass+1))
-fi
+assert_not_contains "record verdict" "$out" "verdict-nudge FD=3: stdout unaffected"
 rm -rf "$tmp" "$metrics" "$stderr_file" "$nudge_file"
 
 # 17a-2. fd 3 set but not redirected: the call still succeeds and the failed
 # write is absorbed, so no "Bad file descriptor" lands on the fd 2 the caller
 # wanted clean.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
@@ -1247,11 +1012,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge FD=3 no redirect: still exits 0"
 stderr_content=$(cat "$stderr_file")
-if echo "$stderr_content" | grep -q "record verdict"; then
-  echo "  FAIL  verdict-nudge FD=3 no redirect: nudge leaked into fd 2"; fail=$((fail+1))
-else
-  echo "  PASS  verdict-nudge FD=3 no redirect: fd 2 stays clean"; pass=$((pass+1))
-fi
+assert_not_contains "record verdict" "$stderr_content" "verdict-nudge FD=3 no redirect: fd 2 stays clean"
 if echo "$stderr_content" | grep -qi "bad file descriptor"; then
   echo "  FAIL  verdict-nudge FD=3 no redirect: 'Bad file descriptor' leaked back to fd 2"; fail=$((fail+1))
 else
@@ -1262,7 +1023,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 17a-3. An explicit FD=2 behaves like unset.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
@@ -1277,7 +1038,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 17a-4. FD=1 is allowed: the nudge lands inline on stdout.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
@@ -1286,22 +1047,14 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_LOCAL_VERDICT_NUDGE_FD=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "verdict-nudge FD=1: exits 0"
-if echo "$out" | grep -q "record verdict"; then
-  echo "  PASS  verdict-nudge FD=1: nudge lands on stdout"; pass=$((pass+1))
-else
-  echo "  FAIL  verdict-nudge FD=1: nudge missing from stdout"; fail=$((fail+1))
-fi
+assert_contains "record verdict" "$out" "verdict-nudge FD=1: nudge lands on stdout"
 stderr_content=$(cat "$stderr_file")
-if echo "$stderr_content" | grep -q "record verdict"; then
-  echo "  FAIL  verdict-nudge FD=1: nudge also leaked into fd 2"; fail=$((fail+1))
-else
-  echo "  PASS  verdict-nudge FD=1: fd 2 stays clean"; pass=$((pass+1))
-fi
+assert_not_contains "record verdict" "$stderr_content" "verdict-nudge FD=1: fd 2 stays clean"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 17a-5. FD=0 is rejected with exit 2 before the model is contacted.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
@@ -1322,7 +1075,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 17a-6. FD=foo (non-numeric) is rejected. exit 2.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
@@ -1337,7 +1090,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 17a-7. FD=-1 (negative) is rejected.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
@@ -1351,7 +1104,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # 17a-7b. FD=10 (multi-digit) is rejected: bash 3.2 has no reliable `>&$N`
 # for N>=10, so the validation fails loud rather than the write failing silently.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
@@ -1366,7 +1119,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 17a-7c. FD=99 is also rejected.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
@@ -1379,7 +1132,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 17a-8. FD set and NO_VERDICT_NUDGE=1: suppression beats redirect.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 nudge_file=$(mktemp)
@@ -1397,16 +1150,12 @@ else
   echo "  PASS  verdict-nudge FD=3 + NO_VERDICT_NUDGE: NO_VERDICT_NUDGE wins (no nudge on fd 3)"; pass=$((pass+1))
 fi
 stderr_content=$(cat "$stderr_file")
-if echo "$stderr_content" | grep -q "record verdict"; then
-  echo "  FAIL  verdict-nudge FD=3 + NO_VERDICT_NUDGE: nudge leaked into fd 2"; fail=$((fail+1))
-else
-  echo "  PASS  verdict-nudge FD=3 + NO_VERDICT_NUDGE: fd 2 also stays clean"; pass=$((pass+1))
-fi
+assert_not_contains "record verdict" "$stderr_content" "verdict-nudge FD=3 + NO_VERDICT_NUDGE: fd 2 also stays clean"
 rm -rf "$tmp" "$metrics" "$stderr_file" "$nudge_file"
 
 # 17a-9. FD set and NO_METRICS=1: no row, so no nudge.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); rm -f "$metrics"
 stderr_file=$(mktemp)
 nudge_file=$(mktemp)
@@ -1597,11 +1346,7 @@ assert_contains '"model":"qwen3.6:35b-a3b"' "$metric_line" "canary timeout: metr
 assert_contains "\"template_sha\":\"$(recipe_template_sha "$prompts/canary-recipe.md")\"" "$metric_line" \
   "canary timeout: metrics row carries template_sha"
 # Verdict nudge must NOT fire on a status:3 exit.
-if echo "$stderr_content" | grep -q "record verdict"; then
-  echo "  FAIL  canary timeout: verdict nudge leaked"; fail=$((fail+1))
-else
-  echo "  PASS  canary timeout: verdict nudge silenced"; pass=$((pass+1))
-fi
+assert_not_contains "record verdict" "$stderr_content" "canary timeout: verdict nudge silenced"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 18c. DELEGATE_NO_PREFLIGHT=1 skips the canary; the dispatch still runs.
@@ -1851,7 +1596,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # 19. The delegate-meta stderr line is the contract surface SKILL.md teaches
 # the assistant to read.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
@@ -1867,11 +1612,7 @@ assert_contains 'tier="prose"' "$stderr_content" "delegate-meta: tier field (quo
 assert_contains 'backend="mlx"' "$stderr_content" "delegate-meta: backend field (quoted)"
 assert_contains "tokens_local=" "$stderr_content" "delegate-meta: tokens_local field (bare integer)"
 assert_contains "duration_ms=" "$stderr_content" "delegate-meta: duration_ms field (bare integer)"
-if echo "$out" | grep -q "delegate-meta:"; then
-  echo "  FAIL  delegate-meta: leaked into stdout"; fail=$((fail+1))
-else
-  echo "  PASS  delegate-meta: stdout unaffected"; pass=$((pass+1))
-fi
+assert_not_contains "delegate-meta:" "$out" "delegate-meta: stdout unaffected"
 # tokens_local is (prompt + context + output chars) / 4, compared numerically.
 meta_line=$(grep '^delegate-meta:' "$stderr_file")
 tokens_val=$(printf '%s' "$meta_line" | grep -oE 'tokens_local=[0-9]+' | cut -d= -f2)
@@ -1888,7 +1629,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # back (#474). The value must be the row's ts byte for byte: a reformatted
 # or re-read clock matches no row.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -1919,7 +1660,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # 19c. A row that could not be appended is not a row: the call still
 # succeeds, but the meta line names no ts/id and nothing nudges for a verdict.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 stderr_file=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -1945,7 +1686,7 @@ rm -rf "$tmp" "$stderr_file"
 # projectless lookup to the session (#476): present when set, absent when
 # unset, never an empty string.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" CLAUDE_CODE_SESSION_ID="0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b" \
@@ -1969,24 +1710,20 @@ rm -rf "$tmp" "$metrics"
 # 19b. With metrics off there is no row, so the meta line names no ts: a
 # value that matches nothing would only send the caller to a --ts refusal.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 stderr_file=$(mktemp)
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_LOCAL_NO_METRICS=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>"$stderr_file"
 meta_line=$(grep '^delegate-meta:' "$stderr_file")
 assert_contains 'model="' "$meta_line" "delegate-meta ts: meta line still printed with metrics off"
-if [[ "$meta_line" == *' ts="'* ]]; then
-  echo "  FAIL  delegate-meta ts: names a ts although no row was written"; fail=$((fail+1))
-else
-  echo "  PASS  delegate-meta ts: no ts field when no row was written"; pass=$((pass+1))
-fi
+assert_not_contains ' ts="' "$meta_line" "delegate-meta ts: no ts field when no row was written"
 rm -rf "$tmp" "$stderr_file"
 
 # 20. DELEGATE_LOCAL_NO_META=1 silences the meta line only; the nudge and
 # the metrics row are unaffected.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 stderr_file=$(mktemp)
 EC=0
@@ -1996,11 +1733,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 0 "$EC" "delegate-meta opt-out: still exits 0"
 stderr_content=$(cat "$stderr_file")
-if echo "$stderr_content" | grep -q "delegate-meta:"; then
-  echo "  FAIL  delegate-meta opt-out: line still printed"; fail=$((fail+1))
-else
-  echo "  PASS  delegate-meta opt-out: silenced"; pass=$((pass+1))
-fi
+assert_not_contains "delegate-meta:" "$stderr_content" "delegate-meta opt-out: silenced"
 assert_contains "record verdict" "$stderr_content" "delegate-meta opt-out: verdict nudge unaffected"
 assert_eq 1 "$(grep -c '^' "$metrics")" "delegate-meta opt-out: metrics row still written"
 rm -rf "$tmp" "$metrics" "$stderr_file"
@@ -2018,11 +1751,7 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
 assert_eq 1 "$EC" "delegate-meta on failure: still exits 1"
 stderr_content=$(cat "$stderr_file")
-if echo "$stderr_content" | grep -q "delegate-meta:"; then
-  echo "  FAIL  delegate-meta on failure: line printed despite non-zero exit"; fail=$((fail+1))
-else
-  echo "  PASS  delegate-meta on failure: silenced"; pass=$((pass+1))
-fi
+assert_not_contains "delegate-meta:" "$stderr_content" "delegate-meta on failure: silenced"
 rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 22. --recipe NAME adds recipe=NAME to the meta line. The probe-aware mock
@@ -2063,7 +1792,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 
 # 23a. </dev/null: not a pipe, holds no data, so cat is skipped.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -2076,7 +1805,7 @@ rm -rf "$tmp" "$metrics"
 
 # 23b. Piped stdin still works, under the perl alarm to assert no hang.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -2090,7 +1819,7 @@ rm -rf "$tmp" "$metrics"
 # 23c. An empty AF_UNIX socket as stdin, the other end held open and never
 # written: the alarm exits 142 if cat blocks.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -2119,7 +1848,7 @@ rm -rf "$tmp" "$metrics"
 # 24. Queue-wait / generation split (#170): queue_wait_ms + generation_ms ==
 # duration_ms is the contract downstream consumers rely on.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -2239,7 +1968,7 @@ RECIPE
 
 # 27a. Valid inputs: block + all required --var provided → success.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 make_typed_recipe "$prompts/typed-recipe.md" $'---\ninputs:\n  pr_number: integer\n  body: string\n---\n'
@@ -2254,7 +1983,7 @@ rm -rf "$tmp" "$metrics"
 
 # 27b. Required --var missing → exit 2 with clear error listing missing key.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 make_typed_recipe "$prompts/typed-recipe.md" $'---\ninputs:\n  pr_number: integer\n  body: string\n---\n'
@@ -2270,7 +1999,7 @@ rm -rf "$tmp" "$metrics"
 
 # 27c. --var integer fails type check → exit 2 with key/type/value named.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 make_typed_recipe "$prompts/typed-recipe.md" $'---\ninputs:\n  pr_number: integer\n  body: string\n---\n'
@@ -2287,7 +2016,7 @@ rm -rf "$tmp" "$metrics"
 
 # 27d. Optional `string?` --var missing → success (lazy migration friendly).
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 # The template references {{pr_number}} only, so the missing anchor cannot
@@ -2328,7 +2057,7 @@ rm -rf "$tmp" "$metrics"
 # the value is substituted.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/typed-recipe.md" <<'RECIPE'
@@ -2370,7 +2099,7 @@ rm -rf "$tmp" "$metrics"
 # blanked rather than tripping the unsubstituted-placeholder guard.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/typed-recipe.md" <<'RECIPE'
@@ -2410,7 +2139,7 @@ rm -rf "$tmp" "$metrics"
 
 # 27e. No inputs: block: no type check runs.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/legacy.md" <<'RECIPE'
@@ -2442,7 +2171,7 @@ rm -rf "$tmp" "$metrics"
 
 # 27f. An undeclared --var passes through untouched.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/typed-recipe.md" <<'RECIPE'
@@ -2479,7 +2208,7 @@ rm -rf "$tmp" "$metrics"
 
 # 27g. An optional `integer?` that is present is still type-checked.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/typed-recipe.md" <<'RECIPE'
@@ -2517,7 +2246,7 @@ rm -rf "$tmp" "$metrics"
 
 # 27h. An unsupported type in inputs: is a recipe authoring error, exit 2.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/bad-type.md" <<'RECIPE'
@@ -2555,7 +2284,7 @@ rm -rf "$tmp" "$metrics"
 
 # 27i. Negative integer is accepted (real-world: error codes, offsets).
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/typed-recipe.md" <<'RECIPE'
@@ -2591,7 +2320,7 @@ rm -rf "$tmp" "$metrics"
 
 # 27j. Piped stdin satisfies a declared `stdin: string` input.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/stdin-required.md" <<'RECIPE'
@@ -2623,7 +2352,7 @@ rm -rf "$tmp" "$metrics"
 
 # 23k. stdin: integer type-checks the piped value.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/stdin-int.md" <<'RECIPE'
@@ -2663,7 +2392,7 @@ rm -rf "$tmp" "$metrics"
 
 # 23l. The missing-required error has no trailing space.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/required-foo.md" <<'RECIPE'
@@ -3098,7 +2827,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # OT11. trace_id / span_id are written to the row even with the exporter
 # unset, so a later feedback span can still link to it.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -3352,7 +3081,7 @@ rm -rf "$tmp" "$metrics"
 # QS1. A Qwen model with no overrides is greedy on the payload and the row.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -3361,46 +3090,22 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "QS1: Qwen model with no overrides exits 0"
 payload=$(cat "$sniff")
 assert_contains '"temperature":0' "$payload" "QS1: bare greedy payload has temperature:0"
-case "$payload" in
-  *'"temperature":0.7'*) echo "  FAIL  QS1: Qwen model must NOT auto-apply temperature=0.7 (default flipped)"; fail=$((fail+1));;
-  *) echo "  PASS  QS1: Qwen model stays greedy by default"; pass=$((pass+1));;
-esac
-case "$payload" in
-  *'"top_p"'*) echo "  FAIL  QS1: bare invocation must NOT carry top_p"; fail=$((fail+1));;
-  *) echo "  PASS  QS1: bare invocation omits top_p"; pass=$((pass+1));;
-esac
-case "$payload" in
-  *'"top_k"'*) echo "  FAIL  QS1: bare invocation must NOT carry top_k"; fail=$((fail+1));;
-  *) echo "  PASS  QS1: bare invocation omits top_k"; pass=$((pass+1));;
-esac
-case "$payload" in
-  *'"presence_penalty"'*) echo "  FAIL  QS1: bare invocation must NOT carry presence_penalty"; fail=$((fail+1));;
-  *) echo "  PASS  QS1: bare invocation omits presence_penalty"; pass=$((pass+1));;
-esac
+assert_not_contains '"temperature":0.7' "$payload" "QS1: Qwen model stays greedy by default"
+assert_not_contains '"top_p"' "$payload" "QS1: bare invocation omits top_p"
+assert_not_contains '"top_k"' "$payload" "QS1: bare invocation omits top_k"
+assert_not_contains '"presence_penalty"' "$payload" "QS1: bare invocation omits presence_penalty"
 line=$(cat "$metrics")
-case "$line" in
-  *'"sampling_temperature"'*) echo "  FAIL  QS1: bare metrics row must omit sampling_temperature"; fail=$((fail+1));;
-  *) echo "  PASS  QS1: bare metrics row omits sampling_temperature"; pass=$((pass+1));;
-esac
-case "$line" in
-  *'"sampling_top_p"'*) echo "  FAIL  QS1: bare metrics row must omit sampling_top_p"; fail=$((fail+1));;
-  *) echo "  PASS  QS1: bare metrics row omits sampling_top_p"; pass=$((pass+1));;
-esac
-case "$line" in
-  *'"sampling_top_k"'*) echo "  FAIL  QS1: bare metrics row must omit sampling_top_k"; fail=$((fail+1));;
-  *) echo "  PASS  QS1: bare metrics row omits sampling_top_k"; pass=$((pass+1));;
-esac
-case "$line" in
-  *'"sampling_presence_penalty"'*) echo "  FAIL  QS1: bare metrics row must omit sampling_presence_penalty"; fail=$((fail+1));;
-  *) echo "  PASS  QS1: bare metrics row omits sampling_presence_penalty"; pass=$((pass+1));;
-esac
+assert_not_contains '"sampling_temperature"' "$line" "QS1: bare metrics row omits sampling_temperature"
+assert_not_contains '"sampling_top_p"' "$line" "QS1: bare metrics row omits sampling_top_p"
+assert_not_contains '"sampling_top_k"' "$line" "QS1: bare metrics row omits sampling_top_k"
+assert_not_contains '"sampling_presence_penalty"' "$line" "QS1: bare metrics row omits sampling_presence_penalty"
 rm -rf "$tmp" "$metrics"
 
 # QS2. A non-Qwen model is greedy by default too.
 tmp=$(mktemp -d)
 MOCK_MODELS='deepseek-r1:32b'
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 EC=0
@@ -3411,30 +3116,18 @@ assert_eq 0 "$EC" "QS2: non-Qwen model exits 0"
 payload=$(cat "$sniff")
 assert_contains '"model":"deepseek-r1:32b"' "$payload" "QS2: model resolved to deepseek-r1"
 assert_contains '"temperature":0' "$payload" "QS2: non-Qwen payload has bare temperature:0"
-case "$payload" in
-  *'"top_p"'*) echo "  FAIL  QS2: non-Qwen payload must NOT carry top_p"; fail=$((fail+1));;
-  *) echo "  PASS  QS2: non-Qwen payload omits top_p"; pass=$((pass+1));;
-esac
-case "$payload" in
-  *'"top_k"'*) echo "  FAIL  QS2: non-Qwen payload must NOT carry top_k"; fail=$((fail+1));;
-  *) echo "  PASS  QS2: non-Qwen payload omits top_k"; pass=$((pass+1));;
-esac
-case "$payload" in
-  *'"presence_penalty"'*) echo "  FAIL  QS2: non-Qwen payload must NOT carry presence_penalty"; fail=$((fail+1));;
-  *) echo "  PASS  QS2: non-Qwen payload omits presence_penalty"; pass=$((pass+1));;
-esac
+assert_not_contains '"top_p"' "$payload" "QS2: non-Qwen payload omits top_p"
+assert_not_contains '"top_k"' "$payload" "QS2: non-Qwen payload omits top_k"
+assert_not_contains '"presence_penalty"' "$payload" "QS2: non-Qwen payload omits presence_penalty"
 line=$(cat "$metrics")
-case "$line" in
-  *'"sampling_temperature"'*) echo "  FAIL  QS2: bare metrics row must omit sampling_temperature"; fail=$((fail+1));;
-  *) echo "  PASS  QS2: bare metrics row omits sampling_temperature"; pass=$((pass+1));;
-esac
+assert_not_contains '"sampling_temperature"' "$line" "QS2: bare metrics row omits sampling_temperature"
 rm -rf "$tmp" "$metrics"
 
 # QS3. DELEGATE_TEMPERATURE reaches the payload and the row; the three
 # sampler vars #567 removed are ignored even when set.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -3460,7 +3153,7 @@ rm -rf "$tmp" "$metrics"
 # QS3b. Only DELEGATE_TEMPERATURE set: the others stay off the payload and the row.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -3470,21 +3163,15 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "QS3b: partial opt-in exits 0"
 payload=$(cat "$sniff")
 assert_contains '"temperature":0.5' "$payload" "QS3b: partial opt-in payload carries the override"
-case "$payload" in
-  *'"top_p"'*) echo "  FAIL  QS3b: partial opt-in must NOT carry top_p (not opted into)"; fail=$((fail+1));;
-  *) echo "  PASS  QS3b: partial opt-in omits top_p"; pass=$((pass+1));;
-esac
+assert_not_contains '"top_p"' "$payload" "QS3b: partial opt-in omits top_p"
 line=$(cat "$metrics")
 assert_contains '"sampling_temperature":0.5' "$line" "QS3b: partial opt-in metrics row carries sampling_temperature"
-case "$line" in
-  *'"sampling_top_p"'*) echo "  FAIL  QS3b: partial opt-in metrics must omit sampling_top_p"; fail=$((fail+1));;
-  *) echo "  PASS  QS3b: partial opt-in metrics omits sampling_top_p"; pass=$((pass+1));;
-esac
+assert_not_contains '"sampling_top_p"' "$line" "QS3b: partial opt-in metrics omits sampling_top_p"
 rm -rf "$tmp" "$metrics"
 
 # QS4. Non-numeric DELEGATE_TEMPERATURE exits 2 with a clear stderr.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); : > "$metrics"
 stderr_file=$(mktemp)
 EC=0
@@ -3501,7 +3188,7 @@ rm -rf "$tmp" "$metrics" "$stderr_file"
 # QS4b. The removed vars are not read, so a garbage value is not an error.
 for vname in DELEGATE_TOP_P DELEGATE_TOP_K DELEGATE_PRESENCE_PENALTY; do
   tmp=$(mktemp -d)
-  make_mock_curl_ok "$tmp"
+  mock_curl "$tmp"
   metrics=$(mktemp); : > "$metrics"
   stderr_file=$(mktemp)
   EC=0
@@ -3518,7 +3205,7 @@ done
 # --argjson rejects must fail with the validator's own error, not jq's.
 for bad in "1-2" "5-" ".-" "1.5.6" "-" "."; do
   tmp=$(mktemp -d)
-  make_mock_curl_ok "$tmp"
+  mock_curl "$tmp"
   metrics=$(mktemp); : > "$metrics"
   stderr_file=$(mktemp)
   EC=0
@@ -3534,7 +3221,7 @@ done
 # QS4d. Valid numeric shapes still pass.
 for good in "0" "1" "-1" "0.7" "1.3" ".5" "1." "-42" "-0.5"; do
   tmp=$(mktemp -d)
-  make_mock_curl_ok "$tmp"
+  mock_curl "$tmp"
   metrics=$(mktemp)
   EC=0
   out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -3549,7 +3236,7 @@ done
 # an `options` object.
 tmp=$(mktemp -d)
 payload_sniff="$tmp/payload.json"
-make_mock_curl_mlx_ok "$tmp" "$payload_sniff"
+mock_curl "$tmp" 'mlx-output-ok' "$payload_sniff"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -3563,7 +3250,7 @@ rm -rf "$tmp" "$metrics"
 
 # QS5b. A non-numeric override exits 2 on MLX too.
 tmp=$(mktemp -d)
-make_mock_curl_mlx_ok "$tmp"
+mock_curl "$tmp" 'mlx-output-ok'
 metrics=$(mktemp); : > "$metrics"
 stderr_file=$(mktemp)
 EC=0
@@ -3631,14 +3318,8 @@ assert_eq 0 "$EC" "QS6: canary + dispatch exits 0"
 canary_payload=$(cat "$canary_payload_sniff")
 assert_contains '"max_tokens":1' "$canary_payload" "QS6: canary has max_tokens:1"
 assert_contains '"temperature":0' "$canary_payload" "QS6: canary stays at temperature:0"
-case "$canary_payload" in
-  *'"top_p"'*) echo "  FAIL  QS6: canary must NOT carry top_p"; fail=$((fail+1));;
-  *) echo "  PASS  QS6: canary omits top_p"; pass=$((pass+1));;
-esac
-case "$canary_payload" in
-  *'"temperature":0.7'*) echo "  FAIL  QS6: canary must not inherit Qwen 0.7"; fail=$((fail+1));;
-  *) echo "  PASS  QS6: canary stays greedy"; pass=$((pass+1));;
-esac
+assert_not_contains '"top_p"' "$canary_payload" "QS6: canary omits top_p"
+assert_not_contains '"temperature":0.7' "$canary_payload" "QS6: canary stays greedy"
 rm -rf "$tmp" "$metrics"
 
 # OT18. Pick-model failure with content opt-in: delegate.prompt is emitted,
@@ -3873,7 +3554,7 @@ rm -rf "$tmp" "$metrics"
 
 # 30a. Strip on: only the answer reaches stdout.
 tmp=$(mktemp -d)
-make_mock_curl_think "$tmp" '<think>\nLet me work through this carefully.\n</think>\n\nCLEAN_ANSWER_123'
+mock_curl "$tmp" '<think>\nLet me work through this carefully.\n</think>\n\nCLEAN_ANSWER_123'
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_STRIP_THINK=1 \
@@ -3883,7 +3564,7 @@ rm -rf "$tmp" "$metrics"
 
 # 30b. Strip OFF (default): the full trace is preserved on stdout.
 tmp=$(mktemp -d)
-make_mock_curl_think "$tmp" '<think>\nLet me work through this carefully.\n</think>\n\nCLEAN_ANSWER_123'
+mock_curl "$tmp" '<think>\nLet me work through this carefully.\n</think>\n\nCLEAN_ANSWER_123'
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
@@ -3894,7 +3575,7 @@ rm -rf "$tmp" "$metrics"
 
 # 30c. Strip ON but response has no </think>: no-op, output unchanged.
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_STRIP_THINK=1 \
@@ -3905,7 +3586,7 @@ rm -rf "$tmp" "$metrics"
 # 30d. A closing </think> with no opening tag (the template-prefilled shape)
 # still strips to the answer.
 tmp=$(mktemp -d)
-make_mock_curl_think "$tmp" 'Reasoning emitted with no opening tag.\n</think>\n\nPREFILLED_ANSWER_456'
+mock_curl "$tmp" 'Reasoning emitted with no opening tag.\n</think>\n\nPREFILLED_ANSWER_456'
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_STRIP_THINK=1 \
@@ -3916,7 +3597,7 @@ rm -rf "$tmp" "$metrics"
 # 30e. The reasoning tier strips by default.
 tmp=$(mktemp -d)
 MOCK_MODELS='deepseek-r1:32b'
-make_mock_curl_think "$tmp" '<think>\nreasoning here\n</think>\n\nREASONING_ANSWER_789'
+mock_curl "$tmp" '<think>\nreasoning here\n</think>\n\nREASONING_ANSWER_789'
 MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -3928,7 +3609,7 @@ rm -rf "$tmp" "$metrics"
 # 30f. DELEGATE_STRIP_THINK=0 disables the strip on the reasoning tier.
 tmp=$(mktemp -d)
 MOCK_MODELS='deepseek-r1:32b'
-make_mock_curl_think "$tmp" '<think>\nreasoning here\n</think>\n\nREASONING_ANSWER_789'
+mock_curl "$tmp" '<think>\nreasoning here\n</think>\n\nREASONING_ANSWER_789'
 MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -3941,7 +3622,7 @@ rm -rf "$tmp" "$metrics"
 # scripts/flavor-defaults.sh unless a per-user profile.sh overrides them.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp)
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/flav.md" <<'EOF'
@@ -4012,7 +3693,7 @@ n/a
 EOF
 # 32a. Both checks fail. The "This-X" padding shape is never auto-stripped,
 # so it stays a failure.
-make_mock_curl_think "$tmp" 'This first line is far longer than ten chars\n\nthe body works fine. This approach ensures simplicity'
+mock_curl "$tmp" 'This first line is far longer than ten chars\n\nthe body works fine. This approach ensures simplicity'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe chk prose "go" </dev/null 2>&1)
@@ -4024,7 +3705,7 @@ row=$(tail -1 "$metrics")
 assert_contains '"checks_failed_names":["subject_max","no_padding_tail"]' "$row" \
   "checks: metrics row names both failed checks in run order"
 # 32b. Clean output -> no FAILED warnings, no checks_failed field.
-make_mock_curl_think "$tmp" 'short\n\nthe body returns a structured response and stops'
+mock_curl "$tmp" 'short\n\nthe body returns a structured response and stops'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe chk prose "go" </dev/null 2>&1)
@@ -4035,7 +3716,7 @@ else
 fi
 # 32c. A participial-comma tail is auto-fixed: stripped, reported as
 # AUTO-FIXED, counted as checks_autofixed on the row.
-make_mock_curl_think "$tmp" 'short\n\nthe body drops the per-call cost, ensuring nothing regresses'
+mock_curl "$tmp" 'short\n\nthe body drops the per-call cost, ensuring nothing regresses'
 errf=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -4043,32 +3724,20 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 err=$(cat "$errf"); rm -f "$errf"
 assert_contains "check 'no_padding_tail' AUTO-FIXED" "$err" "checks: participial tail auto-fixed (not failed)"
 assert_contains "checks_autofixed=1" "$err" "checks: autofix count rides the delegate-meta line"
-if [[ "$out" == *"ensuring nothing regresses"* ]]; then
-  echo "  FAIL  checks: padding clause not stripped from output"; fail=$((fail+1))
-else
-  echo "  PASS  checks: padding clause stripped from output"; pass=$((pass+1))
-fi
-if [[ "$out" == *"the body drops the per-call cost"* ]]; then
-  echo "  PASS  checks: content before the padding clause is preserved"; pass=$((pass+1))
-else
-  echo "  FAIL  checks: content before padding clause lost"; fail=$((fail+1))
-fi
+assert_not_contains "ensuring nothing regresses" "$out" "checks: padding clause stripped from output"
+assert_contains "the body drops the per-call cost" "$out" "checks: content before the padding clause is preserved"
 if grep -q '"checks_autofixed":1' "$metrics"; then
   echo "  PASS  checks: checks_autofixed persisted to metrics"; pass=$((pass+1))
 else
   echo "  FAIL  checks: checks_autofixed missing from metrics"; fail=$((fail+1))
 fi
 # 32d. DELEGATE_NO_AUTOFIX=1 restores warn-only: the same tail FAILS, not fixed.
-make_mock_curl_think "$tmp" 'short\n\nthe body drops the per-call cost, ensuring nothing regresses'
+mock_curl "$tmp" 'short\n\nthe body drops the per-call cost, ensuring nothing regresses'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_AUTOFIX=1 \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe chk prose "go" </dev/null 2>&1)
 assert_contains "check 'no_padding_tail' FAILED" "$out" "checks: DELEGATE_NO_AUTOFIX restores warn-only"
-if [[ "$out" == *"AUTO-FIXED"* ]]; then
-  echo "  FAIL  checks: NO_AUTOFIX still auto-fixed"; fail=$((fail+1))
-else
-  echo "  PASS  checks: NO_AUTOFIX did not strip"; pass=$((pass+1))
-fi
+assert_not_contains "AUTO-FIXED" "$out" "checks: NO_AUTOFIX did not strip"
 rm -rf "$tmp" "$metrics"
 
 # 33. no_padding_tail's participial arm matches any gerund tail, not an
@@ -4096,76 +3765,56 @@ GO
 n/a
 EOF
 # 33a. A gerund the old per-verb list never named is caught.
-make_mock_curl_think "$tmp" 'short subject\n\nthe body drops the per-call cost, confirming the need for a matcher'
+mock_curl "$tmp" 'short subject\n\nthe body drops the per-call cost, confirming the need for a matcher'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe pad prose "go" </dev/null 2>&1)
 assert_contains "check 'no_padding_tail' AUTO-FIXED" "$out" "checks: structural matcher catches+auto-fixes unenumerated gerund tail"
 # 33b. A clean finite-verb tail is not flagged.
-make_mock_curl_think "$tmp" 'short subject\n\nthe body drops the per-call cost and stops here'
+mock_curl "$tmp" 'short subject\n\nthe body drops the per-call cost and stops here'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe pad prose "go" </dev/null 2>&1)
-if [[ "$out" == *"no_padding_tail' FAILED"* ]]; then
-  echo "  FAIL  checks: clean finite-verb tail not flagged"; fail=$((fail+1))
-else
-  echo "  PASS  checks: clean finite-verb tail not flagged"; pass=$((pass+1))
-fi
+assert_not_contains "no_padding_tail' FAILED" "$out" "checks: clean finite-verb tail not flagged"
 # 33c. An allowlisted verb with a further comma after it is detected but not
 # auto-stripped, so no real content is removed.
-make_mock_curl_think "$tmp" 'short subject\n\nthe list is built, ensuring order, then returned to the caller'
+mock_curl "$tmp" 'short subject\n\nthe list is built, ensuring order, then returned to the caller'
 errf=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe pad prose "go" </dev/null 2>"$errf")
 err=$(cat "$errf"); rm -f "$errf"
 assert_contains "check 'no_padding_tail' FAILED" "$err" "checks: ambiguous multi-comma tail not auto-stripped (stays a warning)"
-if [[ "$out" == *"then returned to the caller"* ]]; then
-  echo "  PASS  checks: ambiguous tail content preserved (not stripped)"; pass=$((pass+1))
-else
-  echo "  FAIL  checks: ambiguous tail was wrongly stripped"; fail=$((fail+1))
-fi
+assert_contains "then returned to the caller" "$out" "checks: ambiguous tail content preserved (not stripped)"
 # 33d. A gerund outside the allowlist is detected but not auto-stripped.
-make_mock_curl_think "$tmp" 'short subject\n\nthe cache is rebuilt, surfacing the new latency numbers'
+mock_curl "$tmp" 'short subject\n\nthe cache is rebuilt, surfacing the new latency numbers'
 errf=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe pad prose "go" </dev/null 2>"$errf")
 err=$(cat "$errf"); rm -f "$errf"
 assert_contains "check 'no_padding_tail' FAILED" "$err" "checks: non-allowlisted gerund detected but not auto-stripped"
-if [[ "$out" == *"surfacing the new latency numbers"* ]]; then
-  echo "  PASS  checks: non-allowlisted participial preserved"; pass=$((pass+1))
-else
-  echo "  FAIL  checks: non-allowlisted participial wrongly stripped"; fail=$((fail+1))
-fi
+assert_contains "surfacing the new latency numbers" "$out" "checks: non-allowlisted participial preserved"
 # 33e. A participial followed by a further sentence is not a tail: the arm
 # is anchored to the end of the line.
-make_mock_curl_think "$tmp" 'short subject\n\nthe block is deleted, leaving the actions block unchanged. the fix is verified by the next run'
+mock_curl "$tmp" 'short subject\n\nthe block is deleted, leaving the actions block unchanged. the fix is verified by the next run'
 errf=$(mktemp)
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe pad prose "go" </dev/null >/dev/null 2>"$errf"
 err=$(cat "$errf"); rm -f "$errf"
-if [[ "$err" == *"no_padding_tail"* ]]; then
-  echo "  FAIL  checks: mid-line participial wrongly flagged as a padding tail"; fail=$((fail+1))
-else
-  echo "  PASS  checks: mid-line participial followed by a sentence not flagged"; pass=$((pass+1))
-fi
+assert_not_contains "no_padding_tail" "$err" "checks: mid-line participial followed by a sentence not flagged"
 # 33f. The same shape with a semicolon-joined continuation.
-make_mock_curl_think "$tmp" 'short subject\n\nauto-strip the padding clause on a filler-verb allowlist, adopting the strip only when it clears the padding; persist the counters to metrics so quality is observable. default-on with an opt-out'
+mock_curl "$tmp" 'short subject\n\nauto-strip the padding clause on a filler-verb allowlist, adopting the strip only when it clears the padding; persist the counters to metrics so quality is observable. default-on with an opt-out'
 errf=$(mktemp)
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe pad prose "go" </dev/null >/dev/null 2>"$errf"
 err=$(cat "$errf"); rm -f "$errf"
-if [[ "$err" == *"no_padding_tail"* ]]; then
-  echo "  FAIL  checks: hand-written mid-line participial wrongly flagged"; fail=$((fail+1))
-else
-  echo "  PASS  checks: hand-written mid-line participial not flagged"; pass=$((pass+1))
-fi
+assert_not_contains "no_padding_tail" "$err" "checks: hand-written mid-line participial not flagged"
 # 33g. A tail may contain commas but not cross a sentence boundary, which is
 # why the class is [^.!?]* and not [^,.!?]*.
-make_mock_curl_think "$tmp" 'short subject\n\nthe change lands, ensuring the cache, the limiter and the queue stay in sync'
+mock_curl "$tmp" 'short subject\n\nthe change lands, ensuring the cache, the limiter and the queue stay in sync'
 errf=$(mktemp)
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -4173,31 +3822,23 @@ env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 err=$(cat "$errf"); rm -f "$errf"
 assert_contains "check 'no_padding_tail' FAILED" "$err" "checks: padding tail with an internal comma still detected"
 # 33h. `ing` must be a word ending, or every `-ings` plural is a false positive.
-make_mock_curl_think "$tmp" 'short subject\n\nreads the flag from the repo config, settings are merged per section'
+mock_curl "$tmp" 'short subject\n\nreads the flag from the repo config, settings are merged per section'
 errf=$(mktemp)
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe pad prose "go" </dev/null >/dev/null 2>"$errf"
 err=$(cat "$errf"); rm -f "$errf"
-if [[ "$err" == *"no_padding_tail"* ]]; then
-  echo "  FAIL  checks: -ings plural wrongly treated as a gerund tail"; fail=$((fail+1))
-else
-  echo "  PASS  checks: -ings plural not treated as a gerund tail"; pass=$((pass+1))
-fi
+assert_not_contains "no_padding_tail" "$err" "checks: -ings plural not treated as a gerund tail"
 # 33i. The adoption gate (ADR 0017) stays broad: a strip whose result still
 # carries a mid-line participial is rejected, not silently adopted.
-make_mock_curl_think "$tmp" 'short subject\n\nadds a cache, improving latency. also fixes the lock, ensuring parity'
+mock_curl "$tmp" 'short subject\n\nadds a cache, improving latency. also fixes the lock, ensuring parity'
 errf=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe pad prose "go" </dev/null 2>"$errf")
 err=$(cat "$errf"); rm -f "$errf"
 assert_contains "check 'no_padding_tail' FAILED" "$err" "checks: adoption gate still rejects a not-clean strip"
-if [[ "$out" == *"ensuring parity"* ]]; then
-  echo "  PASS  checks: adoption unchanged, output not silently mutated"; pass=$((pass+1))
-else
-  echo "  FAIL  checks: adoption widened, output was silently stripped"; fail=$((fail+1))
-fi
+assert_contains "ensuring parity" "$out" "checks: adoption unchanged, output not silently mutated"
 # subject_type recipe: optional type input echoed into the check value.
 cat > "$prompts/typ.md" <<'EOF'
 ---
@@ -4224,23 +3865,19 @@ GO {{type}}
 n/a
 EOF
 # 33c. Provided type the subject ignores -> FAILED.
-make_mock_curl_think "$tmp" 'feat: did a thing\n\nbody'
+mock_curl "$tmp" 'feat: did a thing\n\nbody'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe typ --var type=fix prose "go" </dev/null 2>&1)
 assert_contains "check 'subject_type' FAILED" "$out" "checks: subject_type flags an ignored --var type override"
 # 33d. Provided type the subject honours (with a scope) -> no failure.
-make_mock_curl_think "$tmp" 'fix(core): did a thing\n\nbody'
+mock_curl "$tmp" 'fix(core): did a thing\n\nbody'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe typ --var type=fix prose "go" </dev/null 2>&1)
-if [[ "$out" == *"subject_type' FAILED"* ]]; then
-  echo "  FAIL  checks: subject_type passes when subject carries the type"; fail=$((fail+1))
-else
-  echo "  PASS  checks: subject_type passes when subject carries the type"; pass=$((pass+1))
-fi
+assert_not_contains "subject_type' FAILED" "$out" "checks: subject_type passes when subject carries the type"
 # 33e. Omitted optional type -> placeholder blanked in the checks block, skipped.
-make_mock_curl_think "$tmp" 'anything goes here\n\nbody'
+mock_curl "$tmp" 'anything goes here\n\nbody'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe typ prose "go" </dev/null 2>&1)
@@ -4270,14 +3907,14 @@ GO
 n/a
 EOF
 # 33f. Subject-only output (no body) -> body_required FAILED + checks_failed=1.
-make_mock_curl_think "$tmp" 'feat: a subject with no body'
+mock_curl "$tmp" 'feat: a subject with no body'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe bodyreq prose "go" </dev/null 2>&1)
 assert_contains "check 'body_required' FAILED" "$out" "checks: body_required flags a subject-only output"
 assert_contains "checks_failed=1" "$out" "checks: body_required failure rides the delegate-meta line"
 # 33g. Subject + blank line + body -> body_required not flagged.
-make_mock_curl_think "$tmp" 'feat: a subject\n\nthe body explains the change in full'
+mock_curl "$tmp" 'feat: a subject\n\nthe body explains the change in full'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe bodyreq prose "go" </dev/null 2>&1)
@@ -4302,7 +3939,7 @@ DIFF
 # and diff_stat are passed so the git backfill (A4) is skipped.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/commit-message.md" <<'EOF'
@@ -4341,7 +3978,7 @@ rm -rf "$tmp" "$metrics"
 
 # A2. --recipe auto + non-diff context -> exit 2, clear "could not infer".
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 EC=0
@@ -4355,7 +3992,7 @@ rm -rf "$tmp" "$metrics"
 
 # A3. --recipe auto with no piped context -> exit 2, "needs context".
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 EC=0
@@ -4397,7 +4034,7 @@ EOF
 if command -v git >/dev/null 2>&1; then
   tmp=$(mktemp -d)
   sniff="$tmp/payload.json"
-  make_mock_curl_ok "$tmp" "$sniff"
+  mock_curl "$tmp" "" "$sniff"
   metrics=$(mktemp); : > "$metrics"
   prompts="$tmp/prompts"; make_auto_cm_recipe "$prompts"
   repo="$tmp/gitrepo"; mkdir -p "$repo"
@@ -4417,11 +4054,7 @@ if command -v git >/dev/null 2>&1; then
   payload=$(cat "$sniff")
   assert_contains 'initial commit' "$payload" "--recipe auto (backfill): recent_commits from git log"
   assert_contains 'foo.txt' "$payload" "--recipe auto (backfill): diff_stat derived from the piped diff"
-  if [[ "$payload" == *"a.txt"* ]]; then
-    echo "  FAIL  --recipe auto (backfill): diff_stat leaked git index (a.txt) instead of piped diff"; fail=$((fail+1))
-  else
-    echo "  PASS  --recipe auto (backfill): diff_stat does NOT leak the staged index file"; pass=$((pass+1))
-  fi
+  assert_not_contains "a.txt" "$payload" "--recipe auto (backfill): diff_stat does NOT leak the staged index file"
   # The backfilled exemplar keeps bodies but drops trailer lines (#501): a
   # Refs or Co-Authored-By line copied from a prior commit names the wrong
   # issue every time, and no_example_echo only catches it after the fact.
@@ -4439,18 +4072,14 @@ if command -v git >/dev/null 2>&1; then
   payload=$(cat "$sniff")
   assert_contains 'A body line that stays.' "$payload" "--recipe auto (backfill): commit bodies are kept as shape anchors"
   for trailer in "Refs: #999" "Co-Authored-By" "Co-authored-by" "Claude-Session" "Signed-off-by"; do
-    if [[ "$payload" == *"$trailer"* ]]; then
-      echo "  FAIL  --recipe auto (backfill): $trailer leaked into recent_commits (#501)"; fail=$((fail+1))
-    else
-      echo "  PASS  --recipe auto (backfill): $trailer is stripped from recent_commits (#501)"; pass=$((pass+1))
-    fi
+    assert_not_contains "$trailer" "$payload" "--recipe auto (backfill): $trailer is stripped from recent_commits (#501)"
   done
   rm -rf "$tmp" "$metrics"
 
   # A5. A clean tree with the diff piped from elsewhere still fills diff_stat.
   tmp=$(mktemp -d)
   sniff="$tmp/payload.json"
-  make_mock_curl_ok "$tmp" "$sniff"
+  mock_curl "$tmp" "" "$sniff"
   metrics=$(mktemp); : > "$metrics"
   prompts="$tmp/prompts"; make_auto_cm_recipe "$prompts"
   repo="$tmp/gitrepo2"; mkdir -p "$repo"
@@ -4476,7 +4105,7 @@ fi
 # every diff over ~64 KiB fell through to "could not infer" under pipefail.
 tmp=$(mktemp -d)
 sniff="$tmp/payload.json"
-make_mock_curl_ok "$tmp" "$sniff"
+mock_curl "$tmp" "" "$sniff"
 metrics=$(mktemp); : > "$metrics"
 prompts="$tmp/prompts"; mkdir -p "$prompts"
 cat > "$prompts/commit-message.md" <<'EOF2'
@@ -4544,7 +4173,7 @@ rm -rf "$tmp" "$metrics"
 # --- #342: the caller can state the project the delegation is for, since the
 # cwd derivation is wrong when delegate.sh runs from another checkout ---
 tmp=$(mktemp -d)
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 metrics=$(mktemp)
 EC=0
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -4600,7 +4229,7 @@ rm -rf "$tmp" "$metrics"
 # 34. The dispatch curl carries --max-time (default 600 s) and --connect-timeout.
 tmp=$(mktemp -d)
 argv_sniff="$tmp/argv.txt"
-make_mock_curl_argv "$tmp" "$argv_sniff"
+mock_curl "$tmp" "" /dev/null "$argv_sniff"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_LOCAL_NO_METRICS=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1 || true
@@ -4612,7 +4241,7 @@ rm -rf "$tmp"
 # 35. DELEGATE_REQUEST_TIMEOUT overrides the default.
 tmp=$(mktemp -d)
 argv_sniff="$tmp/argv.txt"
-make_mock_curl_argv "$tmp" "$argv_sniff"
+mock_curl "$tmp" "" /dev/null "$argv_sniff"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_LOCAL_NO_METRICS=1 \
   DELEGATE_REQUEST_TIMEOUT=42 \
@@ -4624,7 +4253,7 @@ rm -rf "$tmp"
 # 36. The MLX dispatch curl gets the same bounds.
 tmp=$(mktemp -d)
 argv_sniff="$tmp/argv.txt"
-make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json" "$argv_sniff"
+mock_curl "$tmp" 'mlx-output-ok' "$tmp/payload.json" "$argv_sniff"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_LOCAL_NO_METRICS=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null >/dev/null 2>&1 || true
@@ -4852,7 +4481,7 @@ rm -rf "$tmp" "$metrics"
 # 46. `--tier NAME` (#411) wins over the positional tier and moves the prompt
 # to the first positional; the historical `<tier> ["<prompt>"]` order is untouched.
 tmp=$(mktemp -d); metrics=$(mktemp)
-make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+mock_curl "$tmp" 'mlx-output-ok' "$tmp/payload.json"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" --tier prose "Summarise this" </dev/null >/dev/null 2>&1 || true
 assert_contains '"tier":"prose"' "$(cat "$metrics")" "--tier sets the tier"
@@ -4862,7 +4491,7 @@ rm -rf "$tmp" "$metrics"
 # `code` is unresolvable with this mock's single prose model, so a pass
 # proves the flag won rather than agreeing with the positional.
 tmp=$(mktemp -d); metrics=$(mktemp)
-make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+mock_curl "$tmp" 'mlx-output-ok' "$tmp/payload.json"
 EC=0
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" --tier prose code "Summarise" </dev/null >/dev/null 2>&1 || EC=$?
@@ -4872,7 +4501,7 @@ rm -rf "$tmp" "$metrics"
 
 # --tier=NAME is accepted too.
 tmp=$(mktemp -d); metrics=$(mktemp)
-make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+mock_curl "$tmp" 'mlx-output-ok' "$tmp/payload.json"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" --tier=prose "Summarise" </dev/null >/dev/null 2>&1 || true
 assert_contains '"tier":"prose"' "$(cat "$metrics")" "--tier=NAME sets the tier"
@@ -4896,7 +4525,7 @@ rm -rf "$tmp"
 # tier:"--file" (#550).
 for bad_args in '--file|Summarise' '--file|x|prose|Summarise'; do
   tmp=$(mktemp -d); metrics=$(mktemp)
-  make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+  mock_curl "$tmp" 'mlx-output-ok' "$tmp/payload.json"
   IFS='|' read -r -a bad_argv <<< "$bad_args"
   EC=0
   out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
@@ -4911,7 +4540,7 @@ done
 # A dash-leading prompt works without `--`: it is the second positional and
 # never reaches the option parser.
 tmp=$(mktemp -d); metrics=$(mktemp)
-make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+mock_curl "$tmp" 'mlx-output-ok' "$tmp/payload.json"
 EC=0
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "-not a flag" </dev/null >/dev/null 2>&1 || EC=$?
@@ -4921,7 +4550,7 @@ rm -rf "$tmp" "$metrics"
 
 # The historical positional order is untouched.
 tmp=$(mktemp -d); metrics=$(mktemp)
-make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+mock_curl "$tmp" 'mlx-output-ok' "$tmp/payload.json"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
   bash "$SCRIPT" prose "Summarise this" </dev/null >/dev/null 2>&1 || true
 assert_contains '"tier":"prose"' "$(cat "$metrics")" "positional tier still works"
@@ -4944,7 +4573,7 @@ for pair in "prose r_prose" "reasoning r_reason" "code r_code"; do
   set -- $pair
   want="$1"; rname="$2"
   tmp=$(mktemp -d); pdir=$(mktemp -d); metrics=$(mktemp)
-  make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+  mock_curl "$tmp" 'mlx-output-ok' "$tmp/payload.json"
   mk_recipe "$pdir" "$rname" "$want"
   env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_PROMPTS_DIR="$pdir" \
     DELEGATE_METRICS_FILE="$metrics" \
@@ -4956,7 +4585,7 @@ done
 # A lone positional that is a sentence is the prompt, not the tier: most
 # recipes pass a trailing reinforcement prompt.
 tmp=$(mktemp -d); pdir=$(mktemp -d); metrics=$(mktemp)
-make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+mock_curl "$tmp" 'mlx-output-ok' "$tmp/payload.json"
 mk_recipe "$pdir" "r_prose" "prose"
 EC=0
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_PROMPTS_DIR="$pdir" \
@@ -4969,7 +4598,7 @@ rm -rf "$tmp" "$pdir" "$metrics"
 
 # A lone positional that is a tier name is still the tier.
 tmp=$(mktemp -d); pdir=$(mktemp -d); metrics=$(mktemp)
-make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+mock_curl "$tmp" 'mlx-output-ok' "$tmp/payload.json"
 mk_recipe "$pdir" "r_reason" "reasoning"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_PROMPTS_DIR="$pdir" \
   DELEGATE_METRICS_FILE="$metrics" \
@@ -4979,7 +4608,7 @@ rm -rf "$tmp" "$pdir" "$metrics"
 
 # An explicit tier wins over the declared one.
 tmp=$(mktemp -d); pdir=$(mktemp -d); metrics=$(mktemp)
-make_mock_curl_mlx_ok "$tmp" "$tmp/payload.json"
+mock_curl "$tmp" 'mlx-output-ok' "$tmp/payload.json"
 mk_recipe "$pdir" "r_prose" "prose"
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_PROMPTS_DIR="$pdir" \
   DELEGATE_METRICS_FILE="$metrics" \
@@ -5043,7 +4672,7 @@ Correct: The regression is in the date parser. Could you confirm whether it also
 n/a
 EOF
 # 40a. Output that reproduces the Correct: example verbatim -> FAILED + named.
-make_mock_curl_think "$tmp" 'The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
+mock_curl "$tmp" 'The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
 out=$(echo "unrelated facts about a config loader" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
@@ -5052,14 +4681,14 @@ assert_contains "REJECT this draft" "$out" "echo-check: stderr tells the caller 
 row=$(tail -1 "$metrics")
 assert_contains '"checks_failed_names":["no_example_echo"]' "$row" "echo-check: named on the metrics row"
 # 40b. The label prefix is stripped before comparing, so the Wrong: arm is caught too.
-make_mock_curl_think "$tmp" 'The regression is in the date parser, and ask the reporter to confirm it.'
+mock_curl "$tmp" 'The regression is in the date parser, and ask the reporter to confirm it.'
 out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
 assert_contains "check 'no_example_echo' FAILED" "$out" "echo-check: echoed Wrong: arm caught after label strip"
 # 40b-i. The label is stripped from the output side too, so an echo that
 # keeps its `Correct:` label is caught.
-make_mock_curl_think "$tmp" 'Correct: The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
+mock_curl "$tmp" 'Correct: The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
 out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
@@ -5089,26 +4718,22 @@ Correct: fix: bump the model-resolution cache TTL to 60 seconds flat
 ## Calibration notes
 n/a
 EOF
-make_mock_curl_think "$tmp" 'fix: bump the model-resolution cache TTL to 60 seconds flat'
+mock_curl "$tmp" 'fix: bump the model-resolution cache TTL to 60 seconds flat'
 out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe cc prose "go" 2>&1)
 assert_contains "check 'no_example_echo' FAILED" "$out" \
   "echo-check: echoed template example beginning with a type prefix is caught"
 # 40c. A genuine answer must not trip it.
-make_mock_curl_think "$tmp" 'The override in src/config/loader.js:88 silently wins. Could you make it defer?'
+mock_curl "$tmp" 'The override in src/config/loader.js:88 silently wins. Could you make it defer?'
 out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
-if [[ "$out" == *"no_example_echo"* ]]; then
-  echo "  FAIL  echo-check: genuine answer must not trip the check"; fail=$((fail+1))
-else
-  echo "  PASS  echo-check: genuine answer does not trip the check"; pass=$((pass+1))
-fi
+assert_not_contains "no_example_echo" "$out" "echo-check: genuine answer does not trip the check"
 # 40c-ii. The failure names exemplar boilerplate as a cause: with one
 # exemplar the check cannot tell a footer from content, and the fix belongs
 # in the exemplar.
-make_mock_curl_think "$tmp" 'The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
+mock_curl "$tmp" 'The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
 out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_PROMPTS_DIR="$prompts" bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
@@ -5119,37 +4744,25 @@ assert_contains "pass two" "$out" \
 
 # 40d. Short shared lines are below the 40-char floor, so a recipe and its
 # output can share a heading or a sign-off without colliding.
-make_mock_curl_think "$tmp" '=== Facts ==='
+mock_curl "$tmp" '=== Facts ==='
 out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
-if [[ "$out" == *"no_example_echo"* ]]; then
-  echo "  FAIL  echo-check: short shared line must stay below the length floor"; fail=$((fail+1))
-else
-  echo "  PASS  echo-check: short shared line stays below the length floor"; pass=$((pass+1))
-fi
+assert_not_contains "no_example_echo" "$out" "echo-check: short shared line stays below the length floor"
 # 40e. The comparison runs against the pre-substitution template, so
 # reproducing a piped fact never flags.
-make_mock_curl_think "$tmp" 'The token drop is on the Teams side, inside its own MSAL cache layer.'
+mock_curl "$tmp" 'The token drop is on the Teams side, inside its own MSAL cache layer.'
 out=$(echo "The token drop is on the Teams side, inside its own MSAL cache layer." \
   | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
-if [[ "$out" == *"no_example_echo"* ]]; then
-  echo "  FAIL  echo-check: reproducing piped context must not flag"; fail=$((fail+1))
-else
-  echo "  PASS  echo-check: reproducing piped context does not flag"; pass=$((pass+1))
-fi
+assert_not_contains "no_example_echo" "$out" "echo-check: reproducing piped context does not flag"
 # 40f. Env opt-out.
-make_mock_curl_think "$tmp" 'The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
+mock_curl "$tmp" 'The regression is in the date parser. Could you confirm whether it also happens on older inputs?'
 out=$(echo "facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_ECHO_CHECK=1 \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe anchor prose "go" 2>&1)
-if [[ "$out" == *"no_example_echo"* ]]; then
-  echo "  FAIL  echo-check: DELEGATE_NO_ECHO_CHECK=1 must silence it"; fail=$((fail+1))
-else
-  echo "  PASS  echo-check: DELEGATE_NO_ECHO_CHECK=1 silences it"; pass=$((pass+1))
-fi
+assert_not_contains "no_example_echo" "$out" "echo-check: DELEGATE_NO_ECHO_CHECK=1 silences it"
 # 40g. Frontmatter opt-out is silent and not reported as an unknown check.
 cat > "$prompts/optout.md" <<'EOF'
 ---
@@ -5229,24 +4842,20 @@ run_cm() {
 }
 # 40h-i. Type prefix and PR suffix are stripped from both sides, so an
 # anchor echoed under a different prefix is caught.
-make_mock_curl_think "$tmp" 'ci: bump codeql-action init and analyze together to v4.37.6\n\nCombines the Dependabot PRs.'
+mock_curl "$tmp" 'ci: bump codeql-action init and analyze together to v4.37.6\n\nCombines the Dependabot PRs.'
 out=$(run_cm)
 assert_contains "check 'no_example_echo' FAILED" "$out" \
   "echo-guard: anchor subject echoed under a different type prefix is caught"
 assert_contains '"checks_failed_names":["no_example_echo"]' "$(tail -1 "$metrics")" \
   "echo-guard: named on the metrics row"
 # 40h-ii. An exact copy including the PR suffix is caught too.
-make_mock_curl_think "$tmp" 'chore(deps): bump codeql-action init and analyze together to v4.37.6 (#253)\n\nbody here.'
+mock_curl "$tmp" 'chore(deps): bump codeql-action init and analyze together to v4.37.6 (#253)\n\nbody here.'
 assert_contains "check 'no_example_echo' FAILED" "$(run_cm)" \
   "echo-guard: verbatim anchor including its PR suffix is caught"
 # 40h-iii. A correct subject that shares vocabulary with the anchors must not flag.
-make_mock_curl_think "$tmp" 'chore(deps): bump codeql-action to v4.37.8 and osv-scanner-action to v2.5.1\n\nCombines four Dependabot PRs that each touch one workflow file.'
+mock_curl "$tmp" 'chore(deps): bump codeql-action to v4.37.8 and osv-scanner-action to v2.5.1\n\nCombines four Dependabot PRs that each touch one workflow file.'
 out=$(run_cm)
-if [[ "$out" == *"no_example_echo"* ]]; then
-  echo "  FAIL  echo-guard: the correct subject for the same change must not flag"; fail=$((fail+1))
-else
-  echo "  PASS  echo-guard: the correct subject for the same change does not flag"; pass=$((pass+1))
-fi
+assert_not_contains "no_example_echo" "$out" "echo-guard: the correct subject for the same change does not flag"
 # 40h-iv. A line repeated across anchors is convention the output should
 # reproduce, so it is dropped from the pattern set.
 BOILER='chore(deps): bump one thing to v1 (#1)
@@ -5256,26 +4865,18 @@ Generated with the standard project tooling and reviewed by a maintainer.
 chore(deps): bump another thing to v2 (#2)
 
 Generated with the standard project tooling and reviewed by a maintainer.'
-make_mock_curl_think "$tmp" 'feat: a brand new and entirely different subject line\n\nGenerated with the standard project tooling and reviewed by a maintainer.'
+mock_curl "$tmp" 'feat: a brand new and entirely different subject line\n\nGenerated with the standard project tooling and reviewed by a maintainer.'
 out=$(echo x | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe cm --var recent_commits="$BOILER" --var why="w" 2>&1 >/dev/null)
-if [[ "$out" == *"no_example_echo"* ]]; then
-  echo "  FAIL  echo-guard: a line repeated across anchors must not be forbidden"; fail=$((fail+1))
-else
-  echo "  PASS  echo-guard: a line repeated across anchors is convention, not flagged"; pass=$((pass+1))
-fi
+assert_not_contains "no_example_echo" "$out" "echo-guard: a line repeated across anchors is convention, not flagged"
 # 40h-v. Without the declaration the vars are ordinary content: the guard is opt-in.
 sed '/^echo_guard_vars:/d' "$prompts/cm.md" > "$prompts/cm2.md"
-make_mock_curl_think "$tmp" 'ci: bump codeql-action init and analyze together to v4.37.6\n\nCombines the Dependabot PRs.'
+mock_curl "$tmp" 'ci: bump codeql-action init and analyze together to v4.37.6\n\nCombines the Dependabot PRs.'
 out=$(echo x | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe cm2 --var recent_commits="$ANCHORS" --var why="w" 2>&1 >/dev/null)
-if [[ "$out" == *"no_example_echo"* ]]; then
-  echo "  FAIL  echo-guard: must stay opt-in via echo_guard_vars"; fail=$((fail+1))
-else
-  echo "  PASS  echo-guard: undeclared vars are not guarded (opt-in)"; pass=$((pass+1))
-fi
+assert_not_contains "no_example_echo" "$out" "echo-guard: undeclared vars are not guarded (opt-in)"
 # 40h-vi. `echo_guard_vars: a, b` with a space after the comma: an `IFS=,
 # read` refactor would leave the second name with a leading space.
 cat > "$prompts/two.md" <<'EOF'
@@ -5302,7 +4903,7 @@ Write something.
 ## Calibration notes
 n/a
 EOF
-make_mock_curl_think "$tmp" 'the second exemplar line which is definitely over forty characters'
+mock_curl "$tmp" 'the second exemplar line which is definitely over forty characters'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe two \
@@ -5316,22 +4917,18 @@ assert_contains "check 'no_example_echo' FAILED" "$out" \
 VARIANTS='chore(deps): bump the shared tooling image to the newest tag (#1)
 
 ci: bump the shared tooling image to the newest tag (#2)'
-make_mock_curl_think "$tmp" 'feat: bump the shared tooling image to the newest tag\n\nbody.'
+mock_curl "$tmp" 'feat: bump the shared tooling image to the newest tag\n\nbody.'
 out=$(echo x | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe cm --var recent_commits="$VARIANTS" --var why="w" 2>&1 >/dev/null)
-if [[ "$out" == *"no_example_echo"* ]]; then
-  echo "  FAIL  echo-guard: prefix-variant lines shared across anchors are convention"; fail=$((fail+1))
-else
-  echo "  PASS  echo-guard: prefix-variant lines shared across anchors are convention"; pass=$((pass+1))
-fi
+assert_not_contains "no_example_echo" "$out" "echo-guard: prefix-variant lines shared across anchors are convention"
 # 40h-viii. Each side is normalised exactly once: echo_normalise strips one
 # type prefix per pass, so a doubled-prefix anchor normalised twice would no
 # longer match its own echo.
 DOUBLED='chore: fix: update the dependency pin to the newest release (#9)
 
 perf(football): cut CI validate from 34 to 7 minutes (#287)'
-make_mock_curl_think "$tmp" 'chore: fix: update the dependency pin to the newest release (#9)\n\nbody.'
+mock_curl "$tmp" 'chore: fix: update the dependency pin to the newest release (#9)\n\nbody.'
 out=$(echo x | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe cm --var recent_commits="$DOUBLED" --var why="w" 2>&1 >/dev/null)
@@ -5364,7 +4961,7 @@ GO
 ## Calibration notes
 n/a
 EOF
-make_mock_curl_think "$tmp" 'a draft worth keeping around'
+mock_curl "$tmp" 'a draft worth keeping around'
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
@@ -5444,7 +5041,7 @@ else
 fi
 # 41d. Oversized output is truncated with a marker rather than dropped.
 rm -rf "$data"; mkdir -p "$data"
-make_mock_curl_think "$tmp" 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+mock_curl "$tmp" 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_MAX_BYTES=20 \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
@@ -5454,7 +5051,7 @@ assert_contains "[truncated at 20 bytes" "$(cat "$data/drafts/$draft_name" 2>/de
 # 41e. The cap is in bytes: eight 3-byte characters are 24 bytes. LANG is
 # set because under `env -i` (C locale) bash counts bytes anyway.
 rm -rf "$data"; mkdir -p "$data"
-make_mock_curl_think "$tmp" '\u4e2d\u6587\u6d4b\u8bd5\u4e2d\u6587\u6d4b\u8bd5'
+mock_curl "$tmp" '\u4e2d\u6587\u6d4b\u8bd5\u4e2d\u6587\u6d4b\u8bd5'
 env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" LANG=en_US.UTF-8 DELEGATE_DRAFT_MAX_BYTES=20 \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe cap prose "go" </dev/null >/dev/null 2>&1
@@ -5463,7 +5060,7 @@ assert_contains "[truncated at 20 bytes" "$(cat "$data/drafts/$draft_name" 2>/de
   "draft-capture: byte cap measured in bytes, not characters"
 # 41f. A malformed cap falls back to the default.
 rm -rf "$data"; mkdir -p "$data"
-make_mock_curl_think "$tmp" 'short'
+mock_curl "$tmp" 'short'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_DRAFT_MAX_BYTES=abc \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe cap prose "go" </dev/null 2>&1)
@@ -5495,7 +5092,7 @@ Facts:
 ## Calibration notes
 n/a
 EOF
-make_mock_curl_think "$tmp" 'a draft worth keeping around'
+mock_curl "$tmp" 'a draft worth keeping around'
 ( umask 000
   printf 'the distinctive piped fact about widget-7\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
     DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -5576,7 +5173,7 @@ Note: {{note}}
 ## Calibration notes
 n/a
 EOF
-make_mock_curl_think "$tmp" 'a draft'
+mock_curl "$tmp" 'a draft'
 printf 'fact one about widget-7\n' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe capvar --var who=alice --var "note=$(printf 'two\nlines')" prose "go" >/dev/null 2>&1
@@ -5716,40 +5313,28 @@ run_bw() {
     bash "$SCRIPT" --recipe bw prose "go" </dev/null 2>&1 >/dev/null
 }
 # 42a. Over the limit fails and is named on the row.
-make_mock_curl_think "$tmp" 'subject here\n\none two three four five six seven eight nine ten eleven twelve'
+mock_curl "$tmp" 'subject here\n\none two three four five six seven eight nine ten eleven twelve'
 out=$(run_bw)
 assert_contains "check 'body_max_words' FAILED — body is 12 words (> 10)" "$out" \
   "body_max_words: over-limit body fails with both counts named"
 assert_contains '"checks_failed_names":["body_max_words"]' "$(tail -1 "$metrics")" \
   "body_max_words: named on the metrics row"
 # 42b. At the limit passes — the comparison is >, not >=.
-make_mock_curl_think "$tmp" 'subject here\n\none two three four five six seven eight nine ten'
-if [[ "$(run_bw)" == *"body_max_words"* ]]; then
-  echo "  FAIL  body_max_words: a body exactly at the limit must pass"; fail=$((fail+1))
-else
-  echo "  PASS  body_max_words: a body exactly at the limit passes"; pass=$((pass+1))
-fi
+mock_curl "$tmp" 'subject here\n\none two three four five six seven eight nine ten'
+assert_not_contains "body_max_words" "$(run_bw)" "body_max_words: a body exactly at the limit passes"
 # 42c. The subject is not part of the body.
-make_mock_curl_think "$tmp" 'a very long subject line with many many many many words indeed\n\ntwo words'
-if [[ "$(run_bw)" == *"body_max_words"* ]]; then
-  echo "  FAIL  body_max_words: the subject line must not be counted"; fail=$((fail+1))
-else
-  echo "  PASS  body_max_words: the subject line is not counted"; pass=$((pass+1))
-fi
+mock_curl "$tmp" 'a very long subject line with many many many many words indeed\n\ntwo words'
+assert_not_contains "body_max_words" "$(run_bw)" "body_max_words: the subject line is not counted"
 # 42d. A subject-only message is body_required's business, not this check's.
-make_mock_curl_think "$tmp" 'subject here'
-if [[ "$(run_bw)" == *"body_max_words"* ]]; then
-  echo "  FAIL  body_max_words: subject-only output is body_required's business"; fail=$((fail+1))
-else
-  echo "  PASS  body_max_words: subject-only output is left to body_required"; pass=$((pass+1))
-fi
+mock_curl "$tmp" 'subject here'
+assert_not_contains "body_max_words" "$(run_bw)" "body_max_words: subject-only output is left to body_required"
 # 42e. Paragraphs are summed: six words each, neither over the limit alone.
-make_mock_curl_think "$tmp" 'subject\n\none two three four five six\n\nseven eight nine ten eleven twelve'
+mock_curl "$tmp" 'subject\n\none two three four five six\n\nseven eight nine ten eleven twelve'
 assert_contains "body is 12 words" "$(run_bw)" \
   "body_max_words: paragraphs after the first blank line are summed"
 # 42e-i. CRLF measures the same as LF: an awk that does not treat a lone \r
 # as [[:space:]] (mawk on CI, not BWK awk on macOS) would never find the separator.
-make_mock_curl_think "$tmp" 'subject here\r\n\r\none two three four five six seven eight nine ten eleven twelve'
+mock_curl "$tmp" 'subject here\r\n\r\none two three four five six seven eight nine ten eleven twelve'
 assert_contains "body is 12 words (> 10)" "$(run_bw)" \
   "body_max_words: CRLF output measures the same as LF"
 # 42f. The limit can come from the flavor profile.
@@ -5776,7 +5361,7 @@ EOF
 prof="$tmp/profile.sh"
 printf 'FLAVOR_COMMIT_BODY_MAX_WORDS=3\n' > "$prof"
 chmod 600 "$prof"
-make_mock_curl_think "$tmp" 'subject\n\none two three four five'
+mock_curl "$tmp" 'subject\n\none two three four five'
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   DELEGATE_LOCAL_PROFILE="$prof" \
@@ -5819,45 +5404,33 @@ run_sil() {
 }
 mk_sil_recipe true
 # 43a. One sentence of verdict, then a single numbered ask.
-make_mock_curl_think "$tmp" '@swayamg20, the fix in sanitize_diagram() handles unquoted labels.\n1. Would you like to apply the two inline suggestions, or leave the pipe-label case for a follow-up?'
+mock_curl "$tmp" '@swayamg20, the fix in sanitize_diagram() handles unquoted labels.\n1. Would you like to apply the two inline suggestions, or leave the pipe-label case for a follow-up?'
 out=$(run_sil)
 assert_contains "check 'no_single_item_list' FAILED" "$out" \
   "no_single_item_list: a one-item numbered list fails"
 assert_contains '"checks_failed_names":["no_single_item_list"]' "$(tail -1 "$metrics")" \
   "no_single_item_list: named on the metrics row"
 # 43b. Two items is the legitimate multi-ask shape.
-make_mock_curl_think "$tmp" 'The cause is the flag flip.\n1. Does it reproduce on 2.9?\n2. Could you paste the launch flags?'
-if [[ "$(run_sil)" == *"no_single_item_list"* ]]; then
-  echo "  FAIL  no_single_item_list: a genuine two-ask list must pass"; fail=$((fail+1))
-else
-  echo "  PASS  no_single_item_list: a genuine two-ask list passes"; pass=$((pass+1))
-fi
+mock_curl "$tmp" 'The cause is the flag flip.\n1. Does it reproduce on 2.9?\n2. Could you paste the launch flags?'
+assert_not_contains "no_single_item_list" "$(run_sil)" "no_single_item_list: a genuine two-ask list passes"
 # 43c. Plain prose has no list at all and must pass.
-make_mock_curl_think "$tmp" 'The cause is the flag flip. Could you confirm whether it survives a cold start?'
-if [[ "$(run_sil)" == *"no_single_item_list"* ]]; then
-  echo "  FAIL  no_single_item_list: prose with no list must pass"; fail=$((fail+1))
-else
-  echo "  PASS  no_single_item_list: prose with no list passes"; pass=$((pass+1))
-fi
+mock_curl "$tmp" 'The cause is the flag flip. Could you confirm whether it survives a cold start?'
+assert_not_contains "no_single_item_list" "$(run_sil)" "no_single_item_list: prose with no list passes"
 # 43d. The paren form of the enumerator counts too.
-make_mock_curl_think "$tmp" 'The cause is the flag flip.\n1) Could you paste the launch flags?'
+mock_curl "$tmp" 'The cause is the flag flip.\n1) Could you paste the launch flags?'
 assert_contains "check 'no_single_item_list' FAILED" "$(run_sil)" \
   "no_single_item_list: the 1) enumerator form counts"
 # 43e. An enumerator needs its trailing space: a decimal opening a wrapped
 # line is not a list item.
-make_mock_curl_think "$tmp" 'The regression landed in\n2.9.1 and not before it.'
-if [[ "$(run_sil)" == *"no_single_item_list"* ]]; then
-  echo "  FAIL  no_single_item_list: a bare decimal is not a list item"; fail=$((fail+1))
-else
-  echo "  PASS  no_single_item_list: a bare decimal is not a list item"; pass=$((pass+1))
-fi
+mock_curl "$tmp" 'The regression landed in\n2.9.1 and not before it.'
+assert_not_contains "no_single_item_list" "$(run_sil)" "no_single_item_list: a bare decimal is not a list item"
 # 43f. CRLF behaves the same as LF (a lone \r is non-whitespace to some awks).
-make_mock_curl_think "$tmp" 'The cause is the flag flip.\r\n1. Could you paste the launch flags?'
+mock_curl "$tmp" 'The cause is the flag flip.\r\n1. Could you paste the launch flags?'
 assert_contains "check 'no_single_item_list' FAILED" "$(run_sil)" \
   "no_single_item_list: CRLF output behaves the same as LF"
 # 43g. A `false` value skips the check without an unknown-check warning.
 mk_sil_recipe false
-make_mock_curl_think "$tmp" 'The cause is the flag flip.\n1. Could you paste the launch flags?'
+mock_curl "$tmp" 'The cause is the flag flip.\n1. Could you paste the launch flags?'
 out=$(run_sil)
 if [[ "$out" == *"no_single_item_list' FAILED"* || "$out" == *"unknown check"* ]]; then
   echo "  FAIL  no_single_item_list: 'false' must skip the check quietly"; fail=$((fail+1))
@@ -5902,7 +5475,7 @@ run_tl() {
 }
 mk_tl_recipe examples
 # 44a. An unchecked `## Test plan` appended to a body the examples never showed one for.
-make_mock_curl_think "$tmp" 'Suites: 366 passed, 94/94.\n\n## Test plan\n- [ ] Run the prompts suite (not run yet)\n- [ ] Run the unit suite (not run yet)'
+mock_curl "$tmp" 'Suites: 366 passed, 94/94.\n\n## Test plan\n- [ ] Run the prompts suite (not run yet)\n- [ ] Run the unit suite (not run yet)'
 out=$(run_tl $'TITLE: a merged PR\nBODY:\nTwo sentences of prose. No checklist.')
 assert_contains "check 'no_invented_task_list' FAILED" "$out" \
   "no_invented_task_list: an invented task list fails"
@@ -5911,36 +5484,24 @@ assert_contains "carries 2 markdown task-list item(s)" "$out" \
 assert_contains '"checks_failed_names":["no_invented_task_list"]' "$(tail -1 "$metrics")" \
   "no_invented_task_list: named on the metrics row"
 # 44b. When the examples carry a checklist the output is matching its shape.
-if [[ "$(run_tl $'TITLE: a merged PR\nBODY:\n## Type of change\n- [x] Bug fix\n- [ ] New feature')" == *"no_invented_task_list"* ]]; then
-  echo "  FAIL  no_invented_task_list: a task list the examples also carry must pass"; fail=$((fail+1))
-else
-  echo "  PASS  no_invented_task_list: a task list the examples also carry passes"; pass=$((pass+1))
-fi
+assert_not_contains "no_invented_task_list" "$(run_tl $'TITLE: a merged PR\nBODY:\n## Type of change\n- [x] Bug fix\n- [ ] New feature')" "no_invented_task_list: a task list the examples also carry passes"
 # 44c. No task list in the output at all.
-make_mock_curl_think "$tmp" 'Two sentences of prose describing the change.\n\nRefs: AI-100'
-if [[ "$(run_tl $'TITLE: a merged PR\nBODY:\nprose')" == *"no_invented_task_list"* ]]; then
-  echo "  FAIL  no_invented_task_list: output with no task list must pass"; fail=$((fail+1))
-else
-  echo "  PASS  no_invented_task_list: output with no task list passes"; pass=$((pass+1))
-fi
+mock_curl "$tmp" 'Two sentences of prose describing the change.\n\nRefs: AI-100'
+assert_not_contains "no_invented_task_list" "$(run_tl $'TITLE: a merged PR\nBODY:\nprose')" "no_invented_task_list: output with no task list passes"
 # 44d. A ticked box counts the same as an unchecked one.
-make_mock_curl_think "$tmp" 'Body.\n\n- [x] Tests pass'
+mock_curl "$tmp" 'Body.\n\n- [x] Tests pass'
 assert_contains "check 'no_invented_task_list' FAILED" "$(run_tl $'TITLE: x\nBODY:\nprose')" \
   "no_invented_task_list: a ticked box counts too"
 # 44e. Markdown allows *, + and - as list markers, and indented items.
-make_mock_curl_think "$tmp" 'Body.\n\n  * [ ] one\n  + [ ] two'
+mock_curl "$tmp" 'Body.\n\n  * [ ] one\n  + [ ] two'
 assert_contains "carries 2 markdown task-list item(s)" "$(run_tl $'TITLE: x\nBODY:\nprose')" \
   "no_invented_task_list: * and + markers and indentation count"
 # 44f. A bracketed word is not a checkbox.
-make_mock_curl_think "$tmp" 'Body.\n\n- [draft] not a checkbox\n- [WIP] also not'
-if [[ "$(run_tl $'TITLE: x\nBODY:\nprose')" == *"no_invented_task_list"* ]]; then
-  echo "  FAIL  no_invented_task_list: a bracketed word is not a checkbox"; fail=$((fail+1))
-else
-  echo "  PASS  no_invented_task_list: a bracketed word is not a checkbox"; pass=$((pass+1))
-fi
+mock_curl "$tmp" 'Body.\n\n- [draft] not a checkbox\n- [WIP] also not'
+assert_not_contains "no_invented_task_list" "$(run_tl $'TITLE: x\nBODY:\nprose')" "no_invented_task_list: a bracketed word is not a checkbox"
 # 44g. An empty value skips the check without an unknown-check warning.
 mk_tl_recipe ""
-make_mock_curl_think "$tmp" 'Body.\n\n- [ ] one'
+mock_curl "$tmp" 'Body.\n\n- [ ] one'
 out=$(run_tl $'TITLE: x\nBODY:\nprose')
 if [[ "$out" == *"no_invented_task_list' FAILED"* || "$out" == *"unknown check"* ]]; then
   echo "  FAIL  no_invented_task_list: an empty value must be inert and quiet"; fail=$((fail+1))
@@ -5983,7 +5544,7 @@ run_rf() {
     bash "$SCRIPT" --recipe rf --var examples="$1" prose "go" </dev/null 2>&1 >/dev/null
 }
 # 45a. The examples end in AI-812 / AI-806 and the model continues the sequence.
-make_mock_curl_think "$tmp" 'A short body describing the change.\n\nRefs: AI-813'
+mock_curl "$tmp" 'A short body describing the change.\n\nRefs: AI-813'
 out=$(run_rf $'TITLE: one\nBODY:\nprose\nRefs: AI-812\n\nTITLE: two\nBODY:\nprose\nRefs: AI-806')
 assert_contains "check 'no_invented_refs' FAILED" "$out" \
   "no_invented_refs: an ungrounded trailer identifier fails"
@@ -5992,38 +5553,26 @@ assert_contains "trailer names AI-813" "$out" \
 assert_contains '"checks_failed_names":["no_invented_refs"]' "$(tail -1 "$metrics")" \
   "no_invented_refs: named on the metrics row"
 # 45b. The same identifier, this time supplied by the caller. Must pass.
-if [[ "$(run_rf $'TITLE: one\nBODY:\nprose for AI-813\nRefs: AI-813')" == *"no_invented_refs"* ]]; then
-  echo "  FAIL  no_invented_refs: an identifier the caller supplied must pass"; fail=$((fail+1))
-else
-  echo "  PASS  no_invented_refs: an identifier the caller supplied passes"; pass=$((pass+1))
-fi
+assert_not_contains "no_invented_refs" "$(run_rf $'TITLE: one\nBODY:\nprose for AI-813\nRefs: AI-813')" "no_invented_refs: an identifier the caller supplied passes"
 # 45c. Issue-number references are grounded the same way.
-make_mock_curl_think "$tmp" 'A short body.\n\nCloses: #4271'
+mock_curl "$tmp" 'A short body.\n\nCloses: #4271'
 assert_contains "trailer names #4271" "$(run_rf $'TITLE: one\nBODY:\nprose\nCloses: #12')" \
   "no_invented_refs: an ungrounded issue number fails"
 # 45d. An identifier that appears only in the recipe's own Wrong example is
 # not grounded.
-make_mock_curl_think "$tmp" 'A short body.\n\nRefs: ZZ-9915'
+mock_curl "$tmp" 'A short body.\n\nRefs: ZZ-9915'
 assert_contains "trailer names ZZ-9915" "$(run_rf $'TITLE: one\nBODY:\nprose\nRefs: AI-812')" \
   "no_invented_refs: an identifier taken from the recipe's own text is not grounded"
 # 45d-i. Grounding is token-for-token, not substring: `#4271` does not ground `#427`.
-make_mock_curl_think "$tmp" 'A short body.\n\nCloses: #427'
+mock_curl "$tmp" 'A short body.\n\nCloses: #427'
 assert_contains "trailer names #427" "$(run_rf $'TITLE: one\nBODY:\nfixes #4271 in the parser')" \
   "no_invented_refs: a prefix of a grounded identifier is not itself grounded"
 # 45e. Only trailer-shaped lines are scanned, not prose.
-make_mock_curl_think "$tmp" 'The parser now reads UTF-8 and rejects ISO-8859 input, per RFC-3629.'
-if [[ "$(run_rf $'TITLE: one\nBODY:\nprose')" == *"no_invented_refs"* ]]; then
-  echo "  FAIL  no_invented_refs: hyphenated tokens in prose must not be scanned"; fail=$((fail+1))
-else
-  echo "  PASS  no_invented_refs: hyphenated tokens in prose are not scanned"; pass=$((pass+1))
-fi
+mock_curl "$tmp" 'The parser now reads UTF-8 and rejects ISO-8859 input, per RFC-3629.'
+assert_not_contains "no_invented_refs" "$(run_rf $'TITLE: one\nBODY:\nprose')" "no_invented_refs: hyphenated tokens in prose are not scanned"
 # 45f. A trailer with no identifier in it at all.
-make_mock_curl_think "$tmp" 'A short body.\n\nSuites: 366 passed, 94/94'
-if [[ "$(run_rf $'TITLE: one\nBODY:\nprose')" == *"no_invented_refs"* ]]; then
-  echo "  FAIL  no_invented_refs: a trailer with no identifier must pass"; fail=$((fail+1))
-else
-  echo "  PASS  no_invented_refs: a trailer with no identifier passes"; pass=$((pass+1))
-fi
+mock_curl "$tmp" 'A short body.\n\nSuites: 366 passed, 94/94'
+assert_not_contains "no_invented_refs" "$(run_rf $'TITLE: one\nBODY:\nprose')" "no_invented_refs: a trailer with no identifier passes"
 rm -rf "$tmp" "$metrics"
 
 # --- 46. Zero-padded numeric limits are decimal: bash reads a leading zero
@@ -6062,29 +5611,21 @@ run_oct() {
 }
 # 46a. A zero-padded subject limit still fires, and leaks no arithmetic error.
 mk_oct_recipe 08 500
-make_mock_curl_think "$tmp" 'a subject line that is definitely longer than eight characters'
+mock_curl "$tmp" 'a subject line that is definitely longer than eight characters'
 out=$(run_oct)
 assert_contains "check 'subject_max' FAILED" "$out" \
   "base-10: a zero-padded subject_max still fires"
-if [[ "$out" == *"value too great for base"* ]]; then
-  echo "  FAIL  base-10: subject_max must leak no arithmetic error"; fail=$((fail+1))
-else
-  echo "  PASS  base-10: subject_max leaks no arithmetic error"; pass=$((pass+1))
-fi
+assert_not_contains "value too great for base" "$out" "base-10: subject_max leaks no arithmetic error"
 # 46b. Same for the body word cap.
 mk_oct_recipe 500 09
-make_mock_curl_think "$tmp" 'subject\n\none two three four five six seven eight nine ten eleven twelve'
+mock_curl "$tmp" 'subject\n\none two three four five six seven eight nine ten eleven twelve'
 out=$(run_oct)
 assert_contains "check 'body_max_words' FAILED — body is 12 words (> 09)" "$out" \
   "base-10: a zero-padded body_max_words still fires"
-if [[ "$out" == *"value too great for base"* ]]; then
-  echo "  FAIL  base-10: body_max_words must leak no arithmetic error"; fail=$((fail+1))
-else
-  echo "  PASS  base-10: body_max_words leaks no arithmetic error"; pass=$((pass+1))
-fi
+assert_not_contains "value too great for base" "$out" "base-10: body_max_words leaks no arithmetic error"
 # 46c. A padded limit above the measured value still passes.
 mk_oct_recipe 0500 0500
-make_mock_curl_think "$tmp" 'short subject\n\ntwo words'
+mock_curl "$tmp" 'short subject\n\ntwo words'
 out=$(run_oct)
 if [[ "$out" == *"FAILED"* || "$out" == *"value too great for base"* ]]; then
   echo "  FAIL  base-10: a padded limit above the measured value must pass"; fail=$((fail+1))
@@ -6199,11 +5740,7 @@ make_mock_curl_seq "$tmp" "$counter" \
 run_rt >/dev/null 2>&1
 assert_contains "subject_max" "$(cat "$tmp/payload.2.json")" \
   "retry: the second request names the check that failed"
-if [[ "$(cat "$tmp/payload.1.json")" == *"was rejected"* ]]; then
-  echo "  FAIL  retry: the FIRST request must not carry a rejection notice"; fail=$((fail+1))
-else
-  echo "  PASS  retry: the first request carries no rejection notice"; pass=$((pass+1))
-fi
+assert_not_contains "was rejected" "$(cat "$tmp/payload.1.json")" "retry: the first request carries no rejection notice"
 
 # 47d. One retry, never a loop: every response fails.
 : > "$metrics"
@@ -6222,11 +5759,7 @@ assert_contains '"retried":true' "$(tail -1 "$metrics")" \
 : > "$metrics"
 make_mock_curl_seq "$tmp" "$counter" 'short one\n\nbody'
 run_rt >/dev/null 2>&1
-if [[ "$(tail -1 "$metrics")" == *'"retried"'* ]]; then
-  echo "  FAIL  retry: a call that was not retried must carry no retried field"; fail=$((fail+1))
-else
-  echo "  PASS  retry: a call that was not retried carries no retried field"; pass=$((pass+1))
-fi
+assert_not_contains '"retried"' "$(tail -1 "$metrics")" "retry: a call that was not retried carries no retried field"
 
 # 47e-f. A retry that fails to dispatch keeps the first draft (#550): the
 # caller gets the rejected-but-usable generation, told why, and the row
@@ -6261,11 +5794,7 @@ done
 : > "$metrics"
 make_mock_curl_seq "$tmp" "$counter" 'this subject line is far too long\n\nbody' 'short one\n\nbody'
 run_rt >/dev/null 2>&1
-if [[ "$(tail -1 "$metrics")" == *'"retry_failed"'* ]]; then
-  echo "  FAIL  retry: a retry that dispatched must carry no retry_failed field"; fail=$((fail+1))
-else
-  echo "  PASS  retry: a retry that dispatched carries no retry_failed field"; pass=$((pass+1))
-fi
+assert_not_contains '"retry_failed"' "$(tail -1 "$metrics")" "retry: a retry that dispatched carries no retry_failed field"
 
 # 47e-i. The rejected generation and the notice ride retry_chars rather than
 # inflating prompt_chars / output_chars, and the row still reproduces its
@@ -6290,7 +5819,7 @@ assert_eq "$(printf '%s' "$row" | jq -r '((.prompt_chars + .context_chars + .out
 # field rather than the scratch directory's name.
 : > "$metrics"
 outside="$tmp/not-a-repo"; mkdir -p "$outside"
-make_mock_curl_ok "$tmp"
+mock_curl "$tmp"
 ( cd "$outside" && env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_NO_PREFLIGHT=1 \
     DELEGATE_METRICS_FILE="$metrics" bash "$SCRIPT" prose "go" </dev/null >/dev/null 2>&1 )
 if [[ "$(tail -1 "$metrics" | jq -r 'has("project")')" == "false" ]]; then
@@ -6456,7 +5985,7 @@ run_hd() {
 }
 
 # Headings with bullets under them, against heading-free exemplars.
-make_mock_curl_think "$tmp" 'A paragraph of prose.\n\n### Implementation Details\n- Capture: pre-post.\n\n### Testing\n- 18 new assertions.'
+mock_curl "$tmp" 'A paragraph of prose.\n\n### Implementation Details\n- Capture: pre-post.\n\n### Testing\n- 18 new assertions.'
 out=$(run_hd $'TITLE: a merged PR\nBODY:\nTwo sentences of prose. No headings at all.')
 assert_contains "check 'no_invented_headings' FAILED" "$out" \
   "no_invented_headings: an invented heading fails"
@@ -6466,39 +5995,23 @@ assert_contains '"checks_failed_names":["no_invented_headings"]' "$(tail -1 "$me
   "no_invented_headings: named on the metrics row"
 
 # When the examples carry headings the output is matching its shape.
-if [[ "$(run_hd $'TITLE: a merged PR\nBODY:\n## Summary\nWhat it does.')" == *"no_invented_headings"* ]]; then
-  echo "  FAIL  no_invented_headings: a heading the examples also carry must pass"; fail=$((fail+1))
-else
-  echo "  PASS  no_invented_headings: a heading the examples also carry passes"; pass=$((pass+1))
-fi
+assert_not_contains "no_invented_headings" "$(run_hd $'TITLE: a merged PR\nBODY:\n## Summary\nWhat it does.')" "no_invented_headings: a heading the examples also carry passes"
 
 # Heading-free output against heading-free examples: silent.
-make_mock_curl_think "$tmp" 'Just prose, two sentences of it. Nothing else.'
-if [[ "$(run_hd $'TITLE: a merged PR\nBODY:\nprose')" == *"no_invented_headings"* ]]; then
-  echo "  FAIL  no_invented_headings: output with no heading must pass"; fail=$((fail+1))
-else
-  echo "  PASS  no_invented_headings: output with no heading passes"; pass=$((pass+1))
-fi
+mock_curl "$tmp" 'Just prose, two sentences of it. Nothing else.'
+assert_not_contains "no_invented_headings" "$(run_hd $'TITLE: a merged PR\nBODY:\nprose')" "no_invented_headings: output with no heading passes"
 
 # A shell comment inside a fenced block is not a heading.
-make_mock_curl_think "$tmp" 'Prose about the fix.\n\n```bash\n# run the suite\nbash tests/run-tests.sh\n```\n\nMore prose.'
-if [[ "$(run_hd $'TITLE: a merged PR\nBODY:\nprose')" == *"no_invented_headings"* ]]; then
-  echo "  FAIL  no_invented_headings: a comment inside a fenced block is not a heading"; fail=$((fail+1))
-else
-  echo "  PASS  no_invented_headings: a comment inside a fenced block is not a heading"; pass=$((pass+1))
-fi
+mock_curl "$tmp" 'Prose about the fix.\n\n```bash\n# run the suite\nbash tests/run-tests.sh\n```\n\nMore prose.'
+assert_not_contains "no_invented_headings" "$(run_hd $'TITLE: a merged PR\nBODY:\nprose')" "no_invented_headings: a comment inside a fenced block is not a heading"
 
 # A shebang has no space after the hash, so it is not a heading either.
-make_mock_curl_think "$tmp" 'Prose.\n\n#!/usr/bin/env bash is the first line of the script.'
-if [[ "$(run_hd $'TITLE: a merged PR\nBODY:\nprose')" == *"no_invented_headings"* ]]; then
-  echo "  FAIL  no_invented_headings: a shebang is not a heading"; fail=$((fail+1))
-else
-  echo "  PASS  no_invented_headings: a shebang is not a heading"; pass=$((pass+1))
-fi
+mock_curl "$tmp" 'Prose.\n\n#!/usr/bin/env bash is the first line of the script.'
+assert_not_contains "no_invented_headings" "$(run_hd $'TITLE: a merged PR\nBODY:\nprose')" "no_invented_headings: a shebang is not a heading"
 
 # Fences in the examples are skipped too, or a snippet comment would read as
 # the exemplar carrying headings and silence the check.
-make_mock_curl_think "$tmp" 'Prose.\n\n## Summary\nInvented.'
+mock_curl "$tmp" 'Prose.\n\n## Summary\nInvented.'
 assert_contains "check 'no_invented_headings' FAILED" \
   "$(run_hd $'TITLE: a merged PR\nBODY:\nprose\n```bash\n# not a heading\nls\n```')" \
   "no_invented_headings: a fenced comment in the examples is not a heading either"
@@ -6547,7 +6060,7 @@ run_ce() {
 
 # 48a. Two supplied lines handed straight back -> FAILED, named, counted.
 : > "$metrics"
-make_mock_curl_think "$tmp" 'Not a regression.\nThe GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.\nCould you add a test?'
+mock_curl "$tmp" 'Not a regression.\nThe GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.\nCould you add a test?'
 out=$(run_ce)
 assert_contains "check 'no_context_echo' FAILED" "$out" \
   "context-echo: two supplied lines reproduced verbatim are caught"
@@ -6561,7 +6074,7 @@ assert_contains '"checks_run":2' "$row" \
 
 # 48a-ii. Facts are piped one per line and come back joined into a paragraph,
 # so the unit is the sentence, not the line.
-make_mock_curl_think "$tmp" 'Not a regression. The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412. All 531 tests pass on the branch with the flag forced back on, see PR #2632. Could you add a test?'
+mock_curl "$tmp" 'Not a regression. The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412. All 531 tests pass on the branch with the flag forced back on, see PR #2632. Could you add a test?'
 out=$(run_ce)
 assert_contains "check 'no_context_echo' FAILED" "$out" \
   "context-echo: two facts joined into one paragraph line are still caught"
@@ -6570,7 +6083,7 @@ assert_contains "check 'no_context_echo' FAILED" "$out" \
 # the terminator is not part of the unit.
 ce_facts_bare=$(printf "%s\n" "$ce_facts" | sed "s/\.$//")
 : > "$metrics"
-make_mock_curl_think "$tmp" "Not a regression. The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412. All 531 tests pass on the branch with the flag forced back on, see PR #2632. Could you add a test?"
+mock_curl "$tmp" "Not a regression. The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412. All 531 tests pass on the branch with the flag forced back on, see PR #2632. Could you add a test?"
 out=$(printf "%s\n" "$ce_facts_bare" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
     DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
     DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -6581,62 +6094,42 @@ assert_contains "check 'no_context_echo' FAILED" "$out" \
 # 48a-iii. A --var value is not a pattern: the verdict plus one fact is one
 # echoed sentence, not two.
 : > "$metrics"
-make_mock_curl_think "$tmp" "${ce_verdict} The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412. Could you add a test?"
+mock_curl "$tmp" "${ce_verdict} The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412. Could you add a test?"
 out=$(run_ce)
-if [[ "$out" == *"no_context_echo"* ]]; then
-  echo "  FAIL  context-echo: a reproduced --var value must not count as an echo"; fail=$((fail+1))
-else
-  echo "  PASS  context-echo: a reproduced --var value does not count as an echo"; pass=$((pass+1))
-fi
+assert_not_contains "no_context_echo" "$out" "context-echo: a reproduced --var value does not count as an echo"
 assert_contains '"checks_run":2' "$(tail -1 "$metrics")" \
   "context-echo: the --var case still ran the check"
 
 # 48b. Anchors carried inside new sentences never flag.
-make_mock_curl_think "$tmp" 'Not a regression.\nThe flip is in the Electron 39 upgrade, specifically the sandbox flag at src/main.js:412, two releases before the refactor.\nI re-ran the suite with the flag forced back on and all 531 tests pass, so PR #2632 is not the cause.\nCould you add a test?'
+mock_curl "$tmp" 'Not a regression.\nThe flip is in the Electron 39 upgrade, specifically the sandbox flag at src/main.js:412, two releases before the refactor.\nI re-ran the suite with the flag forced back on and all 531 tests pass, so PR #2632 is not the cause.\nCould you add a test?'
 : > "$metrics"
 out=$(run_ce)
-if [[ "$out" == *"no_context_echo"* ]]; then
-  echo "  FAIL  context-echo: anchors carried in new sentences must not flag"; fail=$((fail+1))
-else
-  echo "  PASS  context-echo: anchors carried in new sentences do not flag"; pass=$((pass+1))
-fi
+assert_not_contains "no_context_echo" "$out" "context-echo: anchors carried in new sentences do not flag"
 # Silence must mean "ran and passed", not "never ran".
 assert_contains '"checks_run":2' "$(tail -1 "$metrics")" \
   "context-echo: the silent case still ran the check"
 
 # 48c. One echoed line is quoting a fact: below the threshold.
-make_mock_curl_think "$tmp" 'Not a regression.\nThe GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nThe refactor is two releases newer, so the failure is the flag.\nCould you add a test?'
+mock_curl "$tmp" 'Not a regression.\nThe GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nThe refactor is two releases newer, so the failure is the flag.\nCould you add a test?'
 out=$(run_ce)
-if [[ "$out" == *"no_context_echo"* ]]; then
-  echo "  FAIL  context-echo: a single echoed line must stay below the threshold"; fail=$((fail+1))
-else
-  echo "  PASS  context-echo: a single echoed line stays below the threshold"; pass=$((pass+1))
-fi
+assert_not_contains "no_context_echo" "$out" "context-echo: a single echoed line stays below the threshold"
 
 # 48c-i. The same line echoed twice is still one supplied line.
-make_mock_curl_think "$tmp" 'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nThe GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.'
+mock_curl "$tmp" 'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nThe GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.'
 out=$(run_ce)
-if [[ "$out" == *"no_context_echo"* ]]; then
-  echo "  FAIL  context-echo: one line repeated is one line, not two"; fail=$((fail+1))
-else
-  echo "  PASS  context-echo: one line repeated is one line, not two"; pass=$((pass+1))
-fi
+assert_not_contains "no_context_echo" "$out" "context-echo: one line repeated is one line, not two"
 
 # 48d. Short lines sit below the same 40-char floor as no_example_echo.
 ce_facts_saved="$ce_facts"
 ce_facts=$'Thanks again!\n=== FACTS ===\nA third short line.'
-make_mock_curl_think "$tmp" 'Thanks again!\n=== FACTS ===\nA third short line.'
+mock_curl "$tmp" 'Thanks again!\n=== FACTS ===\nA third short line.'
 out=$(run_ce)
-if [[ "$out" == *"no_context_echo"* ]]; then
-  echo "  FAIL  context-echo: short shared lines must stay below the length floor"; fail=$((fail+1))
-else
-  echo "  PASS  context-echo: short shared lines stay below the length floor"; pass=$((pass+1))
-fi
+assert_not_contains "no_context_echo" "$out" "context-echo: short shared lines stay below the length floor"
 ce_facts="$ce_facts_saved"
 
 # 48e. Same normalisation as no_example_echo: surrounding whitespace and a
 # `Correct:` label do not hide an echo.
-make_mock_curl_think "$tmp" '   The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.  \nCorrect: All 531 tests pass on the branch with the flag forced back on, see PR #2632.'
+mock_curl "$tmp" '   The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.  \nCorrect: All 531 tests pass on the branch with the flag forced back on, see PR #2632.'
 out=$(run_ce)
 assert_contains "check 'no_context_echo' FAILED" "$out" \
   "context-echo: whitespace and a label prefix are normalised away before comparing"
@@ -6664,33 +6157,21 @@ Reply using only the facts below.
 n/a
 EOF
 : > "$metrics"
-make_mock_curl_think "$tmp" 'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.'
+mock_curl "$tmp" 'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.'
 out=$(run_ce ce_off)
-if [[ "$out" == *"no_context_echo"* ]]; then
-  echo "  FAIL  context-echo: an undeclared check must not run"; fail=$((fail+1))
-else
-  echo "  PASS  context-echo: an undeclared check does not run"; pass=$((pass+1))
-fi
+assert_not_contains "no_context_echo" "$out" "context-echo: an undeclared check does not run"
 assert_contains '"checks_run":1' "$(tail -1 "$metrics")" \
   "context-echo: undeclared, only the default echo check is counted"
 
 # 48f-ii. DELEGATE_NO_ECHO_CHECK=1 silences both echo checks.
 : > "$metrics"
-make_mock_curl_think "$tmp" 'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.'
+mock_curl "$tmp" 'The GPU sandbox flag flip landed in the Electron 39 upgrade at src/main.js:412.\nAll 531 tests pass on the branch with the flag forced back on, see PR #2632.'
 out=$(printf '%s\n' "$ce_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_ECHO_CHECK=1 DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe ce --var verdict="$ce_verdict" prose "go" 2>&1 >/dev/null)
-if [[ "$out" == *"no_context_echo"* ]]; then
-  echo "  FAIL  context-echo: DELEGATE_NO_ECHO_CHECK=1 must silence it too"; fail=$((fail+1))
-else
-  echo "  PASS  context-echo: DELEGATE_NO_ECHO_CHECK=1 silences it too"; pass=$((pass+1))
-fi
-if [[ "$(tail -1 "$metrics")" == *'"checks_run"'* ]]; then
-  echo "  FAIL  context-echo: an opted-out call must not count either echo check"; fail=$((fail+1))
-else
-  echo "  PASS  context-echo: an opted-out call counts neither echo check"; pass=$((pass+1))
-fi
+assert_not_contains "no_context_echo" "$out" "context-echo: DELEGATE_NO_ECHO_CHECK=1 silences it too"
+assert_not_contains '"checks_run"' "$(tail -1 "$metrics")" "context-echo: an opted-out call counts neither echo check"
 
 # 48g. Echo alone is NOT retried (#514): the second generation came back the
 # same size and the same echo on 8 of the 12 maintainer-review-reply retries
@@ -6712,11 +6193,7 @@ assert_contains "All 531 tests pass on the branch" "$out" \
   "context-echo: the caller receives the flagged first generation"
 assert_contains "check 'no_context_echo' FAILED" "$(cat "$err")" \
   "context-echo: the reject is still printed when no retry follows"
-if [[ "$(cat "$err")" == *"regenerating once"* ]]; then
-  echo "  FAIL  context-echo: echo alone must not announce a regeneration"; fail=$((fail+1))
-else
-  echo "  PASS  context-echo: echo alone announces no regeneration"; pass=$((pass+1))
-fi
+assert_not_contains "regenerating once" "$(cat "$err")" "context-echo: echo alone announces no regeneration"
 row=$(tail -1 "$metrics")
 assert_contains '"checks_failed_names":["no_context_echo"]' "$row" \
   "context-echo: the skipped retry still names the failure on the row"
@@ -6775,11 +6252,7 @@ assert_contains "max_context_ratio: the answer runs about as long as the supplie
   "context-echo: the second request names the check that drove the retry"
 assert_contains '"retried":true' "$(tail -1 "$metrics")" \
   "context-echo: a retry driven by another check is marked on the row"
-if [[ "$(tail -1 "$metrics")" == *'"checks_failed_names"'* ]]; then
-  echo "  FAIL  context-echo: a clean retry must leave no failed check on the row"; fail=$((fail+1))
-else
-  echo "  PASS  context-echo: a clean retry leaves no failed check on the row"; pass=$((pass+1))
-fi
+assert_not_contains '"checks_failed_names"' "$(tail -1 "$metrics")" "context-echo: a clean retry leaves no failed check on the row"
 rm -rf "$tmp" "$metrics"
 
 # --- 49. max_context_ratio (#487): fails when output_chars / context_chars
@@ -6817,7 +6290,7 @@ run_mcr() {
 
 # 49a. Long answer against a long context -> FAILED, named, counted.
 : > "$metrics"
-make_mock_curl_think "$tmp" "$mcr_long"
+mock_curl "$tmp" "$mcr_long"
 out=$(run_mcr mcr "$mcr_facts")
 assert_contains "check 'max_context_ratio' FAILED" "$out" \
   "context-ratio: an answer as long as its facts is caught"
@@ -6831,61 +6304,33 @@ assert_contains '"checks_run":2' "$row" \
 
 # 49b. A curated answer well under the ratio passes, and still counts as run.
 : > "$metrics"
-make_mock_curl_think "$tmp" "$mcr_short"
+mock_curl "$tmp" "$mcr_short"
 out=$(run_mcr mcr "$mcr_facts")
-if [[ "$out" == *"max_context_ratio"* ]]; then
-  echo "  FAIL  context-ratio: an answer well under the ratio must pass ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  context-ratio: an answer well under the ratio passes"; pass=$((pass+1))
-fi
+assert_not_contains "max_context_ratio" "$out" "context-ratio: an answer well under the ratio passes"
 row=$(tail -1 "$metrics")
 assert_contains '"checks_run":2' "$row" \
   "context-ratio: a passing check is still counted as run"
-if [[ "$row" == *'"checks_failed_names"'* ]]; then
-  echo "  FAIL  context-ratio: a passing check must leave no failed name on the row"; fail=$((fail+1))
-else
-  echo "  PASS  context-ratio: a passing check leaves no failed name on the row"; pass=$((pass+1))
-fi
+assert_not_contains '"checks_failed_names"' "$row" "context-ratio: a passing check leaves no failed name on the row"
 
 # 49c. A context under the floor is exempt whatever the ratio.
 : > "$metrics"
-make_mock_curl_think "$tmp" "$mcr_long"
+mock_curl "$tmp" "$mcr_long"
 out=$(run_mcr mcr "$mcr_short_facts")
-if [[ "$out" == *"max_context_ratio"* ]]; then
-  echo "  FAIL  context-ratio: a context under the floor must be exempt ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  context-ratio: a context under the default 400-char floor is exempt"; pass=$((pass+1))
-fi
+assert_not_contains "max_context_ratio" "$out" "context-ratio: a context under the default 400-char floor is exempt"
 
 # 49c-ii. A declared min_context_chars above the context length exempts it.
 : > "$metrics"
-make_mock_curl_think "$tmp" "$mcr_long"
+mock_curl "$tmp" "$mcr_long"
 out=$(run_mcr mcr_floor "$mcr_facts")
-if [[ "$out" == *"max_context_ratio"* ]]; then
-  echo "  FAIL  context-ratio: a declared min_context_chars above the context must exempt it ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  context-ratio: a declared min_context_chars above the context exempts it"; pass=$((pass+1))
-fi
-if [[ "$out" == *"unknown check 'min_context_chars'"* ]]; then
-  echo "  FAIL  context-ratio: min_context_chars must be accepted as the floor, not reported unknown"; fail=$((fail+1))
-else
-  echo "  PASS  context-ratio: min_context_chars is accepted beside the ratio"; pass=$((pass+1))
-fi
+assert_not_contains "max_context_ratio" "$out" "context-ratio: a declared min_context_chars above the context exempts it"
+assert_not_contains "unknown check 'min_context_chars'" "$out" "context-ratio: min_context_chars is accepted beside the ratio"
 
 # 49d. Undeclared recipes never run it, however long the answer.
 : > "$metrics"
-make_mock_curl_think "$tmp" "$mcr_long"
+mock_curl "$tmp" "$mcr_long"
 out=$(run_mcr mcr_none "$mcr_facts")
-if [[ "$out" == *"max_context_ratio"* ]]; then
-  echo "  FAIL  context-ratio: an undeclared recipe must not run it ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  context-ratio: an undeclared recipe never runs it"; pass=$((pass+1))
-fi
-if [[ "$(tail -1 "$metrics")" == *'max_context_ratio'* ]]; then
-  echo "  FAIL  context-ratio: an undeclared recipe must not name it on the row"; fail=$((fail+1))
-else
-  echo "  PASS  context-ratio: an undeclared recipe leaves it off the row"; pass=$((pass+1))
-fi
+assert_not_contains "max_context_ratio" "$out" "context-ratio: an undeclared recipe never runs it"
+assert_not_contains 'max_context_ratio' "$(tail -1 "$metrics")" "context-ratio: an undeclared recipe leaves it off the row"
 
 # 49e. The retry carries its own constraint sentence and a clean second
 # generation clears the row.
@@ -6899,18 +6344,10 @@ assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
   "context-ratio: a failed check costs exactly two dispatches"
 assert_contains "max_context_ratio: the answer runs about as long as the supplied facts; curate it to well under the facts' length, in sentences of your own." "$(cat "$tmp/payload.2.json")" \
   "context-ratio: the second request carries the length constraint sentence"
-if [[ "$(cat "$tmp/payload.2.json")" == *"no_context_echo:"* ]]; then
-  echo "  FAIL  context-ratio: the retry must not name a check that did not fail"; fail=$((fail+1))
-else
-  echo "  PASS  context-ratio: the retry names only the check that failed"; pass=$((pass+1))
-fi
+assert_not_contains "no_context_echo:" "$(cat "$tmp/payload.2.json")" "context-ratio: the retry names only the check that failed"
 assert_contains '"retried":true' "$(tail -1 "$metrics")" \
   "context-ratio: the retry is marked on the metrics row"
-if [[ "$(tail -1 "$metrics")" == *'"checks_failed_names"'* ]]; then
-  echo "  FAIL  context-ratio: a clean retry must leave no failed check on the row"; fail=$((fail+1))
-else
-  echo "  PASS  context-ratio: a clean retry leaves no failed check on the row"; pass=$((pass+1))
-fi
+assert_not_contains '"checks_failed_names"' "$(tail -1 "$metrics")" "context-ratio: a clean retry leaves no failed check on the row"
 rm -rf "$tmp" "$metrics"
 
 # --- 50. maintainer-review-reply sets min_context_chars: 900 (#514): 2 of
@@ -6953,35 +6390,19 @@ mrr_ctx_900=$(mrr_ctx_at 900)
 assert_eq 900 "${#mrr_ctx_900}" "review-reply floor: the fixture reads as exactly 900 chars"
 # 50a. The two shipped sizes from the spike set pass: 789 on 832 and 813 on 693.
 : > "$metrics"
-make_mock_curl_think "$tmp" "$(printf '%s' "$mrr_reply" | head -c 789)"
+mock_curl "$tmp" "$(printf '%s' "$mrr_reply" | head -c 789)"
 out=$(run_mrr 832)
-if [[ "$out" == *"max_context_ratio"* ]]; then
-  echo "  FAIL  review-reply floor: a 789-char reply on 832 chars of facts must pass ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  review-reply floor: a 789-char reply on 832 chars of facts passes"; pass=$((pass+1))
-fi
-if [[ "$(tail -1 "$metrics")" == *'"checks_failed_names"'* ]]; then
-  echo "  FAIL  review-reply floor: the 832-char case must leave no failed check on the row ($(tail -1 "$metrics"))"; fail=$((fail+1))
-else
-  echo "  PASS  review-reply floor: the 832-char case leaves no failed check on the row"; pass=$((pass+1))
-fi
+assert_not_contains "max_context_ratio" "$out" "review-reply floor: a 789-char reply on 832 chars of facts passes"
+assert_not_contains '"checks_failed_names"' "$(tail -1 "$metrics")" "review-reply floor: the 832-char case leaves no failed check on the row"
 : > "$metrics"
-make_mock_curl_think "$tmp" "$(printf '%s' "$mrr_reply" | head -c 813)"
+mock_curl "$tmp" "$(printf '%s' "$mrr_reply" | head -c 813)"
 out=$(run_mrr 693)
-if [[ "$out" == *"max_context_ratio"* ]]; then
-  echo "  FAIL  review-reply floor: an 813-char reply on 693 chars of facts must pass ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  review-reply floor: an 813-char reply on 693 chars of facts passes"; pass=$((pass+1))
-fi
+assert_not_contains "max_context_ratio" "$out" "review-reply floor: an 813-char reply on 693 chars of facts passes"
 # 50b. The floor is exactly 900: 899 chars of facts are exempt, 900 are not.
-make_mock_curl_think "$tmp" "$mrr_reply"
+mock_curl "$tmp" "$mrr_reply"
 : > "$metrics"
 out=$(run_mrr 899)
-if [[ "$out" == *"max_context_ratio"* ]]; then
-  echo "  FAIL  review-reply floor: 899 chars of facts must be exempt ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  review-reply floor: 899 chars of facts are exempt"; pass=$((pass+1))
-fi
+assert_not_contains "max_context_ratio" "$out" "review-reply floor: 899 chars of facts are exempt"
 : > "$metrics"
 out=$(run_mrr 900)
 assert_contains "check 'max_context_ratio' FAILED" "$out" \
@@ -7019,7 +6440,7 @@ run_fq() {
 
 # 51a. A fact with anchors handed back as a question -> FAILED, quoted, named, counted.
 : > "$metrics"
-make_mock_curl_think "$tmp" 'Not a regression, the flip is the sandbox flag at src/main.js:412. Could you confirm that all 531 tests pass on PR #2632?'
+mock_curl "$tmp" 'Not a regression, the flip is the sandbox flag at src/main.js:412. Could you confirm that all 531 tests pass on PR #2632?'
 out=$(run_fq fq)
 assert_contains "check 'no_fact_as_question' FAILED" "$out" \
   "fact-question: a fact's anchors asked back to the reader are caught"
@@ -7034,7 +6455,7 @@ assert_contains '"checks_run":2' "$row" \
 # 51a-ii. No anchor at all: two-plus content words from the facts and none
 # from the ask is the same fact asked back.
 : > "$metrics"
-make_mock_curl_think "$tmp" 'The flip is the sandbox flag in the Electron 39 upgrade. Can you confirm the tests pass with the flag forced back on?'
+mock_curl "$tmp" 'The flip is the sandbox flag in the Electron 39 upgrade. Can you confirm the tests pass with the flag forced back on?'
 out=$(run_fq fq)
 assert_contains "check 'no_fact_as_question' FAILED" "$out" \
   "fact-question: a fact without anchors asked back is caught on its content words"
@@ -7042,7 +6463,7 @@ assert_contains 'Can you confirm the tests pass with the flag forced back on?' "
   "fact-question: the zero-anchor question is the one quoted"
 
 # 51a-iii. A MULTI-ASK-SPLIT item is a question of its own, arriving bare.
-make_mock_curl_think "$tmp" 'The flip is the sandbox flag at src/main.js:412.\n1. Could you confirm that all 531 tests pass on PR #2632?\n2. Could you check whether the token survives a cold start of the app?'
+mock_curl "$tmp" 'The flip is the sandbox flag at src/main.js:412.\n1. Could you confirm that all 531 tests pass on PR #2632?\n2. Could you check whether the token survives a cold start of the app?'
 out=$(run_fq fq)
 assert_contains "check 'no_fact_as_question' FAILED" "$out" \
   "fact-question: a numbered item that asks a fact back is caught"
@@ -7052,86 +6473,54 @@ assert_contains ': "Could you confirm that all 531 tests pass on PR #2632?"' "$o
 # 51b. The caller's ask as a question is the recipe's shape: never flagged,
 # still counted as run.
 : > "$metrics"
-make_mock_curl_think "$tmp" 'The flip is the sandbox flag at src/main.js:412 in the Electron 39 upgrade. Could you check whether the token survives a cold start of the app?'
+mock_curl "$tmp" 'The flip is the sandbox flag at src/main.js:412 in the Electron 39 upgrade. Could you check whether the token survives a cold start of the app?'
 out=$(run_fq fq)
-if [[ "$out" == *"no_fact_as_question"* ]]; then
-  echo "  FAIL  fact-question: the caller's ask phrased as a question must pass ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  fact-question: the caller's ask phrased as a question passes"; pass=$((pass+1))
-fi
+assert_not_contains "no_fact_as_question" "$out" "fact-question: the caller's ask phrased as a question passes"
 row=$(tail -1 "$metrics")
 assert_contains '"checks_run":2' "$row" \
   "fact-question: the silent case still ran the check"
-if [[ "$row" == *'"checks_failed_names"'* ]]; then
-  echo "  FAIL  fact-question: a passing check must leave no failed name on the row"; fail=$((fail+1))
-else
-  echo "  PASS  fact-question: a passing check leaves no failed name on the row"; pass=$((pass+1))
-fi
+assert_not_contains '"checks_failed_names"' "$row" "fact-question: a passing check leaves no failed name on the row"
 
 # 51b-ii. An anchor the ask var carries is the caller's, even when the facts
 # carry it too.
-make_mock_curl_think "$tmp" 'The flip is the sandbox flag at src/main.js:412. Does PR #2632 still reproduce it on your machine?'
+mock_curl "$tmp" 'The flip is the sandbox flag at src/main.js:412. Does PR #2632 still reproduce it on your machine?'
 out=$(run_fq fq 'whether PR #2632 still reproduces it')
-if [[ "$out" == *"no_fact_as_question"* ]]; then
-  echo "  FAIL  fact-question: an anchor named in the ask var must not flag ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  fact-question: an anchor named in the ask var is the caller's ask"; pass=$((pass+1))
-fi
+assert_not_contains "no_fact_as_question" "$out" "fact-question: an anchor named in the ask var is the caller's ask"
 
 # 51c. An anchor the facts do not hold is the model's own question, not a fact.
-make_mock_curl_think "$tmp" 'The flip is the sandbox flag at src/main.js:412. Could you try Electron 40 and report back?'
+mock_curl "$tmp" 'The flip is the sandbox flag at src/main.js:412. Could you try Electron 40 and report back?'
 out=$(run_fq fq)
-if [[ "$out" == *"no_fact_as_question"* ]]; then
-  echo "  FAIL  fact-question: an anchor outside the facts must not flag ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  fact-question: an anchor outside the facts is not a supplied fact"; pass=$((pass+1))
-fi
+assert_not_contains "no_fact_as_question" "$out" "fact-question: an anchor outside the facts is not a supplied fact"
 
 # 51c-ii. One shared content word is any question at all: below the floor.
-make_mock_curl_think "$tmp" 'The flip is the sandbox flag at src/main.js:412. Could you paste the flag you use?'
+mock_curl "$tmp" 'The flip is the sandbox flag at src/main.js:412. Could you paste the flag you use?'
 out=$(run_fq fq)
-if [[ "$out" == *"no_fact_as_question"* ]]; then
-  echo "  FAIL  fact-question: one shared word must stay below the floor ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  fact-question: one shared word stays below the two-word floor"; pass=$((pass+1))
-fi
+assert_not_contains "no_fact_as_question" "$out" "fact-question: one shared word stays below the two-word floor"
 
 # 51c-iii. Only the piped facts are a source: a --var value asked back is not
 # a supplied fact (the mirror of 48a-iii).
-make_mock_curl_think "$tmp" 'Thanks for the report on build 4711. The flip is the sandbox flag at src/main.js:412. Could you confirm the report was on build 4711?'
+mock_curl "$tmp" 'Thanks for the report on build 4711. The flip is the sandbox flag at src/main.js:412. Could you confirm the report was on build 4711?'
 out=$(run_fq fq)
-if [[ "$out" == *"no_fact_as_question"* ]]; then
-  echo "  FAIL  fact-question: a --var value asked back must not flag ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  fact-question: a --var value asked back is not a supplied fact"; pass=$((pass+1))
-fi
+assert_not_contains "no_fact_as_question" "$out" "fact-question: a --var value asked back is not a supplied fact"
 
 # 51c-iv. A question the caller wrote (an opener or sign-off, emitted
 # verbatim) is the caller's whatever anchors it carries.
-make_mock_curl_think "$tmp" 'Did all 531 tests pass on PR #2632 for you too? The flip is the sandbox flag at src/main.js:412. Could you check whether the token survives a cold start of the app?'
+mock_curl "$tmp" 'Did all 531 tests pass on PR #2632 for you too? The flip is the sandbox flag at src/main.js:412. Could you check whether the token survives a cold start of the app?'
 out=$(printf '%s\n' "$fq_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe fq --var ask="$fq_ask" --var opener="Did all 531 tests pass on PR #2632 for you too?" prose "go" 2>&1 >/dev/null)
-if [[ "$out" == *"no_fact_as_question"* ]]; then
-  echo "  FAIL  fact-question: a caller-supplied opener that is a question must not flag ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  fact-question: a caller-supplied opener that is a question is the caller's"; pass=$((pass+1))
-fi
+assert_not_contains "no_fact_as_question" "$out" "fact-question: a caller-supplied opener that is a question is the caller's"
 
 # 51c-v. The recipe puts the recipient handle in front of the opener, so the
 # emitted unit is "@handle, <opener>"; the caller's question inside it is
 # still the caller's.
-make_mock_curl_think "$tmp" '@nneul, Did all 531 tests pass on PR #2632 for you too? The flip is the sandbox flag at src/main.js:412. Could you check whether the token survives a cold start of the app?'
+mock_curl "$tmp" '@nneul, Did all 531 tests pass on PR #2632 for you too? The flip is the sandbox flag at src/main.js:412. Could you check whether the token survives a cold start of the app?'
 out=$(printf '%s\n' "$fq_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
   bash "$SCRIPT" --recipe fq --var ask="$fq_ask" --var recipient="nneul" --var opener="Did all 531 tests pass on PR #2632 for you too?" prose "go" 2>&1 >/dev/null)
-if [[ "$out" == *"no_fact_as_question"* ]]; then
-  echo "  FAIL  fact-question: a caller-supplied opener behind the recipient handle must not flag ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  fact-question: a caller-supplied opener behind the recipient handle is the caller's"; pass=$((pass+1))
-fi
+assert_not_contains "no_fact_as_question" "$out" "fact-question: a caller-supplied opener behind the recipient handle is the caller's"
 
 # 51d. Never retried on its own: one dispatch, the failure stays on the row
 # and its stderr reaches the caller.
@@ -7150,11 +6539,7 @@ assert_contains "check 'no_fact_as_question' FAILED" "$out" \
 row=$(tail -1 "$metrics")
 assert_contains '"checks_failed_names":["no_fact_as_question"]' "$row" \
   "fact-question: the un-retried failure is on the row"
-if [[ "$row" == *'"retried"'* ]]; then
-  echo "  FAIL  fact-question: the row must not be marked retried"; fail=$((fail+1))
-else
-  echo "  PASS  fact-question: the row is not marked retried"; pass=$((pass+1))
-fi
+assert_not_contains '"retried"' "$row" "fact-question: the row is not marked retried"
 
 # 51d-ii. Beside a check that does retry, the retry runs for that check and
 # its notice names only that check.
@@ -7169,11 +6554,7 @@ assert_eq 2 "$(wc -l < "$counter" | tr -d ' ')" \
   "fact-question: a retried check beside it still costs two dispatches"
 assert_contains "check(s) no_single_item_list failed" "$out" \
   "fact-question: the retry line names only the check that earns it"
-if [[ "$(cat "$tmp/payload.2.json")" == *"no_fact_as_question"* ]]; then
-  echo "  FAIL  fact-question: the retry notice must not carry this check"; fail=$((fail+1))
-else
-  echo "  PASS  fact-question: the retry notice leaves this check out"; pass=$((pass+1))
-fi
+assert_not_contains "no_fact_as_question" "$(cat "$tmp/payload.2.json")" "fact-question: the retry notice leaves this check out"
 assert_contains '"retried":true' "$(tail -1 "$metrics")" \
   "fact-question: the other check's retry is marked on the row"
 
@@ -7193,13 +6574,9 @@ assert_contains '"checks_failed_names":["no_context_echo","no_fact_as_question"]
 
 # 51e. Undeclared recipes never run it.
 : > "$metrics"
-make_mock_curl_think "$tmp" 'Not a regression, the flip is the sandbox flag at src/main.js:412. Could you confirm that all 531 tests pass on PR #2632?'
+mock_curl "$tmp" 'Not a regression, the flip is the sandbox flag at src/main.js:412. Could you confirm that all 531 tests pass on PR #2632?'
 out=$(run_fq fq_off)
-if [[ "$out" == *"no_fact_as_question"* ]]; then
-  echo "  FAIL  fact-question: an undeclared recipe must not run it ($out)"; fail=$((fail+1))
-else
-  echo "  PASS  fact-question: an undeclared recipe never runs it"; pass=$((pass+1))
-fi
+assert_not_contains "no_fact_as_question" "$out" "fact-question: an undeclared recipe never runs it"
 assert_contains '"checks_run":2' "$(tail -1 "$metrics")" \
   "fact-question: undeclared, only the declared and default checks are counted"
 rm -rf "$tmp" "$metrics"
@@ -7233,7 +6610,7 @@ else
 fi
 # 52b. With it, the stored input holds the lead verbatim, after the opener
 # and before the piped facts, so the model was shown it in that position.
-make_mock_curl_think "$tmp" 'Your trace was right, and this one is not ours to fix. The drop is in the MSAL cache on the Teams side. Could you check whether the token survives a cold start?'
+mock_curl "$tmp" 'Your trace was right, and this one is not ours to fix. The drop is in the MSAL cache on the Teams side. Could you check whether the token survives a cold start?'
 printf '%s\n' "$mr_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$REPO/prompts" \
   bash "$SCRIPT" --recipe maintainer-reply --var lead="$mr_lead" --var ask="whether the token survives a cold start" \
@@ -7284,7 +6661,7 @@ run_um() {
 # 53a. No recipient supplied: any mention is unbidden, even when the name is
 # in the piped facts (which is how both measured cases arose).
 : > "$metrics"
-make_mock_curl_think "$tmp" '@tomgunning, thanks for the report. The crash is at src/main.js:412 and all 531 tests pass.'
+mock_curl "$tmp" '@tomgunning, thanks for the report. The crash is at src/main.js:412 and all 531 tests pass.'
 out=$(run_um)
 assert_contains "check 'no_unbidden_mention' FAILED" "$out" \
   "unbidden-mention: a mention with no recipient supplied is caught"
@@ -7312,20 +6689,20 @@ assert_check_clean() { # $1 = stderr, $2 = name
 # 53b. The supplied recipient may be mentioned, with or without the `@` in
 # the var, and nothing is flagged.
 : > "$metrics"
-make_mock_curl_think "$tmp" '@nneul, thanks for the report. The crash is at src/main.js:412.'
+mock_curl "$tmp" '@nneul, thanks for the report. The crash is at src/main.js:412.'
 out=$(run_um nneul)
 assert_check_clean "$out" "unbidden-mention: the supplied recipient may be mentioned"
 : > "$metrics"
 out=$(run_um '@nneul')
 assert_check_clean "$out" "unbidden-mention: the recipient var may carry its own @"
 : > "$metrics"
-make_mock_curl_think "$tmp" '@NNeul, thanks for the report.'
+mock_curl "$tmp" '@NNeul, thanks for the report.'
 out=$(run_um nneul)
 assert_check_clean "$out" "unbidden-mention: handles compare case-insensitively, as the forges resolve them"
 
 # 53c. A third party beside the recipient is still unbidden.
 : > "$metrics"
-make_mock_curl_think "$tmp" '@nneul, thanks. cc @tomgunning who filed the original.'
+mock_curl "$tmp" '@nneul, thanks. cc @tomgunning who filed the original.'
 out=$(run_um nneul)
 assert_contains "check 'no_unbidden_mention' FAILED" "$out" \
   "unbidden-mention: a third party beside the recipient is caught"
@@ -7335,34 +6712,34 @@ assert_contains 'the only handle you supplied is @nneul' "$out" \
 # 53d. Not mentions: a decorator inside a fenced block or an inline code
 # span, an email address, a scoped package.
 : > "$metrics"
-make_mock_curl_think "$tmp" 'The guard is a decorator:\n\n```python\n@property\ndef x(self): ...\n```\n\nReported by tomgunning.'
+mock_curl "$tmp" 'The guard is a decorator:\n\n```python\n@property\ndef x(self): ...\n```\n\nReported by tomgunning.'
 out=$(run_um)
 assert_check_clean "$out" "unbidden-mention: a decorator inside a fenced block is not a mention"
 : > "$metrics"
-make_mock_curl_think "$tmp" 'The guard is a decorator:\n\n~~~python\n@property\ndef x(self): ...\n~~~\n\nReported by tomgunning.'
+mock_curl "$tmp" 'The guard is a decorator:\n\n~~~python\n@property\ndef x(self): ...\n~~~\n\nReported by tomgunning.'
 out=$(run_um)
 assert_check_clean "$out" "unbidden-mention: a decorator inside a tilde fence is not a mention"
 : > "$metrics"
-make_mock_curl_think "$tmp" 'Quoted as sent:\n\n````markdown\n```python\n@property\n```\n@override\n````\n\nReported by tomgunning.'
+mock_curl "$tmp" 'Quoted as sent:\n\n````markdown\n```python\n@property\n```\n@override\n````\n\nReported by tomgunning.'
 out=$(run_um)
 assert_check_clean "$out" "unbidden-mention: a nested fence does not close a longer one early"
 : > "$metrics"
-make_mock_curl_think "$tmp" 'The `@override` annotation is the one to copy.'
+mock_curl "$tmp" 'The `@override` annotation is the one to copy.'
 out=$(run_um)
 assert_check_clean "$out" "unbidden-mention: an annotation in an inline code span is not a mention"
 : > "$metrics"
-make_mock_curl_think "$tmp" 'Mail the report to releases@example.com when the branch lands.'
+mock_curl "$tmp" 'Mail the report to releases@example.com when the branch lands.'
 out=$(run_um)
 assert_check_clean "$out" "unbidden-mention: an email address is not a mention"
 : > "$metrics"
-make_mock_curl_think "$tmp" 'Pin @scope/pkg to the patched release before merging.'
+mock_curl "$tmp" 'Pin @scope/pkg to the patched release before merging.'
 out=$(run_um)
 assert_check_clean "$out" "unbidden-mention: a scoped package is not a mention"
 
 # 53d2. A fence that never closes is not a block: truncated output often
 # leaves one, and a mention after it must still be seen.
 : > "$metrics"
-make_mock_curl_think "$tmp" 'Thanks for the report.\n\n```\nsee above\n@tomgunning, see above'
+mock_curl "$tmp" 'Thanks for the report.\n\n```\nsee above\n@tomgunning, see above'
 out=$(run_um)
 assert_contains "check 'no_unbidden_mention' FAILED" "$out" \
   "unbidden-mention: a mention after an unclosed fence is still caught"
@@ -7370,7 +6747,7 @@ assert_contains "check 'no_unbidden_mention' FAILED" "$out" \
 # 53d3. A key passed twice keeps its first value, the one the template
 # substituted, so that handle is the permitted one.
 : > "$metrics"
-make_mock_curl_think "$tmp" '@nneul, thanks for the report.'
+mock_curl "$tmp" '@nneul, thanks for the report.'
 out=$(printf '%s\n' "$um_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -7388,11 +6765,11 @@ run_um_lead() {
     bash "$SCRIPT" --recipe um_lead --var 'signoff=cc @IsmaelMartinez' prose "go" 2>&1 >/dev/null
 }
 : > "$metrics"
-make_mock_curl_think "$tmp" 'Thanks for the report. cc @IsmaelMartinez'
+mock_curl "$tmp" 'Thanks for the report. cc @IsmaelMartinez'
 out=$(run_um_lead)
 assert_check_clean "$out" "unbidden-mention: a mention the caller supplied in another var is permitted"
 : > "$metrics"
-make_mock_curl_think "$tmp" '@tomgunning, thanks for the report. cc @IsmaelMartinez'
+mock_curl "$tmp" '@tomgunning, thanks for the report. cc @IsmaelMartinez'
 out=$(run_um_lead)
 assert_contains "check 'no_unbidden_mention' FAILED" "$out" \
   "unbidden-mention: a caller-supplied mention does not excuse a bystander"
@@ -7403,7 +6780,7 @@ assert_not_contains '@ismaelmartinez' "$out" \
 { printf -- '---\ntier: prose\nchecks:\n  no_padding_tail: true\n---\n'
   printf '# um_off\n\n## When to use\nn/a\n\n## Prompt template\n\n```\nReply.\n\n{{stdin}}\n```\n\n## Calibration notes\nn/a\n'; } > "$prompts/um_off.md"
 : > "$metrics"
-make_mock_curl_think "$tmp" '@tomgunning, thanks for the report.'
+mock_curl "$tmp" '@tomgunning, thanks for the report.'
 out=$(printf '%s\n' "$um_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -7414,7 +6791,7 @@ assert_not_contains "no_unbidden_mention" "$out" \
 # 53f. The retry carries the constraint, so the second generation is told
 # what to remove rather than being asked again.
 : > "$metrics"
-make_mock_curl_think "$tmp" '@tomgunning, thanks for the report.'
+mock_curl "$tmp" '@tomgunning, thanks for the report.'
 out=$(printf '%s\n' "$um_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_NO_PREFLIGHT=1 \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
@@ -7435,7 +6812,7 @@ rm -rf "$tmp"
 tmp=$(mktemp -d)
 data="$tmp/data"; mkdir -p "$data"
 metrics="$data/metrics.jsonl"
-make_mock_curl_think "$tmp" 'fix: keep the cache warm\n\nThe cache was cold on every start, so the first call paid the load.'
+mock_curl "$tmp" 'fix: keep the cache warm\n\nThe cache was cold on every start, so the first call paid the load.'
 iq_fuller='commit 1c7b48a0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6
 Author:     A <a@example.com>
 AuthorDate: Mon Sep 28 10:00:00 2026 +0100
@@ -7609,7 +6986,7 @@ GO
 n/a
 EOF
 ttl_run() { # <mock response> [env...]
-  make_mock_curl_think "$tmp" "$1"; shift
+  mock_curl "$tmp" "$1"; shift
   errf=$(mktemp)
   out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
     DELEGATE_PROMPTS_DIR="$prompts" "$@" bash "$SCRIPT" --recipe ttl prose "go" </dev/null 2>"$errf")
@@ -7668,7 +7045,7 @@ n/a
 EOF
 sub_rc='3f9e2a1 feat: add the replay gate (#534); 81a3511 fix: store finals after the call (#596)'
 sub_run() { # <mock response> [env...]
-  make_mock_curl_think "$tmp" "$1"; shift
+  mock_curl "$tmp" "$1"; shift
   errf=$(mktemp)
   out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
     DELEGATE_PROMPTS_DIR="$prompts" DELEGATE_NO_RETRY=1 "$@" \
@@ -7687,7 +7064,7 @@ sub_run 'fix: store finals after the call\n\nBody.' DELEGATE_NO_ECHO_CHECK=1
 assert_not_contains "no_subject_echo" "$err" "no_subject_echo: DELEGATE_NO_ECHO_CHECK=1 silences it with the other echo checks"
 # A guard var passed twice substitutes its first value; the second never
 # reached the model, so a subject matching only it is not an echo.
-make_mock_curl_think "$tmp" 'fix: tidy the release notes\n\nBody.'
+mock_curl "$tmp" 'fix: tidy the release notes\n\nBody.'
 errf=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_PROMPTS_DIR="$prompts" DELEGATE_NO_RETRY=1 \
@@ -7696,6 +7073,4 @@ err=$(cat "$errf"); rm -f "$errf"
 assert_not_contains "no_subject_echo" "$err" "no_subject_echo: only the first value of a guard var passed twice is an exemplar"
 rm -rf "$tmp" "$metrics"
 
-echo
-echo "$pass passed, $fail failed"
-[[ "$fail" -eq 0 ]]
+finish
