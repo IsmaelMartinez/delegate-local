@@ -25,9 +25,9 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 # --- golden template_sha for every recipe in prompts/ ----------------------
-# <recipe> <sha256 of the whole file, 12> <template_sha>, computed on main @
-# 26ebba6 (every file sha refreshed in #569 after the calibration notes
-# moved to docs/calibration/; template_sha unchanged). A pin applies only while the file is the one it was computed on:
+# <recipe> <sha256 of the whole file, 12> <template_sha>: file shas as of
+# #569 (calibration notes moved to docs/calibration/); template_sha values
+# unchanged since main @ 26ebba6. A pin applies only while the file is the one it was computed on:
 # editing a recipe changes its hash by design, so an edited recipe is
 # skipped here rather than failing, and the synthetic fixture below keeps
 # pinning the reader's behaviour after every recipe has moved on.
