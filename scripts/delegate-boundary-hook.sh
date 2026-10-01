@@ -882,22 +882,19 @@ fi
 [[ "$mode" == "off" ]] && exit 0
 
 # A --recipe call that omits a required input exits 2, so the keys are read
-# from the recipe's own frontmatter rather than hardcoded. `stdin` is not a
-# --var, and a trailing `?` marks an optional input the nudge leaves out.
+# from the recipe's own frontmatter by the reader delegate.sh validates with
+# (lib/recipe.sh) rather than hardcoded. `stdin` is not a --var, and a
+# trailing `?` marks an optional input the nudge leaves out. A missing lib
+# leaves the hints empty: fail open.
 var_hint="" stdin_hint=""
-if [[ -f "$prompts_dir/$recipe.md" ]]; then
-  while IFS= read -r key; do
+if [[ -n "$script_dir" && -f "$script_dir/lib/recipe.sh" && -f "$prompts_dir/$recipe.md" ]]; then
+  # shellcheck source=lib/recipe.sh
+  . "$script_dir/lib/recipe.sh"
+  while read -r key ktype; do
+    [[ -z "$key" || "$ktype" == *"?" ]] && continue
     if [[ "$key" == "stdin" ]]; then stdin_hint=" < context.txt"
     else var_hint="${var_hint} --var ${key}=\"...\""; fi
-  done < <(awk '
-    /^---[[:space:]]*$/ { d++; if (d == 2) exit; next }
-    d == 1 && /^inputs:[[:space:]]*$/ { in_inputs = 1; next }
-    d == 1 && /^[^[:space:]]/ { in_inputs = 0 }
-    in_inputs && /^[[:space:]]+[A-Za-z_][A-Za-z0-9_]*:/ {
-      line = $1; sub(/:$/, "", line);
-      if ($2 !~ /\?$/) print line;
-    }
-  ' "$prompts_dir/$recipe.md" 2>/dev/null)
+  done < <(recipe_required_inputs "$prompts_dir/$recipe.md")
 fi
 
 # The nudge names --project explicitly: an agent that cd's into the skill

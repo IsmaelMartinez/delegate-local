@@ -116,6 +116,15 @@ else
   echo "  FAIL  fixture: a checks edit changes template_sha"; fail=$((fail+1))
 fi
 
+# --- the readers every caller shares (#559) --------------------------------
+assert_eq "stdin string"$'\n'"why string?" "$(recipe_required_inputs "$tmp/fx.md")" \
+  "recipe_required_inputs: one 'key type' line per input, the optional '?' kept"
+assert_eq "prose" "$(recipe_tier "$tmp/fx.md")" "recipe_tier: reads the frontmatter tier"
+assert_eq "Summarise."$'\n'"## not a section end"$'\n'"{{stdin}}" "$(recipe_template "$tmp/fx.md")" \
+  "recipe_template: the first fence only, a heading inside it kept"
+printf 'tier: prose\n---\n' > "$tmp/nofm.md"
+assert_eq "" "$(recipe_fm_block "$tmp/nofm.md")" "recipe_fm_block: nothing when line 1 is not ---"
+
 echo
 echo "$pass passed, $fail failed"
 if [[ "$fail" -gt 0 ]]; then exit 1; fi

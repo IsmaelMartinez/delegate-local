@@ -100,6 +100,8 @@ prompts_dir="${DELEGATE_PROMPTS_DIR:-$script_dir/../prompts}"
 lib_dir="$script_dir/lib"
 # shellcheck source=lib/pair-score.sh
 . "$script_dir/lib/pair-score.sh"
+# shellcheck source=lib/recipe.sh
+. "$script_dir/lib/recipe.sh"
 
 # Ritual verdicts (#588): the shipped final was already in the stdin the
 # caller piped, so the verdict says nothing about the template. A verdict
@@ -456,15 +458,7 @@ echo "--- rejected drafts since watermark ---"
 # template line, so it survives, which is the caller's value on it.
 supplied() {
   local tmpl=""
-  [[ -f "$prompts_dir/$2.md" ]] && tmpl=$(awk '
-    /^## Prompt template[[:space:]]*$/ { in_section=1; next }
-    /^## / && in_section && !in_block { in_section=0 }
-    in_section && /^```/ {
-      if (in_block) { exit }
-      in_block=1; next
-    }
-    in_section && in_block { print }
-  ' "$prompts_dir/$2.md" 2>/dev/null)
+  [[ -f "$prompts_dir/$2.md" ]] && tmpl=$(recipe_template "$prompts_dir/$2.md")
   if [[ -n "$tmpl" ]]; then
     grep -Fxvf <(printf '%s\n' "$tmpl") "$1"
   else
