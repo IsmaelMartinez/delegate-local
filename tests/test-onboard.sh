@@ -280,6 +280,40 @@ assert_contains "delegate-boundary-confirm-hook.sh" "$out" "H7: print-only shows
 cmp -s "$s" "$tmp/h1.orig" && r=ok || r=changed
 assert_eq "ok" "$r" "H7: print-only leaves the settings file untouched"
 
+# H8: presence means registered for Bash. A boundary hook under a Read matcher
+# never sees a Bash call, so it is absent and the Bash entry is appended.
+s="$tmp/h8.json"
+read_pre=$(printf '%s' "$pre_entry" | jq -c '.matcher = "Read"')
+jq -n --argjson e "$read_pre" --argjson post "$post_entry" --argjson stop "$stop_entry" \
+  '{hooks: {PreToolUse: [$e], PostToolUse: [$post], Stop: [$stop]}}' > "$s"
+out=$(run_hooks 's\ns\nn\ny\n' "$s")
+assert_contains "boundary hook (PreToolUse): absent" "$out" "H8: a boundary hook under a Read matcher is absent"
+assert_eq "[$read_pre,$pre_entry]" "$(jq -c '.hooks.PreToolUse' "$s")" \
+  "H8: the Bash boundary entry is appended beside the Read one"
+
+# H9: matchers Claude Code applies to Bash count as present: a |-list naming
+# Bash, "*", and an empty or absent matcher.
+for m in '"Edit|Bash"' '"*"' '""' 'null'; do
+  s="$tmp/h9.json"
+  jq -n --argjson m "$m" --argjson pre "$pre_entry" --argjson post "$post_entry" --argjson stop "$stop_entry" \
+    '{hooks: {PreToolUse: [$pre | .matcher = $m | if $m == null then del(.matcher) else . end],
+              PostToolUse: [$post], Stop: [$stop]}}' > "$s"
+  out=$(run_hooks 's\ns\nn\ny\n' "$s")
+  assert_contains "boundary hook (PreToolUse): present" "$out" "H9: matcher $m applies to Bash"
+done
+
+# H10: a new settings file is created 0600 whatever the umask; an existing
+# file keeps its own mode.
+s="$tmp/h10dir/settings.json"
+out=$( umask 022; run_hooks 's\ns\nn\ny\n' "$s" )
+assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 0777' "$s" 2>/dev/null)" \
+  "H10: a new settings file is created mode 600"
+s="$tmp/h10b.json"
+printf '{}\n' > "$s"; chmod 644 "$s"
+out=$( umask 077; run_hooks 's\ns\nn\ny\n' "$s" )
+assert_eq "644" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 0777' "$s")" \
+  "H10: an existing settings file keeps its mode"
+
 # --- M0: the data directory may not exist yet, so writing creates it (#360) --
 deep="$tmp/fresh/.local/share/delegate-local"
 out=$(run_onboard '\n\ny' "$deep/profile.sh" "$deep/config.sh")

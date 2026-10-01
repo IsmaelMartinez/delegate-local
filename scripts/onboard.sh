@@ -149,14 +149,20 @@ prefill_types="${derived_types:-$default_types}"
 # verdict sweep (Stop). A boundary hook without its confirm hook is the
 # incomplete install #497 cannot work on: the confirm hook's .seen file is what
 # lets the boundary hook honour a pending marker. An entry counts as present
-# when any command under its event names the script, whatever the path.
+# when a command under its event names the script, whatever the path, and for
+# the two Bash hooks only under a matcher that applies to Bash: absent, empty,
+# "*", or a |-separated list with a Bash alternative (string compares only, no
+# regex evaluation, so a regex matcher such as "Ba.*" reads as not covering Bash).
 settings_target="${DELEGATE_ONBOARD_SETTINGS:-$HOME/.claude/settings.json}"
 # Literal tilde on purpose: the documented install path, expanded by the
 # harness's shell, so the entry survives the skill moving under the symlink.
 # shellcheck disable=SC2088
 hook_dir='~/.claude/skills/delegate-local/scripts'
 hooks_jq_defs='
-def has(ev; s): any((.hooks[ev] // [])[] | (.hooks // [])[] | .command? | strings; contains(s));
+def bash_matcher: . == null or . == "" or . == "*"
+  or ((strings | split("|") | index(["Bash"])) != null);
+def has(ev; s; bash): any((.hooks[ev] // [])[] | select((bash | not) or (.matcher | bash_matcher))
+  | (.hooks // [])[] | .command? | strings; contains(s));
 def entry(m; s; t): (if m == null then {} else {matcher: m} end)
   + {hooks: [{type: "command", command: ("bash " + $dir + "/" + s), timeout: t}]};
 def add(ev; m; s; t): .hooks[ev] = ((.hooks[ev] // []) + [entry(m; s; t)]);
@@ -167,9 +173,9 @@ if ! command -v jq >/dev/null 2>&1; then
   hooks_note="jq is not on PATH"
 elif [[ -f "$settings_target" ]]; then
   hooks_state=$(jq -r --arg dir "$hook_dir" "$hooks_jq_defs"'
-    [has("PreToolUse"; "delegate-boundary-hook.sh"),
-     has("PostToolUse"; "delegate-boundary-confirm-hook.sh"),
-     has("Stop"; "delegate-verdict-stop-hook.sh")]
+    [has("PreToolUse"; "delegate-boundary-hook.sh"; true),
+     has("PostToolUse"; "delegate-boundary-confirm-hook.sh"; true),
+     has("Stop"; "delegate-verdict-stop-hook.sh"; false)]
     | map(if . then "1" else "0" end) | join(" ")' "$settings_target" 2>/dev/null)
   if [[ "$hooks_state" =~ ^[01]\ [01]\ [01]$ ]]; then
     read -r has_pre has_post has_stop <<<"$hooks_state"
@@ -359,7 +365,9 @@ else
           echo "  merge failed — $settings_target left untouched." >&2
         elif [[ -f "$settings_target" ]] && ! cp -p "$settings_target" "$settings_target.bak.$(date +%Y%m%d%H%M%S)"; then
           echo "  backup failed — $settings_target left untouched." >&2
-        elif ! mkdir -p "$(dirname "$settings_target")" || ! printf '%s\n' "$merged" > "$settings_target"; then
+        # A new file is created 0600 (settings can carry env secrets); an
+        # existing one keeps its mode, since the redirect rewrites it in place.
+        elif ! mkdir -p "$(dirname "$settings_target")" || ! ( umask 077; printf '%s\n' "$merged" > "$settings_target" ); then
           echo "  failed to write $settings_target" >&2
         else
           wrote_hooks=1
