@@ -10,7 +10,9 @@
 # file, go when the file exits instead of piling up in the system temp dir.
 # Not a test file itself: the CI matrix runs tests/test-*.sh.
 
+# shellcheck disable=SC2034  # REPO and SAFE_PATH are for the sourcing file
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck disable=SC2034
 SAFE_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 pass=0
 fail=0
@@ -36,16 +38,23 @@ assert_not_contains() {
   if [[ "$2" != *"$1"* ]]; then echo "  PASS  $3"; pass=$((pass+1))
   else echo "  FAIL  $3 (unexpectedly found '$1')"; fail=$((fail+1)); fi
 }
-# assert_true NAME CMD... — passes when CMD exits 0.
+# assert_lacks ERE HAYSTACK NAME — no alternative of ERE occurs in HAYSTACK,
+# as one assertion.
+assert_lacks() {
+  local found; found=$(printf '%s' "$2" | grep -oE "$1" | head -1)
+  if [[ -z "$found" ]]; then echo "  PASS  $3"; pass=$((pass+1))
+  else echo "  FAIL  $3 (unexpectedly found '$found')"; fail=$((fail+1)); fi
+}
+# assert_true NAME CMD... — passes when CMD exits 0; its output is discarded.
 assert_true() {
   local name="$1"; shift
-  if "$@"; then echo "  PASS  $name"; pass=$((pass+1))
-  else echo "  FAIL  $name"; fail=$((fail+1)); fi
+  if "$@" >/dev/null 2>&1; then echo "  PASS  $name"; pass=$((pass+1))
+  else echo "  FAIL  $name (command: $*)"; fail=$((fail+1)); fi
 }
-# assert_false NAME CMD... — passes when CMD exits non-zero.
+# assert_false NAME CMD... — passes when CMD exits non-zero; its output is discarded.
 assert_false() {
   local name="$1"; shift
-  if "$@"; then echo "  FAIL  $name"; fail=$((fail+1))
+  if "$@" >/dev/null 2>&1; then echo "  FAIL  $name (command: $*)"; fail=$((fail+1))
   else echo "  PASS  $name"; pass=$((pass+1)); fi
 }
 
