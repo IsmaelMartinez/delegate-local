@@ -17,7 +17,8 @@ assert_absent() { case "$2" in *"$1"*) echo "  FAIL  $3 (unexpected '$1')"; fail
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# Mock provider discovery so init.sh's environment probe is deterministic.
+# A provider serving a model, so T1 shows no routing override is offered even
+# when one could be generated (init.sh did, until #567).
 mock="$tmp/bin"; mkdir -p "$mock"
 cat > "$mock/curl" <<'EOF'
 #!/bin/bash
@@ -48,49 +49,46 @@ gc "fix: cc"             # 7
 gc "fix: dddddddddddd"   # 17
 gc "docs: e"             # 7
 
-# run_onboard <answers> <profile> <config> [extra env assignments...]
+# run_onboard <answers> <profile> [extra env assignments...]
 run_onboard() {
-  local answers="$1" profile="$2" config="$3"; shift 3
+  local answers="$1" profile="$2"; shift 2
   ( cd "$corpus" && printf '%b' "$answers" | \
     env PATH="$mock:$SAFE_PATH" DELEGATE_ONBOARD_ASSUME_TTY=1 \
         DELEGATE_ONBOARD_SETTINGS="$tmp/no-settings.json" \
-        DELEGATE_LOCAL_PROFILE="$profile" DELEGATE_LOCAL_CONFIG="$config" "$@" \
+        DELEGATE_LOCAL_PROFILE="$profile" "$@" \
         bash "$SCRIPT" 2>&1 )
 }
 
 # --- T1: non-interactive -> print-only, nothing written ----------------------
 out=$( cd "$corpus" && env PATH="$mock:$SAFE_PATH" \
   DELEGATE_ONBOARD_SETTINGS="$tmp/no-settings.json" \
-  DELEGATE_LOCAL_PROFILE="$tmp/t1p.sh" DELEGATE_LOCAL_CONFIG="$tmp/t1c.sh" \
+  DELEGATE_LOCAL_PROFILE="$tmp/t1p.sh" \
   bash "$SCRIPT" </dev/null 2>&1 ); ec=$?
 assert_eq "0" "$ec" "T1: print-only exits 0"
-assert_contains "routing override candidate" "$out" "T1: prints the config fragment"
+assert_absent "routing override" "$out" "T1: offers no routing override (init.sh is gone, #567)"
 assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=14" "$out" "T1: prints the derived subject max"
 assert_contains 'FLAVOR_COMMIT_TYPES="feat, fix"' "$out" "T1: prints the derived type list"
 assert_contains "wrote nothing" "$out" "T1: says it wrote nothing"
-[[ ! -f "$tmp/t1p.sh" && ! -f "$tmp/t1c.sh" ]] && r=ok || r=written
-assert_eq "ok" "$r" "T1: neither target file created"
+[[ ! -f "$tmp/t1p.sh" ]] && r=ok || r=written
+assert_eq "ok" "$r" "T1: no profile created"
 
-# --- T2: accept-all -> both files written, mode 600, derived values ----------
-out=$(run_onboard '\n\ny\n' "$tmp/t2p.sh" "$tmp/t2c.sh"); ec=$?
+# --- T2: accept-all -> profile written, mode 600, derived values ------------
+out=$(run_onboard '\n\n' "$tmp/t2p.sh"); ec=$?
 assert_eq "0" "$ec" "T2: accept-all exits 0"
 assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=14" "$(cat "$tmp/t2p.sh")" "T2: profile carries derived subject max"
 assert_contains 'FLAVOR_COMMIT_TYPES="feat, fix"' "$(cat "$tmp/t2p.sh")" "T2: profile carries derived types"
-assert_contains 'case "$tier" in' "$(cat "$tmp/t2c.sh")" "T2: config carries the routing override"
 # perl for the mode read — GNU stat treats -f as "filesystem status" and
 # SUCCEEDS with the wrong semantics, so a BSD-first || fallback never fires.
 mode=$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 0777' "$tmp/t2p.sh")
 assert_eq "600" "$mode" "T2: profile written mode 600"
 
 # --- T3: typed override replaces the prefill ---------------------------------
-out=$(run_onboard '60\n\nn\n' "$tmp/t3p.sh" "$tmp/t3c.sh")
+out=$(run_onboard '60\n\n' "$tmp/t3p.sh")
 assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=60" "$(cat "$tmp/t3p.sh")" "T3: typed subject max written"
-[[ ! -f "$tmp/t3c.sh" ]] && r=ok || r=written
-assert_eq "ok" "$r" "T3: declined config not written"
 
 # --- T4: existing profile + decline overwrite -> untouched, no backup --------
 echo "FLAVOR_COMMIT_SUBJECT_MAX=99" > "$tmp/t4p.sh"
-out=$(run_onboard '\n\nn\nn\n' "$tmp/t4p.sh" "$tmp/t4c.sh")
+out=$(run_onboard '\n\nn\n' "$tmp/t4p.sh")
 assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=99" "$(cat "$tmp/t4p.sh")" "T4: declined overwrite leaves profile untouched"
 assert_contains "kept existing" "$out" "T4: explains the decline"
 [[ -z "$(ls "$tmp"/t4p.sh.bak.* 2>/dev/null)" ]] && r=ok || r=bak
@@ -98,20 +96,20 @@ assert_eq "ok" "$r" "T4: no backup created on decline"
 
 # --- T5: existing profile + confirm -> backup holds old, target holds new ----
 echo "FLAVOR_COMMIT_SUBJECT_MAX=99" > "$tmp/t5p.sh"
-out=$(run_onboard '\n\ny\nn\n' "$tmp/t5p.sh" "$tmp/t5c.sh")
+out=$(run_onboard '\n\ny\n' "$tmp/t5p.sh")
 assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=14" "$(cat "$tmp/t5p.sh")" "T5: confirmed overwrite wrote new values"
 bak=$(ls "$tmp"/t5p.sh.bak.* 2>/dev/null | head -1)
 assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=99" "$(cat "$bak")" "T5: backup preserves the old profile"
 
 # --- T6: quit at the first prompt -> nothing written -------------------------
-out=$(run_onboard 'q\n' "$tmp/t6p.sh" "$tmp/t6c.sh"); ec=$?
+out=$(run_onboard 'q\n' "$tmp/t6p.sh"); ec=$?
 assert_eq "0" "$ec" "T6: quit exits 0"
 assert_contains "nothing written" "$out" "T6: quit says nothing written"
-[[ ! -f "$tmp/t6p.sh" && ! -f "$tmp/t6c.sh" ]] && r=ok || r=written
+[[ ! -f "$tmp/t6p.sh" ]] && r=ok || r=written
 assert_eq "ok" "$r" "T6: quit created no files"
 
-# --- T7: skip both keys -> profile not written, config still offered ---------
-out=$(run_onboard 's\ns\nn\n' "$tmp/t7p.sh" "$tmp/t7c.sh")
+# --- T7: skip both keys -> profile not written -----------------------------
+out=$(run_onboard 's\ns\n' "$tmp/t7p.sh")
 assert_contains "profile not written" "$out" "T7: skip-both explains no profile"
 [[ ! -f "$tmp/t7p.sh" ]] && r=ok || r=written
 assert_eq "ok" "$r" "T7: skip-both wrote no profile"
@@ -120,27 +118,25 @@ assert_eq "ok" "$r" "T7: skip-both wrote no profile"
 empty="$tmp/empty"; mkdir -p "$empty"
 out=$( cd "$empty" && env PATH="$mock:$SAFE_PATH" \
   DELEGATE_ONBOARD_SETTINGS="$tmp/no-settings.json" \
-  DELEGATE_LOCAL_PROFILE="$tmp/t8p.sh" DELEGATE_LOCAL_CONFIG="$tmp/t8c.sh" \
+  DELEGATE_LOCAL_PROFILE="$tmp/t8p.sh" \
   bash "$SCRIPT" </dev/null 2>&1 ); ec=$?
 assert_eq "0" "$ec" "T8: non-git cwd exits 0"
 assert_contains "fall back to shipped defaults" "$out" "T8: explains the fallback"
 assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=72" "$out" "T8: shipped default becomes the prefill"
 
-# --- T9: no provider reachable -> env section skipped, flavor still offered --
+# --- T9: no provider reachable -> onboarding needs none ----------------------
 # Host variables point at closed ports, or a live daemon would answer.
 out=$( cd "$corpus" && env PATH="$SAFE_PATH" \
   MLX_HOST=http://localhost:1 DOCKER_MODEL_HOST=http://localhost:2 \
   OLLAMA_HOST=http://localhost:3 \
   DELEGATE_ONBOARD_SETTINGS="$tmp/no-settings.json" \
-  DELEGATE_LOCAL_PROFILE="$tmp/t9p.sh" DELEGATE_LOCAL_CONFIG="$tmp/t9c.sh" \
+  DELEGATE_LOCAL_PROFILE="$tmp/t9p.sh" \
   bash "$SCRIPT" </dev/null 2>&1 ); ec=$?
 assert_eq "0" "$ec" "T9: no provider reachable exits 0"
-assert_contains "environment probe skipped" "$out" "T9: explains the skipped probe"
 assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=14" "$out" "T9: flavor candidate still printed"
-assert_absent "routing override candidate" "$out" "T9: no config fragment without a provider"
 
 # --- T10: invalid edit re-prompts, then a valid retry is accepted ------------
-out=$(run_onboard 'abc\n55\n\nn\n' "$tmp/t10p.sh" "$tmp/t10c.sh")
+out=$(run_onboard 'abc\n55\n\n' "$tmp/t10p.sh")
 assert_contains "invalid value" "$out" "T10: rejects the non-numeric edit"
 assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=55" "$(cat "$tmp/t10p.sh")" "T10: accepts the valid retry"
 
@@ -157,13 +153,14 @@ assert_contains "unknown arg" "$out" "T12: names the bad flag"
 # --- T13: an unterminated final answer (EOF, no newline) is still honoured ----
 # read returns non-zero at EOF but fills the variable; the q/n fallback must
 # only fire on a truly empty read.
-out=$(run_onboard '\n\ny' "$tmp/t13p.sh" "$tmp/t13c.sh")
-assert_contains 'case "$tier" in' "$(cat "$tmp/t13c.sh")" "T13: config written from an unterminated trailing y"
+echo "FLAVOR_COMMIT_SUBJECT_MAX=99" > "$tmp/t13p.sh"
+out=$(run_onboard '\n\ny' "$tmp/t13p.sh")
+assert_contains "FLAVOR_COMMIT_SUBJECT_MAX=14" "$(cat "$tmp/t13p.sh")" "T13: overwrite confirmed by an unterminated trailing y"
 
 # --- H: the hook step (#528) — boundary/confirm/Stop entries in settings.json.
 # Every run points DELEGATE_ONBOARD_SETTINGS at a temp file; the real
 # ~/.claude/settings.json is never read or written here. Answers: skip both
-# flavor keys, decline the routing override, then the hook answer.
+# flavor keys, then the hook answer.
 hooks_cmd='bash ~/.claude/skills/delegate-local/scripts'
 pre_entry="{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"$hooks_cmd/delegate-boundary-hook.sh\",\"timeout\":5}]}"
 post_entry="{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"$hooks_cmd/delegate-boundary-confirm-hook.sh\",\"timeout\":5}]}"
@@ -185,7 +182,7 @@ unrelated='{
   }
 }'
 run_hooks() { # <answers> <settings> -> combined output
-  run_onboard "$1" "$tmp/hp.sh" "$tmp/hc.sh" DELEGATE_ONBOARD_SETTINGS="$2"
+  run_onboard "$1" "$tmp/hp.sh" DELEGATE_ONBOARD_SETTINGS="$2"
 }
 jqs() { jq -S . "$1"; }
 
@@ -195,7 +192,7 @@ s="$tmp/h1.json"
 printf '%s\n' "$unrelated" | jq --argjson pre "$pre_entry" --argjson stop "$stop_entry" \
   '.hooks.PreToolUse += [$pre] | .hooks.Stop = [$stop]' > "$s"
 cp "$s" "$tmp/h1.orig"
-out=$(run_hooks 's\ns\nn\ny\n' "$s")
+out=$(run_hooks 's\ns\ny\n' "$s")
 assert_contains "boundary hook (PreToolUse): present" "$out" "H1: reports the boundary hook present"
 assert_contains "confirm hook (PostToolUse): absent" "$out" "H1: reports the confirm hook absent"
 assert_contains "verdict hook (Stop): present" "$out" "H1: reports the Stop hook present"
@@ -214,7 +211,7 @@ else echo "  FAIL  H1: no byte-identical backup of the settings file"; fail=$((f
 s="$tmp/h2.json"
 printf '%s\n' "$unrelated" | jq . > "$s"
 cp "$s" "$tmp/h2.orig"
-out=$(run_hooks 's\ns\nn\ny\n' "$s")
+out=$(run_hooks 's\ns\ny\n' "$s")
 assert_contains "boundary hook (PreToolUse): absent" "$out" "H2: reports the boundary hook absent"
 assert_contains "confirm hook (PostToolUse): absent" "$out" "H2: reports the confirm hook absent"
 assert_contains "verdict hook (Stop): absent" "$out" "H2: reports the Stop hook absent"
@@ -233,7 +230,7 @@ assert_eq "$(cat "$tmp/h2.orig")" \
 
 # H3: a complete install reports all present and asks nothing.
 cp "$s" "$tmp/h3.orig"
-out=$(run_hooks 's\ns\nn\ny\n' "$s")
+out=$(run_hooks 's\ns\ny\n' "$s")
 assert_contains "all three hooks are installed" "$out" "H3: a complete install says so"
 assert_absent "install the missing hook" "$out" "H3: nothing to install, no prompt"
 cmp -s "$s" "$tmp/h3.orig" && r=ok || r=changed
@@ -243,7 +240,7 @@ assert_eq "ok" "$r" "H3: a complete install is not rewritten"
 s="$tmp/h4.json"
 printf '%s\n' "$unrelated" > "$s"
 cp "$s" "$tmp/h4.orig"
-out=$(run_hooks 's\ns\nn\nn\n' "$s")
+out=$(run_hooks 's\ns\nn\n' "$s")
 assert_contains "hooks not installed" "$out" "H4: explains the decline"
 cmp -s "$s" "$tmp/h4.orig" && r=ok || r=changed
 assert_eq "ok" "$r" "H4: declined settings file byte-identical"
@@ -254,7 +251,7 @@ assert_eq "ok" "$r" "H4: no backup created on decline"
 s="$tmp/h5.json"
 printf '{"hooks": [\n' > "$s"
 cp "$s" "$tmp/h5.orig"
-out=$(run_hooks 's\ns\nn\ny\n' "$s")
+out=$(run_hooks 's\ns\ny\n' "$s")
 assert_contains "not valid JSON" "$out" "H5: malformed settings reported"
 cmp -s "$s" "$tmp/h5.orig" && r=ok || r=changed
 assert_eq "ok" "$r" "H5: malformed settings never overwritten"
@@ -263,7 +260,7 @@ assert_eq "ok" "$r" "H5: no backup of a malformed file"
 
 # H6: no settings file yet -> confirming creates one holding all three.
 s="$tmp/h6dir/settings.json"
-out=$(run_hooks 's\ns\nn\ny\n' "$s")
+out=$(run_hooks 's\ns\ny\n' "$s")
 assert_eq "[$pre_entry]|[$post_entry]|[$stop_entry]" \
   "$(jq -c '.hooks.PreToolUse' "$s" 2>/dev/null)|$(jq -c '.hooks.PostToolUse' "$s" 2>/dev/null)|$(jq -c '.hooks.Stop' "$s" 2>/dev/null)" \
   "H6: a missing settings file is created with the three entries"
@@ -272,7 +269,7 @@ assert_eq "[$pre_entry]|[$post_entry]|[$stop_entry]" \
 s="$tmp/h7.json"
 cp "$tmp/h1.orig" "$s"
 out=$( cd "$corpus" && env PATH="$mock:$SAFE_PATH" DELEGATE_ONBOARD_SETTINGS="$s" \
-  DELEGATE_LOCAL_PROFILE="$tmp/h7p.sh" DELEGATE_LOCAL_CONFIG="$tmp/h7c.sh" \
+  DELEGATE_LOCAL_PROFILE="$tmp/h7p.sh" \
   bash "$SCRIPT" </dev/null 2>&1 )
 assert_contains "confirm hook (PostToolUse): absent" "$out" "H7: print-only reports the missing confirm hook"
 assert_contains "incomplete" "$out" "H7: print-only flags the incomplete install"
@@ -286,7 +283,7 @@ s="$tmp/h8.json"
 read_pre=$(printf '%s' "$pre_entry" | jq -c '.matcher = "Read"')
 jq -n --argjson e "$read_pre" --argjson post "$post_entry" --argjson stop "$stop_entry" \
   '{hooks: {PreToolUse: [$e], PostToolUse: [$post], Stop: [$stop]}}' > "$s"
-out=$(run_hooks 's\ns\nn\ny\n' "$s")
+out=$(run_hooks 's\ns\ny\n' "$s")
 assert_contains "boundary hook (PreToolUse): absent" "$out" "H8: a boundary hook under a Read matcher is absent"
 assert_eq "[$read_pre,$pre_entry]" "$(jq -c '.hooks.PreToolUse' "$s")" \
   "H8: the Bash boundary entry is appended beside the Read one"
@@ -298,25 +295,25 @@ for m in '"Edit|Bash"' '"*"' '""' 'null'; do
   jq -n --argjson m "$m" --argjson pre "$pre_entry" --argjson post "$post_entry" --argjson stop "$stop_entry" \
     '{hooks: {PreToolUse: [$pre | .matcher = $m | if $m == null then del(.matcher) else . end],
               PostToolUse: [$post], Stop: [$stop]}}' > "$s"
-  out=$(run_hooks 's\ns\nn\ny\n' "$s")
+  out=$(run_hooks 's\ns\ny\n' "$s")
   assert_contains "boundary hook (PreToolUse): present" "$out" "H9: matcher $m applies to Bash"
 done
 
 # H10: a new settings file is created 0600 whatever the umask; an existing
 # file keeps its own mode.
 s="$tmp/h10dir/settings.json"
-out=$( umask 022; run_hooks 's\ns\nn\ny\n' "$s" )
+out=$( umask 022; run_hooks 's\ns\ny\n' "$s" )
 assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 0777' "$s" 2>/dev/null)" \
   "H10: a new settings file is created mode 600"
 s="$tmp/h10b.json"
 printf '{}\n' > "$s"; chmod 644 "$s"
-out=$( umask 077; run_hooks 's\ns\nn\ny\n' "$s" )
+out=$( umask 077; run_hooks 's\ns\ny\n' "$s" )
 assert_eq "644" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 0777' "$s")" \
   "H10: an existing settings file keeps its mode"
 
 # --- M0: the data directory may not exist yet, so writing creates it (#360) --
 deep="$tmp/fresh/.local/share/delegate-local"
-out=$(run_onboard '\n\ny' "$deep/profile.sh" "$deep/config.sh")
+out=$(run_onboard '\n\n' "$deep/profile.sh")
 if [[ -f "$deep/profile.sh" ]]; then
   echo "  PASS  M0: writes into a data directory that did not exist"; pass=$((pass+1))
 else

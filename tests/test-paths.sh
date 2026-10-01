@@ -72,16 +72,14 @@ got=$(env -i PATH="$SAFE_PATH" HOME="$H" bash "$REPO/scripts/sync-metrics-to-lok
 assert_eq "$H/.local/share/delegate-local/metrics.jsonl" "$got" "sync-metrics-to-loki: same default"
 
 echo "--- config.sh and profile.sh ---"
-# The config candidate prints only when models are installed, which is false
-# in CI; it is covered structurally here and behaviourally in test-onboard.sh.
+# pick-model.sh is the only reader of a hand-written config.sh; resolving it
+# needs a provider, so the default is covered structurally.
 onb=$(env -i PATH="$SAFE_PATH" HOME="$H" bash "$REPO/scripts/onboard.sh" 2>&1 || true)
 assert_contains "$H/.local/share/delegate-local/profile.sh" "$onb" \
   "onboard: profile.sh target under the data dir"
-for f in onboard pick-model; do
-  if grep -q 'DELEGATE_TO_OLLAMA_CONFIG:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/config.sh' "$REPO/scripts/$f.sh"; then
-    echo "  PASS  $f: config.sh resolves through the data dir"; pass=$((pass+1))
-  else echo "  FAIL  $f: config.sh default not on the data dir"; fail=$((fail+1)); fi
-done
+if grep -q 'config="${DELEGATE_LOCAL_CONFIG:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/config.sh}"' "$REPO/scripts/pick-model.sh"; then
+  echo "  PASS  pick-model: config.sh resolves through the data dir"; pass=$((pass+1))
+else echo "  FAIL  pick-model: config.sh default not on the data dir"; fail=$((fail+1)); fi
 
 echo "--- no script still DEFAULTS to the legacy data path ---"
 # Matches only a `:-` default expansion, since two scripts name the legacy

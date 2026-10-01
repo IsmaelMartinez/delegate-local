@@ -11,8 +11,7 @@
 #
 # Env:
 #   DELEGATE_BASE_URL=<urls>        the provider list (pick-model.sh owns the default)
-#   DELEGATE_LOCAL_NO_METRICS=1     opt out of metrics logging (the old
-#                                   DELEGATE_TO_OLLAMA_ name is accepted when unset)
+#   DELEGATE_LOCAL_NO_METRICS=1     opt out of metrics logging
 #   DELEGATE_LOCAL_DATA_DIR         per-user data (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE=<path>    override the metrics destination
 #   DELEGATE_EMBED_MAX_CHARS=<int>  default 6000; longer inputs are head-truncated
@@ -28,9 +27,6 @@
 #         written. No verdict nudge: embeddings are objective.
 
 set -uo pipefail
-
-# Backwards compat: old env var name (rename delegate-to-ollama → delegate-local).
-DELEGATE_LOCAL_NO_METRICS="${DELEGATE_LOCAL_NO_METRICS:-${DELEGATE_TO_OLLAMA_NO_METRICS:-}}"
 
 usage() {
   echo 'usage: embed.sh [--text "<text>"]' >&2
