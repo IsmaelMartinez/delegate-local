@@ -103,6 +103,8 @@ thinking and returns no score on main or the branch. #570 left the SKILL.md
 frontmatter byte-identical, so triggering cannot have moved, but the gate
 needs that fix before it can measure the next description edit. What remains:
 
+- The wave-4 release, if `gh release list` does not yet show one after
+  v0.44.0: approve the release PR's held runs, then merge it.
 - Wave 5: #573, recipe-quality follow-ups after the #538 and #535
   per-template reads, one replay-gated edit at a time.
 
