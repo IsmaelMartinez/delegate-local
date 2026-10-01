@@ -291,10 +291,15 @@ if (( ritual_only == 1 )); then
   # finals are pruned after DELEGATE_DRAFT_RETENTION_DAYS, so an entry this run
   # could not measure again is kept from the existing sidecar; a verdict it
   # did measure takes this run's result. A quarantined final is left out at
-  # read time, so a kept entry cannot outlive a later quarantine.
+  # read time, so a kept entry cannot outlive a later quarantine. Two
+  # revisions of one verdict in one second share a key (feedback ts is
+  # second-precision), so this run's measurements are collapsed by key with
+  # the last in file order winning, as latest_verdicts picks it.
   if (( peek == 0 )); then
-    awk -F '\t' 'FILENAME == ARGV[1] { if ($2 == "measured") { seen[$1] = 1; if ($3 == "true") printf "%s\t%s\n", $1, $4 }; next }
-         $1 != "" && !($1 in seen) { seen[$1] = 1; print }' "$rt_file" "$ritual_list" > "$ritual_file.tmp" \
+    awk -F '\t' 'FILENAME == ARGV[1] { if ($2 == "measured") { if (!($1 in r)) k[++n] = $1; r[$1] = $3; f[$1] = $4 }; next }
+         $1 != "" && !($1 in r) && !($1 in kept) { kept[$1] = 1; print }
+         END { for (i = 1; i <= n; i++) if (r[k[i]] == "true") printf "%s\t%s\n", k[i], f[k[i]] }' \
+      "$rt_file" "$ritual_list" > "$ritual_file.tmp" \
       && mv "$ritual_file.tmp" "$ritual_file" \
       && echo "written: $ritual_file ($(grep -c '' "$ritual_file") measured ritual verdicts)" \
       || { echo "self-improve: could not write $ritual_file" >&2; exit 2; }

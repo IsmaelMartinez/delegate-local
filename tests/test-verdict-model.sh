@@ -122,6 +122,32 @@ assert_eq "maintainer-reply kept=0 scaffold=0 rewrote=2 ritual=1" "$(printf '%s\
   "a quarantined measured final is not ritual"
 rm -rf "$tmp"
 
+# Two revisions of one legacy verdict in one second share their key (feedback
+# ts is second-precision): the later one, measured not ritual, retracts the
+# earlier ritual measurement, so the latest verdict is the miss it recorded.
+tmp=$(mktemp -d); mkdir -p "$tmp/drafts"
+export DELEGATE_SELF_IMPROVE_STATE="$tmp/state"
+k=$(iso_ago 2000); kv=$(iso_ago 1990)
+cat > "$tmp/metrics.jsonl" <<EOF
+{"ts":"$k","source":"delegate","recipe":"maintainer-reply","session":"S5","tier":"prose","model":"q","exit_status":0,"otel_span_id":"k1","draft_file":"k1.draft.txt","inputs_file":"k1.inputs.json","estimated_tokens_avoided":10}
+{"ts":"$kv","source":"feedback","ref_ts":"$k","ref_id":"k1","kept":false,"reason":"posted my own","final_file":"k1.final.txt"}
+{"ts":"$kv","source":"feedback","ref_ts":"$k","ref_id":"k1","kept":false,"reason":"no, rewrote it","final_file":"k1.final.2.txt"}
+EOF
+printf 'A model draft about something else entirely.\n' > "$tmp/drafts/k1.draft.txt"
+printf '%s\n' "$RT" > "$tmp/drafts/k1.final.txt"
+printf 'My own reply, nothing like the facts.\n' > "$tmp/drafts/k1.final.2.txt"
+jq -nc --arg s "Post this:
+$RT" '{recipe:"maintainer-reply", stdin:$s, vars:{}}' > "$tmp/drafts/k1.inputs.json"
+bash "$SI" --ritual --file "$tmp/metrics.jsonl" > /dev/null 2>&1
+assert_eq 0 "$(grep -c '|k1' "$tmp/ritual-verdicts.tsv" 2>/dev/null)" \
+  "--ritual: a later same-second revision measured not ritual retracts the earlier one"
+want_rev='maintainer-reply kept=0 scaffold=0 rewrote=1 ritual=0'
+assert_eq "$want_rev" "$(bash "$MS" --file "$tmp/metrics.jsonl" --days 7 2>&1 | ms_counts)" \
+  "metrics-summary: the revised verdict counts as the miss it recorded"
+assert_eq "$want_rev" "$(bash "$SI" --peek --file "$tmp/metrics.jsonl" --days 7 2>&1 | si_counts)" \
+  "self-improve: the same revised verdict, the same counts"
+rm -rf "$tmp"
+
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
