@@ -47,7 +47,7 @@ draft/final pair (ADR 0029) sits beside it. That triple — verdict, reason,
 pair — is the quality signal a recipe edit is calibrated from. The headline
 hit rate is computed from every feedback row.
 
-Cutover 2026-10-01: On 2026-10-01 (#624) the verdict definitions were unified: `scaffold` means the draft was edited and shipped, and a rewritten or discarded draft is a `miss` however useful it was. Measured read-only on the live corpus since the 2026-08-19 reset, no scaffold verdict came from `code-draft` or `fix-with-test` (the only recipes whose guidance said "discarded but useful"; the corpus holds 2 delegate rows for them in all), and about 12 of 1160 scaffold rows carry a reason that mentions discarding or abandoning. Rows before the date therefore carry the old meaning for those recipes at most, and nothing is migrated.
+Cutover 2026-10-01: On 2026-10-01 (#624) the verdict definitions were unified: `scaffold` means the draft was edited and shipped, and a rewritten or discarded draft is a `miss` however useful it was. Before that date a scaffold verdict on any recipe may mean discarded-but-useful, because the `delegate-feedback.sh` usage text defined it that way globally, and nothing is migrated. Measured read-only since the 2026-08-19 reset, about 12 of 1160 scaffold reasons mention a discard (a keyword estimate, so the upper bound) and 0 came from `code-draft` or `fix-with-test`.
 
 `delegate-feedback.sh` defaults to `--source agent`, still accepts the flag
 because every caller passes it, and refuses `--source human` with exit 2 and
