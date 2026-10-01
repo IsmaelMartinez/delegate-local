@@ -2448,6 +2448,12 @@ retry563 pr-review-body "gh pr review 12 -a --body \"first $body300\"" "gh pr re
   maintainer-review-reply "gh pr review -a is boolean, so the retry with another body reuses the marker"
 retry563 release-create "gh release create v1 -p --notes \"first $body300\"" "gh release create v1 -p --notes \"second $body300\"" \
   release-note "gh release create -p is boolean, so the retry with other notes reuses the marker"
+retry563 comment-reply "glab mr discussion note 4 --message \"first $body300\"" "glab mr discussion note 4 --message \"second $body300\"" \
+  maintainer-reply "glab mr discussion note reads glab mr note's flags, so a rewritten --message retry reuses the marker"
+# A command with no flag table of its own still never keys on a body-ish
+# value (the tokenizer's TARGET line, read directly).
+assert_eq $'TARGET\t4 repo=o/r' "$(perl "$REPO/scripts/lib/shell-words.pl" 0 <<<'gh pr edit 4 --body first --title t2 --notes n --field f -R o/r' | head -n 1)" \
+  "#563 target: an unlisted command skips --body/--title/--notes/--field values"
 rm -rf "$pending" "$METRICS_DIR/drafts"
 
 # 92 (#563). The common path spawns no jq: the boundary hook pre-filters the

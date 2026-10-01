@@ -220,9 +220,12 @@ if ($c < @W && $W[$c][0] =~ m{(?:\A|/)(?:gh|glab)\z}) {
   my $api = $c + 1 < @W && $W[$c + 1][0] eq 'api';
   my $k = $c + ($api ? 2 : 3);
   my $cmd = $api ? 'gh api' : join(' ', $tool, map { $k - 2 + $_ < @W ? $W[$k - 2 + $_][0] : '' } 0, 1);
-  $k++ if $k < @W && $W[$k][0] eq 'note' && $W[$k - 1][0] eq 'discussion';
+  # `glab mr discussion note` is the note command under another name.
+  if ($cmd =~ /\Aglab (mr|issue) discussion\z/ && $k < @W && $W[$k][0] eq 'note') { $cmd = "glab $1 note"; $k++ }
   $k++ if $cmd eq 'glab mr note' && $k < @W && $W[$k][0] eq 'create';
-  my %takes_value = map { $_ => 1 } split ' ', ($value_flags{$cmd} // '-R --repo');
+  # A command with no table still never keys on a body-ish value.
+  my %takes_value = map { $_ => 1 } split ' ',
+    ($value_flags{$cmd} // '-R --repo --body --message --notes --title --field --raw-field');
   for (; $k < @W; $k++) {
     my $t = $W[$k][0];
     if ($t =~ /\A--repo=/) { push @tgt, 'repo=' . substr($t, 7); next }
