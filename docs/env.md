@@ -14,7 +14,7 @@ Every `DELEGATE_*` variable a script under `scripts/` reads, listed once. All ar
 | `DELEGATE_REQUEST_TIMEOUT` | `600` | `curl --max-time` in seconds for the generation request. | `delegate.sh` |
 | `DELEGATE_MAX_TOKENS` | `4096` | `max_tokens` sent with the request; must be a positive integer. | `delegate.sh` |
 | `DELEGATE_TEMPERATURE` | unset (greedy, `0`) | Sampling temperature; only an explicit value is recorded on the row. | `delegate.sh` |
-| `DELEGATE_THINK` | `false` | `true` sends `enable_thinking: true` through the chat template. | `delegate.sh` |
+| `DELEGATE_THINK` | `false` | `true` sends `enable_thinking: true` through the chat template. | `delegate.sh`, `eval-skill-triggers.sh --local` |
 | `DELEGATE_STRIP_THINK` | unset | `1` strips everything up to the first `</think>`; the `reasoning` tier strips by default and `0` turns that off. | `delegate.sh` |
 
 ## Recipes and output checks

@@ -353,6 +353,15 @@ assert_contains '"max_tokens":480' "$first_body" "--local body: max_tokens scale
 assert_contains "delegate-local" "$first_body" "--local body: skill description leaks through"
 assert_contains "summarise this log" "$first_body" "--local body: query in prompt"
 assert_contains '\"id\":\"p01\"' "$first_body" "--local body: ids in batched payload"
+# Thinking off by default, as delegate.sh sends it: a Qwen3 thinking model
+# otherwise spends the whole max_tokens budget reasoning and returns no score.
+assert_eq "false" "$(jq -c '.chat_template_kwargs.enable_thinking' <<<"$first_body")" "--local body: enable_thinking false by default"
+: > "$sniff"
+(cd "$tmp" && PATH="$tmp:$SAFE_PATH" DELEGATE_THINK=true bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || true
+assert_eq "true" "$(head -1 "$sniff" | jq -c '.chat_template_kwargs.enable_thinking')" "--local body: DELEGATE_THINK=true turns enable_thinking on"
+: > "$sniff"
+(cd "$tmp" && PATH="$tmp:$SAFE_PATH" DELEGATE_THINK=yes bash "$SCRIPT" --local mock-model --eval-set eval-set.json --skill SKILL.md >/dev/null 2>&1) || true
+assert_eq "false" "$(head -1 "$sniff" | jq -c '.chat_template_kwargs.enable_thinking')" "--local body: any DELEGATE_THINK other than true keeps thinking off"
 rm -rf "$tmp"
 
 # 10. OLLAMA_HOST steers the scoring call through pick-model.sh's default
@@ -396,6 +405,7 @@ assert_contains "scoring: backend=anthropic" "$out" "--api: backend label"
 assert_contains "recall=1.000 negative-precision=1.000" "$out" "--api perfect: 1.000/1.000"
 url_line=$(head -1 "$tmp/url-sniff.txt")
 assert_contains "https://api.anthropic.com/v1/messages" "$url_line" "--api: hits Anthropic URL"
+assert_eq "false" "$(head -1 "$sniff" | jq -c 'has("chat_template_kwargs")')" "--api body: no chat_template_kwargs (Anthropic payload unchanged)"
 rm -rf "$tmp"
 
 # 11b. --api non-200: the status and the start of the body are printed, not
