@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.43.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.42.0...v0.43.0) (2026-10-01)
+
+
+### Features
+
+* onboard.sh reports and installs the three delegate hooks ([#609](https://github.com/IsmaelMartinez/delegate-local/issues/609)) ([a314d75](https://github.com/IsmaelMartinez/delegate-local/commit/a314d758c132182170381b62ef983ea351e66a10))
+
+
+### Bug Fixes
+
+* derive dashboard field allowlist, drop dead label_replace, cache llmfit ([#603](https://github.com/IsmaelMartinez/delegate-local/issues/603)) ([80c90cb](https://github.com/IsmaelMartinez/delegate-local/commit/80c90cbc89eab25a1b6cbbd4b9f8bbc191d36d33))
+* **hook:** one shell-word tokenizer instead of two awk quote scanners ([#605](https://github.com/IsmaelMartinez/delegate-local/issues/605)) ([7ff8991](https://github.com/IsmaelMartinez/delegate-local/commit/7ff8991f14209408e3259e17f158d6828261fd40))
+* share one verdict model across metrics-summary, self-improve and replay ([#606](https://github.com/IsmaelMartinez/delegate-local/issues/606)) ([a3a49f6](https://github.com/IsmaelMartinez/delegate-local/commit/a3a49f6896e3a556b2c6ba9fe4ec0ec09af0ac2b))
+
+
+### Code Improvements
+
+* recipe readers into lib/recipe.sh behind a golden template_sha test ([#610](https://github.com/IsmaelMartinez/delegate-local/issues/610)) ([ce9d35e](https://github.com/IsmaelMartinez/delegate-local/commit/ce9d35ec3cea72d4458de56df08047aae15aa889))
+
+
+### Testing
+
+* drop recipe wording pins and stop the lock tests sleeping ([#608](https://github.com/IsmaelMartinez/delegate-local/issues/608)) ([26ebba6](https://github.com/IsmaelMartinez/delegate-local/commit/26ebba6fc0f506b7ac86e3b10d8f868e7c29a04f))
+
 ## [0.42.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.41.0...v0.42.0) (2026-09-30)
 
 
