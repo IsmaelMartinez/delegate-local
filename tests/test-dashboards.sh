@@ -29,8 +29,8 @@ fi
 # writer run against a mock curl in a scratch git repository: delegate.sh (a
 # recipe call, for the recipe and check fields), delegate-feedback.sh (a
 # scaffold with a reason and a final, then a hit), and delegate-boundary-hook.sh
-# (a denied commit, a below-floor reply and a no-provider fail-open, for
-# denied, below_floor and enforce_skipped). The rows are then pushed through
+# (a denied commit, a below-floor reply, an approved reply and a no-provider fail-open, for
+# denied, below_floor, approved and enforce_skipped). The rows are then pushed through
 # sync-metrics-to-loki.sh, which enriches feedback rows with the parent's
 # recipe, tier and tokens, and the allowlist is the union of keys Loki holds.
 # embed.sh rows are not written here: no dashboard queries them, and one that
@@ -77,14 +77,19 @@ MOCK
     unset DELEGATE_PROJECT DELEGATE_BOUNDARY_MODE DELEGATE_BOUNDARY_ENFORCE DELEGATE_LOCAL_NO_METRICS
     cd "$repo" || exit 1
     long=$(printf 'The sandbox flag in src/main.js is the cause, not your distro. %.0s' 1 2 3 4 5)
-    hook() {
-      jq -nc --arg cmd "$1" --arg cwd "$repo" \
-        '{hook_event_name:"PreToolUse", tool_name:"Bash", cwd:$cwd, session_id:"fixture-hook-session", tool_input:{command:$cmd}}' \
+    hook() { # command [transcript_path]
+      jq -nc --arg cmd "$1" --arg cwd "$repo" --arg tp "${2:-}" \
+        '{hook_event_name:"PreToolUse", tool_name:"Bash", cwd:$cwd, session_id:"fixture-hook-session", tool_input:{command:$cmd}}
+         + (if $tp != "" then {transcript_path:$tp} else {} end)' \
         | DELEGATE_BOUNDARY_MIN_CHARS= bash "$REPO/scripts/delegate-boundary-hook.sh" >/dev/null 2>&1
     }
     # The hook rows come first: a delegation already recorded for the project would credit them.
     hook "git commit -m \"$long\""                                          # denied
     hook 'gh pr comment 12 --body "LGTM, thanks!"'                          # below_floor
+    # A reply the human was shown and answered (#607).
+    { jq -nc --arg t "$long" '{type:"assistant", message:{id:"m1", role:"assistant", content:[{type:"text", text:$t}]}}'
+      jq -nc '{type:"user", message:{role:"user", content:"yes, post it"}}'; } > "$w/transcript.jsonl"
+    hook "gh pr comment 12 --body \"$long\"" "$w/transcript.jsonl"          # approved
     DELEGATE_BASE_URL=http://localhost:1/v1 hook "git commit -m \"$long\""  # enforce_skipped
     echo ctx | bash "$REPO/scripts/delegate.sh" --recipe commit-message \
       --var recent_commits=a --var diff_stat="f | 1" --var why=w prose msg >/dev/null 2>&1
@@ -103,7 +108,7 @@ n_known=$(printf '%s\n' "$KNOWN_FIELDS" | grep -c .)
 # One field per source proves each writer ran: recipe (delegate), kept
 # (feedback), enforce_skipped (the fail-open hook row).
 missing_src=""
-for f in recipe kept scaffold denied below_floor enforce_skipped; do
+for f in recipe kept scaffold denied below_floor approved enforce_skipped; do
   printf '%s\n' "$KNOWN_FIELDS" | grep -qxF "$f" || missing_src="$missing_src $f"
 done
 if [[ -z "$missing_src" ]]; then
@@ -256,11 +261,11 @@ OVERVIEW="$DASHBOARDS/grafana/delegate-overview.json"
 if [[ -f "$OVERVIEW" ]]; then
   trigger_panel=$(jq -r '[.panels[] | select((.targets // []) | map(.expr // "") | join(" ")
       | (contains("source=\"opportunity\"") and contains("delegated=\"true\"")
-         and contains("below_floor!=\"true\"") and contains("denied!=\"true\"")))] | length' "$OVERVIEW" 2>/dev/null)
+         and contains("below_floor!=\"true\"") and contains("denied!=\"true\"") and contains("approved!=\"true\"")))] | length' "$OVERVIEW" 2>/dev/null)
   if [[ "$trigger_panel" -ge 1 ]]; then
-    echo "  PASS  delegate-overview.json: trigger-rate panel present, excluding below-floor and denied rows"; pass=$((pass+1))
+    echo "  PASS  delegate-overview.json: trigger-rate panel present, excluding below-floor, denied and approved rows"; pass=$((pass+1))
   else
-    echo "  FAIL  delegate-overview.json: no trigger-rate panel on the opportunity stream with the below_floor/denied exclusions"; fail=$((fail+1))
+    echo "  FAIL  delegate-overview.json: no trigger-rate panel on the opportunity stream with the below_floor/denied/approved exclusions"; fail=$((fail+1))
   fi
   # The ratio gauge divides by the eligible count; a range or project with
   # none would render NaN without a noValue (PR #484 review, item L).

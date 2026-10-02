@@ -30,6 +30,9 @@
 #                                 lock is a killed hook's and is broken (default 5)
 #   DELEGATE_BOUNDARY_LOCK_WAIT_MS how long to wait for the lock, in 50 ms steps,
 #                                 before failing open as lock-timeout (default 2000)
+#   DELEGATE_BOUNDARY_TRANSCRIPT_TAIL_BYTES how much of the transcript's tail
+#                                 the deny path reads for text the human was
+#                                 already shown and answered (default 8388608)
 #   DELEGATE_BOUNDARY_WRAPPER_DIRS colon-separated directories whose scripts are
 #                                 read when run via bash/sh/zsh (default
 #                                 $CLAUDE_JOB_DIR, $TMPDIR, /tmp, /private/tmp,
@@ -60,13 +63,16 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 # One jq for every field. The command goes last, so a newline or a unit
 # separator inside it cannot shift the fields before it.
-_fields=$(jq -j '[(.cwd // "" | tostring), (.session_id // "" | tostring), (.tool_use_id // "" | tostring), (.tool_input.command // "" | tostring)] | join("\u001f")' <<<"$hook_input" 2>/dev/null) || exit 0
+_fields=$(jq -j '[(.cwd // "" | tostring), (.session_id // "" | tostring), (.tool_use_id // "" | tostring), (.transcript_path // "" | tostring), (.tool_input.command // "" | tostring)] | join("\u001f")' <<<"$hook_input" 2>/dev/null) || exit 0
 hook_cwd="${_fields%%$'\x1f'*}"; _fields="${_fields#*$'\x1f'}"
 # The transcript UUID delegate.sh writes on its row as `session` (#479); it
 # scopes the projectless lookup below. The tool_use_id is what the PostToolUse
 # confirm hook matches a credited call by (#497).
 session_id="${_fields%%$'\x1f'*}"; _fields="${_fields#*$'\x1f'}"
-tool_use_id="${_fields%%$'\x1f'*}"; cmd="${_fields#*$'\x1f'}"
+tool_use_id="${_fields%%$'\x1f'*}"; _fields="${_fields#*$'\x1f'}"
+# The session transcript, read only on the deny path for text the human was
+# already shown and answered (#607).
+transcript_path="${_fields%%$'\x1f'*}"; cmd="${_fields#*$'\x1f'}"
 [[ -z "$cmd" ]] && exit 0
 # Relative paths in the command (`--body-file reply.md`) are relative to where
 # the Bash tool will run, so chdir there before reading any body.
@@ -192,12 +198,29 @@ boundary="" recipe=""
 # A segment already read is not read again (`body_seg`): the `gh api` review
 # branch asks for the same segment's body twice, and each read is a perl run.
 body_text="" body_chars="" body_measurable=false body_read=false body_file="" body_kind="" body_seg="" target=""
+body_truncated=false
+# The command's length in bytes (a local LC_ALL=C, so no subshell), the unit
+# shell-words.pl caps its input in.
+cmd_bytes() { local LC_ALL=C; _cmd_bytes=${#cmd}; }
+# Whether body_text is the whole body, which the approved-text exemption
+# (#607) needs: an approved prefix must not carry an unseen remainder past the
+# 64 KB cap. An inline body is flagged as it is read; a file is sized here,
+# on the deny path only, so no other call pays for it.
+body_whole() {
+  local n
+  if [[ "$body_kind" == "FILE" ]]; then
+    n=$(wc -c < "$body_file" 2>/dev/null) || return 1
+    (( n <= 65536 ))
+  else
+    [[ "$body_truncated" != "true" ]]
+  fi
+}
 read_posted_body() { # segment-index (0-based)
   local out first kind flag path
   if [[ "$body_seg" == "$1" ]]; then body_read=true; return 0; fi
   body_seg="$1"
   body_text="" body_chars="" body_measurable=false body_read=true body_file=""
-  body_kind="" target=""
+  body_kind="" target="" body_truncated=false
   # The trailing X survives command-substitution newline stripping.
   out=$(perl "$tokenizer" "$1" <<<"$cmd" 2>/dev/null; printf X); out=${out%X}
   # The first line is the segment's target (#563), read by the same pass.
@@ -221,6 +244,10 @@ read_posted_body() { # segment-index (0-based)
   elif [[ "$kind" == "INLINE" ]]; then
     [[ "$flag" == "1" ]] || return 0
     body_text=${out#*$'\n'}
+    # shell-words.pl reads only the command's first 32768 bytes, so a longer
+    # command may have handed back a prefix of the body.
+    cmd_bytes
+    (( ${#body_text} > 65536 || _cmd_bytes > 32768 )) && body_truncated=true
     body_text=${body_text:0:65536}
     body_measurable=true
   fi
@@ -502,6 +529,9 @@ below_floor=false
 if [[ "$body_measurable" == "true" ]] && (( body_chars < min_chars )); then
   below_floor=true
 fi
+# Set on the deny path only, when the body is text the human was already
+# shown and answered (#607); see the deny decision below.
+approved=false
 
 # --- which mode applies to THIS boundary? (#483, #521) ---------------------
 # Unset enforces the set in DELEGATE_BOUNDARY_ENFORCE and warns elsewhere;
@@ -587,12 +617,14 @@ row_json() { # delegated [denied] [skipped]
   jq -nc --arg ts "$ts" --arg project "$project" --arg boundary "$boundary" \
      --arg recipe "$recipe" --arg sid "$session_id" --argjson delegated "$1" \
      --arg body_chars "$body_chars" --argjson below_floor "$below_floor" \
-     --argjson denied "${2:-false}" --arg skipped "${3:-}" --arg wrapper "$wrapper" '
+     --argjson denied "${2:-false}" --arg skipped "${3:-}" --arg wrapper "$wrapper" \
+     --argjson approved "$approved" '
      {ts:$ts, source:"opportunity", boundary:$boundary, suggested_recipe:$recipe, delegated:$delegated}
      + (if $project != "" then {project:$project} else {} end)
      + (if $sid != "" then {session:$sid} else {} end)
      + (if $body_chars != "" then {body_chars:($body_chars | tonumber)} else {} end)
      + (if $below_floor then {below_floor:true} else {} end)
+     + (if $approved then {approved:true} else {} end)
      + (if $denied then {denied:true} else {} end)
      + (if $skipped != "" then {enforce_skipped:$skipped} else {} end)
      + (if $wrapper != "" then {wrapper:$wrapper} else {} end)'
@@ -890,6 +922,20 @@ else
       enforce_skipped="lock-timeout"
     elif (( denied_streak >= retry_cap )) && [[ "$streak_attempted" == "yes" ]]; then
       enforce_skipped="retry-cap"
+    elif [[ "$body_measurable" == "true" && -n "$transcript_path" && -f "$transcript_path" \
+            && -f "$script_dir/lib/transcript-approved.pl" && -f "$script_dir/lib/pair-score.sh" ]] \
+         && body_whole \
+         && . "$script_dir/lib/pair-score.sh" \
+         && printf '%s' "$body_text" | perl "$script_dir/lib/transcript-approved.pl" "$transcript_path" \
+              "${ritual_min_pct:-90}" "${DELEGATE_BOUNDARY_TRANSCRIPT_TAIL_BYTES:-8388608}" 2>/dev/null; then
+      # The body is text the human was already shown and answered (#607,
+      # D8): at least ritual_min_pct of its word bigrams in one assistant
+      # message a genuine human turn followed, measured over the transcript's
+      # tail. Denying it would buy only a ritual delegation, so it goes
+      # through silently with approved:true on its row. Only a body the hook
+      # read qualifies, and any failure (no transcript, a parse error, no
+      # perl) is no exemption: the deny below proceeds as before.
+      approved=true
     else
       # The same expression delegate.sh uses, so `tier: prose ` resolves in both.
       if [[ -n "$script_dir" && -f "$script_dir/lib/recipe.sh" && -f "$prompts_dir/$recipe.md" ]]; then
@@ -918,7 +964,7 @@ else
     [[ -n "$enforce_skipped" ]] && mode=warn
   fi
   denied=false
-  [[ "$mode" == "enforce" && "$delegated" != "true" && "$below_floor" != "true" ]] && denied=true
+  [[ "$mode" == "enforce" && "$delegated" != "true" && "$below_floor" != "true" && "$approved" != "true" ]] && denied=true
   # The append is the writability test: when it fails the deny is withdrawn,
   # since no credit could ever be recorded here either.
   if ! append_row && [[ "$denied" == "true" ]]; then
@@ -928,9 +974,10 @@ fi
 
 # --- nudge unless the artifact was already delegated ----------------------
 # A file-backed body nudges like an inline one (#465); a body under the floor
-# is not drafting.
+# is not drafting, and an approved one (#607) was already reviewed.
 [[ "$delegated" == "true" ]] && exit 0
 [[ "$below_floor" == "true" ]] && exit 0
+[[ "$approved" == "true" ]] && exit 0
 [[ "$mode" == "off" ]] && exit 0
 
 # A --recipe call that omits a required input exits 2, so the keys are read

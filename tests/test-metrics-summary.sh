@@ -550,6 +550,27 @@ assert_contains "delta                 opportunities=2  delegated=1  missed=1  r
 assert_contains "excluded 1 denied attempts retried" "$trig" \
   "retry: exactly the same-second redraft is the excluded denial"
 rm -f "$xrepo"
+# 12e-iv. #607: an approved:true row (text the human was shown and answered
+# before it was posted) leaves the ratio like a below-floor row, and the
+# footer names how many. An approved post after a denial is the retry, so
+# the denial leaves the ratio with it.
+appr=$(mktemp)
+cat > "$appr" <<'EOF'
+{"ts":"2026-09-13T10:01:00Z","source":"opportunity","project":"alpha","boundary":"comment-reply","suggested_recipe":"maintainer-reply","delegated":true,"body_chars":312,"session":"s1"}
+{"ts":"2026-09-13T10:02:00Z","source":"opportunity","project":"alpha","boundary":"comment-reply","suggested_recipe":"maintainer-reply","delegated":false,"body_chars":312,"session":"s1"}
+{"ts":"2026-09-13T10:03:00Z","source":"opportunity","project":"alpha","boundary":"comment-reply","suggested_recipe":"maintainer-reply","delegated":false,"body_chars":312,"approved":true,"session":"s1"}
+{"ts":"2026-09-13T10:04:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"denied":true,"session":"s2"}
+{"ts":"2026-09-13T10:05:00Z","source":"opportunity","project":"alpha","boundary":"git-commit","suggested_recipe":"commit-message","delegated":false,"body_chars":312,"approved":true,"session":"s2"}
+EOF
+out=$(bash "$SCRIPT" --file "$appr" 2>&1)
+trig=$(sed -n '/^Trigger rate/,/^$/p' <<<"$out")
+assert_contains "opportunities=2  delegated=1  missed=1  rate=50%" "$trig" \
+  "approved: approved rows leave the ratio, and so does the denial an approved post retried"
+assert_contains "excluded 1 denied attempts retried" "$trig" \
+  "approved: the denial an approved post retried is counted as retried"
+assert_contains "excluded 0 boundaries under the floor (20 chars for git-commit, 120 for the rest) and 2 approved posts" "$trig" \
+  "approved: the footer line names the approved rows it excluded"
+rm -f "$appr"
 # With nothing excluded the line still prints, so the floor is never silent.
 opp2=$(mktemp)
 cat > "$opp2" <<'EOF'

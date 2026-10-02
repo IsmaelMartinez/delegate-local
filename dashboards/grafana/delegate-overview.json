@@ -843,7 +843,7 @@
       "id": 14,
       "type": "timeseries",
       "title": "Trigger rate",
-      "description": "Delegatable boundaries the PreToolUse hook saw (commit, PR body, review body, inline review reply, comment reply, issue body) against the ones a local delegation preceded (#277, #483). Rows under the body-length floor (below_floor) and attempts the hook denied (denied) are left out: the first is not drafting, the second is a post that did not happen \u2014 its delegated retry is the row that counts. Measured 2026-09-13: 680 boundaries in 14 days, 108 delegated, 15%.",
+      "description": "Delegatable boundaries the PreToolUse hook saw (commit, PR body, review body, inline review reply, comment reply, issue body) against the ones a local delegation preceded (#277, #483). Rows under the body-length floor (below_floor) and attempts the hook denied (denied) and posts of text the human had already seen and answered (approved, #607) are left out: the first and last are not drafting, the second is a post that did not happen \u2014 its delegated retry is the row that counts. Measured 2026-09-13: 680 boundaries in 14 days, 108 delegated, 15%.",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -895,7 +895,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"opportunity\"} | json | project=~\"$project\" | below_floor!=\"true\" | denied!=\"true\" [$__auto]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"opportunity\"} | json | project=~\"$project\" | below_floor!=\"true\" | denied!=\"true\" | approved!=\"true\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "opportunities"
         },
@@ -906,7 +906,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"opportunity\"} | json | project=~\"$project\" | below_floor!=\"true\" | denied!=\"true\" | delegated=\"true\" [$__auto]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"opportunity\"} | json | project=~\"$project\" | below_floor!=\"true\" | denied!=\"true\" | approved!=\"true\" | delegated=\"true\" [$__auto]))",
           "queryType": "range",
           "legendFormat": "delegated"
         }
@@ -973,7 +973,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"opportunity\"} | json | project=~\"$project\" | below_floor!=\"true\" | denied!=\"true\" | delegated=\"true\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"opportunity\"} | json | project=~\"$project\" | below_floor!=\"true\" | denied!=\"true\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"delegate-local\", source=\"opportunity\"} | json | project=~\"$project\" | below_floor!=\"true\" | denied!=\"true\" | approved!=\"true\" | delegated=\"true\" [$__range])) / sum(count_over_time({service=\"delegate-local\", source=\"opportunity\"} | json | project=~\"$project\" | below_floor!=\"true\" | denied!=\"true\" | approved!=\"true\" [$__range]))",
           "queryType": "instant"
         }
       ]

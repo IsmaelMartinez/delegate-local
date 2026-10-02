@@ -58,6 +58,7 @@ Every `DELEGATE_*` variable a script under `scripts/` reads, listed once. All ar
 | `DELEGATE_BOUNDARY_MIN_CHARS` | `20` for `git-commit`, `120` elsewhere | Body length below which no delegation is asked for. | `delegate-boundary-hook.sh`, `metrics-summary.sh` |
 | `DELEGATE_BOUNDARY_LONG_BODY_CHARS` | `600` | Reply length at or above which a comment routes to `maintainer-review-reply` rather than `maintainer-reply`. | `delegate-boundary-hook.sh` |
 | `DELEGATE_BOUNDARY_WINDOW_MIN` | `480` | Minutes a delegation stays available to credit a boundary. | `delegate-boundary-hook.sh`, `metrics-summary.sh` |
+| `DELEGATE_BOUNDARY_TRANSCRIPT_TAIL_BYTES` | `8388608` (8 MB) | How much of the session transcript's tail the hook reads, on the deny path only, to find text the human was already shown and answered (#607). | `delegate-boundary-hook.sh` |
 | `DELEGATE_BOUNDARY_WRAPPER_DIRS` | `$CLAUDE_JOB_DIR:$TMPDIR:/tmp:/private/tmp:/var/folders` | Colon-separated dirs whose wrapper scripts the hook reads and classifies. | `delegate-boundary-hook.sh` |
 | `DELEGATE_BOUNDARY_LOCK_STALE_SEC` | `5` | Age at which the hook's lock is treated as stale. | `delegate-boundary-hook.sh` |
 | `DELEGATE_BOUNDARY_LOCK_WAIT_MS` | `2000` | How long the hook waits for the lock. | `delegate-boundary-hook.sh` |
