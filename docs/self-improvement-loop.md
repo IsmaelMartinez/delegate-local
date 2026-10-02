@@ -313,7 +313,10 @@ Every recipe edit gets a dated entry in that recipe's calibration history,
 `docs/calibration/<recipe>.md`, saying what was observed, how many times, and
 what changed; the recipe's own `## Calibration notes` is a one-line pointer to
 that file and stays one (#569). That history is how the next session knows a
-defect has already been attacked and with what.
+defect has already been attacked and with what, so a `REJECT` belongs in it
+too: revert the recipe, record what was tried with the replay's summary and
+verdict lines, and open that entry alone as the PR. Otherwise the next pass,
+reading the same reasons, tries the same edit again.
 
 Run the suites the change touches (`tests/test-delegate.sh`,
 `tests/test-prompts-library.sh`, `tests/test-self-improve.sh`), open a PR, and
@@ -377,7 +380,7 @@ Everything the runner and the session print goes to
 
 The session runs with `--permission-mode dontAsk`, so any tool outside its
 allowlist is refused rather than prompted: read files, edit only under
-`prompts/`, run the gate with `--peek`, `replay-recipe.sh`,
+`prompts/` and `docs/calibration/`, run the gate with `--peek`, `replay-recipe.sh`,
 `metrics-summary.sh`, `delegate.sh`, `delegate-feedback.sh`, the three suites
 named under "Apply it" and `shellcheck`, read-only git,
 branch as `loop/<date>-<slug>`, add, commit, push that branch, and

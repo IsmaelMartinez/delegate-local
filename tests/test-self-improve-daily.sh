@@ -57,6 +57,16 @@ EOF
   cat > "$T/bin/git" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$T/rec/git.args"
+# Loop branches come from MOCK_LOOP_BRANCHES; a name's word says its state:
+# "empty" has nothing beyond origin/main, "pushed" is all on its upstream,
+# anything else holds unpushed work and has no upstream.
+case "\$*" in
+  *for-each-ref*) for b in \${MOCK_LOOP_BRANCHES:-}; do echo "\$b"; done; exit 0;;
+  *"rev-list --count origin/main.."*empty*) echo 0; exit 0;;
+  *"rev-list --count origin/main.."*) echo 2; exit 0;;
+  *"rev-list --count origin/"*pushed*) echo 0; exit 0;;
+  *"rev-list --count origin/"*) exit 128;;
+esac
 args=("\$@")
 for ((i = 0; i < \${#args[@]}; i++)); do
   case "\${args[i]}" in
@@ -129,6 +139,19 @@ assert_contains "$T/data/" "$(cat "$T/rec/claude.cwd" 2>/dev/null)" "the session
 assert_contains "worktree remove --force" "$(cat "$T/rec/git.args" 2>/dev/null)" "the worktree is removed afterwards"
 assert_eq "2026-09-30T12:00:00Z" "$(cat "$T/data/self-improve.state" 2>/dev/null)" \
   "a successful session advances the watermark to the bundle's newest row"
+rm -rf "$T"
+
+# 2b. The session's loop/ branches are swept from the live clone when they
+#     hold nothing (a dropped edit) or nothing unpushed, and kept when they
+#     hold unpushed work. The prompt says a rejected replay is recorded.
+setup
+MOCK_LOOP_BRANCHES="loop/2026-10-02-empty loop/2026-10-02-pushed loop/2026-10-02-work" MOCK_GATE_RC=0 run
+gargs=$(cat "$T/rec/git.args" 2>/dev/null)
+assert_contains "branch -D loop/2026-10-02-empty" "$gargs" "a loop branch with no commits is deleted"
+assert_contains "branch -D loop/2026-10-02-pushed" "$gargs" "a fully pushed loop branch is deleted"
+assert_not_contains "branch -D loop/2026-10-02-work" "$gargs" "a loop branch with unpushed work is kept"
+assert_contains "docs/calibration/<recipe>.md recording the attempt" "$(cat "$T/rec/claude.args" 2>/dev/null)" \
+  "the prompt says to record a rejected replay"
 rm -rf "$T"
 
 # 3. A failed session leaves the watermark where it was, so the next day's

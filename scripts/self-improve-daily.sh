@@ -60,6 +60,17 @@ fi
 bundle=$(mktemp)
 cleanup() {
   if [[ -d "$work" ]]; then git -C "$root" worktree remove --force "$work" >/dev/null 2>&1 || rm -rf "$work"; fi
+  # A session's loop/ branch lives in the live clone. One with no commits
+  # beyond origin/main (the session branched, then dropped its edit) or all
+  # of them pushed is litter; one holding unpushed work is kept.
+  local b
+  while IFS= read -r b; do
+    [[ -n "$b" ]] || continue
+    if [[ "$(git -C "$root" rev-list --count "origin/main..$b" 2>/dev/null)" == "0" ]] ||
+       [[ "$(git -C "$root" rev-list --count "origin/$b..$b" 2>/dev/null)" == "0" ]]; then
+      git -C "$root" branch -D "$b" >/dev/null 2>&1
+    fi
+  done < <(git -C "$root" for-each-ref --format='%(refname:short)' refs/heads/loop/ 2>/dev/null)
   rm -f "$bundle"
   if [[ "$(readlink "$lock" 2>/dev/null)" == "$$" ]]; then rm -f "$lock"; fi
 }
@@ -89,7 +100,7 @@ git -C "$root" worktree add --detach "$work" origin/main >/dev/null || { say "co
 today=$(date -u +%Y-%m-%d)
 prompt="You are the scheduled daily self-improvement pass for delegate-local, running headless with nobody watching.
 Read docs/self-improvement-loop.md and follow it from \"What the bundle gives you\" to the end. The gate has already run with --peek and its evidence bundle is on stdin; do not run scripts/self-improve.sh without --peek, because this runner advances the watermark when you exit successfully.
-Choose at most one fix. If you make one, create a branch named loop/$today-<short-slug> from this detached checkout, commit, push that branch with 'git push -u origin loop/$today-<slug>', and open a PR against main with 'gh pr create'. Draft commit and PR text with scripts/delegate.sh recipes and record each verdict with scripts/delegate-feedback.sh --id, as the repo's CLAUDE.md describes.
+Choose at most one fix. You may edit prompts/ and docs/calibration/; if the replay rejects your edit, revert it and make the fix a dated entry in docs/calibration/<recipe>.md recording the attempt and its replay lines. If you make one, create a branch named loop/$today-<short-slug> from this detached checkout, commit, push that branch with 'git push -u origin loop/$today-<slug>', and open a PR against main with 'gh pr create'. Draft commit and PR text with scripts/delegate.sh recipes and record each verdict with scripts/delegate-feedback.sh --id, as the repo's CLAUDE.md describes.
 Never merge, never push to main, never publish or release anything.
 End with one line: the PR URL, or why the evidence was too thin to change anything."
 
