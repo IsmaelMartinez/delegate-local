@@ -199,7 +199,7 @@ every recent-commit example carried `<type>(<scope>):` (`docs(plan)`,
 `feat(yjs)`, `fix(yjs)`) and the draft still wrote a bare `<type>:`. The other
 two had one scoped example and one bare one. The one-line SCOPE rule from
 2026-06-08 was not holding, and the subject-length line still said "starting
-with '<TYPE>:'".
+with `'<TYPE>:'`".
 
 Tried: a SCOPE-MATCH block marked non-negotiable (a scope is required when any
 example has one, and it still applies under the TYPE override), with the
