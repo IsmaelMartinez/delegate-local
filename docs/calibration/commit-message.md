@@ -190,3 +190,32 @@ copies through: a lone exemplar subject normalises under its 40-char floor and a
 `;`-joined list of subjects is one line. Over the 368 stored drafts it flags 8
 (5 rejected, 2 scaffold, 1 unverdicted, 0 kept), 5 of which no check caught.
 Template `3c2e0ca3eebd` becomes `a20e93b62bab`.
+
+### 2026-10-02 — a stronger SCOPE rule, rejected by the replay
+
+The daily bundle (watermark 2026-10-01T21:14:59Z) had seven `commit-message`
+scaffolds whose reasons say "added scope" or "omitted scope". In five of them
+every recent-commit example carried `<type>(<scope>):` (`docs(plan)`,
+`feat(yjs)`, `fix(yjs)`) and the draft still wrote a bare `<type>:`. The other
+two had one scoped example and one bare one. The one-line SCOPE rule from
+2026-06-08 was not holding, and the subject-length line still said "starting
+with '<TYPE>:'".
+
+Tried: a SCOPE-MATCH block marked non-negotiable (a scope is required when any
+example has one, and it still applies under the TYPE override), with the
+subject line naming both prefixes. Replay against `a20e93b62bab` on
+`mlx-community/Qwen3.6-35B-A3B-8bit`:
+
+    Summary: n=40  wins=1  losses=11  ties=28  errors=0
+    Checks failed: champion=0  candidate=7
+    Newest third (14 cases): wins=1  losses=3
+    Verdict: REJECT — the candidate loses 11 cases and wins 1 (p=0.003).
+
+The candidate added a scope on only two of the seven target cases
+(`fix(useAllotmentData)`, `feat(audio)`), so the defect stayed. Where it did add
+a scope, the subject sometimes went past `subject_max`, which accounts for most
+of the seven new check failures. Reverted. The replay's columns cannot see
+scope, so even an edit that worked would show only its cost. This is the
+second prompt-text attempt at scope. The next attempt should be a check
+(`scope_match` against `recent_commits`, like `subject_type`) or a caller
+`--var scope`, and should not reword the rule again.
