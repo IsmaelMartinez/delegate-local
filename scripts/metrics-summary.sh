@@ -378,6 +378,9 @@ fi
 # of row leave the ratio (#483): `below_floor:true`, a body no recipe should
 # draft, and `denied:true` when the same session retried within the window,
 # since the retry is the row that counts; a denial never retried stays a miss.
+# Since #607 `approved:true` leaves it too: a post of text the human was
+# shown and answered before it went out, which the hook does not deny. An
+# approved post after a denial is that denial's retry.
 # The footer names the floor and window in force for this shell, read with the
 # hook's own guards, because the rows carry the verdict, not the threshold.
 if (( n_opp > 0 )); then
@@ -413,8 +416,9 @@ if (( n_opp > 0 )); then
                 and (epoch - ($d | epoch)) <= ($win_min * 60))
           else . end)
     | (map(select(.below_floor == true)) | length) as $floored
+    | (map(select(.approved == true)) | length) as $approved
     | (map(select(.denied == true and .retried == true)) | length) as $denied
-    | map(select(.below_floor != true and (.denied != true or .retried != true)))
+    | map(select(.below_floor != true and .approved != true and (.denied != true or .retried != true)))
     | (group_by(.project // "")
       | map({
           project: (.[0].project // ""),
@@ -428,7 +432,8 @@ if (( n_opp > 0 )); then
       | "  \((if .project == "" then "(no project)" else .project end) | . + (if length < 20 then " " * (20 - length) else "" end))  opportunities=\(.n)  delegated=\(.delegated)  missed=\(.missed)"
         + "  rate=\(.delegated * 100 / .n | floor)%"
         + "  sessions=\(.sessions)"),
-      "  excluded \($floored) boundaries under " + (if $floor != "" then "\($floor) chars" else "the floor (20 chars for git-commit, 120 for the rest)" end),
+      "  excluded \($floored) boundaries under " + (if $floor != "" then "\($floor) chars" else "the floor (20 chars for git-commit, 120 for the rest)" end)
+        + (if $approved > 0 then " and \($approved) approved posts (text shown to the human and answered before it was posted)" else "" end),
       (if $denied > 0 then "  excluded \($denied) denied attempts retried within \($win_min)m (the post did not happen; the retry is what counts)" else empty end)
   ' "$metrics_file"
   echo

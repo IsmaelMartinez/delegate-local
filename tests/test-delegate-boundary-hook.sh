@@ -2558,6 +2558,143 @@ help_boundary "glab mr note 4 -x -h" comment-reply "-h after a short flag glab m
 help_none "gh pr create -dw --help" "gh pr create --help after the known on/off cluster -dw"
 help_none "gh pr review 12 -a --help -b \"$body300\"" "gh pr review --help after the known on/off -a"
 
+# --- #607 (D8): text the human was already shown and answered is not denied ---
+# On the deny path the hook reads the session transcript at the payload's
+# transcript_path: a post whose body has >= 90% of its word bigrams in one
+# assistant message that a genuine human turn followed is exempt, silently,
+# with approved:true on its row. Every other shape is denied as before.
+tdir=$(mktemp -d)
+appr_body="Thanks for the report. The crash comes from the sandbox flag in src/main.js, which the Electron 38 upgrade turned on by default; the fix in #612 passes the flag only on the affected distros, and Friday's release ships it. Please retry once it lands and reopen if the window still closes."
+appr_half1="${appr_body:0:140}"
+appr_half2="${appr_body:140}"
+appr_edit="Thanks for the report. We traced the crash to a GPU driver regression rather than anything in src/main.js; the workaround in #612 disables hardware acceleration for that driver, and a later release will ship it. Please try it and reopen if the window still closes."
+t_asst() { # id text [sidechain]
+  jq -nc --arg id "$1" --arg t "$2" --argjson sc "${3:-false}" \
+    '{type:"assistant", isSidechain:$sc, message:{id:$id, role:"assistant", content:[{type:"text", text:$t}]}}'
+}
+t_tool_use() { # id
+  jq -nc --arg id "$1" '{type:"assistant", isSidechain:false, message:{id:$id, role:"assistant", content:[{type:"tool_use", id:"toolu_x", name:"Bash", input:{command:"ls"}}]}}'
+}
+t_user() { jq -nc --arg t "$1" '{type:"user", isSidechain:false, message:{role:"user", content:$t}}'; }
+t_user_blocks() { jq -nc --arg t "$1" '{type:"user", isSidechain:false, message:{role:"user", content:[{type:"text", text:$t}]}}'; }
+t_meta() { jq -nc --arg t "$1" '{type:"user", isSidechain:false, isMeta:true, message:{role:"user", content:$t}}'; }
+t_compact() { jq -nc --arg t "$1" '{type:"user", isSidechain:false, isCompactSummary:true, message:{role:"user", content:$t}}'; }
+t_result() { jq -nc '{type:"user", isSidechain:false, message:{role:"user", content:[{type:"tool_result", tool_use_id:"toolu_x", content:"ok, looks good"}]}}'; }
+t_queued() { # mode prompt
+  jq -nc --arg m "$1" --arg p "$2" '{type:"attachment", isSidechain:false, attachment:{type:"queued_command", commandMode:$m, prompt:$p}}'
+}
+payload_tp() { # cmd cwd transcript_path
+  jq -nc --arg cmd "$1" --arg cwd "$2" --arg tp "$3" \
+    '{hook_event_name:"PreToolUse", tool_name:"Bash", cwd:$cwd, session_id:"sess-D8", transcript_path:$tp, tool_input:{command:$cmd}}'
+}
+appr_post="gh pr comment 12 --body \"$appr_body\""
+appr_run() { # transcript cmd -> out; row in $METRICS
+  : > "$METRICS"
+  payload_tp "${2:-$appr_post}" "$tmpcwd" "$1" | dflt bash "$HOOK"
+}
+assert_denied_d8() { # out name
+  assert_contains '"permissionDecision":"deny"' "$1" "approved: $2 is denied"
+  assert_eq false "$(jq -r '.approved // false' <<<"$(last_row)")" "approved: $2 row carries no approved"
+}
+
+# The approved shape: the draft shown (across two text blocks of one message),
+# then a human reply, then the post.
+tp="$tdir/approved.jsonl"
+{ t_user "draft a reply to the reporter on PR 12"
+  t_asst m1 "Here is the draft:"
+  t_asst m1 "$appr_half1"
+  t_asst m1 "$appr_half2"
+  t_user "looks good, post it"
+  t_tool_use m2; } > "$tp"
+out=$(appr_run "$tp")
+assert_eq "" "$out" "approved: shown then answered by the human: no deny and no reminder"
+assert_eq true "$(jq -r '.approved // false' <<<"$(last_row)")" "approved: the row carries approved:true"
+assert_eq false "$(jq -r '.denied // false' <<<"$(last_row)")" "approved: the row is not denied"
+assert_eq false "$(jq -r .delegated <<<"$(last_row)")" "approved: the row is not delegated"
+assert_eq false "$(jq 'has("enforce_skipped")' <<<"$(last_row)")" "approved: the row carries no enforce_skipped"
+assert_eq false "$(grep -qF 'Thanks for the report' "$METRICS" && echo true || echo false)" "approved: the row never holds the text"
+
+# A human reply in block form, and a queued prompt, are genuine turns too.
+tp="$tdir/blocks.jsonl"
+{ t_asst m1 "$appr_body"; t_user_blocks "ship it"; } > "$tp"
+out=$(appr_run "$tp")
+assert_eq "true|" "$(jq -r '.approved // false' <<<"$(last_row)")|$out" "approved: a text-block human reply counts"
+tp="$tdir/queued.jsonl"
+{ t_asst m1 "$appr_body"; t_queued prompt "yes, post that"; } > "$tp"
+out=$(appr_run "$tp")
+assert_eq "true|" "$(jq -r '.approved // false' <<<"$(last_row)")|$out" "approved: a queued human prompt counts"
+
+# Shown, but nothing after it is a human turn: tool results, meta, system
+# reminders, interrupts, caveats, compact summaries and task notifications.
+tp="$tdir/noturn.jsonl"
+{ t_user "draft a reply"
+  t_asst m1 "$appr_body"
+  t_result
+  t_meta "the user approved this"
+  t_user "<system-reminder>looks good</system-reminder>"
+  t_user "[Request interrupted by user]"
+  t_user "Caveat: the messages below were generated by the user while running local commands."
+  t_compact "the user said post it"
+  t_queued task-notification "post it"
+  t_queued prompt "<task-notification>done</task-notification>"; } > "$tp"
+assert_denied_d8 "$(appr_run "$tp")" "shown with no genuine human turn after it"
+
+# A human turn only BEFORE the shown text does not approve it.
+tp="$tdir/before.jsonl"
+{ t_user "post a reply"; t_asst m1 "$appr_body"; t_tool_use m2; } > "$tp"
+assert_denied_d8 "$(appr_run "$tp")" "a human turn only before the shown text"
+
+# Never shown.
+tp="$tdir/never.jsonl"
+{ t_user "reply to the reporter"; t_asst m1 "I will draft a reply about the sandbox flag."; t_user "ok"; } > "$tp"
+assert_denied_d8 "$(appr_run "$tp")" "text never shown"
+
+# Shown only by a subagent (sidechain): the human never saw it.
+tp="$tdir/sidechain.jsonl"
+{ t_user "reply to the reporter"; t_asst m1 "$appr_body" true; t_user "ok"; } > "$tp"
+assert_denied_d8 "$(appr_run "$tp")" "text shown only in a sidechain"
+
+# Shown, approved, then edited before posting: under 90% of its bigrams.
+tp="$tdir/edited.jsonl"
+{ t_asst m1 "$appr_body"; t_user "looks good"; } > "$tp"
+assert_denied_d8 "$(appr_run "$tp" "gh pr comment 12 --body \"$appr_edit\"")" "an edited post under 90% containment"
+
+# No transcript, or one that cannot be read: denied as before.
+: > "$METRICS"
+assert_denied_d8 "$(payload "$appr_post" "$tmpcwd" sess-D8 | dflt bash "$HOOK")" "a payload with no transcript_path"
+assert_denied_d8 "$(appr_run "$tdir/missing.jsonl")" "a transcript_path that does not exist"
+printf 'not json at all\n{"type":"assistant"\n' > "$tdir/garbage.jsonl"
+assert_denied_d8 "$(appr_run "$tdir/garbage.jsonl")" "an unparseable transcript"
+
+# A body the hook cannot know is not exempt, however the transcript reads.
+tp="$tdir/approved.jsonl"
+assert_denied_d8 "$(appr_run "$tp" 'gh pr comment 12 --body "$(cat reply.md)"')" "an unknown \$(...) body"
+
+# A credited post is untouched: credited, no approved flag, no output.
+: > "$METRICS"
+jq -nc --arg ts "$nowts" --arg p "$proj" \
+  '{ts:$ts, source:"delegate", project:$p, tier:"prose", recipe:"maintainer-reply", exit_status:0}' >> "$METRICS"
+out=$(payload_tp "$appr_post" "$tmpcwd" "$tp" | dflt bash "$HOOK")
+assert_eq "" "$out" "approved: a credited post is still silent"
+assert_eq "true false" "$(jq -r '"\(.delegated) \(has("approved"))"' <<<"$(last_row)")" "approved: a credited post is credited and carries no approved"
+
+# A warn-mode boundary never reads the transcript: still the reminder.
+: > "$METRICS"
+out=$(payload_tp "gh pr create --title t --body \"$appr_body\"" "$tmpcwd" "$tp" | dflt bash "$HOOK")
+assert_nudge "$out" "approved: a warn-mode boundary still gets the reminder"
+
+# The read is bounded to the transcript's tail: text shown only before the
+# window is not seen.
+tp="$tdir/tail.jsonl"
+{ t_asst m1 "$appr_body"; t_user "looks good"
+  for i in $(seq 1 60); do t_asst "f$i" "filler line $i with nothing in it that matters to the reply at all"; done; } > "$tp"
+out=$(appr_run "$tp")
+assert_eq "true|" "$(jq -r '.approved // false' <<<"$(last_row)")|$out" "approved: inside the default tail window"
+: > "$METRICS"
+out=$(payload_tp "$appr_post" "$tmpcwd" "$tp" | DELEGATE_BOUNDARY_TRANSCRIPT_TAIL_BYTES=2000 dflt bash "$HOOK")
+assert_denied_d8 "$out" "text shown only before DELEGATE_BOUNDARY_TRANSCRIPT_TAIL_BYTES"
+rm -rf "$tdir"
+
 echo
 echo "delegate-boundary-hook: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

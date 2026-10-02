@@ -5,7 +5,10 @@
 #
 # Three scenarios per hook: a non-boundary call (`ls -la`, the path every Bash
 # call pays), a credited post (`gh pr comment` with a delegation in the window,
-# so no provider probe runs), and the same post with a 100 KB inline body. The
+# so no provider probe runs), and the same post with a 100 KB inline body.
+# The boundary hook also times an uncredited enforced post (`gh issue create`,
+# no github-issue-body delegation), the deny path that reads the session
+# transcript for approved text (#607) before its probe of a closed port. The
 # PostToolUse payload of the non-boundary call carries 2 KB of stdout, as a
 # real one does. The confirm hook's credited scenarios time the confirmation
 # of the marker the boundary hook left in the untimed setup.
@@ -32,7 +35,7 @@ while (( $# )); do
     -n) runs="$2"; shift 2 ;;
     --base) base="$2"; shift 2 ;;
     --candidate) cand="$2"; shift 2 ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
     *) echo "bench-hooks: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -60,7 +63,22 @@ mkdir -p "$repo"
   && : > f && git add f && git commit -qm init ) >/dev/null 2>&1
 proj=bench-repo
 sid="0b5e7c1a-3f2d-4e8b-9a61-c0ffee563000"
-transcript="$HOME/.claude/projects/-Users-x-projects-github-bench-repo/$sid.jsonl"
+# A synthetic 12 MB session transcript (#607): the denied scenario reads it
+# for text the human already approved, so its cost is the scanner's over the
+# default 8 MB tail. Mostly tool calls and results, with assistant text and a
+# human turn every block, the mix a long agent session has.
+transcript="$work/transcript.jsonl"
+perl -e '
+  my $pad = "x" x 3000;
+  my $usage = q{"usage":{"input_tokens":2,"cache_read_input_tokens":65842,"output_tokens":318}};
+  my $i = 0;
+  while ((-s STDOUT // 0) < 12 * 1024 * 1024) {
+    $i++;
+    print qq({"type":"user","isSidechain":false,"message":{"role":"user","content":"carry on with step $i"}}\n);
+    print qq({"type":"assistant","isSidechain":false,"message":{"id":"msg_t$i","role":"assistant","content":[{"type":"text","text":"Step $i: the parser reads the attached form and the regression test covers both shapes."}],$usage}}\n);
+    print qq({"type":"assistant","isSidechain":false,"message":{"id":"msg_u$i","role":"assistant","content":[{"type":"tool_use","id":"toolu_$i","name":"Bash","input":{"command":"ls"}}],$usage}}\n);
+    print qq({"type":"user","isSidechain":false,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_$i","content":"$pad"}]}}\n);
+  }' > "$transcript"
 data="$work/data"
 
 # The scenarios' commands and payloads, written once.
@@ -83,6 +101,7 @@ post_payload 'ls -la' toolu_bench_ls "$listing" > "$work/post-ls.json"
 pre_payload "gh pr comment 12 --body \"$short_body\"" toolu_bench_post > "$work/pre-post.json"
 post_payload "gh pr comment 12 --body \"$short_body\"" toolu_bench_post "https://github.com/o/r/pull/12#issuecomment-1" > "$work/post-post.json"
 pre_payload "gh pr comment 12 --body \"$big_body\"" toolu_bench_big > "$work/pre-big.json"
+pre_payload "gh issue create --title t --body \"$short_body\"" toolu_bench_deny > "$work/pre-deny.json"
 post_payload "gh pr comment 12 --body \"$big_body\"" toolu_bench_big "https://github.com/o/r/pull/12#issuecomment-2" > "$work/post-big.json"
 
 # The state each sample starts from: an empty data dir holding one unspent
@@ -111,6 +130,7 @@ perl -MTime::HiRes=time -e '
     ["pre",  "non-boundary", "pre-ls.json",   undef],
     ["pre",  "credited",     "pre-post.json", undef],
     ["pre",  "100KB body",   "pre-big.json",  undef],
+    ["pre",  "uncredited",   "pre-deny.json", undef],
     ["post", "non-boundary", "post-ls.json",  undef],
     ["post", "credited",     "post-post.json", "pre-post.json"],
     ["post", "100KB body",   "post-big.json",  "pre-big.json"],
