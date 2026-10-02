@@ -380,7 +380,7 @@ Everything the runner and the session print goes to
 
 The session runs with `--permission-mode dontAsk`, so any tool outside its
 allowlist is refused rather than prompted: read files, edit only under
-`prompts/`, run the gate with `--peek`, `replay-recipe.sh`,
+`prompts/` and `docs/calibration/`, run the gate with `--peek`, `replay-recipe.sh`,
 `metrics-summary.sh`, `delegate.sh`, `delegate-feedback.sh`, the three suites
 named under "Apply it" and `shellcheck`, read-only git,
 branch as `loop/<date>-<slug>`, add, commit, push that branch, and
