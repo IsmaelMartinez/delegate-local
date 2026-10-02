@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.46.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.45.1...v0.46.0) (2026-10-02)
+
+
+### Features
+
+* **hook:** skip the deny when the transcript shows the human approved the text ([#631](https://github.com/IsmaelMartinez/delegate-local/issues/631)) ([59a19e4](https://github.com/IsmaelMartinez/delegate-local/commit/59a19e45464f58a5c4899310f1dfeeafc02196b0))
+
+
+### Bug Fixes
+
+* **self-improve:** record rejected replays and prune empty loop branches ([#628](https://github.com/IsmaelMartinez/delegate-local/issues/628)) ([103923f](https://github.com/IsmaelMartinez/delegate-local/commit/103923fa86d1c88bbe051b1da10a2b60ad220203))
+
+
+### Documentation
+
+* **calibration:** record the rejected SCOPE-MATCH edit to commit-message ([#630](https://github.com/IsmaelMartinez/delegate-local/issues/630)) ([ebd9a38](https://github.com/IsmaelMartinez/delegate-local/commit/ebd9a3838213f5922222ed4e9d6690ef42e6a160))
+
 ## [0.45.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.45.0...v0.45.1) (2026-10-01)
 
 
