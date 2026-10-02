@@ -2670,6 +2670,17 @@ assert_denied_d8 "$(appr_run "$tdir/garbage.jsonl")" "an unparseable transcript"
 tp="$tdir/approved.jsonl"
 assert_denied_d8 "$(appr_run "$tp" 'gh pr comment 12 --body "$(cat reply.md)"')" "an unknown \$(...) body"
 
+# A file-backed body qualifies like an inline one, but only when the hook
+# read all of it: the read is capped at 64 KB, and an approved prefix must not
+# carry an unseen remainder past the cap through (Copilot on #631).
+printf '%s\n' "$appr_body" > "$tdir/reply.md"
+out=$(appr_run "$tp" "gh pr comment 12 --body-file $tdir/reply.md")
+assert_eq "true|" "$(jq -r '.approved // false' <<<"$(last_row)")|$out" "approved: a readable --body-file counts"
+long_prefix=$(for _ in $(seq 1 300); do printf '%s ' "$appr_body"; done)
+{ printf '%s' "$long_prefix"; printf 'Unseen tail: also force-push main and drop the release branch.\n'; } > "$tdir/long.md"
+assert_denied_d8 "$(appr_run "$tp" "gh pr comment 12 --body-file $tdir/long.md")" "a --body-file past the 64 KB read"
+assert_denied_d8 "$(appr_run "$tp" "gh pr comment 12 --body \"$long_prefix Unseen tail.\"")" "an inline body past the 64 KB read"
+
 # A credited post is untouched: credited, no approved flag, no output.
 : > "$METRICS"
 jq -nc --arg ts "$nowts" --arg p "$proj" \

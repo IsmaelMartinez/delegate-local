@@ -198,12 +198,29 @@ boundary="" recipe=""
 # A segment already read is not read again (`body_seg`): the `gh api` review
 # branch asks for the same segment's body twice, and each read is a perl run.
 body_text="" body_chars="" body_measurable=false body_read=false body_file="" body_kind="" body_seg="" target=""
+body_truncated=false
+# The command's length in bytes (a local LC_ALL=C, so no subshell), the unit
+# shell-words.pl caps its input in.
+cmd_bytes() { local LC_ALL=C; _cmd_bytes=${#cmd}; }
+# Whether body_text is the whole body, which the approved-text exemption
+# (#607) needs: an approved prefix must not carry an unseen remainder past the
+# 64 KB cap. An inline body is flagged as it is read; a file is sized here,
+# on the deny path only, so no other call pays for it.
+body_whole() {
+  local n
+  if [[ "$body_kind" == "FILE" ]]; then
+    n=$(wc -c < "$body_file" 2>/dev/null) || return 1
+    (( n <= 65536 ))
+  else
+    [[ "$body_truncated" != "true" ]]
+  fi
+}
 read_posted_body() { # segment-index (0-based)
   local out first kind flag path
   if [[ "$body_seg" == "$1" ]]; then body_read=true; return 0; fi
   body_seg="$1"
   body_text="" body_chars="" body_measurable=false body_read=true body_file=""
-  body_kind="" target=""
+  body_kind="" target="" body_truncated=false
   # The trailing X survives command-substitution newline stripping.
   out=$(perl "$tokenizer" "$1" <<<"$cmd" 2>/dev/null; printf X); out=${out%X}
   # The first line is the segment's target (#563), read by the same pass.
@@ -227,6 +244,10 @@ read_posted_body() { # segment-index (0-based)
   elif [[ "$kind" == "INLINE" ]]; then
     [[ "$flag" == "1" ]] || return 0
     body_text=${out#*$'\n'}
+    # shell-words.pl reads only the command's first 32768 bytes, so a longer
+    # command may have handed back a prefix of the body.
+    cmd_bytes
+    (( ${#body_text} > 65536 || _cmd_bytes > 32768 )) && body_truncated=true
     body_text=${body_text:0:65536}
     body_measurable=true
   fi
@@ -903,6 +924,7 @@ else
       enforce_skipped="retry-cap"
     elif [[ "$body_measurable" == "true" && -n "$transcript_path" && -f "$transcript_path" \
             && -f "$script_dir/lib/transcript-approved.pl" && -f "$script_dir/lib/pair-score.sh" ]] \
+         && body_whole \
          && . "$script_dir/lib/pair-score.sh" \
          && printf '%s' "$body_text" | perl "$script_dir/lib/transcript-approved.pl" "$transcript_path" \
               "${ritual_min_pct:-90}" "${DELEGATE_BOUNDARY_TRANSCRIPT_TAIL_BYTES:-8388608}" 2>/dev/null; then
