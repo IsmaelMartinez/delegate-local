@@ -268,3 +268,84 @@ Re-measure after roughly ten calls. The number to watch is whether
 `no_unbidden_mention` appears in `checks_failed_names` after the retry: if
 the second generation still carries the mention, the constraint sentence is
 not the lever and the mention should be stripped rather than regenerated.
+
+### 2026-10-04 — the evidence slot filled with the maintainer's gates; the JUDGEMENT-NOT-METHOD edit was replayed and withdrawn
+
+The daily pass read the bundle for 2026-10-03T08:06Z to 2026-10-04T07:59Z:
+this recipe at n=51, kept 0, scaffold 10, rewrote 41, usable 19% over the
+seven days, the worst line in the library. 29 of the 51 are ritual (the
+caller posted text it already had, mostly one-line approvals pasted into
+stdin) and say nothing about the template. Of the 22 that remain, 10 from
+the morning of 2026-10-04 carried facts of one line ("PR #3840: host-only
+endpoint keys; both asks applied. Clean approve.") and were rewritten as
+"local draft generic"; no template can put back what the caller did not
+pipe, and these belong with the ritual rows as a capture problem rather
+than a recipe one. The 9 substantive rejections, every one with its draft,
+input and shipped text, name one family of defect in the evidence slot.
+Four reasons say the draft "leaked the verification method" or "said how
+it was verified": the drafts read "Tests fail without the fix, but the full
+suite and CI are green" and "the revert probe correctly fails", and no
+shipped reply in the window mentions the suite, CI or a probe. Six say the
+draft dropped or blurred the judgement on the bot's open findings ("no
+Qodo line", "dropped the two Qodo reasons", "vague Qodo reason"), which
+every shipped approval carries in one sentence with its reason ("Qodo's
+open notes are comment style and the uninitialised retry attributes,
+neither a defect at this head"). The drafts were obeying item 2 of the
+order as the 2026-09-20 edit wrote it, "what was verified about the change
+and what it showed", and the maintainer was rejecting the obedience, which
+is the 2026-09-20 finding one slot to the right. Beside it, 12 of the 22
+non-ritual pairs carried a `SHAPE` line, draft three paragraphs against a
+shipped one, and one reason said so in words ("verdict line split from
+body"); every shipped reply in the window, with and without an ask, is one
+paragraph, which is the PARAGRAPHS rule of 2026-09-20 contradicted by
+newer evidence.
+
+The edit tried: item 2 rewritten to hold what the reader cannot see for
+themselves (a result that changes what they do next, and the judgement on
+each finding another reviewer or a bot left open, with its reason), with
+the gates named as never going in, backed by a JUDGEMENT-NOT-METHOD guard
+block and matching lines in VERIFIED-NOT-DESCRIBED, the verify step and
+the guard list. The replay against `main` (template `200da2e4317a` against
+candidate `b7e46a5e590f`, model `mlx-community/Qwen3.6-35B-A3B-8bit`):
+
+```
+Summary: n=40  wins=10  losses=16  ties=14  errors=0
+Checks failed: champion=3  candidate=0
+Length flags: champion=12  candidate=10
+Newest third (14 cases): wins=3  losses=4
+Sign test: p=0.163 (one-sided, 16 losses to 10)
+Verdict: INCONCLUSIVE — 16 losses to 10 wins is not yet significant (p=0.163).
+```
+
+The recipe is reverted and the edit is not proposed. The candidate did
+what it was asked, and lost on what it did with the room: on the 3129
+case the gates went and the Qodo disposition stayed, and the output then
+carried a bare `da382e80` on its own line (`invented` 2, `shape` 1); on
+the 3835 case the evidence became the one sentence the maintainer shipped
+and a third paragraph appeared, "Please address the Qodo finding
+separately", with the ask block empty; on the 3820 case the two asks
+became imperatives ("Drop the duplicated DEFAULT constant since
+`configuration.toml` already ships the default") closed by "Please address
+these two points?", charged as `over` 2 and `dropped` 3. Twelve of the 16
+losses are a `shape` flag the champion lacked, and the outputs behind
+them are a short reply padded to three paragraphs with an ask the caller
+did not give, so the edit traded the gates for the item 3 invention the
+order already forbids. The 2026-09-30 cases, whose facts are one line,
+went from a one-line output to three paragraphs with an invented "Please
+proceed with merging" on the same mechanism.
+
+Two things for the next pass, neither tried here. The invented ask on an
+empty ask block is now a measured defect (it appeared under the candidate
+on at least 6 of the 40 cases and under the champion on none), and the
+rule in item 3 does not hold it once the evidence shrinks, so the shape
+to reach for is a declared check that fails a reply ending in a question
+or a "Please ..." sentence when `ask` is empty, with the retry; that is a
+`scripts/lib/checks.sh` change and outside the daily session's edit
+scope. And the PARAGRAPHS rule is the shape loss waiting to happen on any
+evidence edit: with every shipped reply in the window one paragraph, a
+candidate that keeps the three-paragraph skeleton pays `shape` on every
+case it otherwise improves, so the paragraph rule should be re-measured
+on its own, before the evidence slot is tried again, against the 12 pairs
+above. Per the thrash rule the evidence wording is at one prompt-text
+attempt since 2026-09-20's narrowing; a second must carry the ask check
+with it or it will lose the same way.
