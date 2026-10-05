@@ -268,3 +268,82 @@ Re-measure after roughly ten calls. The number to watch is whether
 `no_unbidden_mention` appears in `checks_failed_names` after the retry: if
 the second generation still carries the mention, the constraint sentence is
 not the lever and the mention should be stripped rather than regenerated.
+
+### 2026-10-05 — the one-paragraph edit the replay did not accept (recipe unchanged)
+
+The daily pass read the bundle for the window from 2026-10-04T07:59:51Z to
+2026-10-05T07:51:46Z. This recipe was the worst line of the seven-day table
+(n=69, kept 0, scaffold 16, rewrote 53, usable 23%, with 55 of the 69
+tagged ritual), and the rejections since the watermark carried one
+mechanical signal thirteen times and never its mirror: `SHAPE: draft used 3
+paragraphs; the shipped text used one` on nine non-ritual pairs and four
+ritual ones. The three-paragraph draft is what the template asks for: the
+PARAGRAPHS rule added on 2026-09-20 ("separate short paragraphs ... never
+one paragraph carrying the evidence and the ask together") and the skeleton
+that ends its third block with `?`. Beside it, three reasons said the draft
+ended on a question where an instruction was wanted ("ended with a
+question", "closed with a question", "question mark on an instruction"), and
+three more said the evidence paragraph narrated the verification ("narrated
+how it was verified", "leaked verification method", "dropped how-verified
+sentence"). The "no thanks opener" reasons of the same day are the caller's:
+none of those calls passed `opener`, and the recipe never invents gratitude.
+
+The replay baseline confirmed the shape reading before any edit: over the
+newest 40 non-ritual cases (kept 0, scaffold 8, rewrote 32, two sessions)
+the champion template `200da2e4317a` carried a shape mismatch on 20, with 3
+failed checks and 7 length flags. The edit tried was one fix in the
+documented sense: PARAGRAPHS became ONE-PARAGRAPH (verdict, evidence and ask
+run on as one paragraph, with only the two-or-more-asks list and the
+sign-off outside it), the skeleton collapsed to one line with a second
+"Wrong:" naming the three-block layout, and item 3 said a request ends with
+a full stop and only a question with a question mark. Candidate template
+`13ebdd660103`. The gate's lines:
+
+```
+Summary: n=40  wins=14  losses=16  ties=10  errors=0
+Checks failed: champion=3  candidate=2
+Length flags: champion=7  candidate=9
+Newest third (14 cases): wins=6  losses=5
+Sign test: p=0.428 (one-sided, 16 losses to 14)
+Verdict: INCONCLUSIVE — 16 losses to 14 wins is not yet significant (p=0.428).
+```
+
+The edit did what it was written to do and the measure could not credit
+it, for a reason worth recording so the next pass does not try the same
+wording. Shape mismatches fell from 20 to 12, and the 14 wins are the cases
+whose shipped reply is one paragraph: the candidate matched them and the
+champion did not. Ten of the 16 losses are shape alone, in the other
+direction, against finals of three or more blocks: nine are replies the
+maintainer wrote by hand around fenced `suggestion` blocks (the 2026-10-04
+runs on `pr-agent`, 1.6 to 3.3 KB, every one a `rewrote` whose bundle line
+lists the code under ADDED), and one is a scratch document of two PR bodies
+with `=== #3847 ===` headings stored as a final, which `--quarantine` did
+not list and should. No template produces those replies, because the facts
+never carried the code; under the champion they matched on shape by
+accident, three paragraphs against three-plus. The shape column is
+symmetric and this recipe's references are bimodal, so a one-paragraph rule
+is capped near 20 wins to 10 losses on shape before any other column moves,
+and the other columns did move: five losses are clean approvals (no `ask`,
+no `opener`) where the one-paragraph output read "Approving and merging.
+Verified that PR #3851 restricts the GitLab reaction endpoint to emoji-only
+interactions", charging two anchors under `over` where the champion's
+three-block draft had carried none, and the length flags rose from 7 to 9.
+That sentence is the narration defect the three "how it was verified"
+reasons describe, and the one-paragraph form invites it: with no ask and no
+opener the model fills the paragraph with the PR number and a description
+of the change.
+
+Recipe reverted to `200da2e4317a`; nothing in `prompts/` changed. What the
+next pass should take from this: the one-paragraph shape is right for the
+half of this recipe's traffic that ships as a plain reply and the online
+signal for it is strong (13 SHAPE lines one way, none the other), but the
+replay as built cannot accept it while a quarter of its references are
+hand-written code replies, so a second prose attempt at the same rule will
+land INCONCLUSIVE again and is not worth the calls. Either the gate learns
+to leave out a reference that carries a fenced block the inputs did not
+supply (a change to `replay-recipe.sh`, not to this recipe), or the edit
+goes in as a proposal and is read online under the per-template section at
+thirty rows. The narration defect is separately evidenced now (three
+reasons plus the five candidate outputs above) and is the better next
+target: on a clean approval the evidence is one sentence that names no PR
+number, since the reader knows which PR they opened.
