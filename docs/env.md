@@ -74,6 +74,14 @@ Every `DELEGATE_*` variable a script under `scripts/` reads, listed once. All ar
 | `DELEGATE_REPLAY_MODEL` | resolved from the recipe's tier | The model replay expects and keys its cache on; it does not select the model, and a case whose wrapper ran on a different one fails. | `replay-recipe.sh` |
 | `DELEGATE_REPLAY_DELEGATE_SH` | `scripts/delegate.sh` | The wrapper replay invokes (a test seam). | `replay-recipe.sh` |
 
+## Decisions (Clef spike, #636)
+
+| Variable | Default | Effect | Read by |
+|---|---|---|---|
+| `DELEGATE_CLEF_URL` | `http://127.0.0.1:8765` | Base URL of a SystemOne endpoint (`POST /v1/systemone`), such as Clef served locally from the data dir's `spikes/clef/`. | `decide.sh` |
+| `DELEGATE_CLEF_MODEL` | `clef-flash` | The `model` sent when the request names none. | `decide.sh` |
+| `DELEGATE_DECIDE_TIMEOUT` | `120` | Seconds for each decision request, on either backend. | `decide.sh` |
+
 ## Embeddings
 
 | Variable | Default | Effect | Read by |
