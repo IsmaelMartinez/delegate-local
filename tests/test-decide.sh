@@ -63,6 +63,9 @@ echo "default backend"
 out=$(run <<<"$request")
 assert_eq "logprob" "$(jq -r '.backend' <<<"$out")" "no --backend means the resident model's logprobs (ADR 0033)"
 
+echo "help"
+assert_contains "DELEGATE_DECIDE_TIMEOUT (seconds, default 120)" "$(run --help)" "--help prints the header to its last Env line, however long it grows"
+
 echo "logprob backend"
 : > "$sniff"
 out=$(run --backend logprob <<<"$request")

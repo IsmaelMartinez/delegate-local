@@ -36,7 +36,7 @@ while (( $# > 0 )); do
   case "$1" in
     --backend) need_value "$@"; backend="$2"; shift 2 ;;
     --tier) need_value "$@"; tier="$2"; shift 2 ;;
-    -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR > 1 && !/^#/ { exit } NR > 1' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "decide: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
