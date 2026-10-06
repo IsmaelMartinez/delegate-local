@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.47.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.46.0...v0.47.0) (2026-10-06)
+
+
+### Features
+
+* **decide:** add the decide.sh decision client for the Clef spike ([#643](https://github.com/IsmaelMartinez/delegate-local/issues/643)) ([afe2b04](https://github.com/IsmaelMartinez/delegate-local/commit/afe2b04dcb67cabaacb69b8f8b7fe636ff27b3e8))
+* **export:** add export-verdicts.sh to build the Clef dataset ([#645](https://github.com/IsmaelMartinez/delegate-local/issues/645)) ([447674e](https://github.com/IsmaelMartinez/delegate-local/commit/447674eea8806c92d0d23f3bb70b65960e20324d))
+
 ## [0.46.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.45.1...v0.46.0) (2026-10-02)
 
 
