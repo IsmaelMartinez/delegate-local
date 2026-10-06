@@ -117,6 +117,8 @@ perl -MJSON::PP -e '
   push @{ $split{ substr($_->{ts}, 0, 10) ge $cut ? "holdout" : "dev" } }, $_ for @rows;
   for my $name (qw(dev holdout)) {
     open(my $fh, ">:raw", "$ENV{OUT}/$name.jsonl") or die "export-verdicts: cannot write $ENV{OUT}/$name.jsonl: $!\n";
+    # umask covers a new file only; a rerun over an older 0644 file keeps its mode.
+    chmod(0600, "$ENV{OUT}/$name.jsonl") or die "export-verdicts: cannot chmod $ENV{OUT}/$name.jsonl: $!\n";
     print $fh $json->encode($_), "\n" for @{ $split{$name} };
     close $fh;
   }

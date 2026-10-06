@@ -52,6 +52,10 @@ run() { DELEGATE_LOCAL_DATA_DIR="$data" bash "$SCRIPT" --out "$out" "$@"; }
 rec() { jq -c --arg id "$1" 'select(.id == $id)' "$out/dev.jsonl" "$out/holdout.jsonl"; }
 
 echo "default export"
+# An earlier, world-readable export the run must tighten, not inherit.
+mkdir -p "$out"
+: > "$out/dev.jsonl"
+chmod 644 "$out/dev.jsonl"
 summary=$(run --holdout-from 2026-10-02)
 assert_eq "hit" "$(rec hit | jq -r .verdict)" "kept maps to hit"
 assert_eq "scaffold" "$(rec sca | jq -r .verdict)" "scaffold stays scaffold"
@@ -71,7 +75,7 @@ assert_eq "2" "$(wc -l < "$out/dev.jsonl" | tr -d ' ')" "dev holds the days befo
 assert_eq "1" "$(wc -l < "$out/holdout.jsonl" | tr -d ' ')" "holdout holds the cut day on"
 assert_contains "pr-description" "$summary" "the summary lists N per recipe"
 assert_not_contains "pass --holdout-from" "$summary" "a given cut is not re-suggested"
-assert_eq "600" "$(stat -c %a "$out/dev.jsonl" 2>/dev/null || stat -f %Lp "$out/dev.jsonl")" "the dataset is readable by its owner only"
+assert_eq "600" "$(stat -c %a "$out/dev.jsonl" 2>/dev/null || stat -f %Lp "$out/dev.jsonl")" "the dataset is readable by its owner only, even over an older 0644 file"
 
 echo "options"
 summary=$(run --include-ritual --holdout-from 2026-10-02)
