@@ -71,6 +71,7 @@ assert_eq "2" "$(wc -l < "$out/dev.jsonl" | tr -d ' ')" "dev holds the days befo
 assert_eq "1" "$(wc -l < "$out/holdout.jsonl" | tr -d ' ')" "holdout holds the cut day on"
 assert_contains "pr-description" "$summary" "the summary lists N per recipe"
 assert_not_contains "pass --holdout-from" "$summary" "a given cut is not re-suggested"
+assert_eq "600" "$(stat -c %a "$out/dev.jsonl" 2>/dev/null || stat -f %Lp "$out/dev.jsonl")" "the dataset is readable by its owner only"
 
 echo "options"
 summary=$(run --include-ritual --holdout-from 2026-10-02)
@@ -87,6 +88,10 @@ DELEGATE_LOCAL_DATA_DIR="$data" bash "$SCRIPT" --out "$REPO/tests" >/dev/null 2>
 assert_eq "2" "$?" "an output dir inside a git checkout is refused"
 run --since 2026-9-1 >/dev/null 2>&1
 assert_eq "2" "$?" "a malformed date exits 2"
+run --holdout-from 2026-13-40 >/dev/null 2>&1
+assert_eq "2" "$?" "an impossible month exits 2"
+run --holdout-from 2026-02-30 >/dev/null 2>&1
+assert_eq "2" "$?" "a day jq would roll into March exits 2"
 run --holdout-from >/dev/null 2>&1
 assert_eq "2" "$?" "a value-less option exits 2"
 DELEGATE_LOCAL_DATA_DIR="$TEST_ROOT/none" bash "$SCRIPT" --out "$out" >/dev/null 2>&1

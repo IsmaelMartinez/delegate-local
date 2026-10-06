@@ -35,7 +35,12 @@ out_dir="$data_dir/spikes/clef/dataset"
 include_ritual=false
 
 need_value() { [[ -n "${2:-}" ]] || { echo "export-verdicts: $1 requires a value" >&2; exit 2; }; }
-is_day() { [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "export-verdicts: '$1' is not YYYY-MM-DD" >&2; exit 2; }; }
+# A real calendar day: jq rejects month 13 but rolls 2026-02-30 into March, so
+# the parsed day must print back unchanged.
+is_day() {
+  [[ "$(jq -rn --arg d "$1" '($d + "T00:00:00Z") | fromdateiso8601 | todate[0:10]' 2>/dev/null)" == "$1" ]] \
+    || { echo "export-verdicts: '$1' is not a YYYY-MM-DD date" >&2; exit 2; }
+}
 while (( $# > 0 )); do
   case "$1" in
     --since) need_value "$@"; is_day "$2"; since="$2"; shift 2 ;;
@@ -48,6 +53,8 @@ while (( $# > 0 )); do
 done
 
 [[ -f "$metrics_file" ]] || { echo "export-verdicts: no metrics file at $metrics_file" >&2; exit 1; }
+# The rows carry drafts and repo text, so private like the drafts dir.
+umask 077
 mkdir -p "$out_dir"
 if git -C "$out_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "export-verdicts: $out_dir is inside a git checkout; the dataset holds repo and issue text, write it elsewhere" >&2
