@@ -29,10 +29,11 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 backend="clef"
 tier="prose"
+need_value() { [[ -n "${2:-}" ]] || { echo "decide: $1 requires a value" >&2; exit 2; }; }
 while (( $# > 0 )); do
   case "$1" in
-    --backend) backend="${2:-}"; shift 2 ;;
-    --tier) tier="${2:-}"; shift 2 ;;
+    --backend) need_value "$@"; backend="$2"; shift 2 ;;
+    --tier) need_value "$@"; tier="$2"; shift 2 ;;
     -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "decide: unknown argument '$1'" >&2; exit 2 ;;
   esac
@@ -63,9 +64,9 @@ case "$backend" in
     url="${DELEGATE_CLEF_URL:-http://127.0.0.1:8765}"
     body=$(jq -c --arg m "${DELEGATE_CLEF_MODEL:-clef-flash}" '.model //= $m' <<<"$request")
     t0=$(now_ms)
-    if ! response=$(curl -sS --fail-with-body -m "$timeout" -H 'Content-Type: application/json' \
+    if ! response=$(curl -sS --fail --max-time "$timeout" -H 'Content-Type: application/json' \
          --data-binary @- "$url/v1/systemone" <<<"$body"); then
-      echo "decide: clef request to $url failed: $response" >&2
+      echo "decide: clef request to $url failed" >&2
       exit 1
     fi
     t1=$(now_ms)
@@ -102,9 +103,15 @@ case "$backend" in
          logprobs: true, top_logprobs: 10,
          chat_template_kwargs: {enable_thinking: false},
          messages: [{role: "user", content: $p}]}')
-      if ! response=$(curl -sS --fail-with-body -m "$timeout" -H 'Content-Type: application/json' \
+      if ! response=$(curl -sS --fail --max-time "$timeout" -H 'Content-Type: application/json' \
            --data-binary @- "$base/chat/completions" <<<"$payload"); then
-        echo "decide: logprob request to $base failed: $response" >&2
+        echo "decide: logprob request to $base failed" >&2
+        exit 1
+      fi
+      # A provider that ignores logprobs returns no distribution; uniform
+      # scores made up from nothing would pass for a control result.
+      if ! jq -e '(.choices[0].logprobs.content[0].top_logprobs // []) | length > 0' <<<"$response" >/dev/null; then
+        echo "decide: $base returned no top_logprobs for '$qid'; the logprob control needs a provider that supports them" >&2
         exit 1
       fi
       # Tokens may arrive byte-level encoded ("ĠA" for " A"); strip that marker

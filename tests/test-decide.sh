@@ -32,7 +32,10 @@ case "\$url" in
     cat >> "$sniff"
     [[ -f "$mock/clef-down" ]] && { echo 'connection refused' ; exit 7; }
     cat "$mock/clef.json" ;;
-  */chat/completions) cat >> "$sniff"; cat "$mock/chat.json" ;;
+  */chat/completions)
+    cat >> "$sniff"
+    if [[ -f "$mock/no-logprobs" ]]; then echo '{"choices":[{"message":{"content":"A"}}]}'
+    else cat "$mock/chat.json"; fi ;;
 esac
 EOF
 chmod +x "$mock/curl"
@@ -78,6 +81,16 @@ run --backend clef <<<'{"state":"x","questions":{}}' >/dev/null 2>&1
 assert_eq "2" "$?" "a request without questions exits 2"
 run --backend nope <<<"$request" >/dev/null 2>&1
 assert_eq "2" "$?" "an unknown backend exits 2"
+err=$(run --backend <<<"$request" 2>&1 >/dev/null)
+rc=$?
+assert_eq "2" "$rc" "a value-less --backend exits 2"
+assert_contains "--backend requires a value" "$err" "and says which option lacks its value"
+touch "$mock/no-logprobs"
+err=$(run --backend logprob <<<"$request" 2>&1 >/dev/null)
+rc=$?
+rm -f "$mock/no-logprobs"
+assert_eq "1" "$rc" "a provider without logprobs exits 1"
+assert_contains "returned no top_logprobs" "$err" "rather than inventing uniform scores"
 many=$(jq -nc '{state:"x",questions:{q:{type:"choice",criteria:([range(27)] | map({key:"o\(.)",value:"v"}) | from_entries)}}}')
 err=$(run --backend logprob <<<"$many" 2>&1 >/dev/null)
 assert_contains "needs 2-26" "$err" "more than 26 options is refused by the control"
