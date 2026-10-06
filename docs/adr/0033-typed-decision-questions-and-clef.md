@@ -1,6 +1,6 @@
 # ADR 0033: Typed decision questions are adopted on the resident model; Clef is kept for batched labelling only
 
-Status: proposed.
+Status: accepted.
 Date: 2026-10-06
 
 ## Context
