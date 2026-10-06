@@ -268,3 +268,45 @@ Re-measure after roughly ten calls. The number to watch is whether
 `no_unbidden_mention` appears in `checks_failed_names` after the retry: if
 the second generation still carries the mention, the constraint sentence is
 not the lever and the mention should be stripped rather than regenerated.
+
+### 2026-10-06 — NO-ASK-ONE-PARAGRAPH tried, replay inconclusive, not applied
+
+In the bundle for 2026-10-05T07:51Z to 2026-10-06T08:06Z, 14 non-ritual
+rejections of this recipe carried `SHAPE: draft used 3 paragraphs; the
+shipped text used one`. Read in full, the clean approvals (no `ask`, a
+one-line FACTS block) share a defect: the model splits a two-sentence reply
+into three paragraphs and fills the empty ask slot with an invented closer
+("Please merge.", "No further action is required.", "This change is ready to
+be merged."), against a one-paragraph shipped reply. Examples are the stems
+`20261005T182042Z-f2c63651`, `20261005T214706Z-0a3d8edd`,
+`20261006T063908Z-d39ea41d` and `20261006T071230Z-07413929`. Caveat on the
+evidence: most of these finals were written and approved before the recipe
+ran, so they are independent references rather than edits of the draft.
+
+The candidate added a named rule beside PARAGRAPHS (when the ask block is
+empty the reply is one paragraph that ends on the evidence, and the empty ask
+slot is never filled with a readiness, nothing-more-needed or merge closer)
+and a "Correct with no ask" skeleton line. Replay against
+`main` (template `200da2e4317a`, candidate `9b65ce305bc0`,
+Qwen3.6-35B-A3B-8bit):
+
+    Summary: n=40  wins=14  losses=20  ties=6  errors=0
+    Checks failed: champion=1  candidate=0
+    Length flags: champion=9  candidate=11
+    Newest third (14 cases): wins=6  losses=7
+    Verdict: INCONCLUSIVE — 20 losses to 14 wins is not yet significant (p=0.196).
+
+The wins are the clean approvals, where the shape column went from 1 to 0.
+Of the 20 losses, nine are the opposite case: reviews shipped as several
+paragraphs, most with anchored inline suggestions (#3933 twice, #3934,
+#3935, #3850, #3904 among them), while the caller passed no `ask`, so the
+candidate collapsed them to one paragraph and picked up a shape flag. Seven
+are `over` rises (#3913, #3902, #3932, #3936, #3938, #3901, #3873): with no
+closer to spend words on, the candidate put more of the facts' anchors back
+into the evidence sentence. The last four are two `dropped` rises and two
+new length flags. The empty `ask` var does not separate a clean approval from a
+review whose asks the caller kept in the facts, so a rule keyed on it cuts
+both ways. Reverted. A next attempt should key on something that does
+separate them (the verdict text, or the facts' length) or be a check that
+strips a trailing paragraph with no supplied anchor when `ask` is empty,
+rather than another prompt rule.
