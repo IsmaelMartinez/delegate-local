@@ -101,7 +101,31 @@ select-all-that-apply pass over a whole corpus, one request per record with
 a `noul` per label, is where Clef-flash is cheaper by the number of
 questions, and the hosted model takes up to 64 a request.
 
-[multi-label results pending]
+That pass was then run over the 114 labelled issues with fourteen `noul`
+questions a request, one per label, phrased two ways (as a question, and
+with true and false criteria), both ways in one request, and on the
+control. Ranking is good on both backends for any label with more than a
+handful of positives: bug at 0.94 and 0.95 AUROC, prompt-pattern at 0.98
+and 0.98, lane-analytics at 0.96 and 0.90, with Clef-flash ahead on the
+lanes and the control ahead on needs-decision (0.85 against 0.76).
+Deciding is not. At a 0.5 cut the control over-fires on every rare label
+and gets the exact label set right on 4 of 112 issues, Clef-flash on 16 of
+114; a per-label threshold chosen by 2-fold cross-validation lifts
+Clef-flash's criteria phrasing to 25 and the control to 13, because two to
+eight positives cannot set a threshold. Three aggregation results answer
+whether asking more buys accuracy. Both phrasings in one request gave the
+same answers as each alone (bug F1 0.74 against 0.75), so the joint head
+neither helped nor hurt; averaging the two phrasings moved bug's F1 to 0.81
+and the exact sets to 23, not a consistent gain; averaging Clef-flash with
+the control lifted the hard labels (enhancement F1 0.68 against 0.62 and
+0.59, lane-core 0.56 against 0.36 and 0.22) and matched the best single run
+at 25 exact sets. The cost side is the structural one: 1.8 s an issue for
+all fourteen labels on Clef-flash, 4.1 s for twenty-eight questions, and
+7.9 s on the control for fourteen calls. The shape that fits exclusive
+groups, a `choice` for the type and one for the lane with an explicit none
+beside `noul`s for the independent flags, is written and smoke-tested but
+not run: the batch jobs had the laptop at 96 °C and were stopped, so it is
+the first run to make once #646 gates the GPU.
 
 ## Decision
 
@@ -111,10 +135,13 @@ backtick references to fields, one atomic question per property and the
 combination, weights and thresholds in code, with every threshold calibrated
 on this corpus before it gates anything. The default backend is the resident
 model's logprobs, because it is free, better calibrated on single questions
-here and already running; `DELEGATE_CLEF_URL` keeps Clef-flash as the
+here and already running; `--backend clef` keeps Clef-flash as the
 backend for batched many-question jobs over a corpus, where its one-pass
 scoring is measured to be four to five times cheaper, and its server stays
-in the data dir rather than the repo. The first uses are the ones measured:
+in the data dir rather than the repo. Set-valued labels use a `choice` for
+each mutually exclusive group and a `noul` only for an independent flag,
+with any threshold set per label on this corpus, and where a label is rare
+the two backends are averaged, which was the best run measured. The first uses are the ones measured:
 reviving the trigger gate with the `ref` format on the resident model
 (#638), feeding the commit type into `commit-message` as an input instead
 of a guess, and suggesting issue labels at creation. Nothing is wired into
