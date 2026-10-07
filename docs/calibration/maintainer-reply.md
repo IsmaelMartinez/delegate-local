@@ -265,3 +265,42 @@ recipe, but the shape is shared — same optional `recipient` input, same prose
 rule, same model — so the check is declared on both rather than waiting for
 this one to post its own. A mention is the one defect that notifies a real
 person before the maintainer sees the draft.
+
+### 2026-10-07 — a LEAD-ALREADY-SAID guard, inconclusive on the replay
+
+The daily bundle (watermark 2026-10-06T08:06:39Z) had `no_context_echo` × 21
+and `max_context_ratio` × 16 on this recipe over 7 days (n=52, usable 53%), and
+five non-ritual `teams-for-linux` rejections with reasons like "repeated the
+lead verbatim in the next sentence" and "echoed facts verbatim". Three of the
+pairs (`72d01d08`, `4ff716d1`, `424003d2`) show the same mechanism: the caller
+wrote the lead from the same notes as the Facts block, so one fact line said
+what the lead said, and the draft wrote that point a second time after the
+lead. In `72d01d08` every fact was already in the lead and there was no ask,
+so the shipped reply was the opener and the lead alone. The template asks for
+"one or two sentences" of the model's own whatever is left, and item 3 says
+only that an anchor the lead carries "still counts as carried", which does not
+forbid saying it again. The missing sign-off in the same reasons is a caller
+gap: none of those calls passed `--var signoff`.
+
+Tried: a LEAD-ALREADY-SAID block (a fact the lead already states is not
+written again; when the lead states every fact, there is no item 3), with the
+intro line, item 3, NO-FACT-DROP and the sentence-count rule pointing at it.
+Replay against `c9444a457a08` on `mlx-community/Qwen3.6-35B-A3B-8bit`:
+
+    Summary: n=40  wins=15  losses=9  ties=16  errors=0
+    Checks failed: champion=10  candidate=6
+    Length flags: champion=2  candidate=1
+    Newest third (14 cases): wins=4  losses=5
+    Sign test: p=0.154 (one-sided, 15 wins to 9)
+    Verdict: INCONCLUSIVE — 15 wins to 9 is not yet significant (p=0.154); wait for more cases or a wider edit.
+
+Two of the three target cases won (`72d01d08` and `4ff716d1`, both to 0), and
+failed checks fell from 10 to 6. `424003d2` lost on one echoed sentence. The
+cost showed on the `delegate-local` evidence replies: `db6373f1` went from 5 to
+17 dropped anchors, `ee18edaf` from 2 to 5, and `db7fdf55` gained 5 `over`.
+So the model read facts as already in the lead when the lead only touched
+them. The newest third lost 4 to 5, so this is not a measured gain. Reverted.
+If the defect keeps showing up, the next attempt should not be wording.
+Better options are a check that flags a sentence after the lead repeating the
+lead (the `no_context_echo` comparison run against `{{lead}}` instead of
+stdin), or caller guidance to leave the lead's point out of stdin.
