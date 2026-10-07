@@ -89,8 +89,8 @@ if (( rc != 0 )); then say "gate failed with exit $rc"; exit 2; fi
 newest=$(sed -n 's/^Newest row: //p' "$bundle" | head -n 1)
 if [[ -z "$newest" ]]; then say "gate printed no 'Newest row:' line; not starting a session"; exit 2; fi
 say "open: bundle up to $newest"
-# The session can run for hours; a lid close on battery must not stall it
-# (#657). caffeinate -i ends with this script.
+# The session can run for hours; caffeinate -i prevents idle sleep until
+# this script exits (#657). A closed lid on battery still sleeps the machine.
 # shellcheck source=lib/gpu-gate.sh
 . "$root/scripts/lib/gpu-gate.sh"
 gpu_gate_keep_awake

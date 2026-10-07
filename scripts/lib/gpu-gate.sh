@@ -27,7 +27,9 @@
 #       DELEGATE_GPU_WAIT_MAX        give up after this many seconds (600)
 #       DELEGATE_GPU_COOLDOWN        seconds to rest after each item (0)
 # gpu_gate_keep_awake holds a `caffeinate -i` assertion for the batch's
-# lifetime, so a lid close on battery cannot stall a run (#657).
+# lifetime, which prevents idle sleep during a batch (#657). A closed lid on
+# battery still sleeps the machine: keep the lid open, or run on AC with an
+# external display.
 # Sourcing has no side effects. bash 3.2 portable.
 
 # The exit code a batch caller uses when the gate gives up (EX_TEMPFAIL), so

@@ -61,7 +61,9 @@
 #                                 rests DELEGATE_GPU_COOLDOWN seconds after;
 #                                 cached cases never wait; DELEGATE_GPU_GATE=0
 #                                 turns it off. The run holds caffeinate -i
-#                                 where it exists, so sleep cannot stall it
+#                                 where it exists, which prevents idle sleep;
+#                                 a closed lid on battery still sleeps the
+#                                 machine
 # Exit: 0 report printed (the last line is the verdict); 3 no replayable case
 #       for the recipe; 2 usage or dependency error; 4 every case errored;
 #       75 the machine stayed hot or busy past DELEGATE_GPU_WAIT_MAX (the
