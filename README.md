@@ -113,9 +113,11 @@ The shipped `pick-model.sh` is one preference list for everyone. To override the
 ```bash
 # ~/.local/share/delegate-local/config.sh
 case "$tier" in
-  prose) prefs=("gemma4" "qwen3.6" "qwen3-next") ;;
+  prose) prefs=(gemma-4-26b "${prefs[@]}") ;;
 esac
 ```
+
+Trying or switching a model is that one line: it puts your model ahead of the shipped list, which still answers when the model is not served, and keeps following every later change to it. Matching is a case-insensitive substring of the id the provider reports, and the shipped lists spell each model for MLX, Docker Model Runner and Ollama alike (`gemma-4` and `gemma4`); a name you prepend matches only the ids that contain it, so `gemma-4-26b` picks the MLX build and `gemma4:26b` the Ollama one. Avoid reassigning a tier to a complete list of your own: that copy shadows the shipped list for good, and `audit-models.sh` warns about any tier that does it.
 
 Nothing generates `config.sh`: write it by hand, and only for a tier whose shipped order is wrong for you. (`scripts/init.sh` used to print one, but its output was the shipped order with the installed models moved first, which `pick-model.sh` already does, and once installed it shadowed every later change to the shipped lists; it was removed in #567.)
 

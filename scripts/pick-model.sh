@@ -6,7 +6,8 @@
 # Prints the model name on stdout; exit 1 when no match, 2 on usage error.
 # --dry-run also traces the resolution to stderr. --print-providers,
 # --print-installed and --print-prefs take no tier and exist so callers never
-# re-derive routing state; --print-resolution prints "<base>\t<model>".
+# re-derive routing state; --print-resolution prints "<base>\t<model>", and
+# --print-frozen-tiers the tiers config.sh replaces instead of prepending to.
 #
 # Preference order per tier is a substring-matched list, highest capability
 # first; edit the arrays below when the installed set changes. Prefer the
@@ -32,7 +33,10 @@ TIERS="code|prose|reasoning|long-context|vision|embedding|premium-general|reason
 
 # Space-separated substrings per tier; --print-prefs emits them all so
 # external callers never duplicate the lists.
-PROSE_PREFS="qwen3.6 qwen3-next gemma4:latest gemma4 llama4 qwen3.5"
+# Each model is spelled for every provider (#653): Ollama and Docker Hub ai/
+# ids run the family name together (gemma4, llama4), while MLX and hf.co pulls
+# carry the Hugging Face name, which hyphenates (gemma-4-26b-a4b-it-8bit).
+PROSE_PREFS="qwen3.6 qwen3-next gemma4:latest gemma4 gemma-4 llama4 llama-4 qwen3.5"
 # code, reasoning and long-context resolve the prose model (#652): an
 # mlx_lm.server lists every cached model from /models and loads whichever a
 # request names beside the resident one, so a separate list per tier stacked a
@@ -48,13 +52,14 @@ EMBEDDING_PREFS="nomic-embed-text bge-large"
 # beside the resident model killed Docker once. Opt in from config.sh, e.g.
 # `premium-general) prefs=("qwen3.5-122b") ;;`.
 PREMIUM_GENERAL_PREFS=""
-REASONING_VISION_PREFS="phi4-reasoning-vision qwen3-vl:30b-a3b-thinking qwen3-vl-30b-a3b-thinking"
+REASONING_VISION_PREFS="phi4-reasoning-vision phi-4-reasoning-vision qwen3-vl:30b-a3b-thinking qwen3-vl-30b-a3b-thinking"
 
 dry_run=0
 print_prefs=0
 print_providers=0
 print_installed=0
 print_resolution=0
+print_frozen=0
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --dry-run) dry_run=1 ;;
@@ -62,6 +67,7 @@ while [[ "${1:-}" == --* ]]; do
     --print-providers) print_providers=1 ;;
     --print-installed) print_installed=1 ;;
     --print-resolution) print_resolution=1 ;;
+    --print-frozen-tiers) print_frozen=1 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -152,46 +158,31 @@ list_installed() {
   done | sort -u
 }
 
-# Tier-independent surfaces answer before the tier argument is read.
-if (( print_providers )); then
-  # Deliberately unquoted: each space-separated entry becomes its own line.
-  printf '%s\n' $DELEGATE_BASE_URL
-  exit 0
-fi
-
-if (( print_installed )); then
-  list_installed
-  exit 0
-fi
-
-tier="${1:-}"
-if [[ -z "$tier" ]]; then
-  echo "usage: pick-model.sh [--dry-run] <$TIERS>" >&2
-  exit 2
-fi
-
-case "$tier" in
-  code)             prefs=($CODE_PREFS) ;;
-  prose)            prefs=($PROSE_PREFS) ;;
-  reasoning)        prefs=($REASONING_PREFS) ;;
-  long-context)     prefs=($LONG_CONTEXT_PREFS) ;;
-  vision)           prefs=($VISION_PREFS) ;;
-  embedding)        prefs=($EMBEDDING_PREFS) ;;
-  premium-general)  prefs=($PREMIUM_GENERAL_PREFS) ;;
-  reasoning-vision) prefs=($REASONING_VISION_PREFS) ;;
-  *) echo "unknown tier: $tier (valid: $TIERS)" >&2; exit 2 ;;
-esac
-
-trace "tier=$tier"
-trace "providers=$DELEGATE_BASE_URL"
-trace "preferences=${prefs[*]:-}"
+# Sets `prefs` to the shipped list for tier $1; returns 1 for an unknown tier.
+set_shipped_prefs() {
+  case "$1" in
+    code)             prefs=($CODE_PREFS) ;;
+    prose)            prefs=($PROSE_PREFS) ;;
+    reasoning)        prefs=($REASONING_PREFS) ;;
+    long-context)     prefs=($LONG_CONTEXT_PREFS) ;;
+    vision)           prefs=($VISION_PREFS) ;;
+    embedding)        prefs=($EMBEDDING_PREFS) ;;
+    premium-general)  prefs=($PREMIUM_GENERAL_PREFS) ;;
+    reasoning-vision) prefs=($REASONING_VISION_PREFS) ;;
+    *) return 1 ;;
+  esac
+}
 
 # Per-user override: plain bash sourced after the defaults populate `prefs`,
-# which it may reassign. User-owned content executed in the user's own
-# context by design; the threat model assumes single-user dev. Path:
-# DELEGATE_LOCAL_CONFIG, else <data dir>/config.sh.
+# which it may reassign, reading the tier from `$tier`. User-owned content
+# executed in the user's own context by design; the threat model assumes
+# single-user dev. Path: DELEGATE_LOCAL_CONFIG, else <data dir>/config.sh.
 config="${DELEGATE_LOCAL_CONFIG:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/config.sh}"
-if [[ -f "$config" ]]; then
+
+# Returns 0 when $config exists and is safe to source. The caller sources it,
+# outside any function or condition, so `set -e` still applies to its body.
+override_usable() {
+  [[ -f "$config" ]] || return 1
   # Skip an override not owned by the current user or group/world-writable.
   # BSD `stat` first (macOS), GNU fallback (Linux).
   if stat -f '%Su' "$config" >/dev/null 2>&1; then
@@ -206,14 +197,68 @@ if [[ -f "$config" ]]; then
   cfg_world=${cfg_mode: -1}
   if [[ "$cfg_owner" != "$(id -un)" ]]; then
     echo "warning: $config not owned by $(id -un), skipping override" >&2
+    return 1
   elif [[ "$cfg_group" == [2367] || "$cfg_world" == [2367] ]]; then
     echo "warning: $config is group/world-writable (mode $cfg_mode), skipping override" >&2
-  else
-    trace "sourcing override: $config (owner=$cfg_owner, mode=$cfg_mode)"
-    # shellcheck disable=SC1090
-    source "$config"
-    trace "preferences (post-override)=${prefs[*]:-}"
+    return 1
   fi
+}
+
+# Tier-independent surfaces answer before the tier argument is read.
+if (( print_providers )); then
+  # Deliberately unquoted: each space-separated entry becomes its own line.
+  printf '%s\n' $DELEGATE_BASE_URL
+  exit 0
+fi
+
+if (( print_installed )); then
+  list_installed
+  exit 0
+fi
+
+# A tier whose override does not carry the shipped list forward is a frozen
+# copy (#653): later changes to the shipped list never reach that machine.
+# config.sh is handed a sentinel in place of the shipped list, and a tier is
+# printed when the sentinel does not survive. A tier that ships no list
+# (premium-general) has nothing to drop, so its opt-in is not a copy.
+if (( print_frozen )); then
+  for tier in ${TIERS//|/ }; do
+    set_shipped_prefs "$tier"
+    (( ${#prefs[@]} > 0 )) || continue
+    (
+      prefs=("__delegate_shipped_prefs__")
+      override_usable 2>/dev/null || exit 0
+      # shellcheck disable=SC1090
+      source "$config" >/dev/null 2>&1
+      case " ${prefs[*]:-} " in
+        *" __delegate_shipped_prefs__ "*) ;;
+        *) printf '%s\n' "$tier" ;;
+      esac
+    ) || true
+  done
+  exit 0
+fi
+
+tier="${1:-}"
+if [[ -z "$tier" ]]; then
+  echo "usage: pick-model.sh [--dry-run] <$TIERS>" >&2
+  exit 2
+fi
+
+if ! set_shipped_prefs "$tier"; then
+  echo "unknown tier: $tier (valid: $TIERS)" >&2
+  exit 2
+fi
+
+trace "tier=$tier"
+trace "providers=$DELEGATE_BASE_URL"
+trace "preferences=${prefs[*]:-}"
+
+if override_usable; then
+  trace "sourcing override: $config (owner=$cfg_owner, mode=$cfg_mode)"
+  # shellcheck disable=SC1090
+  source "$config"
+  trace "preferences (post-override)=${prefs[*]:-}"
 fi
 
 # A tier that ships no list (premium-general) resolves only once config.sh
