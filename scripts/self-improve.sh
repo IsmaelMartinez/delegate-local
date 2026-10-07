@@ -391,7 +391,11 @@ echo
 # online half of the replay gate (docs/self-improvement-loop.md, "Revert").
 # A row from before the template hash was recorded is one bucket,
 # `(unhashed)`, so the pre-edit baseline sits beside the first hashed
-# template rather than vanishing. Silent when no recipe changed template.
+# template rather than vanishing. A recipe more than one model served is
+# listed too, one line per template and model (#655): ADR 0009 binds
+# calibration to the model, and the model is the delegate row's, so each
+# verdict counts under the model it scored. Silent when no recipe changed
+# template or model.
 # ---------------------------------------------------------------------------
 echo "--- per-recipe outcomes, last ${window_days}d (worst usable-rate first) ---"
 jq -L "$lib_dir" -rs --argjson days "$window_days" --rawfile sl "$suspect_list" --rawfile rl "$ritual_list" '
@@ -402,20 +406,22 @@ jq -L "$lib_dir" -rs --argjson days "$window_days" --rawfile sl "$suspect_list" 
   | latest_outcomes($sl; $rl)
   | map(select(parent != null and (parent | ok and in_window($cut)))
         | {u, r: (parent.recipe // "(bare)"), sha: (parent.template_sha // "(unhashed)"),
-           ts: parent.ts, session: (parent.session // "")})
+           m: (parent.model // "(unknown)"), ts: parent.ts, session: (parent.session // "")})
   | group_by(.r) as $by
   # Ranked on kept+scaffold: a recipe whose drafts are all thrown away is a
   # worse problem than one whose drafts get edited, and kept alone cannot tell.
   | ($by | map({recipe: .[0].r} + tally) | sort_by(rate(.kept + .scaffold; .n), -.n)
      | .[] | "  \(.recipe)  \(line)"),
     "",
-    ([$by[] | select((map(.sha) | unique | length) > 1)
-      | .[0].r as $r | group_by(.sha)
-      | map({recipe: $r, sha: .[0].sha, since: (map(.ts) | min)} + tally)
+    ([$by[] | select((map(.sha) | unique | length) > 1 or (map(.m) | unique | length) > 1)
+      | .[0].r as $r | ((map(.m) | unique | length) > 1) as $split
+      | group_by([.sha] + (if $split then [.m] else [] end))
+      | map({recipe: $r, sha: .[0].sha, m: (if $split then .[0].m else null end), since: (map(.ts) | min)} + tally)
       | sort_by(.since) | reverse | .[]] as $t
      | if ($t | length) > 0 then
-         "--- per-template outcomes, last \($days)d (recipes that changed template, newest first) ---",
-         ($t[] | "  \(.recipe)  template=\(.sha)  since=\(.since)  \(line)"),
+         "--- per-template outcomes, last \($days)d (recipes that changed template"
+           + (if any($t[]; .m != null) then " or model" else "" end) + ", newest first) ---",
+         ($t[] | "  \(.recipe)  template=\(.sha)" + (if .m != null then "  model=\(.m)" else "" end) + "  since=\(.since)  \(line)"),
          ""
        else empty end)
 ' "$metrics_file"

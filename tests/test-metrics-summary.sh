@@ -1089,6 +1089,101 @@ assert_contains "n=1/1  inferred=1  by-hand=0" "$out" \
   "captured pairs: --since windows the line with the rest of the report"
 rm -f "$cp4"
 
+# 21. Per-model split (#655): ADR 0009 binds calibration to the model, so a
+# recipe served by more than one model in the window gets one sub-line per
+# model with its own n. A recipe one model served gets none, and a window one
+# model served prints exactly what it printed before the split existed (the
+# golden below is the pre-#655 output for this fixture).
+onemodel=$(mktemp)
+cat > "$onemodel" <<'EOF'
+{"ts":"2026-10-01T10:00:00Z","source":"delegate","otel_span_id":"o1","recipe":"commit-message","project":"alpha","session":"s1","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-01T10:01:00Z","source":"delegate","otel_span_id":"o2","recipe":"commit-message","project":"alpha","session":"s2","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-01T10:02:00Z","source":"delegate","otel_span_id":"o3","recipe":"summarise-issue","project":"alpha","session":"s2","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":6000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-01T11:00:00Z","source":"feedback","ref_id":"o1","ref_ts":"2026-10-01T10:00:00Z","kept":true}
+{"ts":"2026-10-01T11:01:00Z","source":"feedback","ref_id":"o2","ref_ts":"2026-10-01T10:01:00Z","kept":false,"scaffold":true,"reason":"trimmed"}
+{"ts":"2026-10-01T11:02:00Z","source":"opportunity","project":"alpha","session":"s1","boundary":"git-commit","delegated":true}
+EOF
+golden=$(cat <<'EOF'
+=== delegate-local metrics ===
+File:                @FILE@
+Time range:          2026-10-01T10:00:00Z  →  2026-10-01T10:02:00Z
+Total invocations:   3  (not counted: feedback=2, opportunity=1)
+Errors (non-zero):   0
+Tokens avoided (≈):  300
+  successful delegations          tokens≈300  n=3
+    shipped as-is     tokens≈100  33.3%  n=1
+    rewritten         tokens≈0  0.0%  n=0
+    used as scaffold  tokens≈100  33.3%  n=1
+    no verdict        tokens≈100  33.3%  n=1
+
+Per-source:
+  delegate      n=3  tokens≈300  p50=5000ms  p95=6000ms
+
+Delegation feedback (hit/miss/scaffold):
+  Recipe delegations (calibration signal): n=3  hits=1  misses=0  scaffold=1  untracked=1  coverage=66%  sessions=2
+    prose           n=3  hits=1  misses=0  scaffold=1  untracked=1
+  Captured pairs (rejections with the shipped text stored): n=0/1  inferred=0  by-hand=0  hook-captured=0
+
+Per-recipe (delegate):
+  commit-message        n=2  hits=1  misses=0  scaffold=1  untracked=0  sessions=2
+  summarise-issue       n=1  hits=0  misses=0  scaffold=0  untracked=1  sessions=1
+
+Trigger rate (commit/PR/release/comment boundaries):
+  alpha                 opportunities=1  delegated=1  missed=0  rate=100%  sessions=1
+  excluded 0 boundaries under the floor (20 chars for git-commit, 120 for the rest)
+
+Per-tier (delegate):
+  prose           n=3  p50=5000ms  p95=6000ms
+
+Top models:
+  3  qwen3.6:35b-a3b
+EOF
+)
+out=$(bash "$SCRIPT" --file "$onemodel" 2>&1)
+assert_eq "${golden/@FILE@/$onemodel}" "$out" "per-model: a one-model window prints exactly the pre-split output"
+rm -f "$onemodel"
+
+twomodel=$(mktemp)
+cat > "$twomodel" <<'EOF'
+{"ts":"2026-10-02T10:00:00Z","source":"delegate","otel_span_id":"t1","recipe":"commit-message","project":"alpha","session":"s1","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-02T10:01:00Z","source":"delegate","otel_span_id":"t2","recipe":"commit-message","project":"alpha","session":"s1","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-02T10:02:00Z","source":"delegate","recipe":"commit-message","project":"alpha","session":"s2","tier":"prose","model":"Gemma4:26b-a4b","duration_ms":3000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-02T10:03:00Z","source":"delegate","otel_span_id":"t4","recipe":"commit-message","project":"alpha","session":"s3","tier":"prose","model":"Gemma4:26b-a4b","duration_ms":3000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-02T10:04:00Z","source":"delegate","otel_span_id":"t5","recipe":"summarise-issue","project":"alpha","session":"s1","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-02T11:00:00Z","source":"feedback","ref_id":"t1","ref_ts":"2026-10-02T10:00:00Z","kept":true}
+{"ts":"2026-10-02T11:01:00Z","source":"feedback","ref_id":"t2","ref_ts":"2026-10-02T10:01:00Z","kept":false,"reason":"rewrote"}
+{"ts":"2026-10-02T11:02:00Z","source":"feedback","ref_ts":"2026-10-02T10:02:00Z","kept":true}
+{"ts":"2026-10-02T11:03:00Z","source":"feedback","ref_id":"t5","ref_ts":"2026-10-02T10:04:00Z","kept":true}
+{"ts":"2026-10-02T11:04:00Z","source":"opportunity","project":"alpha","session":"s1","boundary":"git-commit","delegated":true}
+EOF
+out=$(bash "$SCRIPT" --file "$twomodel" 2>&1)
+recipes=$(printf '%s\n' "$out" | sed -n '/^Per-recipe/,/^$/p')
+assert_eq "Per-recipe (delegate):
+  commit-message        n=4  hits=2  misses=1  untracked=1  sessions=3
+    model=qwen3.6:35b-a3b            n=2  hits=1  misses=1  untracked=0  sessions=1
+    model=Gemma4:26b-a4b             n=2  hits=1  misses=0  untracked=1  sessions=2
+  summarise-issue       n=1  hits=1  misses=0  untracked=0  sessions=1" "$recipes" "per-model: a two-model recipe splits by model with n per model; the ts-only verdict lands on its delegate row's model"
+assert_not_contains "model=" "$(printf '%s\n' "$out" | sed -n '/^  summarise-issue/,/^$/p')" \
+  "per-model: a recipe one model served gets no model sub-line"
+
+# --model filters every section to that model's delegations and the verdicts
+# that join to them; case-insensitive substring, as pick-model.sh matches.
+out=$(bash "$SCRIPT" --file "$twomodel" --model gemma 2>&1)
+assert_contains "Model filter:        'gemma'  (3 of 10 rows)" "$out" "--model: the header names the filter and the rows kept"
+assert_contains "Total invocations:   2  (not counted: feedback=1, opportunity=0)" "$out" \
+  "--model: only the matching delegations and their verdicts are kept"
+assert_contains "  commit-message        n=2  hits=1  misses=0  untracked=1  sessions=2" "$out" \
+  "--model: the per-recipe line counts the matching model only"
+assert_not_contains "summarise-issue" "$out" "--model: a recipe only another model served is gone"
+assert_not_contains "model=" "$out" "--model: one model left means no split"
+assert_not_contains "qwen" "$out" "--model: Top models lists the matching model only"
+out=$(bash "$SCRIPT" --file "$twomodel" --model nomatch 2>&1)
+assert_contains "no rows match --model 'nomatch'" "$out" "--model: no match gets its own note"
+EC=0
+bash "$SCRIPT" --file "$twomodel" --model >/dev/null 2>&1 || EC=$?
+assert_eq 2 "$EC" "--model: a missing value exits 2"
+rm -f "$twomodel"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

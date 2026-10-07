@@ -70,7 +70,7 @@ When you spot a recurring task pattern that doesn't have a recipe yet:
 
 1. Use the skill on the task with hand-crafted anchoring (verbatim recent examples, explicit guards), then call `bash scripts/delegate-feedback.sh hit "<reason>"` if the output was usable verbatim or with trivial edits.
 2. Distil the working prompt into the four sections above. Keep it short — the recipe is the minimum context that consistently produces HIT, not a manifesto.
-3. Start `docs/calibration/<task>.md` with the provenance of that first HIT, and end the recipe with a `## Calibration notes` heading whose one line points at it. Every later edit to the recipe adds a dated entry to that file, never to the recipe; `tests/test-prompts-library.sh` checks the pointer and the file.
+3. Start `docs/calibration/<task>.md` with the provenance of that first HIT, and end the recipe with a `## Calibration notes` heading whose one line points at it. Every later edit to the recipe adds a dated entry to that file, never to the recipe, naming the model the evidence was measured on (ADR 0009 binds calibration to the model); `tests/test-prompts-library.sh` checks the pointer and the file.
 4. Add an entry to the SKILL.md "Recipes" pointer so the agent knows the recipe exists.
 5. Where it makes sense, mirror the task shape into `evals/eval-set.json` as a positive paraphrase so the trigger eval ensures the description still fires on the pattern.
 

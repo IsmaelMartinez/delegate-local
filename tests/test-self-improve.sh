@@ -536,6 +536,32 @@ assert_contains "maintainer-reply  template=(unhashed)  since=$t1  n=1  kept=0  
 first_line=$(printf '%s\n' "$section" | grep -E '^  maintainer-reply' | head -1)
 assert_contains "template=newnewnewnew" "$first_line" "per-template: newest template first"
 assert_not_contains "commit-message" "$section" "per-template: a recipe under one template is not listed"
+assert_not_contains "model=" "$section" "per-template: one model in the window adds no model column"
+rm -rf "$tmp"
+
+# --- Per-template outcomes by model (#655): ADR 0009 binds calibration to
+# the model, so a recipe two models served gets one line per template and
+# model, each with its own n, even when the template never changed; the
+# verdict counts under the model of the delegate row it joins to. ---
+tmp=$(mktemp -d)
+t1=$(iso_ago 7200); t2=$(iso_ago 5400); t3=$(iso_ago 3600); t4=$(iso_ago 1800)
+cat > "$tmp/m.jsonl" <<EOF
+{"ts":"$t1","source":"delegate","tier":"prose","model":"qwen3.6:35b-a3b","recipe":"maintainer-reply","project":"p","session":"S1","exit_status":0,"otel_span_id":"b1","template_sha":"samesamesame"}
+{"ts":"$(iso_ago 7190)","source":"feedback","ref_id":"b1","kept":false,"reason":"r","verdict_source":"agent"}
+{"ts":"$t2","source":"delegate","tier":"prose","model":"gemma4:26b-a4b","recipe":"maintainer-reply","project":"p","session":"S2","exit_status":0,"otel_span_id":"b2","template_sha":"samesamesame"}
+{"ts":"$(iso_ago 5390)","source":"feedback","ref_id":"b2","kept":true,"verdict_source":"agent"}
+{"ts":"$t3","source":"delegate","tier":"prose","model":"gemma4:26b-a4b","recipe":"maintainer-reply","project":"p","session":"S3","exit_status":0,"otel_span_id":"b3","template_sha":"samesamesame"}
+{"ts":"$(iso_ago 3590)","source":"feedback","ref_ts":"$t3","kept":false,"scaffold":true,"reason":"r","verdict_source":"agent"}
+{"ts":"$t4","source":"delegate","tier":"prose","model":"qwen3.6:35b-a3b","recipe":"commit-message","project":"p","session":"S1","exit_status":0,"otel_span_id":"b4","template_sha":"cmcmcmcmcmcm"}
+{"ts":"$(iso_ago 1790)","source":"feedback","ref_id":"b4","kept":true,"verdict_source":"agent"}
+EOF
+out=$(DELEGATE_SELF_IMPROVE_STATE="$tmp/state" bash "$SCRIPT" --file "$tmp/m.jsonl" 2>&1)
+section=$(printf '%s\n' "$out" | sed -n '/per-template outcomes/,/^$/p')
+assert_contains "maintainer-reply  template=samesamesame  model=gemma4:26b-a4b  since=$t2  n=2  kept=1  scaffold=1  rewrote=0  usable=100%  sessions=2" "$section" \
+  "per-template by model: the newer model's line carries its own n and rate"
+assert_contains "maintainer-reply  template=samesamesame  model=qwen3.6:35b-a3b  since=$t1  n=1  kept=0  scaffold=0  rewrote=1  usable=0%  sessions=1" "$section" \
+  "per-template by model: the older model's line sits beside it"
+assert_not_contains "commit-message" "$section" "per-template by model: a recipe one model served under one template is not listed"
 rm -rf "$tmp"
 
 # --- #587: --quarantine lists the suspect finals in a sidecar beside the
