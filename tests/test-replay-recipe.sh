@@ -556,8 +556,11 @@ esac
 while (( $# > 0 )); do
   case "$1" in -o) out_file="$2"; shift 2;; -w) write_out="$2"; shift 2;; *) shift;; esac
 done
-m=$(jq -r '.model')
+body=$(cat)
+m=$(jq -r '.model' <<< "$body")
 echo "$url $m" >> "$MC_LOG"
+# A case whose who is zed is refused on the candidate, as a bad request.
+[[ "$m" == gemma4:26b && "$body" == *zed* ]] && exit 22
 case "$m" in
   gemma4:26b) c='Fixed at src/main.js:412 for #2632 with 531 tests. See also #9999.';;
   *) c='Fixed it.';;
@@ -586,6 +589,14 @@ assert_contains "mutually exclusive" "$out" "the exclusion is named"
 EC=0; out=$(mrun --candidate-base http://cand.test/v1) || EC=$?
 assert_eq 2 "$EC" "--candidate-base without --candidate-model exits 2"
 assert_contains "--candidate-base needs --candidate-model" "$out" "the missing model is named"
+# An empty value (an unset shell variable) is an error, not an absent flag.
+for empty in --candidate-model= --candidate-base= "--candidate-model|" "--candidate-base|"; do
+  if [[ "$empty" == *"|" ]]; then set -- "${empty%|}" ""; else set -- "$empty"; fi
+  EC=0; out=$(mrun "$@") || EC=$?
+  assert_eq 2 "$EC" "an empty ${1%=} value exits 2 ($empty)"
+  assert_contains "${1%=} needs a value" "$out" "the empty ${1%=} is named ($empty)"
+done
+set --
 
 # The champion's stored drafts stand in (same template, same model); the
 # candidate is requested by its exact id at --candidate-base.
@@ -600,7 +611,7 @@ assert_eq "3" "$(mlog | grep -c '')" "the champion arm reads its stored drafts a
 assert_contains "model comparison" "$out" "the report is labelled a model comparison"
 assert_contains "Champion model:  $champ_m" "$out" "the champion model is named"
 assert_contains "Candidate model: gemma4:26b at http://cand.test/v1" "$out" "the candidate model and its base are named"
-assert_contains "Kept (not counted): n=1  wins=0  losses=1  ties=0" "$out" "the kept case is reported on its own"
+assert_contains "Kept (not counted): n=1  wins=0  losses=1  ties=0  errors=0" "$out" "the kept case is reported on its own"
 assert_contains "Summary: n=2  wins=2  losses=0  ties=0  errors=0" "$out" "the kept case is left out of the tally"
 assert_contains "Sign test: p=0.250 (one-sided, 2 wins to 0)" "$out" "the sign test runs on the edited cases only"
 assert_eq "1" "$(printf '%s\n' "$out" | grep -c '^  kept0001 .*LOSS (kept, not counted)$')" "the kept case is listed with its result"
@@ -626,6 +637,17 @@ rm -rf "$tmp/out"; rm -f "$mc/log"
 out=$(mrun --candidate-model gemma4 --candidate-base http://cand.test/v1)
 assert_eq "0" "$(mlog | grep -c 'cand.test')" "a candidate id listed only as a substring sends no request"
 assert_contains "ERR (candidate)" "$out" "and the case is an error"
+
+# A kept case that fails to run is a kept error, not a counted one: it is
+# outside the verdict, so it cannot hold the verdict at INCONCLUSIVE.
+seed "$tmp/data" 2 "$champ_sha" "$champ_m"
+printf '{"recipe":"rp","tier":"prose","stdin":"%s","vars":{"who":"zed"}}' "$STDIN" > "$tmp/data/drafts/20260930T100000Z-kept0001.inputs.json"
+rm -rf "$tmp/out"; rm -f "$mc/log"
+out=$(mrun --candidate-model gemma4:26b --candidate-base http://cand.test/v1)
+assert_contains "ERR (candidate)" "$out" "the refused kept case is listed as an error"
+assert_contains "Kept (not counted): n=1  wins=0  losses=0  ties=0  errors=1" "$out" "its error is tallied on the Kept line"
+assert_contains "Summary: n=2  wins=2  losses=0  ties=0  errors=0" "$out" "and not in the counted summary"
+assert_not_contains "failed to run" "$out" "a kept error does not hold the verdict"
 
 # A candidate equal to the champion's model is reported, not measured.
 rm -f "$mc/log"

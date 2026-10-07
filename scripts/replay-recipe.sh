@@ -105,10 +105,16 @@ while (($# > 0)); do
     --recipe=*) recipe="${1#--recipe=}"; shift;;
     --candidate) candidate="${2:?--candidate requires a directory}"; shift 2;;
     --candidate=*) candidate="${1#--candidate=}"; shift;;
-    --candidate-model) candidate_model="${2:?--candidate-model requires a model id}"; shift 2;;
-    --candidate-model=*) candidate_model="${1#--candidate-model=}"; shift;;
-    --candidate-base) candidate_base="${2:?--candidate-base requires a URL}"; shift 2;;
-    --candidate-base=*) candidate_base="${1#--candidate-base=}"; shift;;
+    # An empty value is an unset shell variable, not an absent flag: read as
+    # absent, it would run a baseline or skip the needs-a-model check.
+    --candidate-model|--candidate-base)
+      [[ -n "${2:-}" ]] || { echo "replay-recipe: $1 needs a value" >&2; exit 2; }
+      if [[ "$1" == --candidate-model ]]; then candidate_model="$2"; else candidate_base="$2"; fi
+      shift 2;;
+    --candidate-model=*|--candidate-base=*)
+      [[ -n "${1#*=}" ]] || { echo "replay-recipe: ${1%%=*} needs a value" >&2; exit 2; }
+      if [[ "$1" == --candidate-model=* ]]; then candidate_model="${1#*=}"; else candidate_base="${1#*=}"; fi
+      shift;;
     --champion) champion="${2:?--champion requires a directory}"; shift 2;;
     --champion=*) champion="${1#--champion=}"; shift;;
     --limit) limit="${2:?--limit requires a number}"; shift 2;;
@@ -556,7 +562,7 @@ sessions_n=$(cut -d'|' -f10 "$cases_tmp" | awk 'NF' | sort -u | grep -c '')
 echo "Cases:     $n_cases (kept=$kept_n scaffold=$scaffold_n rewrote=$rewrote_n; newest $limit)  sessions=$sessions_n"
 echo
 
-wins=0; losses=0; ties=0; errors=0
+wins=0; losses=0; ties=0; errors=0; kept_errors=0
 champ_checks=0; cand_checks=0; champ_len=0; cand_len=0
 newest_n=$(( (counted_n + 2) / 3 ))
 newest_wins=0; newest_losses=0
@@ -585,7 +591,7 @@ while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel _sessio
   a=$(arm_output "$champion" "$champion_sha" "$model" "$model_key" "" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")
   gate_stop
   if [[ "$a" == "ERR" ]]; then
-    errors=$((errors + 1)); printf '  %-10s %-20s %-8s %s\n' "${id:0:10}" "$ts" "$verdict" "ERR (champion)"; continue
+    (( counted )) && errors=$((errors + 1)) || kept_errors=$((kept_errors + 1)); printf '  %-10s %-20s %-8s %s\n' "${id:0:10}" "$ts" "$verdict" "ERR (champion)"; continue
   fi
   a_out="${a%|*}"; a_checks="${a##*|}"
   a_score=$(score "$a_out" "$a_checks")
@@ -600,7 +606,7 @@ while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel _sessio
   b=$(arm_output "$cand_dir" "$cand_sha" "$cand_model" "$cand_key" "$cand_base" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")
   gate_stop
   if [[ "$b" == "ERR" ]]; then
-    errors=$((errors + 1)); printf '  %-10s %-20s %-8s %-18s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "ERR (candidate)"; continue
+    (( counted )) && errors=$((errors + 1)) || kept_errors=$((kept_errors + 1)); printf '  %-10s %-20s %-8s %-18s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "ERR (candidate)"; continue
   fi
   b_out="${b%|*}"; b_checks="${b##*|}"
   b_score=$(score "$b_out" "$b_checks")
@@ -630,7 +636,7 @@ done < "$cases_tmp"
 echo
 echo "Scores are checks/dropped/over/invented/echoed/shape/length=total; lower is better (over: supplied anchors carried past the shipped text; length: under a quarter or over four times its words)."
 
-if (( errors == n_cases )); then
+if (( errors + kept_errors == n_cases )); then
   echo "Verdict: ERROR — every case failed to run; see $out_dir/*.err.txt"
   exit 4
 fi
@@ -641,7 +647,7 @@ if [[ -z "$cand_dir" ]]; then
 fi
 
 if [[ -n "$candidate_model" ]]; then
-  echo "Kept (not counted): n=$kept_n  wins=$kept_wins  losses=$kept_losses  ties=$kept_ties  (the reference is $model's own draft)"
+  echo "Kept (not counted): n=$kept_n  wins=$kept_wins  losses=$kept_losses  ties=$kept_ties  errors=$kept_errors  (the reference is $model's own draft)"
 fi
 echo "Summary: n=$counted_n  wins=$wins  losses=$losses  ties=$ties  errors=$errors"
 echo "Checks failed: champion=$champ_checks  candidate=$cand_checks"
