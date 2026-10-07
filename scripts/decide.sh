@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # decide.sh — answer a SystemOne decision request with per-option probabilities
-# (spike for #636; epic #642). Two backends share one output shape, so every
-# Clef experiment can compare them row by row:
+# (ADR 0033; spike #636, epic #642). Two backends share one output shape, so
+# any experiment can compare them row by row:
 #
-#   clef     POST {DELEGATE_CLEF_URL}/v1/systemone — Cloudflare Clef served locally
-#            (a uv script in the data dir's spikes/clef/) or any SystemOne
-#            endpoint. The repo ships no server.
-#   logprob  the control: each question asked of the resident tier model as a
+#   logprob  the default: each question asked of the resident tier model as a
 #            lettered multiple choice with max_tokens 1, scored from the first
 #            token's top logprobs and renormalised over the option letters.
+#            One chat call per question.
+#   clef     POST {DELEGATE_CLEF_URL}/v1/systemone — Cloudflare Clef served locally
+#            (a uv script in the data dir's spikes/clef/) or any SystemOne
+#            endpoint; every question of a request scored in one pass, so it
+#            is the backend for many-question batch jobs. The repo ships no server.
 #
-# Usage:  decide.sh [--backend clef|logprob] [--tier TIER] < request.json
+# Usage:  decide.sh [--backend logprob|clef] [--tier TIER] < request.json
 #
 # request.json is a SystemOne body: {"state": string|object, "questions":
 # {id: {"type": "noul"|"choice"|"score", "instructions": "...", "criteria":
@@ -27,14 +29,14 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-backend="clef"
+backend="logprob"
 tier="prose"
 need_value() { [[ -n "${2:-}" ]] || { echo "decide: $1 requires a value" >&2; exit 2; }; }
 while (( $# > 0 )); do
   case "$1" in
     --backend) need_value "$@"; backend="$2"; shift 2 ;;
     --tier) need_value "$@"; tier="$2"; shift 2 ;;
-    -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR > 1 && !/^#/ { exit } NR > 1' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "decide: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done

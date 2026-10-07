@@ -80,7 +80,9 @@ Every `DELEGATE_*` variable a script under `scripts/` reads, listed once. All ar
 | `DELEGATE_GPU_WAIT_MAX` | `600` | Seconds to wait before giving up with exit 75; the run resumes from its cache. | `replay-recipe.sh` |
 | `DELEGATE_GPU_COOLDOWN` | `0` | Seconds to rest between items. | `replay-recipe.sh` |
 
-## Decisions (Clef spike, #636)
+## Decisions (`decide.sh`, ADR 0033)
+
+`decide.sh` answers on the resident tier model's logprobs unless `--backend clef` is passed; the first two variables matter only to that backend.
 
 | Variable | Default | Effect | Read by |
 |---|---|---|---|
