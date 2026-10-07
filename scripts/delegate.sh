@@ -33,6 +33,8 @@
 #   DELEGATE_BASE_URL=<urls>            ordered OpenAI-compatible base URLs; the
 #                                       default list lives in pick-model.sh
 #   MLX_HOST / DOCKER_MODEL_HOST / OLLAMA_HOST   feed that default list
+#   DELEGATE_MODEL=<id>                 this exact model id instead of the
+#                                       tier's preference list (pick-model.sh)
 #   DELEGATE_LOCAL_DATA_DIR             per-user data (default ~/.local/share/delegate-local)
 #   DELEGATE_METRICS_FILE=<path>        override the metrics destination
 #   DELEGATE_PROJECT=<name>             the project the delegation is FOR, when

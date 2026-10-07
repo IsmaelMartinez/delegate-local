@@ -30,10 +30,24 @@
 # Usage:
 #   replay-recipe.sh --recipe NAME [--candidate DIR] [--champion DIR]
 #                    [--limit N] [--seed FILE] [--out DIR]
+#   replay-recipe.sh --recipe NAME --candidate-model ID [--candidate-base URL]
+#                    [--champion DIR] [--limit N] [--seed FILE] [--out DIR]
 #
 #   --recipe NAME     recipe to replay (required)
 #   --candidate DIR   prompts directory holding the edited NAME.md; without
 #                     one the champion alone is scored (a baseline read)
+#   --candidate-model ID
+#                     a model comparison (#656) instead of a template one: the
+#                     champion template runs on the current model and on ID,
+#                     requested by that exact id (DELEGATE_MODEL), never
+#                     through a tier list. Kept cases are listed and tallied
+#                     apart but left out of the sign test, because their
+#                     reference is the current model's own draft. Exclusive
+#                     with --candidate
+#   --candidate-base URL
+#                     the OpenAI-compatible base serving ID (e.g. a second
+#                     mlx_lm.server on http://localhost:8081/v1); default the
+#                     base the champion resolves to
 #   --champion DIR    the live prompts directory. Default: the recipe as
 #                     committed on `main` (DELEGATE_REPLAY_BASE overrides the
 #                     ref), materialised in a temp dir, so an edit made on a
@@ -78,6 +92,8 @@ metrics_file="${DELEGATE_METRICS_FILE:-$data_dir/metrics.jsonl}"
 delegate_sh="${DELEGATE_REPLAY_DELEGATE_SH:-$script_dir/delegate.sh}"
 champion=""
 candidate=""
+candidate_model=""
+candidate_base=""
 recipe=""
 limit=40
 seed=""
@@ -89,6 +105,10 @@ while (($# > 0)); do
     --recipe=*) recipe="${1#--recipe=}"; shift;;
     --candidate) candidate="${2:?--candidate requires a directory}"; shift 2;;
     --candidate=*) candidate="${1#--candidate=}"; shift;;
+    --candidate-model) candidate_model="${2:?--candidate-model requires a model id}"; shift 2;;
+    --candidate-model=*) candidate_model="${1#--candidate-model=}"; shift;;
+    --candidate-base) candidate_base="${2:?--candidate-base requires a URL}"; shift 2;;
+    --candidate-base=*) candidate_base="${1#--candidate-base=}"; shift;;
     --champion) champion="${2:?--champion requires a directory}"; shift 2;;
     --champion=*) champion="${1#--champion=}"; shift;;
     --limit) limit="${2:?--limit requires a number}"; shift 2;;
@@ -108,6 +128,12 @@ command -v shasum >/dev/null || { echo "replay-recipe: shasum not on PATH" >&2; 
 [[ -n "$recipe" ]] || { echo "replay-recipe: --recipe is required" >&2; exit 2; }
 case "$limit" in ''|*[!0-9]*|0) echo "replay-recipe: --limit must be a positive number" >&2; exit 2;; esac
 case "$recipe" in *[!A-Za-z0-9_-]*) echo "replay-recipe: recipe names are [A-Za-z0-9_-]+" >&2; exit 2;; esac
+if [[ -n "$candidate" && -n "$candidate_model" ]]; then
+  echo "replay-recipe: --candidate and --candidate-model are mutually exclusive: compare a template or a model, not both" >&2; exit 2
+fi
+if [[ -n "$candidate_base" && -z "$candidate_model" ]]; then
+  echo "replay-recipe: --candidate-base needs --candidate-model" >&2; exit 2
+fi
 
 work_tmp=$(mktemp -d)
 trap 'rm -rf "$work_tmp"' EXIT
@@ -165,18 +191,36 @@ candidate_sha=""
 # a template effect. Resolved once from the recipe's tier; unknown when no
 # provider answers, in which case the shortcut and the cache are model-blind
 # and the report says so.
+# A model comparison also needs the champion's base, the candidate's default.
 model="${DELEGATE_REPLAY_MODEL:-}"
-if [[ -z "$model" && -x "$script_dir/pick-model.sh" ]]; then
+champion_base=""
+if [[ -x "$script_dir/pick-model.sh" ]] \
+   && { [[ -z "$model" ]] || [[ -n "$candidate_model" && -z "$candidate_base" ]]; }; then
   tier=$(recipe_tier "$champion/$recipe.md")
-  [[ -n "$tier" ]] && model=$(bash "$script_dir/pick-model.sh" "$tier" 2>/dev/null | head -n 1)
+  if [[ -n "$tier" ]]; then
+    resolution=$(bash "$script_dir/pick-model.sh" --print-resolution "$tier" 2>/dev/null | head -n 1)
+    if [[ "$resolution" == *$'\t'* ]]; then
+      champion_base="${resolution%%$'\t'*}"
+      [[ -n "$model" ]] || model="${resolution#*$'\t'}"
+    fi
+  fi
+fi
+if [[ -n "$candidate_model" ]]; then
+  # The comparison is between two named models: neither may be unknown.
+  [[ -n "$model" ]] || { echo "replay-recipe: the champion's model is unresolved; set DELEGATE_REPLAY_MODEL" >&2; exit 2; }
+  candidate_base="${candidate_base:-$champion_base}"
+  [[ -n "$candidate_base" ]] || { echo "replay-recipe: the champion's base is unresolved; pass --candidate-base" >&2; exit 2; }
 fi
 # The cache key carries a digest of the model id, not a slug: `foo:bar` and
 # `foo_bar` slug to the same name and would share an output.
+key_of() { printf '%s' "$1" | shasum -a 256 | cut -c1-10; }
 if [[ -n "$model" ]]; then
-  model_key=$(printf '%s' "$model" | shasum -a 256 | cut -c1-10)
+  model_key=$(key_of "$model")
 else
   model_key="unknown-model"
 fi
+candidate_key=""
+[[ -n "$candidate_model" ]] && candidate_key=$(key_of "$candidate_model")
 
 # ---------------------------------------------------------------------------
 # Cases. One record per line, `|`-separated (no field can carry one):
@@ -291,17 +335,19 @@ fi
 # assignment.
 read_into() { local _bytes; _bytes=$(cat "$2"; printf x); printf -v "$1" '%s' "${_bytes%x}"; }
 
-# run_wrapper <prompts dir> <inputs.json> <out file> <err file>: the same
-# call the original delegation made, under another template, on the tier it
-# was made on. Metrics, the canary and the nudge are off: a replay is a
-# measurement, not a delegation. The meta line is forced on, because
-# delegate.sh gates the output checks on it as well, and the prompt goes
-# after `--` so one that starts with an option-like token is still the
-# prompt. Returns 1 when the wrapper failed or ran on a model other than
-# the one this replay measures.
+# run_wrapper <prompts dir> <inputs.json> <out file> <err file> <arm model>
+# [<exact base>]: the same call the original delegation made, under another
+# template, on the tier it was made on. Metrics, the canary and the nudge are
+# off: a replay is a measurement, not a delegation. The meta line is forced
+# on, because delegate.sh gates the output checks on it as well, and the
+# prompt goes after `--` so one that starts with an option-like token is
+# still the prompt. With an exact base (the model arm) the arm's model is
+# requested by its exact id at that base, never through the tier's list.
+# Returns 1 when the wrapper failed or ran on a model other than the arm's.
 run_wrapper() {
-  local dir="$1" inputs="$2" out="$3" err="$4" k v tier prompt ran_model
-  local args=() tail=()
+  local dir="$1" inputs="$2" out="$3" err="$4" arm_model="$5" exact_base="${6:-}" k v tier prompt ran_model
+  local args=() tail=() pin=()
+  [[ -n "$exact_base" ]] && pin=(DELEGATE_MODEL="$arm_model" DELEGATE_BASE_URL="$exact_base")
   # The heat gate (#646) runs here, right before a model call, so cached
   # cases and stored drafts never wait; arm_output runs in a subshell, so a
   # gate that gives up leaves a marker the main loop stops on, and the first
@@ -324,7 +370,7 @@ run_wrapper() {
   [[ -n "$prompt" ]] && tail=(-- "$prompt")
   jq -j '.stdin // ""' "$inputs" \
     | env DELEGATE_PROMPTS_DIR="$dir" DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_NO_PREFLIGHT=1 \
-          DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 DELEGATE_LOCAL_NO_META=0 \
+          DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 DELEGATE_LOCAL_NO_META=0 ${pin[@]+"${pin[@]}"} \
           bash "$delegate_sh" --recipe "$recipe" ${args[@]+"${args[@]}"} ${tail[@]+"${tail[@]}"} \
       > "$out" 2> "$err"
   local rc=$?
@@ -337,22 +383,24 @@ run_wrapper() {
   if [[ -z "$ran_model" ]]; then
     echo "replay-recipe: no delegate-meta line from the wrapper" >> "$err"; return 1
   fi
-  if [[ -n "$model" && "$ran_model" != "$model" ]]; then
-    echo "replay-recipe: the wrapper ran on $ran_model, the replay measures $model" >> "$err"; return 1
+  if [[ -n "$arm_model" && "$ran_model" != "$arm_model" ]]; then
+    echo "replay-recipe: the wrapper ran on $ran_model, the replay measures $arm_model" >> "$err"; return 1
   fi
   return 0
 }
 
-# arm_output <dir> <sha> <id> <draft> <inputs> <row sha> <row checks> <row model>:
-# prints "<out file>|<checks_failed>" or "ERR". The champion's output for a
-# case produced under the same template by the same model is the stored
+# arm_output <dir> <sha> <arm model> <arm key> <exact base> <id> <draft>
+# <inputs> <row sha> <row checks> <row model>:
+# prints "<out file>|<checks_failed>" or "ERR". An arm's output for a case
+# produced under the same template by the arm's model is the stored
 # draft itself, checks from the row: no call — unless the draft was cut at
 # the byte cap, which a fresh output never is. The output is written to a
 # temp name and moved into place after its checks sidecar, so an interrupted
 # run leaves nothing a later run mistakes for a result.
 arm_output() {
-  local dir="$1" sha="$2" id="$3" draft="$4" inputs="$5" row_sha="$6" row_checks="$7" row_model="$8"
-  local stem="$out_dir/$id.$sha.$model_key" out checks_f err
+  local dir="$1" sha="$2" arm_model="$3" arm_key="$4" exact_base="$5" id="$6" draft="$7" inputs="$8"
+  local row_sha="$9" row_checks="${10}" row_model="${11}"
+  local stem="$out_dir/$id.$sha.$arm_key" out checks_f err
   out="$stem.out.txt"; checks_f="$stem.checks"
   # An output without its sidecar is an interrupted run; if it cannot be
   # cleared it cannot be trusted either.
@@ -362,7 +410,7 @@ arm_output() {
   fi
   if [[ ! -f "$out" ]]; then
     if [[ -n "$row_sha" && "$row_sha" == "$sha" ]] \
-       && { [[ -z "$model" ]] || [[ "$row_model" == "$model" ]]; } \
+       && { [[ -z "$arm_model" ]] || [[ "$row_model" == "$arm_model" ]]; } \
        && ! grep -qF '[truncated at ' "$draft"; then
       if ! { cp "$draft" "$out.tmp" && printf '%s' "$row_checks" > "$checks_f" && mv "$out.tmp" "$out"; }; then
         rm -f "$out.tmp" "$checks_f"
@@ -376,7 +424,7 @@ arm_output() {
       # count is 0 once the line itself has been seen (run_wrapper insists
       # on it); under pipefail the grep's own exit is not a write failure.
       # Either write failing is an error, as in the branch above.
-      if run_wrapper "$dir" "$inputs" "$out.tmp" "$err" \
+      if run_wrapper "$dir" "$inputs" "$out.tmp" "$err" "$arm_model" "$exact_base" \
          && { { grep -o 'checks_failed=[0-9]*' "$err" || true; } | head -1 | cut -d= -f2 > "$checks_f"; } \
          && { [[ -s "$checks_f" ]] || printf '0' > "$checks_f"; } \
          && mv "$out.tmp" "$out"; then
@@ -459,21 +507,49 @@ sign_p() {
            $p /= 2**$n; printf "%.3f %d", $p, ($p < 0.05 ? 1 : 0)' "$1" "$2"
 }
 
-echo "=== replay: $recipe ==="
-echo "Champion:  $champion_label (template=$champion_sha)"
-if [[ -n "$candidate" ]]; then
-  echo "Candidate: $candidate (template=$candidate_sha)"
-  if [[ "$candidate_sha" == "$champion_sha" ]]; then
-    echo "Verdict: INCONCLUSIVE — the candidate's frontmatter and prompt block are identical to the champion's."
+# The candidate arm: an edited template on the same model, or (#656) the
+# champion template on another model, requested by its exact id.
+cand_dir=""; cand_sha=""; cand_model="$model"; cand_key="$model_key"; cand_base=""
+if [[ -n "$candidate_model" ]]; then
+  cand_dir="$champion"; cand_sha="$champion_sha"
+  cand_model="$candidate_model"; cand_key="$candidate_key"; cand_base="$candidate_base"
+elif [[ -n "$candidate" ]]; then
+  cand_dir="$candidate"; cand_sha="$candidate_sha"
+fi
+
+if [[ -n "$candidate_model" ]]; then
+  echo "=== replay: $recipe (model comparison) ==="
+  echo "Champion:  $champion_label (template=$champion_sha), on both arms"
+  echo "Champion model:  $model"
+  echo "Candidate model: $candidate_model at $candidate_base"
+  if [[ "$candidate_model" == "$model" ]]; then
+    echo "Verdict: INCONCLUSIVE — the candidate model is the champion's."
     exit 0
   fi
-fi
-if [[ -n "$model" ]]; then
-  echo "Model:     $model"
 else
-  echo "Model:     (unresolved — stored drafts stand in for the champion whatever model produced them)"
+  echo "=== replay: $recipe ==="
+  echo "Champion:  $champion_label (template=$champion_sha)"
+  if [[ -n "$candidate" ]]; then
+    echo "Candidate: $candidate (template=$candidate_sha)"
+    if [[ "$candidate_sha" == "$champion_sha" ]]; then
+      echo "Verdict: INCONCLUSIVE — the candidate's frontmatter and prompt block are identical to the champion's."
+      exit 0
+    fi
+  fi
+  if [[ -n "$model" ]]; then
+    echo "Model:     $model"
+  else
+    echo "Model:     (unresolved — stored drafts stand in for the champion whatever model produced them)"
+  fi
 fi
 kept_n=$(grep -c '|kept|' "$cases_tmp"); scaffold_n=$(grep -c '|scaffold|' "$cases_tmp"); rewrote_n=$(grep -c '|rewrote|' "$cases_tmp")
+# In a model comparison a kept case's reference is the champion model's own
+# draft, so the champion cannot lose it on anchors and the candidate rarely
+# ties it: those cases are scored and listed but tallied apart, and the sign
+# test, the newest third and the checks and length totals read the edited
+# cases alone.
+counted_n=$n_cases
+[[ -n "$candidate_model" ]] && counted_n=$(( scaffold_n + rewrote_n ))
 # The distinct sessions the cases come from (#588): two sessions once made
 # most of one template's case set.
 sessions_n=$(cut -d'|' -f10 "$cases_tmp" | awk 'NF' | sort -u | grep -c '')
@@ -482,8 +558,9 @@ echo
 
 wins=0; losses=0; ties=0; errors=0
 champ_checks=0; cand_checks=0; champ_len=0; cand_len=0
-newest_n=$(( (n_cases + 2) / 3 ))
+newest_n=$(( (counted_n + 2) / 3 ))
 newest_wins=0; newest_losses=0
+kept_wins=0; kept_losses=0; kept_ties=0
 # gate_stop: when the heat gate gave up inside a model call, stop the run
 # with its code; the outputs so far are cached, so a rerun resumes.
 gate_stop() {
@@ -493,43 +570,60 @@ gate_stop() {
 }
 
 i=0
-if [[ -n "$candidate" ]]; then
+j=0
+if [[ -n "$cand_dir" ]]; then
   printf '  %-10s %-20s %-8s %-18s %-18s %s\n' case ts verdict champion candidate result
 else
   printf '  %-10s %-20s %-8s %-18s\n' case ts verdict champion
 fi
 while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel _session; do
   i=$((i + 1))
+  counted=1
+  [[ -n "$candidate_model" && "$verdict" == kept ]] && counted=0
+  (( counted )) && j=$((j + 1))
   case_refs "$inputs" "$final"
-  a=$(arm_output "$champion" "$champion_sha" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")
+  a=$(arm_output "$champion" "$champion_sha" "$model" "$model_key" "" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")
   gate_stop
   if [[ "$a" == "ERR" ]]; then
     errors=$((errors + 1)); printf '  %-10s %-20s %-8s %s\n' "${id:0:10}" "$ts" "$verdict" "ERR (champion)"; continue
   fi
   a_out="${a%|*}"; a_checks="${a##*|}"
   a_score=$(score "$a_out" "$a_checks")
-  champ_checks=$((champ_checks + a_checks))
-  champ_len=$((champ_len + $(printf '%s' "${a_score%=*}" | cut -d/ -f7)))
-  if [[ -z "$candidate" ]]; then
+  if (( counted )); then
+    champ_checks=$((champ_checks + a_checks))
+    champ_len=$((champ_len + $(printf '%s' "${a_score%=*}" | cut -d/ -f7)))
+  fi
+  if [[ -z "$cand_dir" ]]; then
     printf '  %-10s %-20s %-8s %-18s\n' "${id:0:10}" "$ts" "$verdict" "$a_score"
     continue
   fi
-  b=$(arm_output "$candidate" "$candidate_sha" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")
+  b=$(arm_output "$cand_dir" "$cand_sha" "$cand_model" "$cand_key" "$cand_base" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")
   gate_stop
   if [[ "$b" == "ERR" ]]; then
     errors=$((errors + 1)); printf '  %-10s %-20s %-8s %-18s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "ERR (candidate)"; continue
   fi
   b_out="${b%|*}"; b_checks="${b##*|}"
   b_score=$(score "$b_out" "$b_checks")
-  cand_checks=$((cand_checks + b_checks))
-  cand_len=$((cand_len + $(printf '%s' "${b_score%=*}" | cut -d/ -f7)))
   a_total="${a_score##*=}"; b_total="${b_score##*=}"
-  if (( b_total < a_total )); then
-    result=WIN; wins=$((wins + 1)); (( i <= newest_n )) && newest_wins=$((newest_wins + 1))
-  elif (( b_total > a_total )); then
-    result=LOSS; losses=$((losses + 1)); (( i <= newest_n )) && newest_losses=$((newest_losses + 1))
+  if (( b_total < a_total )); then result=WIN
+  elif (( b_total > a_total )); then result=LOSS
+  else result=tie
+  fi
+  if (( counted )); then
+    cand_checks=$((cand_checks + b_checks))
+    cand_len=$((cand_len + $(printf '%s' "${b_score%=*}" | cut -d/ -f7)))
+    case "$result" in
+      WIN)  wins=$((wins + 1)); (( j <= newest_n )) && newest_wins=$((newest_wins + 1));;
+      LOSS) losses=$((losses + 1)); (( j <= newest_n )) && newest_losses=$((newest_losses + 1));;
+      *)    ties=$((ties + 1));;
+    esac
   else
-    result=tie; ties=$((ties + 1))
+    case "$result" in
+      WIN)  kept_wins=$((kept_wins + 1));;
+      LOSS) kept_losses=$((kept_losses + 1));;
+      *)    kept_ties=$((kept_ties + 1));;
+    esac
+    result="$result (kept, not counted)"
   fi
   printf '  %-10s %-20s %-8s %-18s %-18s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "$b_score" "$result"
 done < "$cases_tmp"
@@ -540,13 +634,16 @@ if (( errors == n_cases )); then
   echo "Verdict: ERROR — every case failed to run; see $out_dir/*.err.txt"
   exit 4
 fi
-if [[ -z "$candidate" ]]; then
+if [[ -z "$cand_dir" ]]; then
   echo "Summary: n=$n_cases  checks failed under the champion=$champ_checks  length flags=$champ_len  errors=$errors"
-  echo "Verdict: BASELINE — pass --candidate DIR to compare an edit."
+  echo "Verdict: BASELINE — pass --candidate DIR to compare an edit, or --candidate-model ID to compare a model."
   exit 0
 fi
 
-echo "Summary: n=$n_cases  wins=$wins  losses=$losses  ties=$ties  errors=$errors"
+if [[ -n "$candidate_model" ]]; then
+  echo "Kept (not counted): n=$kept_n  wins=$kept_wins  losses=$kept_losses  ties=$kept_ties  (the reference is $model's own draft)"
+fi
+echo "Summary: n=$counted_n  wins=$wins  losses=$losses  ties=$ties  errors=$errors"
 echo "Checks failed: champion=$champ_checks  candidate=$cand_checks"
 echo "Length flags: champion=$champ_len  candidate=$cand_len"
 echo "Newest third ($newest_n cases): wins=$newest_wins  losses=$newest_losses"
@@ -581,6 +678,6 @@ elif (( losses > wins )); then
     echo "Verdict: INCONCLUSIVE — $losses losses to $wins wins is not yet significant (p=$p)."
   fi
 else
-  echo "Verdict: INCONCLUSIVE — $wins wins to $losses losses; the edit did not separate the arms."
+  echo "Verdict: INCONCLUSIVE — $wins wins to $losses losses; the arms did not separate."
 fi
 exit 0
