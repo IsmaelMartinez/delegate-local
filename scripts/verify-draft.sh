@@ -29,7 +29,9 @@
 #
 # Exit codes:  0 pass (or calibration done), 1 flag, 2 usage or input error,
 #              3 verifier unavailable (no model resolves for the verify tier,
-#              or the decision request failed).
+#              the decision request failed, or the answer held neither option
+#              letter); --calibrate also exits 3, recording nothing, when any
+#              row could not be scored or the resolved model changed mid-run.
 #
 # Env:  DELEGATE_VERIFY_THRESHOLD overrides the recorded threshold (0-1); with
 #       neither, 0.5 and a one-line stderr note. DELEGATE_LOCAL_DATA_DIR and
@@ -80,6 +82,12 @@ score() {
     echo "verify-draft: the verifier is unavailable (decide.sh --tier verify failed)" >&2
     return 3
   fi
+  # No option letter among the top logprobs: decide.sh reports coverage 0
+  # and a uniform 0.5 made up from nothing, which must not pass for a score.
+  if jq -e '.answers.grounded.coverage == 0' <<<"$answer" >/dev/null; then
+    echo "verify-draft: the verifier answered with neither option letter (coverage 0); no score" >&2
+    return 3
+  fi
   jq -r '[.model, .answers.grounded.probabilities.true, .latency_ms] | @tsv' <<<"$answer"
 }
 
@@ -95,9 +103,16 @@ if [[ -n "$calibrate" ]]; then
   scored=""
   model=""
   errors=0
-  while IFS= read -r row; do
+  # || [[ -n $row ]]: a file without a trailing newline keeps its last row.
+  while IFS= read -r row || [[ -n "$row" ]]; do
     [[ -n "$row" ]] || continue
     if line=$(score "$row"); then
+      # One threshold per model: a verifier that changes mid-run (a server
+      # restart, a config.sh edit) would record a mixture under one name.
+      if [[ -n "$model" && "${line%%$'\t'*}" != "$model" ]]; then
+        echo "verify-draft: the verify model changed from $model to ${line%%$'\t'*} mid-calibration; nothing recorded" >&2
+        exit 3
+      fi
       model="${line%%$'\t'*}"
       scored="$scored$(jq -r '.label' <<<"$row")"$'\t'"${line#*$'\t'}"$'\n'
     else
@@ -125,9 +140,14 @@ if [[ -n "$calibrate" ]]; then
     print "$best\n";
     printf "n=%d auroc=%.3f threshold=%s balanced_accuracy=%.3f accuracy=%d/%d acc\@0.5=%d/%d recall %s p50_ms=%d\n",
       scalar @r, $auroc, $best, $best_bal, $acc->($best), scalar @r, $acc->(0.5), scalar @r, $rec, $lat[@lat / 2];
-  ') || exit 2
+  ') || { (( errors > 0 )) && exit 3; exit 2; }
   threshold="${result%%$'\n'*}"
   echo "verify-calibrate: model=$model errors=$errors ${result#*$'\n'}"
+  # A threshold chosen over a subset is not the set it claims to be.
+  if (( errors > 0 )); then
+    echo "verify-calibrate: $errors row(s) could not be scored; threshold not recorded" >&2
+    exit 3
+  fi
   if (( dry_run )); then
     echo "verify-calibrate: --dry-run, threshold not recorded" >&2
   else

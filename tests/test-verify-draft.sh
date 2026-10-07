@@ -13,16 +13,22 @@ sniff="$mock/payloads"
 : > "$sniff"
 data="$TEST_ROOT/data"
 mkdir -p "$data/drafts"
+# models.json is a file so a SWITCH_MODEL request can change what later
+# discovery calls see; NOLETTER answers with neither option letter in the top
+# logprobs, which decide.sh reports as coverage 0.
 write_mock() {
+  mock_models_json $MOCK_MODELS > "$mock/models.json"
   cat > "$mock/curl" <<EOF
 #!/usr/bin/env bash
 url=""
 for a in "\$@"; do case "\$a" in http*) url="\$a" ;; esac; done
 case "\$url" in
-  */models) printf '%s' '$(mock_models_json $MOCK_MODELS)' ;;
+  */models) cat "$mock/models.json" ;;
   */chat/completions)
     body=\$(cat)
     printf '%s\n' "\$body" >> "$sniff"
+    case "\$body" in *SWITCH_MODEL*) printf '%s' '$(mock_models_json gemma4:latest)' > "$mock/models.json" ;; esac
+    case "\$body" in *NOLETTER*) echo '{"choices":[{"message":{"content":"Hello"},"logprobs":{"content":[{"token":"Hello","logprob":-0.1,"top_logprobs":[{"token":"Hello","logprob":-0.1}]}]}}]}'; exit 0 ;; esac
     s=\$(printf '%s' "\$body" | grep -o 'SCORE_[0-9.]*' | head -1)
     s=\${s#SCORE_}
     perl -e 'my \$p = shift || 0.5; my (\$a, \$b) = (log(\$p), log(1 - \$p));
@@ -113,6 +119,9 @@ run <<<'{"facts":"f","draft":"SCORE_0.9"}' >/dev/null 2>&1
 assert_eq "3" "$?" "no model for the verify tier exits 3"
 MOCK_MODELS='qwen3.6:35b-a3b'
 write_mock
+run <<<'{"facts":"f","draft":"NOLETTER"}' >/dev/null 2>"$mock/err"
+assert_eq "3" "$?" "an answer with neither option letter (coverage 0) exits 3"
+assert_contains "coverage 0" "$(cat "$mock/err")" "and says why instead of passing a made-up 0.5"
 
 echo "calibrate"
 set_file="$TEST_ROOT/set.jsonl"
@@ -143,5 +152,25 @@ run --calibrate "$TEST_ROOT/one-class.jsonl" >/dev/null 2>&1
 assert_eq "2" "$?" "a set without both classes exits 2"
 run --calibrate "$TEST_ROOT/missing.jsonl" >/dev/null 2>&1
 assert_eq "2" "$?" "a missing set exits 2"
+
+rm -f "$data/verify-thresholds.tsv"
+printf '%s' "$(cat "$set_file")" > "$TEST_ROOT/no-newline.jsonl"
+out=$(run --calibrate "$TEST_ROOT/no-newline.jsonl" --dry-run 2>&1)
+assert_contains "n=6" "$out" "a set without a trailing newline keeps its last row"
+
+{ cat "$set_file"; jq -nc '{facts:"f", draft:"NOLETTER", label:"unsupported"}'; } > "$TEST_ROOT/with-error.jsonl"
+out=$(run --calibrate "$TEST_ROOT/with-error.jsonl" 2>&1)
+rc=$?
+assert_eq "3" "$rc" "a row the verifier could not score exits 3"
+assert_contains "errors=1 n=6" "$out" "after reporting the summary of the rows it did score"
+assert_true "and records no threshold" test ! -e "$data/verify-thresholds.tsv"
+
+{ jq -nc '{facts:"f", draft:"SCORE_0.9 SWITCH_MODEL", label:"supported"}'; cat "$set_file"; } > "$TEST_ROOT/switch.jsonl"
+out=$(run --calibrate "$TEST_ROOT/switch.jsonl" 2>&1)
+rc=$?
+assert_eq "3" "$rc" "a model change mid-calibration exits 3"
+assert_contains "changed from qwen3.6:35b-a3b to gemma4:latest" "$out" "naming both models"
+assert_true "and records no threshold" test ! -e "$data/verify-thresholds.tsv"
+write_mock
 
 finish
