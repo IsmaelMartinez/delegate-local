@@ -525,4 +525,80 @@ assert_contains "recall=1.000 negative-precision=1.000" "$out" "gate:false: diag
 assert_contains "diagnostic (non-gating, embedded sub-step): dtp=1 dfn=1 embedded-recall=0.500" "$out" "gate:false: diagnostic line reports embedded-recall"
 rm -rf "$tmp"
 
+# --decide (#638): one decide.sh call per query, scored from p(true) at 0.5.
+# The stub answers by query wording (the fixture's positives start with
+# summarise/draft/triage), records each request body and its argv, or fails.
+make_mock_decide() {
+  local dir="$1" rule="$2"
+  mkdir -p "$dir/scripts"
+  cp "$SCRIPT" "$dir/scripts/eval-skill-triggers.sh"
+  cat > "$dir/scripts/decide.sh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$dir/decide-argv.txt"
+req=\$(cat); printf '%s\n' "\$req" >> "$dir/decide-req.txt"
+case "$rule" in
+  fail) echo "decide: request failed" >&2; exit 1 ;;
+  all) p=0.9 ;;
+  mixed) p=0.8; m=other-model; jq -e '.state.request | test("^summarise")' <<<"\$req" >/dev/null && m=stub ;;
+  lowcov) jq -nc '{backend: "logprob", model: "stub", latency_ms: 1, answers: {trigger: {type: "noul", coverage: 0.1, probabilities: {"true": 0.5, "false": 0.5}}}}'; exit 0 ;;
+  *) if jq -e '.state.request | test("^(summarise|draft|triage)")' <<<"\$req" >/dev/null; then p=0.8; else p=0.2; fi ;;
+esac
+jq -nc --argjson p "\$p" --arg m "\${m:-stub}" '{backend: "logprob", model: \$m, latency_ms: 1, answers: {trigger: {type: "noul", probabilities: {"true": \$p, "false": (1 - \$p)}}}}'
+EOF
+  chmod +x "$dir/scripts/decide.sh"
+}
+
+tmp=$(mktemp -d); make_eval_set "$tmp"; make_skill "$tmp"; make_mock_decide "$tmp" perfect
+EC=0
+out=$(cd "$tmp" && PATH="$SAFE_PATH" bash scripts/eval-skill-triggers.sh --decide --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 0 "$EC" "--decide perfect stub -> exits 0"
+assert_contains "scoring: backend=decide model=logprob" "$out" "--decide: header names the decide backend"
+assert_contains "recall=1.000 negative-precision=1.000" "$out" "--decide perfect: 1.000/1.000"
+assert_contains "scored on: stub" "$out" "--decide: names the model decide.sh scored on"
+assert_eq 16 "$(wc -l < "$tmp/decide-req.txt" | tr -d ' ')" "--decide: one decide.sh call per query"
+first=$(head -1 "$tmp/decide-req.txt")
+assert_contains '"skill_description":"Use this skill to offload' "$first" "--decide request: description as a named state field"
+assert_contains '"request":"summarise this log"' "$first" "--decide request: query as a named state field"
+assert_contains '"type":"noul"' "$first" "--decide request: one yes/no question"
+assert_contains "--backend logprob" "$(head -1 "$tmp/decide-argv.txt")" "--decide: defaults to the logprob backend"
+assert_eq 1 "$(jq -s '[.[] | select(.id == "p01" and .p == 0.8 and .verdict == "TRIGGER")] | length' "$tmp"/evals/results/*-decide-logprob.jsonl)" "--decide results row carries p and the verdict"
+rm -rf "$tmp"
+
+tmp=$(mktemp -d); make_eval_set "$tmp"; make_skill "$tmp"; make_mock_decide "$tmp" all
+EC=0
+out=$(cd "$tmp" && PATH="$SAFE_PATH" bash scripts/eval-skill-triggers.sh --decide clef --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 1 "$EC" "--decide always-yes -> exit 1 (precision breach)"
+assert_contains "negative-precision=0.000" "$out" "--decide always-yes -> 0 precision"
+assert_contains "--backend clef" "$(head -1 "$tmp/decide-argv.txt")" "--decide clef: backend passed through"
+rm -rf "$tmp"
+
+tmp=$(mktemp -d); make_eval_set "$tmp"; make_skill "$tmp"; make_mock_decide "$tmp" fail
+EC=0
+out=$(cd "$tmp" && PATH="$SAFE_PATH" bash scripts/eval-skill-triggers.sh --decide --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 2 "$EC" "--decide with a failing decide.sh -> exit 2, never a score"
+assert_contains "decide.sh failed on p01" "$out" "--decide failure names the query"
+rm -rf "$tmp"
+
+tmp=$(mktemp -d); make_eval_set "$tmp"; make_skill "$tmp"; make_mock_decide "$tmp" mixed
+EC=0
+out=$(cd "$tmp" && PATH="$SAFE_PATH" bash scripts/eval-skill-triggers.sh --decide --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 2 "$EC" "--decide: queries scored on two models -> no score, exit 2"
+assert_contains "scored on more than one model (other-model stub); no score" "$out" "--decide mixed models are named"
+rm -rf "$tmp"
+
+tmp=$(mktemp -d); make_eval_set "$tmp"; make_skill "$tmp"; make_mock_decide "$tmp" lowcov
+EC=0
+out=$(cd "$tmp" && PATH="$SAFE_PATH" bash scripts/eval-skill-triggers.sh --decide --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 2 "$EC" "--decide: a uniform fallback (letters absent from the logprobs) is no score, exit 2"
+assert_contains "held only 0.1 of the model's mass on p01" "$out" "--decide low coverage names the query"
+rm -rf "$tmp"
+
+tmp=$(mktemp -d); make_eval_set "$tmp"; make_skill "$tmp"; make_mock_decide "$tmp" perfect
+EC=0
+out=$(cd "$tmp" && PATH="$SAFE_PATH" bash scripts/eval-skill-triggers.sh --decide logprobs --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 2 "$EC" "--decide with an unknown backend -> usage exit 2"
+assert_contains "--decide takes logprob or clef, not 'logprobs'" "$out" "--decide unknown backend named before any query runs"
+assert_eq 0 "$(cat "$tmp/decide-argv.txt" 2>/dev/null | wc -l | tr -d ' ')" "--decide unknown backend: decide.sh never called"
+rm -rf "$tmp"
+
 finish

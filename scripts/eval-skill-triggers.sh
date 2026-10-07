@@ -8,14 +8,19 @@
 #                     pick-model.sh code, since trigger eval is closed-form
 #                     binary classification. The thresholds in the eval set
 #                     are the calibration target, not the chosen model.
+#   --decide [logprob|clef]: one decide.sh question per query (free, #638):
+#                     the description and the query as named state fields,
+#                     a yes/no "should this skill fire" question, TRIGGER at
+#                     p(true) >= 0.5. Default logprob, the resident tier
+#                     model's first-token logprobs. The pre-merge gate.
 #
-# One batched call per run, not one per query (#62). Both modes use the
-# SKILL.md frontmatter description as the trigger surface and the same
-# thresholds. A non-200 answer, or a 200 whose body is not the expected JSON,
+# --api and --local send one batched call per run, not one per query (#62).
+# Every mode uses the SKILL.md frontmatter description as the trigger surface
+# and the same thresholds. A non-200 answer, or a 200 whose body is not the expected JSON,
 # prints the status and the start of the body and exits 2: no score is never
 # reported as a pass.
 #
-# Usage:  eval-skill-triggers.sh [--api | --local [model]] [--eval-set path] [--skill path]
+# Usage:  eval-skill-triggers.sh [--api | --local [model] | --decide [logprob|clef]] [--eval-set path] [--skill path]
 # Env:    ANTHROPIC_API_KEY (required for --api)
 #         DELEGATE_BASE_URL (optional for --local; pick-model.sh owns the default)
 #         DELEGATE_THINK=true (optional for --local; enable_thinking, default off as in delegate.sh)
@@ -27,6 +32,7 @@ mode="shape"
 backend=""
 local_model=""
 local_base=""
+decide_backend=""
 eval_set="evals/eval-set.json"
 skill="SKILL.md"
 
@@ -38,9 +44,14 @@ while [[ $# -gt 0 ]]; do
       # Optional model name; a following --flag is not one.
       if [[ $# -gt 0 && "$1" != --* ]]; then local_model="$1"; shift; fi
       ;;
+    --decide)
+      mode="api"; backend="decide"; decide_backend="logprob"; shift
+      if [[ $# -gt 0 && "$1" != --* ]]; then decide_backend="$1"; shift; fi
+      case "$decide_backend" in logprob|clef) ;; *) echo "--decide takes logprob or clef, not '$decide_backend'" >&2; exit 2 ;; esac
+      ;;
     --eval-set) eval_set="$2"; shift 2 ;;
     --skill) skill="$2"; shift 2 ;;
-    *) echo "usage: eval-skill-triggers.sh [--api | --local [model]] [--eval-set path] [--skill path]" >&2; exit 2 ;;
+    *) echo "usage: eval-skill-triggers.sh [--api | --local [model] | --decide [logprob|clef]] [--eval-set path] [--skill path]" >&2; exit 2 ;;
   esac
 done
 
@@ -65,7 +76,7 @@ echo "shape: total=$total positive=$pos negative=$neg diagnostic=$diagnostic mis
 (( missing_fields == 0 )) || { echo "FAIL: $missing_fields queries missing fields" >&2; exit 1; }
 
 if [[ "$mode" == "shape" ]]; then
-  echo "OK shape mode (run with --api or --local for trigger-accuracy check)"
+  echo "OK shape mode (run with --decide, --local or --api for trigger-accuracy check)"
   exit 0
 fi
 
@@ -111,12 +122,17 @@ case "$backend" in
       scoring_model="${_resolved#*	}"
     fi
     ;;
+  decide)
+    decide_sh="$(dirname "$0")/decide.sh"
+    [[ -f "$decide_sh" ]] || { echo "decide.sh not found at $decide_sh" >&2; exit 2; }
+    scoring_model="$decide_backend"
+    ;;
 esac
 
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
 results_dir="evals/results"
 mkdir -p "$results_dir"
-results_file="$results_dir/$run_id-$backend.jsonl"
+results_file="$results_dir/$run_id-$backend${decide_backend:+-$decide_backend}.jsonl"
 : > "$results_file"
 
 # Output token budget: ~30 tokens per verdict (id + JSON syntax) is generous.
@@ -209,31 +225,78 @@ score_batch() {
 
 echo "scoring: backend=$backend model=$scoring_model"
 
-raw=$(score_batch) || { echo "FAIL: $backend scoring call produced no score" >&2; exit 2; }
-
-# Strip any code fences the model might emit despite the no-fences instruction.
-raw=${raw//\`\`\`json/}
-raw=${raw//\`\`\`/}
-
-# If the model emitted prose around the JSON, fall back to the first {...} block.
-verdicts_json=$(jq -c '.verdicts // empty' <<<"$raw" 2>/dev/null || true)
-if [[ -z "$verdicts_json" || "$verdicts_json" == "null" ]]; then
-  # Fallback: extract the first balanced JSON object substring and re-parse.
-  extracted=$(printf '%s' "$raw" | perl -0777 -ne 'if (/(\{.*\})/s) { print $1 }')
-  verdicts_json=$(jq -c '.verdicts // empty' <<<"$extracted" 2>/dev/null || true)
-fi
-if [[ -z "$verdicts_json" || "$verdicts_json" == "null" ]]; then
-  echo "$backend response did not contain a parseable verdicts array" >&2
-  printf 'raw response (first 400 chars): %s\n' "${raw:0:400}" >&2
-  exit 2
-fi
-
-# TSV-backed lookup (bash 3 has no associative arrays): <id>\t<VERDICT>.
+# TSV-backed lookup (bash 3 has no associative arrays):
+# <id>\t<VERDICT>[\t<p>\t<model>] — p and model on --decide rows only.
 verdict_map=$(mktemp)
 trap 'rm -f "$verdict_map"' EXIT
-jq -r '.[] | "\(.id)\t\(.verdict)"' <<<"$verdicts_json" \
-  | awk -F'\t' '{ v=toupper($2); gsub(/[^A-Z]/, "", v); printf "%s\t%s\n", $1, v }' \
-  > "$verdict_map"
+
+# One typed yes/no question per query. Named state fields and backtick
+# references are the format that passed the gate on the 2026-10-06 spike
+# (21/22 recall, 15/15 negative precision on the resident model, epic #642);
+# the batched prompt missed four positives on the same model (#625). The 0.5
+# cut is fixed, never tuned per query. A logprob answer whose option letters
+# held under half the top-logprob mass is no answer: decide.sh renormalises
+# it, down to a uniform 0.5 when the letters are absent, and that must not
+# count as a TRIGGER.
+score_decide() {
+  local row id req ans p cov model
+  while read -r row; do
+    id=$(jq -r '.id' <<<"$row")
+    req=$(jq -c --arg d "$description" '{
+      state: {skill_description: $d, request: .query},
+      questions: {trigger: {type: "noul",
+        instructions: "Following the MUST and Do NOT rules in `skill_description`, should the assistant invoke this skill to handle `request`?",
+        criteria: {"true": "`skill_description` says the skill must be used for a request like `request`.",
+                   "false": "`skill_description` excludes `request`, or does not cover it."}}}}' <<<"$row")
+    ans=$(bash "$decide_sh" --backend "$decide_backend" <<<"$req") \
+      || { echo "FAIL: decide.sh failed on $id; no score" >&2; return 1; }
+    p=$(jq -r '.answers.trigger.probabilities["true"] // empty' <<<"$ans")
+    [[ -n "$p" ]] || { echo "FAIL: decide.sh gave no probability for $id; no score" >&2; return 1; }
+    cov=$(jq -r '.answers.trigger.coverage // 1' <<<"$ans")
+    if awk -v c="$cov" 'BEGIN { exit !(c + 0 < 0.5) }'; then
+      echo "FAIL: the answer letters held only $cov of the model's mass on $id; no score" >&2; return 1
+    fi
+    model=$(jq -r '.model // "unknown"' <<<"$ans")
+    awk -v id="$id" -v p="$p" -v m="$model" 'BEGIN { printf "%s\t%s\t%s\t%s\n", id, (p + 0 >= 0.5 ? "TRIGGER" : "NOTRIGGER"), p, m }'
+  done < <(jq -c '.queries[]' "$eval_set")
+}
+
+# The single batched call (--api, --local): parse the verdicts object out of
+# the answer and print <id>\t<VERDICT> lines.
+score_batched() {
+  local raw verdicts_json extracted
+  raw=$(score_batch) || { echo "FAIL: $backend scoring call produced no score" >&2; return 1; }
+  # Strip any code fences the model might emit despite the no-fences instruction.
+  raw=${raw//\`\`\`json/}
+  raw=${raw//\`\`\`/}
+  # If the model emitted prose around the JSON, fall back to the first {...} block.
+  verdicts_json=$(jq -c '.verdicts // empty' <<<"$raw" 2>/dev/null || true)
+  if [[ -z "$verdicts_json" || "$verdicts_json" == "null" ]]; then
+    extracted=$(printf '%s' "$raw" | perl -0777 -ne 'if (/(\{.*\})/s) { print $1 }')
+    verdicts_json=$(jq -c '.verdicts // empty' <<<"$extracted" 2>/dev/null || true)
+  fi
+  if [[ -z "$verdicts_json" || "$verdicts_json" == "null" ]]; then
+    echo "$backend response did not contain a parseable verdicts array" >&2
+    printf 'raw response (first 400 chars): %s\n' "${raw:0:400}" >&2
+    return 1
+  fi
+  jq -r '.[] | "\(.id)\t\(.verdict)"' <<<"$verdicts_json" \
+    | awk -F'\t' '{ v=toupper($2); gsub(/[^A-Z]/, "", v); printf "%s\t%s\n", $1, v }'
+}
+
+if [[ "$backend" == "decide" ]]; then
+  score_decide > "$verdict_map" || exit 2
+  # Each query is its own decide.sh call, which resolves the model afresh; a
+  # score is one model's score or none.
+  models=$(cut -f4 "$verdict_map" | sort -u)
+  if [[ "$(printf '%s\n' "$models" | grep -c '')" -ne 1 ]]; then
+    echo "FAIL: the queries were scored on more than one model ($(printf '%s' "$models" | tr '\n' ' ')); no score" >&2
+    exit 2
+  fi
+  echo "scored on: $models"
+else
+  score_batched > "$verdict_map" || exit 2
+fi
 
 tp=0; fn=0; tn=0; fp=0
 # Diagnostic counters (#277): `"gate": false` queries (the embedded-sub-step
@@ -248,12 +311,14 @@ while read -r row; do
   # Explicit compare, NOT `.gate // true`: jq treats false as absent there.
   gate=$(jq -r 'if .gate == false then "false" else "true" end' <<<"$row")
   verdict=$(awk -F'\t' -v id="$id" '$1 == id { print $2; exit }' "$verdict_map")
+  p=$(awk -F'\t' -v id="$id" '$1 == id { print $3; exit }' "$verdict_map")
   if [[ -z "$verdict" ]]; then
     missing_verdicts=$((missing_verdicts + 1))
     verdict="MISSING"
   fi
-  jq -nc --arg id "$id" --arg expect "$expect" --arg verdict "$verdict" --arg query "$query" --argjson gate "$gate" \
-    '{id:$id, expect:$expect, verdict:$verdict, query:$query, gate:$gate}' >> "$results_file"
+  # --decide rows also carry p(true), so a miss shows how close it came.
+  jq -nc --arg id "$id" --arg expect "$expect" --arg verdict "$verdict" --arg query "$query" --argjson gate "$gate" --arg p "$p" \
+    '{id:$id, expect:$expect, verdict:$verdict, query:$query, gate:$gate} + (if $p == "" then {} else {p: ($p | tonumber)} end)' >> "$results_file"
   # NOTRIGGER must be checked before TRIGGER, which is a prefix of it. A
   # garbage or missing verdict counts as a miss against the expected outcome.
   is_trigger=0; is_notrigger=0
