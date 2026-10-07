@@ -33,15 +33,15 @@ Standalone asks ("summarise this log") fire the skill reliably, but a commit mes
 
 ## Per-machine routing override
 
-`pick-model.sh` already picks the first preference a running provider serves, so most hosts need no override. To change the order for a tier on this host without forking the repo, write `~/.local/share/delegate-local/config.sh` by hand:
+`pick-model.sh` already picks the first preference a running provider serves, so most hosts need no override. To put a model first for a tier on this host without forking the repo, write `~/.local/share/delegate-local/config.sh` by hand, prepending to the shipped list:
 
 ```bash
 case "$tier" in
-  prose) prefs=("gemma4" "qwen3.6") ;;
+  prose) prefs=(gemma-4-26b "${prefs[@]}") ;;
 esac
 ```
 
-The override is sourced after the shipped defaults so any tier it touches wins; untouched tiers fall through. See [`README.md`](../README.md#personalising-routing-recommended) for the full pattern.
+The override is sourced after the shipped defaults so any tier it touches wins; untouched tiers fall through. Prepending keeps the shipped list as the fallback and keeps it current; a tier reassigned to a full list of its own stops following it, and `audit-models.sh` warns about that. See [`README.md`](../README.md#personalising-routing-recommended) for the full pattern.
 
 ## Uninstall
 

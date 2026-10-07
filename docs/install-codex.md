@@ -31,7 +31,7 @@ If Codex answers without delegating, check that `~/.codex/skills/delegate-local/
 
 ## Per-machine routing override
 
-Same as Claude Code's pattern: a hand-written `~/.local/share/delegate-local/config.sh` that reassigns `prefs` for the tiers you want reordered (see [`install-claude-code.md`](install-claude-code.md#per-machine-routing-override)). The path is the shared data directory whichever agent installed the skill; `DELEGATE_LOCAL_CONFIG` redirects it.
+Same as Claude Code's pattern: a hand-written `~/.local/share/delegate-local/config.sh` that prepends to `prefs` for the tiers you want reordered, e.g. `prose) prefs=(gemma-4-26b "${prefs[@]}") ;;` (see [`install-claude-code.md`](install-claude-code.md#per-machine-routing-override)). The path is the shared data directory whichever agent installed the skill; `DELEGATE_LOCAL_CONFIG` redirects it.
 
 ## Uninstall
 
