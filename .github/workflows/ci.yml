@@ -67,7 +67,7 @@ jobs:
             fi
           fi
           if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "::notice title=Trigger eval skipped::SKILL.md or evals/ changed but the ANTHROPIC_API_KEY repo secret is not set; run 'bash scripts/eval-skill-triggers.sh --local' before merging"
+            echo "::notice title=Trigger eval skipped::SKILL.md or evals/ changed but the ANTHROPIC_API_KEY repo secret is not set; run 'bash scripts/eval-skill-triggers.sh --decide' before merging"
             exit 0
           fi
           bash scripts/eval-skill-triggers.sh --api

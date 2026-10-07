@@ -32,10 +32,10 @@ Each kept script has its own per-script test file under `tests/` (`test-delegate
 If you edit the `description` field in `SKILL.md` frontmatter, run the trigger eval against a real model before opening the PR:
 
 ```bash
-bash scripts/eval-skill-triggers.sh --local
+bash scripts/eval-skill-triggers.sh --decide
 ```
 
-This is free, runs locally in 10–30 seconds, and dogfoods the project's own routing. CI runs the same gate against the Anthropic API (`--api`) on any PR that changes `SKILL.md` or `evals/`, so a regression there will fail the build. The threshold is recall ≥ 0.9 and negative-precision ≥ 0.9 against `evals/eval-set.json`.
+This is free, asks the resident model one yes/no question per query through `decide.sh` in about a minute, and dogfoods the project's own routing. CI runs the same gate against the Anthropic API (`--api`) on any PR that changes `SKILL.md` or `evals/`, so a regression there will fail the build. The threshold is recall ≥ 0.9 and negative-precision ≥ 0.9 against `evals/eval-set.json`.
 
 A post-edit hook at `.claude/hooks/post-edit-validate.sh` runs the frontmatter and content checks automatically when you save through Claude Code. It does not run the trigger-accuracy gate — run that yourself before merge.
 

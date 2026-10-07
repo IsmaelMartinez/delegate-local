@@ -100,8 +100,9 @@ and wave 4 is merged (#568, #569, #570, #571, #572). The wave-4 trigger-eval
 gate could not score: `eval-skill-triggers.sh --local` sends no
 `enable_thinking:false`, so the resident Qwen3.6 spends its output budget
 thinking and returns no score on main or the branch. #570 left the SKILL.md
-frontmatter byte-identical, so triggering cannot have moved, but the gate
-needs that fix before it can measure the next description edit. What remains:
+frontmatter byte-identical, so triggering cannot have moved. #638 revived the
+gate as `eval-skill-triggers.sh --decide` (one `decide.sh` question per query on
+the resident model, 0.955 recall and 1.000 negative precision on 2026-10-07). What remains:
 
 - The wave-4 release, if `gh release list` does not yet show one after
   v0.44.0: approve the release PR's held runs, then merge it.
