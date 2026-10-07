@@ -73,7 +73,7 @@ gpu_gate_busy() {
 # under one second is taken as one, so the probes never spin.
 gpu_gate_wait() {
   [[ "${DELEGATE_GPU_GATE:-1}" == "0" ]] && return 0
-  local step max waited=0 why
+  local step max waited=0 why s
   step=$(gpu_gate_int DELEGATE_GPU_POLL 15); (( step < 1 )) && step=1
   max=$(gpu_gate_int DELEGATE_GPU_WAIT_MAX 600)
   while why=$(gpu_gate_busy); do
@@ -82,8 +82,10 @@ gpu_gate_wait() {
       return "$GPU_GATE_BUSY"
     fi
     echo "gpu-gate: waiting, $why" >&2
-    sleep "$step"
-    waited=$((waited + step))
+    # The last sleep is cut to what is left, so WAIT_MAX is a real cap.
+    s="$step"; (( max - waited < s )) && s=$((max - waited))
+    sleep "$s"
+    waited=$((waited + s))
   done
   return 0
 }

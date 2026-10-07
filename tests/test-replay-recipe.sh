@@ -199,6 +199,20 @@ assert_contains "stopped at case 1 of 3; rerun to resume from the cache" "$out" 
 assert_eq "0" "$(calls)" "the gate stops the run before the wrapper is called"
 rm -rf "$hot" "$tmp/out"; rm -f "$tmp/calls"
 
+# 3c. A failed call rests as long as a good one: with every call refused and
+# a 7 s cooldown, each attempted call is followed by one logged sleep of 7.
+cool=$(mktemp -d)
+printf '#!/usr/bin/env bash\necho 0\n' > "$cool/osascript"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$cool/ioreg"
+printf '#!/usr/bin/env bash\necho "$1" >> "%s/slept"\n' "$cool" > "$cool/sleep"
+chmod +x "$cool/osascript" "$cool/ioreg" "$cool/sleep"
+EC=0; out=$(PATH="$cool:$PATH" STUB_FAIL_ON=--recipe DELEGATE_GPU_GATE=1 DELEGATE_GPU_MAX_THERMAL=2 \
+  DELEGATE_GPU_MAX_UTIL=90 DELEGATE_GPU_POLL=15 DELEGATE_GPU_WAIT_MAX=600 DELEGATE_GPU_COOLDOWN=7 \
+  run --recipe rp --candidate "$tmp/good") || EC=$?
+assert_eq "$(calls)" "$(grep -c '^7$' "$cool/slept" 2>/dev/null)" "every refused call is followed by the cooldown"
+assert_contains "ERR (candidate)" "$out" "the refused calls are still reported as errors"
+rm -rf "$cool" "$tmp/out"; rm -f "$tmp/calls"
+
 # 4. A candidate that carries the anchors wins the rejected cases and ties
 # the kept one; two wins to none is not yet significant.
 rm -f "$tmp/calls"; rm -rf "$tmp/out"

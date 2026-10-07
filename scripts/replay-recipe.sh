@@ -316,8 +316,11 @@ run_wrapper() {
     | env DELEGATE_PROMPTS_DIR="$dir" DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_NO_PREFLIGHT=1 \
           DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 DELEGATE_LOCAL_NO_META=0 \
           bash "$delegate_sh" --recipe "$recipe" ${args[@]+"${args[@]}"} ${tail[@]+"${tail[@]}"} \
-      > "$out" 2> "$err" || return 1
+      > "$out" 2> "$err"
+  local rc=$?
+  # A failed call can leave the GPU as hot as a good one, so it rests too.
   gpu_gate_cooldown
+  (( rc == 0 )) || return 1
   # The wrapper resolves its own model; the run counts only when it is the
   # one the report names and the cache is keyed on.
   ran_model=$(grep -o 'delegate-meta: model="[^"]*"' "$err" | head -1 | sed 's/.*model="//; s/"$//')

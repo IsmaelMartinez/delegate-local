@@ -67,6 +67,10 @@ assert_contains "rc=75" "$out" "a fractional poll still gates instead of breakin
 out=$(run_gate 3 "12" 'DELEGATE_GPU_POLL=0 DELEGATE_GPU_WAIT_MAX=2 gpu_gate_wait')
 assert_eq "1 1" "$(tr '\n' ' ' < "$stub/slept" | sed 's/ $//')" "a zero poll sleeps one second per check, never spins"
 
+out=$(run_gate 3 "12" 'DELEGATE_GPU_POLL=15 DELEGATE_GPU_WAIT_MAX=2 gpu_gate_wait')
+assert_eq "2" "$(cat "$stub/slept")" "WAIT_MAX is a real cap: a 15 s poll under a 2 s cap sleeps 2 s"
+assert_contains "still busy after 2s" "$out" "the give-up reports the capped wait"
+
 out=$(run_gate 0 "50" 'DELEGATE_GPU_MAX_UTIL=high gpu_gate_wait')
 assert_contains "DELEGATE_GPU_MAX_UTIL='high' is not a whole number; using 90" "$out" "a non-numeric threshold is named"
 assert_contains "rc=0" "$out" "a non-numeric threshold falls back to the default instead of gating on 0"
