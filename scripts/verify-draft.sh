@@ -19,8 +19,9 @@
 # Prints one JSON line: {"model","p_supported","threshold","verdict","latency_ms"},
 # verdict "pass" when p_supported >= threshold, else "flag".
 #
-# --calibrate scores every row of FILE.jsonl ({facts, draft, label}; a label
-# other than "supported" counts as not supported), prints n, AUROC, the chosen
+# --calibrate scores every row of FILE.jsonl ({facts, draft, label}, label one
+# of supported, contradicted or unsupported; the last two count as not
+# supported), prints n, AUROC, the chosen
 # threshold, accuracy there and at 0.5, recall per label and p50 latency, and
 # records the threshold for the resolved model in <data dir>/verify-thresholds.tsv
 # (model<TAB>threshold; --dry-run records nothing). The threshold is the
@@ -98,6 +99,13 @@ if [[ -n "$calibrate" ]]; then
   if ! jq -se 'length > 0 and all(.[]; (.facts | type) == "string" and (.draft | type) == "string" and (.label | type) == "string")
                and any(.[]; .label == "supported") and any(.[]; .label != "supported")' "$calibrate" >/dev/null 2>&1; then
     echo "verify-draft: $calibrate needs rows with string facts, draft and label, both supported and not-supported" >&2
+    exit 2
+  fi
+  # Labels feed label<TAB>p lines to the scorer, so only the three known
+  # values are accepted, checked before any row is scored.
+  bad_row=$(jq -rs 'to_entries[] | select(.value.label | IN("supported", "contradicted", "unsupported") | not) | .key + 1' "$calibrate" | head -n 1)
+  if [[ -n "$bad_row" ]]; then
+    echo "verify-draft: $calibrate row $bad_row has a label other than supported, contradicted or unsupported" >&2
     exit 2
   fi
   scored=""

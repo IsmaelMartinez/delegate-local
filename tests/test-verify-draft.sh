@@ -152,6 +152,13 @@ run --calibrate "$TEST_ROOT/one-class.jsonl" >/dev/null 2>&1
 assert_eq "2" "$?" "a set without both classes exits 2"
 run --calibrate "$TEST_ROOT/missing.jsonl" >/dev/null 2>&1
 assert_eq "2" "$?" "a missing set exits 2"
+# A tab or newline in a label would corrupt the label<TAB>p lines the scorer reads.
+{ cat "$set_file"; printf '%s\n' '{"facts":"f","draft":"SCORE_0.9","label":"unsupported\t0.85"}'; } > "$TEST_ROOT/bad-label.jsonl"
+: > "$sniff"
+run --calibrate "$TEST_ROOT/bad-label.jsonl" --dry-run >/dev/null 2>"$mock/err"
+assert_eq "2" "$?" "a label outside supported|contradicted|unsupported exits 2"
+assert_contains "row 7" "$(cat "$mock/err")" "naming the row"
+assert_eq "0" "$(wc -l < "$sniff" | tr -d ' ')" "before any scoring call"
 
 rm -f "$data/verify-thresholds.tsv"
 printf '%s' "$(cat "$set_file")" > "$TEST_ROOT/no-newline.jsonl"
