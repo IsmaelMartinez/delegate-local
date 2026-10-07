@@ -9,6 +9,10 @@ set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$REPO/scripts/replay-recipe.sh"
+# The heat gate (#646) reads the real machine through osascript and ioreg;
+# off here so a hot laptop cannot stall the suite. Test 3b turns it on
+# against stubs.
+export DELEGATE_GPU_GATE=0
 
 pass=0
 fail=0
@@ -171,6 +175,17 @@ assert_contains "0/5/0/0/0/0/0=5" "$out" "a rejected case scores the champion's 
 assert_contains "0/0/0/0/0/0/0=0" "$out" "the kept case scores zero against itself"
 assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$tmp/out/"*kept0001*.out.txt)" \
   "cache files are private (600)"
+
+# 3b. The heat gate (#646): a machine that stays hot stops the run with 75
+# before the first case, and says how to resume. osascript and sleep are stubs.
+hot=$(mktemp -d)
+printf '#!/usr/bin/env bash\necho 3\n' > "$hot/osascript"; printf '#!/usr/bin/env bash\nexit 0\n' > "$hot/sleep"
+chmod +x "$hot/osascript" "$hot/sleep"
+EC=0; out=$(PATH="$hot:$PATH" DELEGATE_GPU_GATE=1 DELEGATE_GPU_WAIT_MAX=0 run --recipe rp) || EC=$?
+assert_eq 75 "$EC" "a machine that stays hot stops the replay with 75"
+assert_contains "still busy after 0s (thermal state 3)" "$out" "the gate names why it stopped"
+assert_contains "stopped at case 1 of 3; rerun to resume from the cache" "$out" "the replay says where it stopped"
+rm -rf "$hot"
 
 # 4. A candidate that carries the anchors wins the rejected cases and ties
 # the kept one; two wins to none is not yet significant.

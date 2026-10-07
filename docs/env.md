@@ -73,6 +73,12 @@ Every `DELEGATE_*` variable a script under `scripts/` reads, listed once. All ar
 | `DELEGATE_REPLAY_BASE` | `main` | Git ref the champion recipe is materialised from. | `replay-recipe.sh` |
 | `DELEGATE_REPLAY_MODEL` | resolved from the recipe's tier | The model replay expects and keys its cache on; it does not select the model, and a case whose wrapper ran on a different one fails. | `replay-recipe.sh` |
 | `DELEGATE_REPLAY_DELEGATE_SH` | `scripts/delegate.sh` | The wrapper replay invokes (a test seam). | `replay-recipe.sh` |
+| `DELEGATE_GPU_GATE` | `1` | `0` turns off the heat gate (`lib/gpu-gate.sh`, #646) that batch callers run before each item. | `replay-recipe.sh` |
+| `DELEGATE_GPU_MAX_THERMAL` | `2` | Wait while macOS's thermal state (0 nominal, 1 fair, 2 serious, 3 critical) is at or above this. | `replay-recipe.sh` |
+| `DELEGATE_GPU_MAX_UTIL` | `90` | Wait while an accelerator's `Device Utilization %` is above this. | `replay-recipe.sh` |
+| `DELEGATE_GPU_POLL` | `15` | Seconds between checks while waiting. | `replay-recipe.sh` |
+| `DELEGATE_GPU_WAIT_MAX` | `600` | Seconds to wait before giving up with exit 75; the run resumes from its cache. | `replay-recipe.sh` |
+| `DELEGATE_GPU_COOLDOWN` | `0` | Seconds to rest between items. | `replay-recipe.sh` |
 
 ## Decisions (Clef spike, #636)
 

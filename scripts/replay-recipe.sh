@@ -55,8 +55,14 @@
 #   DELEGATE_REPLAY_DELEGATE_SH   the wrapper to run (tests inject a stub)
 #   DELEGATE_REPLAY_MODEL         the model the arms run on, when known; else
 #                                 pick-model.sh resolves the recipe's tier once
+#   DELEGATE_GPU_*                the heat gate (lib/gpu-gate.sh, #646): each
+#                                 case waits while the machine is hot or the
+#                                 GPU is busy, and rests DELEGATE_GPU_COOLDOWN
+#                                 seconds after; DELEGATE_GPU_GATE=0 turns it off
 # Exit: 0 report printed (the last line is the verdict); 3 no replayable case
-#       for the recipe; 2 usage or dependency error; 4 every case errored.
+#       for the recipe; 2 usage or dependency error; 4 every case errored;
+#       75 the machine stayed hot or busy past DELEGATE_GPU_WAIT_MAX (the
+#       outputs so far are cached, so a rerun resumes).
 set -uo pipefail
 umask 077
 
@@ -105,6 +111,8 @@ trap 'rm -rf "$work_tmp"' EXIT
 . "$script_dir/lib/pair-score.sh"
 # shellcheck source=lib/recipe.sh
 . "$script_dir/lib/recipe.sh"
+# shellcheck source=lib/gpu-gate.sh
+. "$script_dir/lib/gpu-gate.sh"
 
 # The champion is what is live, which on this machine is the committed
 # recipe on main, not the working file: the procedure edits the recipe on a
@@ -465,6 +473,8 @@ else
 fi
 while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel _session; do
   i=$((i + 1))
+  (( i > 1 )) && gpu_gate_cooldown
+  gpu_gate_wait || { echo "replay-recipe: stopped at case $i of $n_cases; rerun to resume from the cache" >&2; exit "$GPU_GATE_BUSY"; }
   case_refs "$inputs" "$final"
   a=$(arm_output "$champion" "$champion_sha" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")
   if [[ "$a" == "ERR" ]]; then
