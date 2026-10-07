@@ -42,6 +42,9 @@ assert_eq "" "$(cat "$stub/slept" 2>/dev/null)" "nominal and idle: never sleeps"
 out=$(run_gate 0 "$(printf '12\n95')" 'gpu_gate_busy')
 assert_contains "GPU at 95%" "$out" "busy reads the highest accelerator's utilisation"
 
+out=$(run_gate 0 "099" 'gpu_gate_busy')
+assert_contains "GPU at 099%" "$out" "a padded reading is compared in base 10, not octal, and gates"
+
 out=$(run_gate 3 "12" 'DELEGATE_GPU_WAIT_MAX=30 DELEGATE_GPU_POLL=15 gpu_gate_wait')
 assert_contains "rc=75" "$out" "critical and never cooling: gives up with 75"
 assert_contains "still busy after 30s (thermal state 3); stopping" "$out" "give-up message names the wait and the reason"

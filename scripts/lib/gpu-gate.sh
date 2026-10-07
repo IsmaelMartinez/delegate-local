@@ -58,11 +58,11 @@ gpu_gate_int() {
 gpu_gate_busy() {
   local t u
   t=$(gpu_gate_thermal)
-  if [[ -n "$t" ]] && (( t >= $(gpu_gate_int DELEGATE_GPU_MAX_THERMAL 2) )); then
+  if [[ -n "$t" ]] && (( 10#$t >= $(gpu_gate_int DELEGATE_GPU_MAX_THERMAL 2) )); then
     echo "thermal state $t"; return 0
   fi
   u=$(gpu_gate_util)
-  if [[ -n "$u" ]] && (( u > $(gpu_gate_int DELEGATE_GPU_MAX_UTIL 90) )); then
+  if [[ -n "$u" ]] && (( 10#$u > $(gpu_gate_int DELEGATE_GPU_MAX_UTIL 90) )); then
     echo "GPU at ${u}%"; return 0
   fi
   return 1
