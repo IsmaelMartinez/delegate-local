@@ -140,6 +140,12 @@ fi
 if [[ -n "$candidate_base" && -z "$candidate_model" ]]; then
   echo "replay-recipe: --candidate-base needs --candidate-model" >&2; exit 2
 fi
+# The base is printed in the report header, so a user:pass@ in it is refused
+# here, before anything is printed, as pick-model.sh refuses it; the URL is
+# not echoed back.
+case "$candidate_base" in
+  *"://"*"@"*) echo "replay-recipe: --candidate-base contains userinfo (credentials before an @); refusing" >&2; exit 2;;
+esac
 
 work_tmp=$(mktemp -d)
 trap 'rm -rf "$work_tmp"' EXIT

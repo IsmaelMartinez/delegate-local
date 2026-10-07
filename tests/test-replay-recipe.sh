@@ -597,6 +597,12 @@ for empty in --candidate-model= --candidate-base= "--candidate-model|" "--candid
   assert_contains "${1%=} needs a value" "$out" "the empty ${1%=} is named ($empty)"
 done
 set --
+# Userinfo in the base would be printed in the report header; it is refused
+# before anything is printed, as pick-model.sh refuses it.
+EC=0; out=$(mrun --candidate-model gemma4:26b --candidate-base http://user:pass@cand.test/v1) || EC=$?
+assert_eq 2 "$EC" "a --candidate-base with userinfo exits 2"
+assert_contains "contains userinfo" "$out" "the refusal is named"
+assert_not_contains "pass" "$out" "the credentials are never printed"
 
 # The champion's stored drafts stand in (same template, same model); the
 # candidate is requested by its exact id at --candidate-base.
