@@ -32,6 +32,7 @@ mode="shape"
 backend=""
 local_model=""
 local_base=""
+decide_backend=""
 eval_set="evals/eval-set.json"
 skill="SKILL.md"
 
@@ -46,6 +47,7 @@ while [[ $# -gt 0 ]]; do
     --decide)
       mode="api"; backend="decide"; decide_backend="logprob"; shift
       if [[ $# -gt 0 && "$1" != --* ]]; then decide_backend="$1"; shift; fi
+      case "$decide_backend" in logprob|clef) ;; *) echo "--decide takes logprob or clef, not '$decide_backend'" >&2; exit 2 ;; esac
       ;;
     --eval-set) eval_set="$2"; shift 2 ;;
     --skill) skill="$2"; shift 2 ;;
@@ -130,7 +132,7 @@ esac
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
 results_dir="evals/results"
 mkdir -p "$results_dir"
-results_file="$results_dir/$run_id-$backend.jsonl"
+results_file="$results_dir/$run_id-$backend${decide_backend:+-$decide_backend}.jsonl"
 : > "$results_file"
 
 # Output token budget: ~30 tokens per verdict (id + JSON syntax) is generous.
@@ -223,17 +225,21 @@ score_batch() {
 
 echo "scoring: backend=$backend model=$scoring_model"
 
-# TSV-backed lookup (bash 3 has no associative arrays): <id>\t<VERDICT>[\t<p>].
+# TSV-backed lookup (bash 3 has no associative arrays):
+# <id>\t<VERDICT>[\t<p>\t<model>] — p and model on --decide rows only.
 verdict_map=$(mktemp)
 trap 'rm -f "$verdict_map"' EXIT
 
 # One typed yes/no question per query. Named state fields and backtick
 # references are the format that passed the gate on the 2026-10-06 spike
 # (21/22 recall, 15/15 negative precision on the resident model, ADR 0033);
-# the batched prompt below missed four positives on the same model (#625).
-# The 0.5 cut is fixed, never tuned per query.
+# the batched prompt missed four positives on the same model (#625). The 0.5
+# cut is fixed, never tuned per query. A logprob answer whose option letters
+# held under half the top-logprob mass is no answer: decide.sh renormalises
+# it, down to a uniform 0.5 when the letters are absent, and that must not
+# count as a TRIGGER.
 score_decide() {
-  local row id req ans p
+  local row id req ans p cov model
   while read -r row; do
     id=$(jq -r '.id' <<<"$row")
     req=$(jq -c --arg d "$description" '{
@@ -246,36 +252,43 @@ score_decide() {
       || { echo "FAIL: decide.sh failed on $id; no score" >&2; return 1; }
     p=$(jq -r '.answers.trigger.probabilities["true"] // empty' <<<"$ans")
     [[ -n "$p" ]] || { echo "FAIL: decide.sh gave no probability for $id; no score" >&2; return 1; }
-    awk -v id="$id" -v p="$p" 'BEGIN { printf "%s\t%s\t%s\n", id, (p + 0 >= 0.5 ? "TRIGGER" : "NOTRIGGER"), p }'
+    cov=$(jq -r '.answers.trigger.coverage // 1' <<<"$ans")
+    if awk -v c="$cov" 'BEGIN { exit !(c + 0 < 0.5) }'; then
+      echo "FAIL: the answer letters held only $cov of the model's mass on $id; no score" >&2; return 1
+    fi
+    model=$(jq -r '.model // "unknown"' <<<"$ans")
+    awk -v id="$id" -v p="$p" -v m="$model" 'BEGIN { printf "%s\t%s\t%s\t%s\n", id, (p + 0 >= 0.5 ? "TRIGGER" : "NOTRIGGER"), p, m }'
   done < <(jq -c '.queries[]' "$eval_set")
+}
+
+# The single batched call (--api, --local): parse the verdicts object out of
+# the answer and print <id>\t<VERDICT> lines.
+score_batched() {
+  local raw verdicts_json extracted
+  raw=$(score_batch) || { echo "FAIL: $backend scoring call produced no score" >&2; return 1; }
+  # Strip any code fences the model might emit despite the no-fences instruction.
+  raw=${raw//\`\`\`json/}
+  raw=${raw//\`\`\`/}
+  # If the model emitted prose around the JSON, fall back to the first {...} block.
+  verdicts_json=$(jq -c '.verdicts // empty' <<<"$raw" 2>/dev/null || true)
+  if [[ -z "$verdicts_json" || "$verdicts_json" == "null" ]]; then
+    extracted=$(printf '%s' "$raw" | perl -0777 -ne 'if (/(\{.*\})/s) { print $1 }')
+    verdicts_json=$(jq -c '.verdicts // empty' <<<"$extracted" 2>/dev/null || true)
+  fi
+  if [[ -z "$verdicts_json" || "$verdicts_json" == "null" ]]; then
+    echo "$backend response did not contain a parseable verdicts array" >&2
+    printf 'raw response (first 400 chars): %s\n' "${raw:0:400}" >&2
+    return 1
+  fi
+  jq -r '.[] | "\(.id)\t\(.verdict)"' <<<"$verdicts_json" \
+    | awk -F'\t' '{ v=toupper($2); gsub(/[^A-Z]/, "", v); printf "%s\t%s\n", $1, v }'
 }
 
 if [[ "$backend" == "decide" ]]; then
   score_decide > "$verdict_map" || exit 2
+  echo "scored on: $(awk -F'\t' 'NR == 1 { print $4 }' "$verdict_map")"
 else
-
-raw=$(score_batch) || { echo "FAIL: $backend scoring call produced no score" >&2; exit 2; }
-
-# Strip any code fences the model might emit despite the no-fences instruction.
-raw=${raw//\`\`\`json/}
-raw=${raw//\`\`\`/}
-
-# If the model emitted prose around the JSON, fall back to the first {...} block.
-verdicts_json=$(jq -c '.verdicts // empty' <<<"$raw" 2>/dev/null || true)
-if [[ -z "$verdicts_json" || "$verdicts_json" == "null" ]]; then
-  # Fallback: extract the first balanced JSON object substring and re-parse.
-  extracted=$(printf '%s' "$raw" | perl -0777 -ne 'if (/(\{.*\})/s) { print $1 }')
-  verdicts_json=$(jq -c '.verdicts // empty' <<<"$extracted" 2>/dev/null || true)
-fi
-if [[ -z "$verdicts_json" || "$verdicts_json" == "null" ]]; then
-  echo "$backend response did not contain a parseable verdicts array" >&2
-  printf 'raw response (first 400 chars): %s\n' "${raw:0:400}" >&2
-  exit 2
-fi
-
-jq -r '.[] | "\(.id)\t\(.verdict)"' <<<"$verdicts_json" \
-  | awk -F'\t' '{ v=toupper($2); gsub(/[^A-Z]/, "", v); printf "%s\t%s\n", $1, v }' \
-  > "$verdict_map"
+  score_batched > "$verdict_map" || exit 2
 fi
 
 tp=0; fn=0; tn=0; fp=0

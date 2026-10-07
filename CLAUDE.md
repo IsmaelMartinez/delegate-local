@@ -46,7 +46,7 @@ The validation pipeline CI runs on every PR, runnable locally:
 bash scripts/validate-frontmatter.sh SKILL.md
 bash scripts/validate-skill-content.sh SKILL.md
 bash scripts/eval-skill-triggers.sh                           # eval-set shape only
-bash scripts/eval-skill-triggers.sh --decide                    # pre-merge trigger gate for a description edit (free, on-device, #638)
+bash scripts/eval-skill-triggers.sh --decide                  # pre-merge trigger gate for a description edit (free, on-device, #638)
 ANTHROPIC_API_KEY=… bash scripts/eval-skill-triggers.sh --api # what CI runs when SKILL.md or evals/ change and the secret is set
 find scripts tests .claude/hooks -name '*.sh' -print0 | xargs -0 shellcheck -S error
 ```
