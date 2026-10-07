@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # Read the delegate metrics JSONL and print a summary: headline, per-source,
 # per-backend, feedback, per-project, per-recipe, trigger-rate, per-tier and
-# top-model sections. Rows missing `source` are treated as `delegate`.
+# top-model sections. Rows missing `source` are treated as `delegate`. A
+# recipe more than one model served in the window gets a sub-line per model
+# (#655), since ADR 0009 binds calibration to the model.
 #
 # Usage:  metrics-summary.sh [--file path] [--since YYYY-MM-DD|ISO-8601] [--days N]
+#                            [--model SUBSTRING]
 #         --since / --days restrict every section to rows at or after the cutoff.
+#         --model restricts every section to delegations whose model contains
+#         SUBSTRING (case-insensitive, as pick-model.sh matches) and the
+#         verdicts that join to them; opportunity rows carry no model and
+#         are left out.
 # Env:    DELEGATE_METRICS_FILE   override the metrics path
 #         DELEGATE_LOCAL_DATA_DIR per-user data (default ~/.local/share/delegate-local)
 # Exit:   0 OK, 1 file missing, 2 usage error.
@@ -14,13 +21,15 @@ set -uo pipefail
 metrics_file="${DELEGATE_METRICS_FILE:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/metrics.jsonl}"
 since=""
 days=""
+model_filter=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --file) [[ $# -ge 2 ]] || { echo "--file requires a path" >&2; exit 2; }; metrics_file="$2"; shift 2 ;;
     --since) [[ $# -ge 2 ]] || { echo "--since requires a value (YYYY-MM-DD or ISO-8601)" >&2; exit 2; }; since="$2"; shift 2 ;;
     --days) [[ $# -ge 2 ]] || { echo "--days requires a positive integer" >&2; exit 2; }; days="$2"; shift 2 ;;
-    -h|--help) echo "usage: metrics-summary.sh [--file path] [--since YYYY-MM-DD|ISO] [--days N]"; exit 0 ;;
+    --model) [[ $# -ge 2 && -n "$2" ]] || { echo "--model requires a substring of the model name" >&2; exit 2; }; model_filter="$2"; shift 2 ;;
+    -h|--help) echo "usage: metrics-summary.sh [--file path] [--since YYYY-MM-DD|ISO] [--days N] [--model SUBSTRING]"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -52,6 +61,9 @@ display_file="$metrics_file"
 window_active=0
 cutoff_iso=""
 orig_total=0
+filtered=""
+mfiltered=""
+trap 'rm -f "$filtered" "$mfiltered"' EXIT
 if [[ -n "$since" || -n "$days" ]]; then
   if [[ -n "$since" && -n "$days" ]]; then
     echo "use either --since or --days, not both" >&2; exit 2
@@ -74,16 +86,46 @@ if [[ -n "$since" || -n "$days" ]]; then
   orig_total=$(jq -s 'length' "$metrics_file")
   filtered=$(mktemp "${TMPDIR:-/tmp}/delegate-metrics.XXXXXX") \
     || { echo "cannot create temp file for the metrics window" >&2; exit 2; }
-  trap 'rm -f "$filtered"' EXIT
   jq -L "$lib_dir" -c --argjson cutoff "$cutoff_epoch" \
     'include "pair"; select(in_window($cutoff))' "$metrics_file" > "$filtered"
   metrics_file="$filtered"
   window_active=1
 fi
 
+# --model (#655), applied after the window: the delegations whose model
+# contains the substring, case-insensitive as pick-model.sh matches, and the
+# verdicts whose delegate row (pair.jq's parent_join) is one of them, so a
+# verdict lands on the model of the delegation it scored. Other call sources
+# match on their own model; opportunity rows and unjoined verdicts have none.
+model_active=0
+pre_model=0
+if [[ -n "$model_filter" ]]; then
+  pre_model=$(jq -s 'length' "$metrics_file")
+  mfiltered=$(mktemp "${TMPDIR:-/tmp}/delegate-metrics.XXXXXX") \
+    || { echo "cannot create temp file for the model filter" >&2; exit 2; }
+  jq -L "$lib_dir" -sc --arg m "$model_filter" '
+    include "pair";
+    ($m | ascii_downcase) as $lm
+    | def matches: (.model // "") | ascii_downcase | contains($lm);
+    [to_entries[] | .value + {_fi: .key}] as $all
+    | ($all | parent_join | map(select(._p != null and (._p | matches)) | {key: (._fi | tostring), value: true}) | from_entries) as $fb
+    | $all[]
+    | select(if src == "feedback" then $fb[._fi | tostring] == true
+             elif src == "opportunity" then false
+             else matches end)
+    | del(._fi)
+  ' "$metrics_file" > "$mfiltered"
+  metrics_file="$mfiltered"
+  model_active=1
+fi
+
 total=$(jq -s 'length' "$metrics_file")
 if (( total == 0 )); then
-  if (( window_active )); then
+  if (( model_active )); then
+    scope="$pre_model rows"
+    (( window_active )) && scope="$pre_model rows since $cutoff_iso"
+    echo "no rows match --model '$model_filter' — $scope in $display_file"
+  elif (( window_active )); then
     echo "no rows in window (since $cutoff_iso) — $orig_total total rows in $display_file"
   else
     echo "metrics file is empty: $metrics_file"
@@ -114,7 +156,8 @@ IFS=$'\t' read -r ts_first ts_last total_avoided errors n_call n_tier n_feedback
 
 echo "=== delegate-local metrics ==="
 echo "File:                $display_file"
-(( window_active )) && echo "Window:              since $cutoff_iso  ($total of $orig_total rows)"
+(( window_active )) && echo "Window:              since $cutoff_iso  ($(( model_active ? pre_model : total )) of $orig_total rows)"
+(( model_active )) && echo "Model filter:        '$model_filter'  ($total of $pre_model rows)"
 echo "Time range:          $ts_first  →  $ts_last"
 echo "Total invocations:   $n_call  (not counted: feedback=$n_feedback, opportunity=$n_opp)"
 echo "Errors (non-zero):   $errors"
@@ -353,7 +396,8 @@ if (( n_recipe > 0 )); then
     '"$ritual_col"'
     def counts: tally | "n=\(.n)  hits=\(.kept)  misses=\(.rewrote)" + (if $show_scaffold then "  scaffold=\(.scaffold)" else "" end) + "  untracked=\(.untracked)" + ritual_col + "  sessions=\(.sessions)";
     verdict_index($sl; $rl) as $vi
-    | delegates | map(select(.recipe != null and ok) | {recipe, session, iq: (.input_quality // []), u: $vi[dkey]})
+    | delegates | map(select(.recipe != null and ok) | {recipe, session, iq: (.input_quality // []), u: $vi[dkey],
+                                                       model: (.model // "(unknown)"), ts: (.ts // "")})
     | group_by(.recipe)
     | sort_by(-length)
     | .[]
@@ -366,6 +410,14 @@ if (( n_recipe > 0 )); then
          ([$rows[] | select((.iq | length) == 0)] | select(length > 0) | "    input_quality=(none)             \(counts)"),
          ([$rows[].iq[]] | unique | .[] as $l
           | [$rows[] | select(any(.iq[]; . == $l))] | "    input_quality=\($l + (" " * (17 - ($l | length))))  \(counts)")
+       else empty end),
+      # A recipe more than one model served (#655) gets a sub-line per model,
+      # most rows first, then the model that served it first: ADR 0009 binds
+      # calibration to the model, so a switch must not blend two corpora.
+      # The model is read off the delegate row, so each verdict lands on it.
+      (if ([$rows[].model] | unique | length) > 1 then
+         $rows | group_by(.model) | sort_by(-length, (map(.ts) | min)) | .[]
+         | "    model=\(.[0].model + (" " * (25 - (.[0].model | length))))  \(counts)"
        else empty end)
   ' "$metrics_file"
   echo

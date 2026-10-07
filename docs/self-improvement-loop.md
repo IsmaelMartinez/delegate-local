@@ -77,7 +77,11 @@ first, with the hash, the first row's timestamp and the same counts. Rows
 from before the hash was recorded are their own `(unhashed)` line. This is
 the post-merge read for an edit that landed, and the revert signal (see
 "Revert when the online read disagrees" below); when no recipe changed
-template there is nothing to read and the section is absent.
+template there is nothing to read and the section is absent. A recipe that
+more than one model served in the window is listed too, one line per
+template and model with `model=` and its own n (#655): ADR 0009 binds
+calibration to the model, so after a switch or a trial the two models'
+rates sit side by side instead of blending into one.
 
 The **deterministic check failures** section needs no interpretation. The
 wrapper already decided the output broke a constraint the recipe declared, so
@@ -310,8 +314,10 @@ checkout, so a merged fix reaches other sessions only after
 `git -C ~/.local/share/delegate-local-live pull --ff-only`.
 
 Every recipe edit gets a dated entry in that recipe's calibration history,
-`docs/calibration/<recipe>.md`, saying what was observed, how many times, and
-what changed; the recipe's own `## Calibration notes` is a one-line pointer to
+`docs/calibration/<recipe>.md`, saying what was observed, how many times, on
+which model (the `model` the evidence rows carry, since ADR 0009 binds
+calibration to the model and a rate read on one says nothing about another),
+and what changed; the recipe's own `## Calibration notes` is a one-line pointer to
 that file and stays one (#569). That history is how the next session knows a
 defect has already been attacked and with what, so a `REJECT` belongs in it
 too: revert the recipe, record what was tried with the replay's summary and
@@ -495,7 +501,13 @@ N` and `self-improve.sh --days N` print agree (`tests/test-verdict-model.sh`,
 #564). `--since YYYY-MM-DD` and `--days N` window every section to rows at or
 after the cutoff, resolved in jq via `now`/`fromdateiso8601` so there is no
 BSD-versus-GNU `date` split, and the matching rows are filtered once into a
-temp file every later pass reads. The script is read-only.
+temp file every later pass reads. A recipe that more than one model served
+in the window gets a `model=` sub-line per model with its own n beneath its
+per-recipe line, and a window one model served prints no sub-line (#655).
+`--model SUBSTRING` restricts every section to the delegations whose model
+contains it, case-insensitive as `pick-model.sh` matches, and to the
+verdicts whose delegate row is one of them; opportunity rows carry no model
+and drop out under it. The script is read-only.
 
 The feedback block carries a captured-pair line that splits the rejections
 that stored their shipped half into `inferred` (the verdict adopted the final
