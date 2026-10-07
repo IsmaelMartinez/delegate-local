@@ -13,6 +13,12 @@ SCRIPT="$REPO/scripts/replay-recipe.sh"
 # off here so a hot laptop cannot stall the suite. Test 3b turns it on
 # against stubs.
 export DELEGATE_GPU_GATE=0
+# Every run holds caffeinate -i (#657); a no-op stub keeps the suite from
+# spawning the real one. Test 3d swaps in a recording stub.
+nocaf=$(mktemp -d)
+printf '#!/usr/bin/env bash\nexit 0\n' > "$nocaf/caffeinate"
+chmod +x "$nocaf/caffeinate"
+export PATH="$nocaf:$PATH"
 
 pass=0
 fail=0
@@ -212,6 +218,34 @@ EC=0; out=$(PATH="$cool:$PATH" STUB_FAIL_ON=--recipe DELEGATE_GPU_GATE=1 DELEGAT
 assert_eq "$(calls)" "$(grep -c '^7$' "$cool/slept" 2>/dev/null)" "every refused call is followed by the cooldown"
 assert_contains "ERR (candidate)" "$out" "the refused calls are still reported as errors"
 rm -rf "$cool" "$tmp/out"; rm -f "$tmp/calls"
+
+# 3d. A replay is not paused by its own load (#657): the GPU reads busy once
+# the wrapper has been called, which gates nothing; a GPU busy before the
+# first call (another session) still stops the run. Each run holds one
+# caffeinate -i on its own pid.
+busy=$(mktemp -d)
+printf '#!/usr/bin/env bash\necho 0\n' > "$busy/osascript"
+printf '#!/usr/bin/env bash\nu=12; { [[ -s "%s" ]] || [[ -f "%s/always" ]]; } && u=95\necho "  \\"Device Utilization %%\\"=$u"\n' \
+  "$tmp/calls" "$busy" > "$busy/ioreg"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$busy/sleep"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/caffeinated"\n' "$busy" > "$busy/caffeinate"
+chmod +x "$busy/osascript" "$busy/ioreg" "$busy/sleep" "$busy/caffeinate"
+busy_run() {
+  PATH="$busy:$PATH" DELEGATE_GPU_GATE=1 DELEGATE_GPU_MAX_THERMAL=2 DELEGATE_GPU_MAX_UTIL=90 \
+    DELEGATE_GPU_POLL=15 DELEGATE_GPU_WAIT_MAX=0 DELEGATE_GPU_COOLDOWN=0 run "$@"
+}
+EC=0; out=$(busy_run --recipe rp --candidate "$tmp/good") || EC=$?
+assert_eq 0 "$EC" "the replay's own load does not stop it"
+assert_eq "3" "$(calls)" "every case is called while the GPU reads busy from the replay's own calls"
+assert_not_contains "gpu-gate: waiting" "$out" "no call waits on the replay's own load"
+assert_eq "1" "$(grep -c '^-i -w [0-9][0-9]*$' "$busy/caffeinated" 2>/dev/null)" \
+  "the replay holds one caffeinate -i on its pid"
+rm -rf "$tmp/out"; rm -f "$tmp/calls"; : > "$busy/always"
+EC=0; out=$(busy_run --recipe rp --candidate "$tmp/good") || EC=$?
+assert_eq 75 "$EC" "a GPU busy before the first call still stops the replay"
+assert_contains "still busy after 0s (GPU at 95%)" "$out" "the first call names the utilisation"
+assert_eq "0" "$(calls)" "another session's load stops the run before the wrapper is called"
+rm -rf "$busy" "$tmp/out"; rm -f "$tmp/calls"
 
 # 4. A candidate that carries the anchors wins the rejected cases and ties
 # the kept one; two wins to none is not yet significant.
@@ -510,7 +544,7 @@ assert_eq "0.050 1" "$(sign_p 101 78)" "101 wins to 78: printed 0.050, significa
 assert_eq "0.016 1" "$(sign_p 6 0)" "six wins to none: significant"
 assert_eq "0.067 0" "$(sign_p 100 79)" "100 wins to 79: not significant (p=0.06736)"
 
-rm -rf "$tmp"
+rm -rf "$tmp" "$nocaf"
 
 echo
 echo "$pass passed, $fail failed"

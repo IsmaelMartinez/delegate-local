@@ -35,6 +35,13 @@ setup() {
   T=$(mktemp -d)
   mkdir -p "$T/root/scripts" "$T/bin" "$T/data" "$T/rec"
   cp "$RUNNER" "$T/root/scripts/self-improve-daily.sh" 2>/dev/null || true
+  mkdir -p "$T/root/scripts/lib"
+  cp "$REPO/scripts/lib/gpu-gate.sh" "$T/root/scripts/lib/"
+  cat > "$T/bin/caffeinate" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$T/rec/caffeinate.args"
+EOF
+  chmod +x "$T/bin/caffeinate"
   cat > "$T/root/scripts/self-improve.sh" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$T/rec/gate.args"
@@ -137,6 +144,10 @@ assert_contains "worktree add --detach" "$(cat "$T/rec/git.args" 2>/dev/null)" \
   "the session gets a detached worktree of the live clone"
 assert_contains "$T/data/" "$(cat "$T/rec/claude.cwd" 2>/dev/null)" "the session runs inside that worktree"
 assert_contains "worktree remove --force" "$(cat "$T/rec/git.args" 2>/dev/null)" "the worktree is removed afterwards"
+# The stub runs in the background; give it up to five seconds to record.
+for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -s "$T/rec/caffeinate.args" ]] && break; sleep 0.5; done
+assert_eq "1" "$(grep -c '^-i -w [0-9][0-9]*$' "$T/rec/caffeinate.args" 2>/dev/null)" \
+  "the session runs under one caffeinate -i on the runner's pid (#657)"
 assert_eq "2026-09-30T12:00:00Z" "$(cat "$T/data/self-improve.state" 2>/dev/null)" \
   "a successful session advances the watermark to the bundle's newest row"
 rm -rf "$T"
