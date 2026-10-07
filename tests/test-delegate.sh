@@ -2810,7 +2810,7 @@ assert_not_contains '"sampling_presence_penalty"' "$line" "QS1: bare metrics row
 
 # QS2. A non-Qwen model is greedy by default too.
 tmp=$(mktemp -d)
-MOCK_MODELS='deepseek-r1:32b'
+MOCK_MODELS='gemma4:latest'
 sniff="$tmp/payload.json"
 mock_curl "$tmp" "" "$sniff"
 MOCK_MODELS='qwen3.6:35b-a3b'
@@ -2818,10 +2818,10 @@ metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
-  bash "$SCRIPT" reasoning "Summarise" </dev/null 2>&1) || EC=$?
+  bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "QS2: non-Qwen model exits 0"
 payload=$(cat "$sniff")
-assert_contains '"model":"deepseek-r1:32b"' "$payload" "QS2: model resolved to deepseek-r1"
+assert_contains '"model":"gemma4:latest"' "$payload" "QS2: model resolved to gemma4"
 assert_contains '"temperature":0' "$payload" "QS2: non-Qwen payload has bare temperature:0"
 assert_not_contains '"top_p"' "$payload" "QS2: non-Qwen payload omits top_p"
 assert_not_contains '"top_k"' "$payload" "QS2: non-Qwen payload omits top_k"
@@ -3089,9 +3089,7 @@ assert_eq "PREFILLED_ANSWER_456" "$out" "strip-think on: prefilled-open-tag trac
 
 # 30e. The reasoning tier strips by default.
 tmp=$(mktemp -d)
-MOCK_MODELS='deepseek-r1:32b'
 mock_curl "$tmp" '<think>\nreasoning here\n</think>\n\nREASONING_ANSWER_789'
-MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
@@ -3100,9 +3098,7 @@ assert_eq "REASONING_ANSWER_789" "$out" "strip-think: reasoning tier strips by d
 
 # 30f. DELEGATE_STRIP_THINK=0 disables the strip on the reasoning tier.
 tmp=$(mktemp -d)
-MOCK_MODELS='deepseek-r1:32b'
 mock_curl "$tmp" '<think>\nreasoning here\n</think>\n\nREASONING_ANSWER_789'
-MOCK_MODELS='qwen3.6:35b-a3b'
 metrics=$(mktemp)
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" DELEGATE_STRIP_THINK=0 \

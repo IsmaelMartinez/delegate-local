@@ -124,12 +124,12 @@ EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" code || true
 assert_eq "1" "$EC" "provider serving nothing -> exit 1"
 rm -rf "$tmp"
 
-# 5. Code tier with coder installed returns it.
+# 5. Code tier resolves the prose model even beside a coder model (#652).
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:qwen3-coder:30b-a3b-q8_0,gemma4:latest"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" code || true
 assert_eq "0" "$EC" "code tier exits 0"
-assert_eq "qwen3-coder:30b-a3b-q8_0" "$OUT" "code tier picks qwen3-coder"
+assert_eq "gemma4:latest" "$OUT" "code tier picks the prose model, not qwen3-coder"
 rm -rf "$tmp"
 
 # 6. Prose tier with only gemma4 falls back to gemma4.
@@ -216,18 +216,13 @@ EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" embedding || true
 assert_eq "bge-large" "$OUT" "embedding falls back to bge-large"
 rm -rf "$tmp"
 
-# 17. premium-general tier picks qwen3.5 122b variant when installed.
+# 17. premium-general ships no list (#652): even with the 122B served it
+# resolves nothing, and says how to opt in.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:qwen3.5:122b-a10b-q4_K_M"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" premium-general || true
-assert_eq "qwen3.5:122b-a10b-q4_K_M" "$OUT" "premium-general picks qwen3.5:122b"
-rm -rf "$tmp"
-
-# 18. premium-general does NOT silently downshift to qwen3.5:27b.
-tmp=$(mktemp -d)
-make_mock_provider "$tmp" "1:qwen3.5:27b"
-EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" premium-general || true
-assert_eq "1" "$EC" "premium-general -> exit 1 when only smaller qwen3.5 installed"
+assert_eq "1" "$EC" "premium-general -> exit 1 without a config.sh opt-in"
+assert_contains "has no preferences; opt in from" "$ERR" "premium-general -> stderr names the opt-in"
 rm -rf "$tmp"
 
 # 19. reasoning-vision picks phi4-reasoning-vision when installed.
@@ -244,11 +239,49 @@ EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" reasoning-vision || true
 assert_eq "qwen3-vl:30b-a3b-thinking" "$OUT" "reasoning-vision falls back to qwen3-vl thinking"
 rm -rf "$tmp"
 
-# 20b. reasoning prefers deepseek-r1 over phi4-reasoning (baseline-measured).
+echo
+echo "=== pick-model.sh on a server advertising the whole cache (#652) ==="
+
+# mlx_lm.server lists every cached model from /v1/models, not only the
+# resident one, and serves whichever a request names by loading it beside the
+# resident model. This is the 2026-10-07 listing on the maintainer's machine:
+# no tier but the scaffolded ones may resolve anything other than the prose
+# model, and premium-general (the 122B) must not resolve at all by default.
+CACHE_LIST="1:Cloudflare/clef-flash,mlx-community/Qwen3.5-122B-A10B-4bit,mlx-community/gemma-4-26b-a4b-it-8bit,lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-8bit,mlx-community/Qwen3.6-35B-A3B-8bit,mlx-community/Qwen1.5-0.5B-Chat-4bit,mlx-community/Qwen3-VL-30B-A3B-Thinking-8bit,mlx-community/Qwen3.8-27B-8bit,Cloudflare/clef,mlx-community/DeepSeek-R1-Distill-Qwen-32B-MLX-8Bit,mlx-community/Qwen3-0.6B-4bit"
 tmp=$(mktemp -d)
-make_mock_provider "$tmp" "1:deepseek-r1:32b,phi4-reasoning:plus"
-EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" reasoning || true
-assert_eq "deepseek-r1:32b" "$OUT" "reasoning picks deepseek-r1 ahead of phi4-reasoning"
+make_mock_provider "$tmp" "$CACHE_LIST"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+prose_model="$OUT"
+assert_eq "mlx-community/Qwen3.6-35B-A3B-8bit" "$prose_model" "cache listing: prose resolves the resident Qwen3.6"
+for t in code reasoning long-context; do
+  EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" "$t" || true
+  assert_eq "$prose_model" "$OUT" "cache listing: $t resolves the prose model, not a second large model"
+done
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" premium-general || true
+assert_eq "1" "$EC" "cache listing: premium-general resolves nothing by default"
+assert_eq "" "$OUT" "cache listing: premium-general prints no model by default"
+
+# config.sh is still the opt-in: it is sourced after the defaults.
+cat > "$tmp/config.sh" <<'EOF'
+case "$tier" in
+  premium-general) prefs=("qwen3.5-122b") ;;
+esac
+EOF
+EC=0
+DELEGATE_LOCAL_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" premium-general || true
+assert_eq "mlx-community/Qwen3.5-122B-A10B-4bit" "$OUT" "cache listing: config.sh opts premium-general into the 122B"
+unset DELEGATE_LOCAL_CONFIG
+
+# --print-prefs agrees with routing: the folded tiers print prose's list and
+# premium-general prints an empty one.
+EC=0; run "$SAFE_PATH" bash "$PICK" --print-prefs || true
+prose_prefs=$(printf '%s\n' "$OUT" | sed -n 's/^prose://p')
+for t in code reasoning long-context; do
+  assert_eq "$prose_prefs" "$(printf '%s\n' "$OUT" | sed -n "s/^$t://p")" "--print-prefs: $t lists the prose preferences"
+done
+assert_contains "
+premium-general:
+" "$OUT" "--print-prefs: premium-general ships an empty list"
 rm -rf "$tmp"
 
 echo
@@ -278,7 +311,7 @@ esac
 EOF
 EC=0
 DELEGATE_LOCAL_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" code || true
-assert_eq "qwen3-coder:30b" "$OUT" "override leaves untouched tiers using shipped defaults"
+assert_eq "qwen3.6:35b-a3b" "$OUT" "override leaves untouched tiers using shipped defaults"
 unset DELEGATE_LOCAL_CONFIG
 rm -rf "$tmp"
 

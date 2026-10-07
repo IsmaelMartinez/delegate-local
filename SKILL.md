@@ -132,9 +132,11 @@ Local models are weak unsupervised agents but usable as a supervised draft gener
 | `prose` | Generating prose: commit messages, docs, replies, release notes. |
 | `reasoning` | Extraction, classification, triage, log filtering. |
 | `long-context` | Large logs, many-file scans, big diffs. |
-| `premium-general` | Explicit opt-in to a larger model; not a quality upgrade over `prose`. |
+| `premium-general` | Explicit opt-in to a larger model; resolves nothing until `config.sh` names one. |
 | `embedding` | Local semantic search, through `scripts/embed.sh` and `scripts/semantic-search.sh`. |
 | `vision`, `reasoning-vision` | Scaffolding only: `delegate.sh` sends text, so there is no image dispatch path. |
+
+By default `code`, `reasoning` and `long-context` resolve the same model as `prose`, so a server that advertises every cached model never loads a second large one beside it; the tier still names the task, and `config.sh` can route it elsewhere.
 
 The `prose` tier is for generating prose, not for inferring about it. For analytical work over a diff or log, use `reasoning` even if the input is text-heavy. When a rule applied to one item has to propagate context across the others (severity across related findings), prefer a reasoning-distilled model at enough scale over a same-size coder model; smaller is fine for independent per-item classification. Bigger is not better in general: prefer the smallest model sufficient for the task.
 

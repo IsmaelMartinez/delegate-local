@@ -26,9 +26,10 @@ surface looks textual.
 ## Where we are (2026-10-01)
 
 The skill installs via `npx skills add` (or `cp -r`) and routes the `code`,
-`prose`, `reasoning` and `long-context` tiers, with `vision`, `embedding`,
-`premium-general` and `reasoning-vision` resolving when a matching model is
-served. It ships 13 recipes since #616 retired ten unused ones. Recipe calls run
+`prose`, `reasoning` and `long-context` tiers, where `code`, `reasoning` and
+`long-context` follow the `prose` list (#652); `vision`, `embedding` and
+`reasoning-vision` resolve when a matching model is served, and
+`premium-general` resolves only when `config.sh` opts in. It ships 13 recipes since #616 retired ten unused ones. Recipe calls run
 a pre-flight canary, weak-input labels, deterministic output checks and at most
 one retry (`docs/checks.md`), and store the draft, the rendered input and the
 structured inputs beside the metrics row so a rejection can be diffed against
