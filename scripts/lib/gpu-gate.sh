@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Heat gate for local batch inference (#646). Batch callers (replay-recipe.sh)
-# call gpu_gate_wait before each item and gpu_gate_cooldown after it, so a
+# call `gpu_gate_wait first` before their first model call, gpu_gate_wait
+# before each later one and gpu_gate_cooldown after each, so a
 # long run backs off while the machine is hot or another session holds the
 # GPU, instead of stacking more load on it. Interactive delegate.sh calls are
 # not gated: one call is short, and a lock on the runtime path would add
@@ -12,8 +13,11 @@
 #            reports nothing on this hardware, and GPU utilisation alone does
 #            not track heat.
 #   util     the highest `Device Utilization %` ioreg reports for an
-#            IOAccelerator; above the cap means another session is
-#            generating.
+#            IOAccelerator; above the cap before the first call means
+#            another session is generating. It gates that call only: after
+#            it the busy GPU is the batch's own generation, which paused a
+#            dense 27B replay on 18 of 20 calls at nominal thermal (#657).
+#            Thermal gates every call.
 # A signal that cannot be read (Linux, a missing binary) does not gate.
 #
 # Env:  DELEGATE_GPU_GATE=0          turn the gate off
@@ -22,6 +26,10 @@
 #       DELEGATE_GPU_POLL            seconds between checks while waiting (15)
 #       DELEGATE_GPU_WAIT_MAX        give up after this many seconds (600)
 #       DELEGATE_GPU_COOLDOWN        seconds to rest after each item (0)
+# gpu_gate_keep_awake holds a `caffeinate -i` assertion for the batch's
+# lifetime, which prevents idle sleep during a batch (#657). A closed lid on
+# battery still sleeps the machine: keep the lid open, or run on AC with an
+# external display.
 # Sourcing has no side effects. bash 3.2 portable.
 
 # The exit code a batch caller uses when the gate gives up (EX_TEMPFAIL), so
@@ -53,14 +61,16 @@ gpu_gate_int() {
   esac
 }
 
-# gpu_gate_busy — prints why and returns 0 while the machine should not take
-# more local inference; returns 1 when it is clear.
+# gpu_gate_busy [first] — prints why and returns 0 while the machine should
+# not take more local inference; returns 1 when it is clear. Utilisation is
+# read only with `first`.
 gpu_gate_busy() {
   local t u
   t=$(gpu_gate_thermal)
   if [[ -n "$t" ]] && (( 10#$t >= $(gpu_gate_int DELEGATE_GPU_MAX_THERMAL 2) )); then
     echo "thermal state $t"; return 0
   fi
+  [[ "${1:-}" == "first" ]] || return 1
   u=$(gpu_gate_util)
   if [[ -n "$u" ]] && (( 10#$u > $(gpu_gate_int DELEGATE_GPU_MAX_UTIL 90) )); then
     echo "GPU at ${u}%"; return 0
@@ -68,15 +78,16 @@ gpu_gate_busy() {
   return 1
 }
 
-# gpu_gate_wait — returns 0 once the machine is clear, or GPU_GATE_BUSY after
-# DELEGATE_GPU_WAIT_MAX seconds of waiting. Progress goes to stderr. A poll
-# under one second is taken as one, so the probes never spin.
+# gpu_gate_wait [first] — returns 0 once the machine is clear, or
+# GPU_GATE_BUSY after DELEGATE_GPU_WAIT_MAX seconds of waiting; `first` also
+# waits on utilisation. Progress goes to stderr. A poll under one second is
+# taken as one, so the probes never spin.
 gpu_gate_wait() {
   [[ "${DELEGATE_GPU_GATE:-1}" == "0" ]] && return 0
   local step max waited=0 why s
   step=$(gpu_gate_int DELEGATE_GPU_POLL 15); (( step < 1 )) && step=1
   max=$(gpu_gate_int DELEGATE_GPU_WAIT_MAX 600)
-  while why=$(gpu_gate_busy); do
+  while why=$(gpu_gate_busy "${1:-}"); do
     if (( waited >= max )); then
       echo "gpu-gate: still busy after ${waited}s ($why); stopping, rerun to resume" >&2
       return "$GPU_GATE_BUSY"
@@ -95,5 +106,17 @@ gpu_gate_cooldown() {
   local c
   c=$(gpu_gate_int DELEGATE_GPU_COOLDOWN 0)
   (( c > 0 )) && sleep "$c"
+  return 0
+}
+
+# gpu_gate_keep_awake — call once at the top level of a batch script. The
+# assertion waits on the script's pid ($$, the same in a subshell), so it
+# ends with the script however it exits, and it is detached from the
+# script's output so it never holds a $(...) capture or a log open. A no-op
+# where caffeinate does not exist. Not tied to DELEGATE_GPU_GATE: staying
+# awake is not a heat decision.
+gpu_gate_keep_awake() {
+  command -v caffeinate >/dev/null 2>&1 || return 0
+  caffeinate -i -w "$$" </dev/null >/dev/null 2>&1 &
   return 0
 }

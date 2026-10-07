@@ -56,10 +56,14 @@
 #   DELEGATE_REPLAY_MODEL         the model the arms run on, when known; else
 #                                 pick-model.sh resolves the recipe's tier once
 #   DELEGATE_GPU_*                the heat gate (lib/gpu-gate.sh, #646): each
-#                                 model call waits while the machine is hot or
-#                                 the GPU is busy, and rests DELEGATE_GPU_COOLDOWN
-#                                 seconds after; cached cases never wait;
-#                                 DELEGATE_GPU_GATE=0 turns it off
+#                                 model call waits while the machine is hot, the
+#                                 first one also while the GPU is busy, and each
+#                                 rests DELEGATE_GPU_COOLDOWN seconds after;
+#                                 cached cases never wait; DELEGATE_GPU_GATE=0
+#                                 turns it off. The run holds caffeinate -i
+#                                 where it exists, which prevents idle sleep;
+#                                 a closed lid on battery still sleeps the
+#                                 machine
 # Exit: 0 report printed (the last line is the verdict); 3 no replayable case
 #       for the recipe; 2 usage or dependency error; 4 every case errored;
 #       75 the machine stayed hot or busy past DELEGATE_GPU_WAIT_MAX (the
@@ -114,6 +118,7 @@ trap 'rm -rf "$work_tmp"' EXIT
 . "$script_dir/lib/recipe.sh"
 # shellcheck source=lib/gpu-gate.sh
 . "$script_dir/lib/gpu-gate.sh"
+gpu_gate_keep_awake
 
 # The champion is what is live, which on this machine is the committed
 # recipe on main, not the working file: the procedure edits the recipe on a
@@ -299,8 +304,13 @@ run_wrapper() {
   local args=() tail=()
   # The heat gate (#646) runs here, right before a model call, so cached
   # cases and stored drafts never wait; arm_output runs in a subshell, so a
-  # gate that gives up leaves a marker the main loop stops on.
-  gpu_gate_wait || { : > "$work_tmp/gate-busy"; return 1; }
+  # gate that gives up leaves a marker the main loop stops on, and the first
+  # call, the only one utilisation gates (#657), is told apart by a marker
+  # too.
+  local first=first
+  [[ -f "$work_tmp/gate-passed" ]] && first=""
+  gpu_gate_wait "$first" || { : > "$work_tmp/gate-busy"; return 1; }
+  : > "$work_tmp/gate-passed"
   while IFS= read -r k; do
     [[ -n "$k" ]] || continue
     jq -j --arg k "$k" '.vars[$k] | if type == "string" then . else tojson end' "$inputs" > "$work_tmp/var"
