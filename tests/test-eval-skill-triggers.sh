@@ -539,10 +539,11 @@ req=\$(cat); printf '%s\n' "\$req" >> "$dir/decide-req.txt"
 case "$rule" in
   fail) echo "decide: request failed" >&2; exit 1 ;;
   all) p=0.9 ;;
+  mixed) p=0.8; m=other-model; jq -e '.state.request | test("^summarise")' <<<"\$req" >/dev/null && m=stub ;;
   lowcov) jq -nc '{backend: "logprob", model: "stub", latency_ms: 1, answers: {trigger: {type: "noul", coverage: 0.1, probabilities: {"true": 0.5, "false": 0.5}}}}'; exit 0 ;;
   *) if jq -e '.state.request | test("^(summarise|draft|triage)")' <<<"\$req" >/dev/null; then p=0.8; else p=0.2; fi ;;
 esac
-jq -nc --argjson p "\$p" '{backend: "logprob", model: "stub", latency_ms: 1, answers: {trigger: {type: "noul", probabilities: {"true": \$p, "false": (1 - \$p)}}}}'
+jq -nc --argjson p "\$p" --arg m "\${m:-stub}" '{backend: "logprob", model: \$m, latency_ms: 1, answers: {trigger: {type: "noul", probabilities: {"true": \$p, "false": (1 - \$p)}}}}'
 EOF
   chmod +x "$dir/scripts/decide.sh"
 }
@@ -576,6 +577,13 @@ EC=0
 out=$(cd "$tmp" && PATH="$SAFE_PATH" bash scripts/eval-skill-triggers.sh --decide --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
 assert_eq 2 "$EC" "--decide with a failing decide.sh -> exit 2, never a score"
 assert_contains "decide.sh failed on p01" "$out" "--decide failure names the query"
+rm -rf "$tmp"
+
+tmp=$(mktemp -d); make_eval_set "$tmp"; make_skill "$tmp"; make_mock_decide "$tmp" mixed
+EC=0
+out=$(cd "$tmp" && PATH="$SAFE_PATH" bash scripts/eval-skill-triggers.sh --decide --eval-set eval-set.json --skill SKILL.md 2>&1) || EC=$?
+assert_eq 2 "$EC" "--decide: queries scored on two models -> no score, exit 2"
+assert_contains "scored on more than one model (other-model stub); no score" "$out" "--decide mixed models are named"
 rm -rf "$tmp"
 
 tmp=$(mktemp -d); make_eval_set "$tmp"; make_skill "$tmp"; make_mock_decide "$tmp" lowcov

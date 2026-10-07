@@ -232,7 +232,7 @@ trap 'rm -f "$verdict_map"' EXIT
 
 # One typed yes/no question per query. Named state fields and backtick
 # references are the format that passed the gate on the 2026-10-06 spike
-# (21/22 recall, 15/15 negative precision on the resident model, ADR 0033);
+# (21/22 recall, 15/15 negative precision on the resident model, epic #642);
 # the batched prompt missed four positives on the same model (#625). The 0.5
 # cut is fixed, never tuned per query. A logprob answer whose option letters
 # held under half the top-logprob mass is no answer: decide.sh renormalises
@@ -286,7 +286,14 @@ score_batched() {
 
 if [[ "$backend" == "decide" ]]; then
   score_decide > "$verdict_map" || exit 2
-  echo "scored on: $(awk -F'\t' 'NR == 1 { print $4 }' "$verdict_map")"
+  # Each query is its own decide.sh call, which resolves the model afresh; a
+  # score is one model's score or none.
+  models=$(cut -f4 "$verdict_map" | sort -u)
+  if [[ "$(printf '%s\n' "$models" | grep -c '')" -ne 1 ]]; then
+    echo "FAIL: the queries were scored on more than one model ($(printf '%s' "$models" | tr '\n' ' ')); no score" >&2
+    exit 2
+  fi
+  echo "scored on: $models"
 else
   score_batched > "$verdict_map" || exit 2
 fi
