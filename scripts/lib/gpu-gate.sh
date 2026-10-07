@@ -40,34 +40,49 @@ gpu_gate_util() {
     | grep -oE '"Device Utilization %"=[0-9]+' | sed 's/.*=//' | sort -n | tail -1
 }
 
+# gpu_gate_int NAME DEFAULT — the whole-number value of env var NAME, or
+# DEFAULT with a warning when it is set to anything else (a fraction, a word),
+# so a typo cannot reach (( )) and silently gate on 0 or break the loop; a
+# leading zero is read as base 10, not octal.
+gpu_gate_int() {
+  local v="${!1:-}"
+  case "$v" in
+    '') echo "$2" ;;
+    *[!0-9]*) echo "gpu-gate: $1='$v' is not a whole number; using $2" >&2; echo "$2" ;;
+    *) echo "$((10#$v))" ;;
+  esac
+}
+
 # gpu_gate_busy — prints why and returns 0 while the machine should not take
 # more local inference; returns 1 when it is clear.
 gpu_gate_busy() {
   local t u
   t=$(gpu_gate_thermal)
-  if [[ -n "$t" ]] && (( t >= ${DELEGATE_GPU_MAX_THERMAL:-2} )); then
+  if [[ -n "$t" ]] && (( t >= $(gpu_gate_int DELEGATE_GPU_MAX_THERMAL 2) )); then
     echo "thermal state $t"; return 0
   fi
   u=$(gpu_gate_util)
-  if [[ -n "$u" ]] && (( u > ${DELEGATE_GPU_MAX_UTIL:-90} )); then
+  if [[ -n "$u" ]] && (( u > $(gpu_gate_int DELEGATE_GPU_MAX_UTIL 90) )); then
     echo "GPU at ${u}%"; return 0
   fi
   return 1
 }
 
 # gpu_gate_wait — returns 0 once the machine is clear, or GPU_GATE_BUSY after
-# DELEGATE_GPU_WAIT_MAX seconds of waiting. Progress goes to stderr.
+# DELEGATE_GPU_WAIT_MAX seconds of waiting. Progress goes to stderr. A poll
+# under one second is taken as one, so the probes never spin.
 gpu_gate_wait() {
   [[ "${DELEGATE_GPU_GATE:-1}" == "0" ]] && return 0
-  local poll="${DELEGATE_GPU_POLL:-15}" max="${DELEGATE_GPU_WAIT_MAX:-600}" waited=0 step why
-  step="$poll"; (( step < 1 )) && step=1
+  local step max waited=0 why
+  step=$(gpu_gate_int DELEGATE_GPU_POLL 15); (( step < 1 )) && step=1
+  max=$(gpu_gate_int DELEGATE_GPU_WAIT_MAX 600)
   while why=$(gpu_gate_busy); do
     if (( waited >= max )); then
       echo "gpu-gate: still busy after ${waited}s ($why); stopping, rerun to resume" >&2
       return "$GPU_GATE_BUSY"
     fi
     echo "gpu-gate: waiting, $why" >&2
-    sleep "$poll"
+    sleep "$step"
     waited=$((waited + step))
   done
   return 0
@@ -75,6 +90,8 @@ gpu_gate_wait() {
 
 gpu_gate_cooldown() {
   [[ "${DELEGATE_GPU_GATE:-1}" == "0" ]] && return 0
-  local c="${DELEGATE_GPU_COOLDOWN:-0}"
-  [[ "$c" == "0" ]] || sleep "$c"
+  local c
+  c=$(gpu_gate_int DELEGATE_GPU_COOLDOWN 0)
+  (( c > 0 )) && sleep "$c"
+  return 0
 }

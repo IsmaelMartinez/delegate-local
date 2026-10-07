@@ -176,16 +176,28 @@ assert_contains "0/0/0/0/0/0/0=0" "$out" "the kept case scores zero against itse
 assert_eq "600" "$(perl -e 'printf "%o", (stat($ARGV[0]))[2] & 07777' "$tmp/out/"*kept0001*.out.txt)" \
   "cache files are private (600)"
 
-# 3b. The heat gate (#646): a machine that stays hot stops the run with 75
-# before the first case, and says how to resume. osascript and sleep are stubs.
+# 3b. The heat gate (#646) runs right before a model call. On a machine that
+# stays hot, the baseline above (every output a stored draft) still runs, and
+# a candidate that needs calls stops with 75 and says how to resume.
+# osascript, ioreg and sleep are stubs, and every DELEGATE_GPU_* is pinned.
 hot=$(mktemp -d)
-printf '#!/usr/bin/env bash\necho 3\n' > "$hot/osascript"; printf '#!/usr/bin/env bash\nexit 0\n' > "$hot/sleep"
-chmod +x "$hot/osascript" "$hot/sleep"
-EC=0; out=$(PATH="$hot:$PATH" DELEGATE_GPU_GATE=1 DELEGATE_GPU_WAIT_MAX=0 run --recipe rp) || EC=$?
-assert_eq 75 "$EC" "a machine that stays hot stops the replay with 75"
+printf '#!/usr/bin/env bash\necho 3\n' > "$hot/osascript"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$hot/ioreg"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$hot/sleep"
+chmod +x "$hot/osascript" "$hot/ioreg" "$hot/sleep"
+hot_run() {
+  PATH="$hot:$PATH" DELEGATE_GPU_GATE=1 DELEGATE_GPU_MAX_THERMAL=2 DELEGATE_GPU_MAX_UTIL=90 \
+    DELEGATE_GPU_POLL=15 DELEGATE_GPU_WAIT_MAX=0 DELEGATE_GPU_COOLDOWN=0 run "$@"
+}
+rm -f "$tmp/calls"; rm -rf "$tmp/out"
+EC=0; out=$(hot_run --recipe rp) || EC=$?
+assert_eq 0 "$EC" "a hot machine does not block a replay that needs no model call"
+EC=0; out=$(hot_run --recipe rp --candidate "$tmp/good") || EC=$?
+assert_eq 75 "$EC" "a machine that stays hot stops a replay that needs calls with 75"
 assert_contains "still busy after 0s (thermal state 3)" "$out" "the gate names why it stopped"
 assert_contains "stopped at case 1 of 3; rerun to resume from the cache" "$out" "the replay says where it stopped"
-rm -rf "$hot"
+assert_eq "0" "$(calls)" "the gate stops the run before the wrapper is called"
+rm -rf "$hot" "$tmp/out"; rm -f "$tmp/calls"
 
 # 4. A candidate that carries the anchors wins the rejected cases and ties
 # the kept one; two wins to none is not yet significant.

@@ -56,9 +56,10 @@
 #   DELEGATE_REPLAY_MODEL         the model the arms run on, when known; else
 #                                 pick-model.sh resolves the recipe's tier once
 #   DELEGATE_GPU_*                the heat gate (lib/gpu-gate.sh, #646): each
-#                                 case waits while the machine is hot or the
-#                                 GPU is busy, and rests DELEGATE_GPU_COOLDOWN
-#                                 seconds after; DELEGATE_GPU_GATE=0 turns it off
+#                                 model call waits while the machine is hot or
+#                                 the GPU is busy, and rests DELEGATE_GPU_COOLDOWN
+#                                 seconds after; cached cases never wait;
+#                                 DELEGATE_GPU_GATE=0 turns it off
 # Exit: 0 report printed (the last line is the verdict); 3 no replayable case
 #       for the recipe; 2 usage or dependency error; 4 every case errored;
 #       75 the machine stayed hot or busy past DELEGATE_GPU_WAIT_MAX (the
@@ -296,6 +297,10 @@ read_into() { local _bytes; _bytes=$(cat "$2"; printf x); printf -v "$1" '%s' "$
 run_wrapper() {
   local dir="$1" inputs="$2" out="$3" err="$4" k v tier prompt ran_model
   local args=() tail=()
+  # The heat gate (#646) runs here, right before a model call, so cached
+  # cases and stored drafts never wait; arm_output runs in a subshell, so a
+  # gate that gives up leaves a marker the main loop stops on.
+  gpu_gate_wait || { : > "$work_tmp/gate-busy"; return 1; }
   while IFS= read -r k; do
     [[ -n "$k" ]] || continue
     jq -j --arg k "$k" '.vars[$k] | if type == "string" then . else tojson end' "$inputs" > "$work_tmp/var"
@@ -312,6 +317,7 @@ run_wrapper() {
           DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 DELEGATE_LOCAL_NO_META=0 \
           bash "$delegate_sh" --recipe "$recipe" ${args[@]+"${args[@]}"} ${tail[@]+"${tail[@]}"} \
       > "$out" 2> "$err" || return 1
+  gpu_gate_cooldown
   # The wrapper resolves its own model; the run counts only when it is the
   # one the report names and the cache is keyed on.
   ran_model=$(grep -o 'delegate-meta: model="[^"]*"' "$err" | head -1 | sed 's/.*model="//; s/"$//')
@@ -465,6 +471,14 @@ wins=0; losses=0; ties=0; errors=0
 champ_checks=0; cand_checks=0; champ_len=0; cand_len=0
 newest_n=$(( (n_cases + 2) / 3 ))
 newest_wins=0; newest_losses=0
+# gate_stop: when the heat gate gave up inside a model call, stop the run
+# with its code; the outputs so far are cached, so a rerun resumes.
+gate_stop() {
+  [[ -f "$work_tmp/gate-busy" ]] || return 0
+  echo "replay-recipe: stopped at case $i of $n_cases; rerun to resume from the cache" >&2
+  exit "$GPU_GATE_BUSY"
+}
+
 i=0
 if [[ -n "$candidate" ]]; then
   printf '  %-10s %-20s %-8s %-18s %-18s %s\n' case ts verdict champion candidate result
@@ -473,10 +487,9 @@ else
 fi
 while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel _session; do
   i=$((i + 1))
-  (( i > 1 )) && gpu_gate_cooldown
-  gpu_gate_wait || { echo "replay-recipe: stopped at case $i of $n_cases; rerun to resume from the cache" >&2; exit "$GPU_GATE_BUSY"; }
   case_refs "$inputs" "$final"
   a=$(arm_output "$champion" "$champion_sha" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")
+  gate_stop
   if [[ "$a" == "ERR" ]]; then
     errors=$((errors + 1)); printf '  %-10s %-20s %-8s %s\n' "${id:0:10}" "$ts" "$verdict" "ERR (champion)"; continue
   fi
@@ -489,6 +502,7 @@ while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel _sessio
     continue
   fi
   b=$(arm_output "$candidate" "$candidate_sha" "$id" "$draft" "$inputs" "$sha" "$checks" "$rmodel")
+  gate_stop
   if [[ "$b" == "ERR" ]]; then
     errors=$((errors + 1)); printf '  %-10s %-20s %-8s %-18s %s\n' "${id:0:10}" "$ts" "$verdict" "$a_score" "ERR (candidate)"; continue
   fi
