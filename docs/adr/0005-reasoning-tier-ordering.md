@@ -4,7 +4,7 @@ Date: 2026-05-08
 
 ## Status
 
-Accepted.
+Accepted; the ordering is superseded by #652 (2026-10-07). The `reasoning` tier now reuses the `prose` list, because on a server that advertises every cached model the deepseek-r1 preference loaded a second 32B model beside the resident prose model, and the tier drew no calls between 2026-08-19 and 2026-10-07. The regression assertion described below was removed with it; a machine that wants the measured order back sets it in `config.sh`.
 
 ## Context
 

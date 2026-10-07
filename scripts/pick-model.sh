@@ -32,13 +32,22 @@ TIERS="code|prose|reasoning|long-context|vision|embedding|premium-general|reason
 
 # Space-separated substrings per tier; --print-prefs emits them all so
 # external callers never duplicate the lists.
-CODE_PREFS="qwen3-coder-next qwen3-coder deepseek-r1 qwen3.5"
 PROSE_PREFS="qwen3.6 qwen3-next gemma4:latest gemma4 llama4 qwen3.5"
-REASONING_PREFS="deepseek-r1:32b deepseek-r1-distill-qwen-32b phi4-reasoning qwq glm-4"
-LONG_CONTEXT_PREFS="qwen3.6 qwen3-next llama4:scout qwen3-coder-next llama4 glm-4"
+# code, reasoning and long-context resolve the prose model (#652): an
+# mlx_lm.server lists every cached model from /models and loads whichever a
+# request names beside the resident one, so a separate list per tier stacked a
+# second 20-30 GB model on the shared server for tiers that drew 2 calls
+# against about 2,400 on prose (2026-08-19 to 2026-10-07). config.sh may still
+# give any tier its own list.
+CODE_PREFS="$PROSE_PREFS"
+REASONING_PREFS="$PROSE_PREFS"
+LONG_CONTEXT_PREFS="$PROSE_PREFS"
 VISION_PREFS="qwen3-vl:30b-a3b-thinking qwen3-vl-30b-a3b-thinking qwen3-vl"
 EMBEDDING_PREFS="nomic-embed-text bge-large"
-PREMIUM_GENERAL_PREFS="qwen3.5:122b qwen3.5-122b"
+# Empty on purpose (#652): the 122B it named is about 65 GB, and one load
+# beside the resident model killed Docker once. Opt in from config.sh, e.g.
+# `premium-general) prefs=("qwen3.5-122b") ;;`.
+PREMIUM_GENERAL_PREFS=""
 REASONING_VISION_PREFS="phi4-reasoning-vision qwen3-vl:30b-a3b-thinking qwen3-vl-30b-a3b-thinking"
 
 dry_run=0
@@ -175,7 +184,7 @@ esac
 
 trace "tier=$tier"
 trace "providers=$DELEGATE_BASE_URL"
-trace "preferences=${prefs[*]}"
+trace "preferences=${prefs[*]:-}"
 
 # Per-user override: plain bash sourced after the defaults populate `prefs`,
 # which it may reassign. User-owned content executed in the user's own
@@ -203,8 +212,15 @@ if [[ -f "$config" ]]; then
     trace "sourcing override: $config (owner=$cfg_owner, mode=$cfg_mode)"
     # shellcheck disable=SC1090
     source "$config"
-    trace "preferences (post-override)=${prefs[*]}"
+    trace "preferences (post-override)=${prefs[*]:-}"
   fi
+fi
+
+# A tier that ships no list (premium-general) resolves only once config.sh
+# gives it one; say so rather than probing and blaming the installed set.
+if (( ${#prefs[@]} == 0 )); then
+  echo "pick-model: tier '$tier' has no preferences; opt in from $config" >&2
+  exit 1
 fi
 
 resolve_rc=0
