@@ -49,6 +49,12 @@
 #   DELEGATE_MAX_TOKENS=<int>           default 4096; not a positive integer exits 2
 #   DELEGATE_TEMPERATURE=<n>            sampler temperature (default 0, greedy);
 #                                       non-numeric exits 2
+#   DELEGATE_VERIFY=1|0                 force the draft verifier on (1) or off
+#                                       (0) for a recipe call; unset, the
+#                                       recipe's `verify: true` decides (#661)
+#   DELEGATE_DECIDE_TIMEOUT=<s>         per-request bound on the verifier
+#                                       (default 60 here); a timeout is a
+#                                       verify_error, never a failed call
 #   DELEGATE_OTEL_ENDPOINT=<url>        POST one OTLP/HTTP span per call
 #                                       (synchronous: a hung collector adds up
 #                                       to DELEGATE_OTEL_TIMEOUT s of latency)
@@ -319,8 +325,9 @@ log_metric() {
   # The otel ids are written unconditionally so feedback rows and backfills
   # join without a second lookup. jq builds the line because model ids come
   # from whatever a provider reports. Optional fields (recipe, project,
-  # session, sampling_temperature, input_quality) are present iff set, so the row shape
-  # is stable. input_quality is read from the global the recipe block sets.
+  # session, sampling_temperature, input_quality, verify, verify_error) are
+  # present iff set, so the row shape is stable. input_quality, verify and
+  # verify_error are read from the globals the recipe and verifier blocks set.
   jq -nc \
     --arg ts "$ts" --arg backend "$backend" --arg tier "$tier" --arg model "$model" \
     --arg recipe "$recipe_name" --arg project "$project" --arg session "${CLAUDE_CODE_SESSION_ID:-}" \
@@ -333,6 +340,7 @@ log_metric() {
     --arg cnames "$checks_failed_names" --arg draft "$draft_file" --arg input "$input_file" \
     --arg retried "$retried" --arg retry_chars "$retry_chars" \
     --arg tsha "$template_sha" --arg inputs "$inputs_file" --arg retry_failed "$retry_failed" --arg iq "${input_quality:-}" \
+    --arg verify "${verify_json:-}" --arg verify_error "${verify_error:-}" \
     '{ts:$ts, source:"delegate", backend:$backend, tier:$tier, model:$model, prompt_chars:$pchars, context_chars:$cchars, output_chars:$ochars, duration_ms:$dur_ms, queue_wait_ms:$qwait_ms, generation_ms:$gen_ms, exit_status:$status, estimated_tokens_avoided:$tokens_avoided}
      + (if $recipe != "" then {recipe:$recipe} else {} end)
      + (if $tsha != "" then {template_sha:$tsha} else {} end)
@@ -348,7 +356,9 @@ log_metric() {
      + (if $inputs != "" then {inputs_file:$inputs} else {} end)
      + (if $retried != "" then {retried:true, retry_chars:($retry_chars|tonumber)} else {} end)
      + (if $retry_failed != "" then {retry_failed:true} else {} end)
-     + (if $iq != "" then {input_quality:($iq|split(","))} else {} end)' \
+     + (if $iq != "" then {input_quality:($iq|split(","))} else {} end)
+     + (if $verify != "" then {verify:($verify|fromjson)} else {} end)
+     + (if $verify_error != "" then {verify_error:$verify_error} else {} end)' \
     >> "$metrics_file" 2>/dev/null
 }
 
@@ -1178,6 +1188,72 @@ if (( status == 0 )); then
   fi
   IFS=$'\t' read -r draft_file input_file inputs_file <<<"$(capture_draft "$output" "$ts_start" "${recipe:+$full_input}" "$inputs_json")"
 fi
+
+# The draft verifier (#661), recipe calls only, after the checks and any
+# retry: verify-draft.sh scores whether every claim in the draft is stated in
+# the call's facts (the piped stdin then each --var value, the rule its --id
+# mode uses). It informs the caller and never acts: the draft, the retry and
+# the exit code are untouched, since retries did not repair the reply
+# recipes (#513, #514). DELEGATE_VERIFY=1 forces it on, =0 off, otherwise
+# the recipe's frontmatter `verify: true` decides. The row gets `verify`
+# (verify-draft.sh's JSON line) or `verify_error` (why there is no score).
+# Run after duration_ms is taken, so that keeps meaning the generation; the
+# verifier's own time is verify.latency_ms. DELEGATE_DECIDE_TIMEOUT bounds
+# each request at 60 s by default here (decide.sh's own default is 120),
+# which covers a 27B cold load of about 20 s.
+verify_json=""
+verify_error=""
+verify_on=0
+if [[ -n "$recipe" ]] && (( status == 0 )) && [[ -n "$output" ]]; then
+  case "${DELEGATE_VERIFY:-}" in
+    1) verify_on=1 ;;
+    0) ;;
+    *) [[ "$(recipe_verify "$recipe_file")" == "true" ]] && verify_on=1 ;;
+  esac
+fi
+if (( verify_on == 1 )); then
+  verify_timeout="${DELEGATE_DECIDE_TIMEOUT:-60}"
+  verify_err=$(mktemp)
+  if [[ -z "$inputs_json" ]]; then
+    verify_rc=2
+    echo "verify-draft: the call's structured inputs could not be built" > "$verify_err"
+  else
+    verify_json=$({ printf '%s' "$inputs_json"; printf '%s' "$output" | jq -Rs .; } | recipe_verify_input \
+      | DELEGATE_DECIDE_TIMEOUT="$verify_timeout" bash "$script_dir/verify-draft.sh" 2>"$verify_err")
+    verify_rc=$?
+  fi
+  if (( verify_rc <= 1 )) && jq -e '.verdict' <<<"$verify_json" >/dev/null 2>&1; then
+    # verify-draft.sh's stderr on a score is only its uncalibrated-threshold
+    # note; inline it would print on every call, so it is dropped here. A
+    # score against that 0.5 fallback (threshold_source "default") is no
+    # verdict at all: it passes almost every draft, so it is recorded as
+    # "uncalibrated", never flags, and the meta line is the one notice.
+    if [[ "$(jq -r '.threshold_source' <<<"$verify_json")" == "default" ]]; then
+      verify_json=$(jq -c '.verdict = "uncalibrated"' <<<"$verify_json")
+    elif [[ "$(jq -r '.verdict' <<<"$verify_json")" == "flag" ]]; then
+      echo "delegate: verifier flagged a possibly unsupported claim ($(jq -r '"p_supported=\(.p_supported) < \(.threshold), \(.model)"' <<<"$verify_json")) — check the draft against the facts before posting." >&2
+    fi
+  else
+    verify_json=""
+    # A curl --max-time on decide.sh's request is named as the timeout it
+    # is; otherwise decide.sh's own reason (no model for the tier, a failed
+    # request), which verify-draft.sh follows with a generic line, and only
+    # then verify-draft.sh's last word.
+    if grep -q 'curl: (28)' "$verify_err"; then
+      verify_error="timed out after ${verify_timeout}s"
+    else
+      verify_error=$(grep '^decide: ' "$verify_err" | tail -n 1)
+      verify_error="${verify_error#decide: }"
+      if [[ -z "$verify_error" ]]; then
+        verify_error=$(grep '^verify-draft: ' "$verify_err" | tail -n 1)
+        verify_error="${verify_error#verify-draft: }"
+      fi
+      [[ -n "$verify_error" ]] || verify_error="verify-draft.sh exited $verify_rc"
+    fi
+    echo "delegate: verifier unavailable ($verify_error); the draft is returned unverified." >&2
+  fi
+  rm -f "$verify_err"
+fi
 # row_written is what the meta line's ts/id and the verdict nudge are gated
 # on: they name the row this call wrote, so they are only true when one was.
 row_written=false
@@ -1207,6 +1283,11 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] \
   fi
   if (( checks_autofixed > 0 )); then
     meta="$meta checks_autofixed=$checks_autofixed"
+  fi
+  if [[ -n "$verify_json" ]]; then
+    meta="$meta verify=\"$(jq -r '.verdict' <<<"$verify_json")\""
+  elif [[ -n "$verify_error" ]]; then
+    meta="$meta verify=\"error\""
   fi
   echo "delegate-meta: $meta" >&2
 fi

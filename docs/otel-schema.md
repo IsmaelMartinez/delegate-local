@@ -182,4 +182,6 @@ The following OTel-defined attribute names are NEVER present in the payload, reg
 - `gen_ai.completion` (opt-in in the SemConv; not used by this skill — content travels as `delegate.output` when enabled)
 - Any `delegate.prompt_text`, `delegate.output_text`, `delegate.context_text` attribute name (deprecated drafts during Track A review; the final names are `delegate.prompt`, `delegate.context`, `delegate.output`)
 
+Some JSONL row fields have no span attribute at all. Among them are the draft verifier's `verify` object (`model`, `p_supported`, `threshold`, `threshold_source`, `verdict`, `latency_ms`) and `verify_error` (#661), both present only on a recipe call the verifier ran on; [`checks.md`](checks.md) documents them.
+
 Track F's redaction test (issue #158) is the tested invariant that backs the gated-by-default rule. It asserts that with `DELEGATE_OTEL_INCLUDE_CONTENT` unset, no `delegate.prompt`, `delegate.context`, `delegate.output`, or `delegate.feedback.reason` attribute is present in the OTLP body. With the flag set, those four attributes are present and carry their JSONL-row values verbatim. A future change that wants to add a new content-bearing attribute must extend the same gate in lock-step.

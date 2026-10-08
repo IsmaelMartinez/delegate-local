@@ -317,3 +317,7 @@ body. Write `context` as notes, one fact per line, the way
 invented PR number; the check strips a leading `type(scope): ...` or `#N type: ...`
 line when a blank line separates it from the body (`checks_autofixed`), and
 reports it otherwise. Template `dfaad6df0739` becomes `4426d3be28da`.
+
+### 2026-10-08 — `verify: true` (#661)
+
+The frontmatter gains `verify: true`, so `delegate.sh` runs the draft verifier on every call of this recipe and reports a flag on stderr and on the row (`docs/checks.md`). Nothing the model sees changes and the key is left out of `template_sha`, so the hash and the per-template history carry on unbroken and no replay applies. The #660 read-out behind the choice of recipes is in `docs/verify.md`.

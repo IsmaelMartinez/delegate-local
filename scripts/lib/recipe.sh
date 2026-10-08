@@ -61,7 +61,8 @@ recipe_tier() { # file
 # notes") are left out, so a dated note added after a revert does not split
 # the per-template read into a third bucket.
 # The `input_quality:` block is left out too: it judges the caller's inputs
-# and shapes nothing the model sees (#590).
+# and shapes nothing the model sees (#590). A `verify:` line is left out for
+# the same reason: it runs a check on the draft afterwards (#661).
 # One helper for delegate.sh (the row's template_sha) and replay-recipe.sh
 # (the arm's hash), so the two cannot drift; tests/test-recipe-lib.sh pins
 # its value for every recipe. Empty where shasum is missing.
@@ -75,8 +76,26 @@ recipe_template_sha() { # file
       NR==1 { if (/^---[[:space:]]*$/) { in_fm=1; print; next } exit }
       /^input_quality:[[:space:]]*$/ { in_iq=1; next }
       in_iq && /^[[:space:]]+[^[:space:]]/ { next }
+      in_fm && /^verify:/ { in_iq=0; next }
       { in_iq=0; print; if (/^---[[:space:]]*$/) { closed=1; exit } }
       END { if (in_fm && !closed) exit 1 }
     ' "$1" 2>/dev/null && recipe_template "$1"
   } | shasum -a 256 | cut -c1-12
+}
+
+# recipe_verify <file> — `true` when the frontmatter sets `verify: true`
+# (#661): delegate.sh then runs verify-draft.sh on the call's draft.
+recipe_verify() { # file
+  recipe_fm_block "$1" | awk '/^verify:[[:space:]]*true[[:space:]]*$/ { print "true"; exit }'
+}
+
+# recipe_verify_input — the {facts, draft} verify-draft.sh scores, from two
+# JSON values on stdin: a recipe call's structured inputs (the inputs.json
+# delegate.sh stores) then the draft as a JSON string. The facts are the
+# piped stdin then every --var value in key order, newline-joined; the
+# positional prompt and the rendered template are not facts (docs/verify.md).
+# One expression for delegate.sh's inline check and verify-draft.sh --id.
+recipe_verify_input() {
+  jq -sc '{facts: (([.[0].stdin // ""] + ((.[0].vars // {}) | to_entries | sort_by(.key) | map(.value))) | join("\n")),
+           draft: .[1]}'
 }

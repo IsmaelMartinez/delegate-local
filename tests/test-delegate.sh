@@ -5035,4 +5035,181 @@ assert_contains "check 'no_subject_echo' FAILED" "$err" "no_subject_echo: a subj
 assert_not_contains "no_example_echo' FAILED" "$err" "no_subject_echo: ...which no_example_echo misses under its 40-char floor"
 assert_contains '"checks_failed_names":["no_subject_echo"]' "$(tail -1 "$metrics")" "no_subject_echo: the failure is named on the row"
 
+# --- 661. The draft verifier, opt-in on recipe calls: verify-draft.sh runs
+# after the checks and any retry, prints one line on a flag, records `verify`
+# or `verify_error` on the row, and never changes the draft or the exit code.
+fresh
+# make_mock_curl_verify DIR DRAFT — dispatches answer DRAFT (JSON-escaped),
+# counted in DIR/dcalls; the verifier's logprob requests are counted in
+# DIR/vcalls with their argv in DIR/vargv and their payload in DIR/vpayload,
+# and give the first option letter the p of the request's SCORE_<p> marker.
+# VERIFY_TIMEOUT in the request makes that call exit 28, as --max-time does,
+# and NOLETTER answers with neither option letter.
+make_mock_curl_verify() {
+  local dir="$1"
+  printf '{"choices":[{"message":{"content":"%s"},"finish_reason":"stop"}]}' "$2" > "$dir/curl.body"
+  : > "$dir/dcalls"; : > "$dir/vcalls"
+  cat > "$dir/curl" <<EOF
+#!/usr/bin/env bash
+for _a in "\$@"; do
+  case "\$_a" in */models) printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0 ;; esac
+done
+argv="\$*"
+out_file=""
+write_out=""
+while (( \$# > 0 )); do
+  case "\$1" in
+    -o) out_file="\$2"; shift 2 ;;
+    -w) write_out="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+body=\$(cat)
+case "\$body" in
+  *'"logprobs":true'*)
+    echo x >> "$dir/vcalls"
+    printf '%s\n' "\$argv" > "$dir/vargv"
+    printf '%s\n' "\$body" > "$dir/vpayload"
+    case "\$body" in *VERIFY_TIMEOUT*) echo "curl: (28) Operation timed out" >&2; exit 28 ;; esac
+    case "\$body" in *NOLETTER*) echo '{"choices":[{"message":{"content":"Hello"},"logprobs":{"content":[{"token":"Hello","logprob":-0.1,"top_logprobs":[{"token":"Hello","logprob":-0.1}]}]}}]}'; exit 0 ;; esac
+    s=\$(printf '%s' "\$body" | grep -o 'SCORE_[0-9.]*' | head -1)
+    perl -e 'my \$p = shift || 0.5; my (\$a, \$b) = (log(\$p), log(1 - \$p));
+      printf q({"choices":[{"message":{"content":"A"},"logprobs":{"content":[{"token":"A","logprob":%.8f,"top_logprobs":[{"token":"A","logprob":%.8f},{"token":"B","logprob":%.8f}]}]}}]}), \$a, \$a, \$b' "\${s#SCORE_}"
+    exit 0 ;;
+esac
+echo x >> "$dir/dcalls"
+if [[ -n "\$out_file" ]]; then cat "$dir/curl.body" > "\$out_file"; else cat "$dir/curl.body"; fi
+[[ -n "\$write_out" ]] && printf '%s' "\${write_out//%\\{time_starttransfer\\}/0.001}"
+exit 0
+EOF
+  chmod +x "$dir/curl"
+}
+vcalls() { wc -l < "$tmp/vcalls" | tr -d ' '; }
+dcalls() { wc -l < "$tmp/dcalls" | tr -d ' '; }
+mk_check_recipe vr '' 'Reply to {{stdin}} for {{who}}.' 'verify: true'
+mk_check_recipe unv '' 'Reply to {{stdin}} for {{who}}.'
+recipe_stdin='The fix landed in abc123.'
+
+# 661a. A tagged recipe whose draft passes: the row carries verify, the
+# stderr carries no flag line, the facts are stdin then the vars in key order.
+make_mock_curl_verify "$tmp" 'Fixed in abc123. SCORE_0.9'
+err=$(run_recipe DELEGATE_VERIFY_THRESHOLD=0.68 vr --var who=alice --var also=bob)
+rc=$?
+row=$(tail -1 "$metrics")
+assert_eq 0 "$rc" "verify: a passing draft exits 0"
+assert_eq 1 "$(vcalls)" "verify: a verify-tagged recipe runs the verifier once"
+assert_eq "pass" "$(jq -r '.verify.verdict' <<<"$row")" "verify: the row records verdict pass"
+assert_eq "0.9 0.68 qwen3.6:35b-a3b" "$(jq -r '"\(.verify.p_supported) \(.verify.threshold) \(.verify.model)"' <<<"$row")" \
+  "verify: the row records p_supported, the threshold and the verifier model"
+assert_not_contains "verifier flagged" "$err" "verify: a pass prints no flag line"
+assert_contains 'verify="pass"' "$err" "verify: the meta line carries the verdict"
+assert_contains '"facts":"The fix landed in abc123.\nbob\nalice"' "$(jq -r '.messages[0].content' "$tmp/vpayload")" \
+  "verify: the facts are the piped stdin then each --var value in key order, without the prompt"
+assert_contains '--max-time 60 ' "$(cat "$tmp/vargv")" "verify: the verifier call is bounded at 60 s by default"
+assert_eq "Fixed in abc123. SCORE_0.9" "$(cat "$tmp/stdout")" "verify: the draft is returned unchanged"
+assert_eq "env" "$(jq -r '.verify.threshold_source' <<<"$(tail -1 "$metrics")")" "verify: an env threshold is recorded as its source"
+# No threshold given, recorded or shipped for the model: verify-draft.sh
+# falls back to 0.5, which is not a meaningful verdict, so the row says
+# uncalibrated, nothing flags, and the meta line is the only notice.
+make_mock_curl_verify "$tmp" 'Reverted abc123. SCORE_0.41'
+err=$(run_recipe vr --var who=alice)
+row=$(tail -1 "$metrics")
+assert_eq "0.5 default uncalibrated" "$(jq -r '"\(.verify.threshold) \(.verify.threshold_source) \(.verify.verdict)"' <<<"$row")" \
+  "verify: an uncalibrated model's score is recorded as uncalibrated, not pass or flag"
+assert_not_contains "verifier flagged" "$err" "verify: an uncalibrated score never prints the flag line"
+assert_contains 'verify="uncalibrated"' "$err" "verify: the meta line says the verifier is uncalibrated"
+assert_not_contains "no calibrated threshold" "$err" "verify: the inline path prints no uncalibrated note"
+# A model with a shipped threshold is scored against it with no setup.
+MOCK_MODELS='mlx-community/Qwen3.6-35B-A3B-8bit'
+make_mock_curl_verify "$tmp" 'Reverted abc123. SCORE_0.41'
+err=$(run_recipe vr --var who=alice)
+row=$(tail -1 "$metrics")
+assert_eq "0.7549 shipped flag" "$(jq -r '"\(.verify.threshold) \(.verify.threshold_source) \(.verify.verdict)"' <<<"$row")" \
+  "verify: a model with a shipped threshold is scored against it"
+assert_contains "verifier flagged" "$err" "verify: ...and a shipped-threshold flag prints the flag line"
+MOCK_MODELS='qwen3.6:35b-a3b'
+
+# 661b. A flag: one stderr line, the row says flag, output, exit code and the
+# single dispatch unchanged (a flag never earns the retry).
+make_mock_curl_verify "$tmp" 'Reverted abc123. SCORE_0.41'
+err=$(run_recipe DELEGATE_VERIFY_THRESHOLD=0.68 vr --var who=alice)
+rc=$?
+assert_eq 0 "$rc" "verify: a flagged draft still exits 0"
+assert_eq "Reverted abc123. SCORE_0.41" "$(cat "$tmp/stdout")" "verify: a flagged draft is returned unchanged"
+assert_eq 1 "$(dcalls)" "verify: a flag does not trigger the retry"
+assert_contains "delegate: verifier flagged a possibly unsupported claim (p_supported=0.41 < 0.68, qwen3.6:35b-a3b)" "$err" \
+  "verify: a flag prints one stderr line with p, the threshold and the model"
+assert_eq 1 "$(grep -c 'verifier flagged' <<<"$err")" "verify: exactly one flag line"
+assert_eq "flag" "$(jq -r '.verify.verdict' <<<"$(tail -1 "$metrics")")" "verify: the row records verdict flag"
+assert_contains 'verify="flag"' "$err" "verify: the meta line carries the flag"
+
+# 661c. The verifier fails (a timeout): verify_error on the row, the draft
+# and exit code untouched, and DELEGATE_DECIDE_TIMEOUT bounds the call.
+make_mock_curl_verify "$tmp" 'Fixed in abc123. VERIFY_TIMEOUT'
+err=$(run_recipe DELEGATE_DECIDE_TIMEOUT=7 vr --var who=alice)
+rc=$?
+row=$(tail -1 "$metrics")
+assert_eq 0 "$rc" "verify: a verifier failure leaves the exit code at 0"
+assert_eq "Fixed in abc123. VERIFY_TIMEOUT" "$(cat "$tmp/stdout")" "verify: a verifier failure returns the draft"
+assert_contains '--max-time 7 ' "$(cat "$tmp/vargv")" "verify: DELEGATE_DECIDE_TIMEOUT bounds the verifier call"
+assert_eq "timed out after 7s" "$(jq -r '.verify_error' <<<"$row")" "verify: a timeout is recorded as verify_error"
+assert_eq "absent" "$(jq -r '.verify // "absent"' <<<"$row")" "verify: no verify object beside verify_error"
+assert_contains "delegate: verifier unavailable (timed out after 7s)" "$err" "verify: the failure is named on stderr"
+
+# 661d. An answer with neither option letter (verify-draft.sh exit 3) is a
+# verify_error carrying verify-draft.sh's own reason.
+make_mock_curl_verify "$tmp" 'Fixed in abc123. NOLETTER'
+err=$(run_recipe vr --var who=alice)
+rc=$?
+row=$(tail -1 "$metrics")
+assert_eq 0 "$rc" "verify: an unscorable answer leaves the exit code at 0"
+assert_contains "coverage 0" "$(jq -r '.verify_error' <<<"$row")" "verify: verify-draft's own reason is recorded"
+assert_eq "Fixed in abc123. NOLETTER" "$(cat "$tmp/stdout")" "verify: ...and the draft is returned"
+# No model resolves for the verify tier: decide.sh's own reason is the
+# diagnostic one, not verify-draft.sh's generic "unavailable" line after it.
+printf '%s\n' 'case "$tier" in verify) prefs=(no-such-verifier) ;; esac' > "$tmp/config.sh"
+make_mock_curl_verify "$tmp" 'Fixed in abc123. SCORE_0.9'
+err=$(run_recipe DELEGATE_LOCAL_CONFIG="$tmp/config.sh" vr --var who=alice)
+row=$(tail -1 "$metrics")
+assert_eq "no model resolves for tier 'verify'" "$(jq -r '.verify_error' <<<"$row")" "verify: decide.sh's reason is recorded as verify_error"
+assert_contains "delegate: verifier unavailable (no model resolves for tier 'verify')" "$err" "verify: ...and named on stderr"
+
+# 661e. DELEGATE_VERIFY=0 switches a tagged recipe off.
+make_mock_curl_verify "$tmp" 'Fixed in abc123. SCORE_0.41'
+err=$(run_recipe DELEGATE_VERIFY=0 vr --var who=alice)
+row=$(tail -1 "$metrics")
+assert_eq 0 "$(vcalls)" "verify: DELEGATE_VERIFY=0 runs no verifier"
+assert_eq "absent absent" "$(jq -r '"\(.verify // "absent") \(.verify_error // "absent")"' <<<"$row")" \
+  "verify: DELEGATE_VERIFY=0 leaves both fields off the row"
+assert_not_contains 'verify=' "$err" "verify: DELEGATE_VERIFY=0 leaves the meta line alone"
+
+# 661f. An untagged recipe runs nothing; DELEGATE_VERIFY=1 turns it on.
+run_recipe unv --var who=alice >/dev/null
+assert_eq 0 "$(vcalls)" "verify: an untagged recipe runs no verifier"
+assert_eq "absent" "$(jq -r '.verify // "absent"' <<<"$(tail -1 "$metrics")")" "verify: an untagged recipe's row has no verify"
+run_recipe DELEGATE_VERIFY=1 DELEGATE_VERIFY_THRESHOLD=0.68 unv --var who=alice >/dev/null
+assert_eq 1 "$(vcalls)" "verify: DELEGATE_VERIFY=1 runs the verifier on an untagged recipe"
+assert_eq "flag" "$(jq -r '.verify.verdict' <<<"$(tail -1 "$metrics")")" "verify: ...and records its verdict"
+
+# 661g. A bare call never runs it, even with DELEGATE_VERIFY=1.
+make_mock_curl_verify "$tmp" 'Fixed in abc123. SCORE_0.41'
+printf 'ctx' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" DELEGATE_VERIFY=1 DELEGATE_METRICS_FILE="$metrics" \
+  bash "$SCRIPT" prose "go" >/dev/null 2>&1
+assert_eq 0 "$(vcalls)" "verify: a bare call never runs the verifier"
+
+# 661h. DELEGATE_LOCAL_NO_METRICS=1: still verified and flagged, no row.
+: > "$metrics"
+err=$(run_recipe DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_VERIFY_THRESHOLD=0.68 vr --var who=alice)
+assert_contains "verifier flagged" "$err" "verify: the flag line prints with metrics off"
+assert_eq 0 "$(wc -l < "$metrics" | tr -d ' ')" "verify: ...and no row is written"
+
+# 661i. The five reply and description recipes are tagged; commit-message is
+# not (its stored inputs lack the diff, so claims read from it look unsupported).
+. "$REPO/scripts/lib/recipe.sh"
+for r in maintainer-reply maintainer-review-reply pr-description pr-review-reply github-issue-body; do
+  assert_eq "true" "$(recipe_verify "$REPO/prompts/$r.md")" "verify: $r is tagged verify: true"
+done
+assert_eq "" "$(recipe_verify "$REPO/prompts/commit-message.md")" "verify: commit-message is not tagged"
+unset recipe_stdin
+
 finish

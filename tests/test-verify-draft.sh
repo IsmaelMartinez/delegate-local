@@ -51,6 +51,7 @@ assert_eq "0.9" "$(jq -r '.p_supported' <<<"$out")" "p_supported is the true pro
 assert_eq "qwen3.6:35b-a3b" "$(jq -r '.model' <<<"$out")" "model comes from the verify tier"
 assert_eq "number" "$(jq -r '.latency_ms | type' <<<"$out")" "latency recorded"
 assert_eq "0.5" "$(jq -r '.threshold' <<<"$out")" "uncalibrated falls back to 0.5"
+assert_eq "default" "$(jq -r '.threshold_source' <<<"$out")" "and names its source as default"
 assert_contains "no calibrated threshold for qwen3.6:35b-a3b" "$(cat "$mock/err")" "and says so on stderr"
 prompt=$(tail -1 "$sniff" | jq -r '.messages[0].content')
 assert_contains 'Is every claim in `draft` stated in or directly implied by `facts`?' "$prompt" "the measured question is asked"
@@ -82,6 +83,24 @@ assert_eq "0.85" "$(jq -r '.threshold' <<<"$out")" "and is reported"
 DELEGATE_VERIFY_THRESHOLD=high run <<<'{"facts":"f","draft":"SCORE_0.9"}' >/dev/null 2>&1
 assert_eq "2" "$?" "a non-numeric DELEGATE_VERIFY_THRESHOLD exits 2"
 rm -f "$data/verify-thresholds.tsv"
+
+# Lookup order (#671): DELEGATE_VERIFY_THRESHOLD, the data dir's recorded
+# threshold, the repo's shipped one for the exact served id, then 0.5.
+MOCK_MODELS='mlx-community/Qwen3.6-35B-A3B-8bit'
+write_mock
+out=$(run <<<'{"facts":"f","draft":"SCORE_0.7"}' 2>"$mock/err")
+assert_eq "0.7549 shipped flag" "$(jq -r '"\(.threshold) \(.threshold_source) \(.verdict)"' <<<"$out")" \
+  "a served id with a shipped threshold uses it"
+assert_not_contains "no calibrated threshold" "$(cat "$mock/err")" "and prints no uncalibrated note"
+printf 'mlx-community/Qwen3.6-35B-A3B-8bit\t0.6\n' > "$data/verify-thresholds.tsv"
+out=$(run <<<'{"facts":"f","draft":"SCORE_0.7"}' 2>/dev/null)
+assert_eq "0.6 calibrated pass" "$(jq -r '"\(.threshold) \(.threshold_source) \(.verdict)"' <<<"$out")" \
+  "a recorded threshold wins over the shipped one"
+out=$(DELEGATE_VERIFY_THRESHOLD=0.9 run <<<'{"facts":"f","draft":"SCORE_0.7"}' 2>/dev/null)
+assert_eq "0.9 env" "$(jq -r '"\(.threshold) \(.threshold_source)"' <<<"$out")" "DELEGATE_VERIFY_THRESHOLD wins over both"
+rm -f "$data/verify-thresholds.tsv"
+MOCK_MODELS='qwen3.6:35b-a3b'
+write_mock
 
 echo "id mode"
 printf '%s\n' '{"stdin":"SCORE_0.9 piped context","vars":{"zeta":"last var","alpha":"first var"},"prompt":"not a fact"}' > "$data/drafts/20261007T000000Z-feedc0de.inputs.json"

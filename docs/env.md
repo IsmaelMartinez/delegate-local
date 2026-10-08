@@ -89,8 +89,9 @@ Every `DELEGATE_*` variable a script under `scripts/` reads, listed once. All ar
 |---|---|---|---|
 | `DELEGATE_CLEF_URL` | `http://127.0.0.1:8765` | Base URL of a SystemOne endpoint (`POST /v1/systemone`), such as Clef served locally from the data dir's `spikes/clef/`. | `decide.sh` |
 | `DELEGATE_CLEF_MODEL` | `clef-flash` | The `model` sent when the request names none. | `decide.sh` |
-| `DELEGATE_DECIDE_TIMEOUT` | `120` | Seconds for each decision request, on either backend. | `decide.sh` |
-| `DELEGATE_VERIFY_THRESHOLD` | the resolved model's line in `<data dir>/verify-thresholds.tsv`, else `0.5` | p(supported) at or above which `verify-draft.sh` passes a draft (0-1); overrides the threshold `--calibrate` recorded. | `verify-draft.sh` |
+| `DELEGATE_DECIDE_TIMEOUT` | `120`; `60` for the verifier a recipe call runs | Seconds for each decision request, on either backend. When the verifier inside `delegate.sh` times out, the row gets `verify_error` and the draft is returned as usual. | `decide.sh`, `delegate.sh` |
+| `DELEGATE_VERIFY` | unset | `1` runs the draft verifier on any recipe call, `0` on none; unset, a recipe's frontmatter `verify: true` decides (`docs/checks.md`). Bare calls are never verified. | `delegate.sh` |
+| `DELEGATE_VERIFY_THRESHOLD` | the resolved model's line in `<data dir>/verify-thresholds.tsv`, else in the shipped `scripts/lib/verify-thresholds.tsv` (exact model id), else `0.5` | p(supported) at or above which `verify-draft.sh` passes a draft (0-1); overrides the recorded and shipped thresholds. | `verify-draft.sh` |
 
 ## Embeddings
 

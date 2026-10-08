@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Read the delegate metrics JSONL and print a summary: headline, per-source,
-# per-backend, feedback, per-project, per-recipe, trigger-rate, per-tier and
-# top-model sections. Rows missing `source` are treated as `delegate`. A
+# per-backend, feedback, per-project, per-recipe, verifier flag rate,
+# trigger-rate, per-tier and top-model sections. Rows missing `source` are treated as `delegate`. A
 # recipe more than one model served in the window gets a sub-line per model
 # (#655), since ADR 0009 binds calibration to the model.
 #
@@ -418,6 +418,38 @@ if (( n_recipe > 0 )); then
       (if ([$rows[].model] | unique | length) > 1 then
          $rows | group_by(.model) | sort_by(-length, (map(.ts) | min)) | .[]
          | "    model=\(.[0].model + (" " * (25 - (.[0].model | length))))  \(counts)"
+       else empty end)
+  ' "$metrics_file"
+  echo
+fi
+
+# Verifier flag rate (#661): per recipe, the drafts the verifier flagged over
+# those it scored against a real threshold, with the calls it could not score
+# (verify_error) and the scores against the uncalibrated 0.5 fallback apart.
+# Printed when a row in the window carries `verify` or `verify_error`, so a
+# window of nothing but failures still shows. A recipe scored by more than one
+# verifier model or threshold gets a sub-line per pair, as the per-recipe
+# rollup splits by model: the pairs flag at different rates by design.
+if jq -se 'any(.[]; (.source // "delegate") == "delegate" and (.verify != null or .verify_error != null))' "$metrics_file" >/dev/null; then
+  echo "Verifier flag rate (flagged/verified per recipe):"
+  jq -L "$lib_dir" -rs '
+    include "pair";
+    def rate: "flagged=\(map(select(.verify.verdict == "flag")) | length)/\(length) (\(pct(map(select(.verify.verdict == "flag")) | length; length))%)";
+    map(select(src == "delegate" and .recipe != null and (.verify != null or .verify_error != null)))
+    | group_by(.recipe)
+    | map(. as $rows
+          | ($rows | map(select(.verify.verdict == "pass" or .verify.verdict == "flag"))) as $scored
+          | {recipe: $rows[0].recipe, scored: $scored,
+             uncal: ($rows | map(select(.verify.verdict == "uncalibrated")) | length),
+             errors: ($rows | map(select(.verify_error != null)) | length)})
+    | sort_by(-(.scored | length))
+    | .[]
+    | "  \(.recipe | . + (" " * (20 - length)))  \(.scored | rate)"
+        + (if .uncal > 0 then "  uncalibrated=\(.uncal)" else "" end)
+        + (if .errors > 0 then "  errors=\(.errors)" else "" end),
+      (if (.scored | map([.verify.model, .verify.threshold]) | unique | length) > 1 then
+         .scored | group_by([.verify.model, .verify.threshold]) | sort_by(-length) | .[]
+         | "    model=\(.[0].verify.model) t=\(.[0].verify.threshold)  \(rate)"
        else empty end)
   ' "$metrics_file"
   echo

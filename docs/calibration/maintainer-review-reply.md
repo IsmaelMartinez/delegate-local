@@ -268,3 +268,7 @@ Re-measure after roughly ten calls. The number to watch is whether
 `no_unbidden_mention` appears in `checks_failed_names` after the retry: if
 the second generation still carries the mention, the constraint sentence is
 not the lever and the mention should be stripped rather than regenerated.
+
+### 2026-10-08 — `verify: true` (#661)
+
+The frontmatter gains `verify: true`, so `delegate.sh` runs the draft verifier on every call of this recipe and reports a flag on stderr and on the row (`docs/checks.md`). Nothing the model sees changes and the key is left out of `template_sha`, so the hash and the per-template history carry on unbroken and no replay applies. The #660 read-out behind the choice of recipes is in `docs/verify.md`.

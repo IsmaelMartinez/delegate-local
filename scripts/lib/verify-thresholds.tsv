@@ -1,0 +1,8 @@
+# Shipped verifier thresholds (#671), read by verify-draft.sh after
+# DELEGATE_VERIFY_THRESHOLD and <data dir>/verify-thresholds.tsv, before the
+# 0.5 fallback. model<TAB>threshold, the model id exactly as the provider
+# serves it: another provider's spelling of the same weights needs its own
+# --calibrate run. Each value flags at most 5% of kept non-commit drafts on
+# the 2026-10-07 read-out (Qwen3.6 9/192, Qwen3.8 6/192; docs/verify.md).
+mlx-community/Qwen3.6-35B-A3B-8bit	0.7549
+mlx-community/Qwen3.8-27B-8bit	0.6792

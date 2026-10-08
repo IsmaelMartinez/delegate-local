@@ -1,5 +1,6 @@
 ---
 tier: prose
+verify: true
 inputs:
   hash: string
   verdict: string
