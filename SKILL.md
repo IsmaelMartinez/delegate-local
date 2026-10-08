@@ -124,7 +124,7 @@ Local models are weak unsupervised agents but usable as a supervised draft gener
 
 ## Routing
 
-`pick-model.sh <tier>` resolves a tier to the first served model in that tier's preference list. Never hardcode model names in calls; when the installed set changes, edit the preference lists in `scripts/pick-model.sh`. Providers come from `DELEGATE_BASE_URL`, an ordered list of OpenAI-compatible base URLs that defaults to MLX (`localhost:8080`), Docker Model Runner (`localhost:12434`) and Ollama (`localhost:11434`); the first reachable provider serving a preferred model wins, so MLX leads when it is running. `bash scripts/audit-models.sh` prints the routing and, with `llmfit` installed, suggests upgrades; it never pulls anything. Install and launchd auto-start for MLX are in `docs/install-mlx.md`.
+`pick-model.sh <tier>` resolves a tier to the first served model in that tier's preference list. Never hardcode model names in calls; when the installed set changes, edit the preference lists in `scripts/pick-model.sh`. Providers come from `DELEGATE_BASE_URL`, an ordered list of OpenAI-compatible base URLs that defaults to MLX (`localhost:8080`), Docker Model Runner (`localhost:12434`) and Ollama (`localhost:11434`); the first reachable provider serving a preferred model wins, so MLX leads when it is running. `bash scripts/audit-models.sh` prints the routing and never pulls anything; trialling a new model is `docs/model-swap.md`. Install and launchd auto-start for MLX are in `docs/install-mlx.md`.
 
 | Tier | Use for |
 |---|---|

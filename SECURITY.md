@@ -12,7 +12,7 @@ The skill itself is a set of bash scripts. It does not store credentials, does n
 
 In-scope concerns include shell injection in the bash scripts, command injection through tier names or prompts, malicious content in `SKILL.md` that would alter Claude's behaviour in dangerous ways, and secrets exfiltration through the metrics JSONL.
 
-Out of scope: vulnerabilities in Ollama itself, in the local models, in `llmfit`, in agent harnesses (Claude Code, Codex, OpenCode, etc.), or in the host operating system. Report those upstream.
+Out of scope: vulnerabilities in Ollama itself, in the local models, in agent harnesses (Claude Code, Codex, OpenCode, etc.), or in the host operating system. Report those upstream.
 
 ## Trust model: the sourced `config.sh` override
 

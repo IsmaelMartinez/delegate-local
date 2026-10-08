@@ -323,9 +323,11 @@ is written to the metrics file.
 
 Kept cases are listed with their result and tallied on their own `Kept`
 line, failures included, but left out of the sign test, the newest third and the checks and
-length totals. Their reference is the current model's own draft, so the
-champion scores near zero on them by construction and any other model loses
-them for sounding different, not for being worse; on 2026-10-07 the edited
+length totals. Their reference is a model's own draft (usually, not always,
+the current model's, since the corpus is not filtered by model) rather than a
+human-edited target, so they measure similarity to that draft, not quality,
+and an arm can lose them for sounding different rather than for being worse;
+on 2026-10-07 the edited
 cases alone tied 26-25 (Qwen3.8) and 22-21 (Gemma 4) against the incumbent.
 
 ## Apply it

@@ -48,13 +48,14 @@ jobs:
           # YAML-indent rules (a plain heredoc terminator must sit at column 0,
           # which clashes with the YAML script block's leading indent).
           body=$(printf '%s\n' \
-            'Monthly reminder to run `scripts/audit-models.sh` locally and review the llmfit-driven upgrade suggestions. This workflow is notification-only because the audit reads the local model store and the running providers, which a GitHub-hosted runner does not have.' \
+            'Monthly reminder to run `scripts/audit-models.sh` locally and decide whether a new model is worth a trial. This workflow is notification-only because the audit reads the local model store and the running providers, which a GitHub-hosted runner does not have.' \
             '' \
             '### Checklist' \
             '' \
-            '- [ ] Run `bash scripts/audit-models.sh` locally.' \
-            '- [ ] Review llmfit-driven upgrade suggestions (3+ point delta threshold).' \
-            '- [ ] If a model beats the installed leader, install it and open a PR updating the tier preference list in `scripts/pick-model.sh`, with the matching assertion in `tests/run-tests.sh`.' \
+            '- [ ] Run `bash scripts/audit-models.sh` locally: providers reachable, routing as expected, no frozen `config.sh` warning.' \
+            '- [ ] Check whether a new first-party release fits the memory budget (about 60 GB resident) and is worth a trial.' \
+            '- [ ] For a candidate, follow `docs/model-swap.md`: its own `mlx_lm.server` on :8081, paired replay with `--candidate-model`, blind judge, grounding calibration, `--decide` trigger gate, speed and cold load.' \
+            '- [ ] If it wins, run the `config.sh` live trial and read `metrics-summary.sh --model` split at the switch minute before editing `PROSE_PREFS` in `scripts/pick-model.sh` and the ordering test in `tests/run-tests.sh`.' \
             '- [ ] Close this issue once the audit is complete (next month'"'"'s run will open a fresh one).')
 
           gh issue create \
