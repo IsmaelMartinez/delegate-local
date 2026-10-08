@@ -24,7 +24,7 @@ cat > "$mock/curl" <<'EOF'
 #!/bin/bash
 for a in "$@"; do
   case "$a" in
-    */models) printf '%s' '{"object":"list","data":[{"id":"qwen3.6:35b-a3b-q8_0"}]}'; exit 0 ;;
+    */models) printf '%s' '{"object":"list","data":[{"id":"test-prose-model"}]}'; exit 0 ;;
   esac
 done
 exit 7

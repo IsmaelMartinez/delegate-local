@@ -123,7 +123,7 @@ bodies="$tmp/bodies"
 invocations="$tmp/invocations"; : > "$invocations"
 make_mock_curl "$tmp" "$bodies" "$invocations" "ok"
 cat > "$tmp/m.jsonl" <<'EOF'
-{"ts":"2026-05-22T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b","prompt_chars":80,"context_chars":100,"output_chars":50,"duration_ms":5000,"queue_wait_ms":100,"generation_ms":4900,"exit_status":0,"estimated_tokens_avoided":40}
+{"ts":"2026-05-22T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"test-prose-model","prompt_chars":80,"context_chars":100,"output_chars":50,"duration_ms":5000,"queue_wait_ms":100,"generation_ms":4900,"exit_status":0,"estimated_tokens_avoided":40}
 EOF
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -144,7 +144,7 @@ assert_eq "$expected_trace" "$trace_in_body" "T4: trace_id is deterministic from
 assert_eq "$expected_span" "$span_in_body" "T4: span_id is deterministic from (ts, source)"
 # Schema sanity: gen_ai.* attributes present.
 assert_contains '"gen_ai.request.model"' "$body" "T4: gen_ai.request.model attribute"
-assert_contains '"qwen3.6:35b"' "$body" "T4: model value forwarded"
+assert_contains '"test-prose-model"' "$body" "T4: model value forwarded"
 assert_contains '"delegate.tier"' "$body" "T4: delegate.tier attribute"
 assert_contains '"prose"' "$body" "T4: tier value forwarded"
 # Privacy: no content attributes present.
@@ -161,7 +161,7 @@ bodies="$tmp/bodies"
 invocations="$tmp/invocations"; : > "$invocations"
 make_mock_curl "$tmp" "$bodies" "$invocations" "ok"
 cat > "$tmp/m.jsonl" <<'EOF'
-{"ts":"2026-05-22T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b","prompt_chars":80,"context_chars":100,"output_chars":50,"duration_ms":5000,"queue_wait_ms":100,"generation_ms":4900,"exit_status":0,"estimated_tokens_avoided":40}
+{"ts":"2026-05-22T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"test-prose-model","prompt_chars":80,"context_chars":100,"output_chars":50,"duration_ms":5000,"queue_wait_ms":100,"generation_ms":4900,"exit_status":0,"estimated_tokens_avoided":40}
 {"ts":"2026-05-22T10:01:00Z","source":"feedback","ref_ts":"2026-05-22T10:00:00Z","kept":false,"reason":"had to rewrite","project":"acme-repo"}
 EOF
 EC=0
@@ -216,7 +216,7 @@ bodies="$tmp/bodies"
 invocations="$tmp/invocations"; : > "$invocations"
 make_mock_curl "$tmp" "$bodies" "$invocations" "ok"
 cat > "$tmp/m.jsonl" <<'EOF'
-{"ts":"2026-05-22T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b","prompt_chars":80,"context_chars":100,"output_chars":50,"duration_ms":5000,"queue_wait_ms":100,"generation_ms":4900,"exit_status":0,"estimated_tokens_avoided":40}
+{"ts":"2026-05-22T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"test-prose-model","prompt_chars":80,"context_chars":100,"output_chars":50,"duration_ms":5000,"queue_wait_ms":100,"generation_ms":4900,"exit_status":0,"estimated_tokens_avoided":40}
 {"ts":"2026-05-22T10:01:00Z","source":"feedback","ref_ts":"2026-05-22T10:00:00Z","kept":false,"reason":"had to rewrite"}
 EOF
 EC=0
@@ -260,7 +260,7 @@ bodies2="$tmp/bodies-run2"
 invocations="$tmp/invocations"; : > "$invocations"
 make_mock_curl "$tmp" "$bodies1" "$invocations" "ok"
 cat > "$tmp/m.jsonl" <<'EOF'
-{"ts":"2026-05-22T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b","prompt_chars":80,"context_chars":100,"output_chars":50,"duration_ms":5000,"queue_wait_ms":100,"generation_ms":4900,"exit_status":0,"estimated_tokens_avoided":40}
+{"ts":"2026-05-22T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"test-prose-model","prompt_chars":80,"context_chars":100,"output_chars":50,"duration_ms":5000,"queue_wait_ms":100,"generation_ms":4900,"exit_status":0,"estimated_tokens_avoided":40}
 EOF
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \

@@ -48,7 +48,7 @@ cat > "$MOCKDIR/curl" <<'EOF'
 : >> "$(dirname "$0")/probed"
 for a in "$@"; do
   case "$a" in
-    *:8080/*) printf '{"object":"list","data":[{"id":"qwen3.6:35b-a3b-q8_0","object":"model"}]}'; exit 0 ;;
+    *:8080/*) printf '{"object":"list","data":[{"id":"test-prose-model","object":"model"}]}'; exit 0 ;;
   esac
 done
 exit 7
@@ -57,6 +57,8 @@ chmod +x "$MOCKDIR/curl"
 export PATH="$MOCKDIR:$PATH"
 export DELEGATE_BASE_URL=http://localhost:8080/v1
 export DELEGATE_LOCAL_CONFIG=/dev/null
+# Routes every tier to the fixture id exactly, so no test names the shipped model (#654).
+export DELEGATE_MODEL=test-prose-model
 # Most tests post placeholder bodies that a 120-char floor would silence; the
 # floor is pinned off here and tested at its default in the #483 block.
 export DELEGATE_BOUNDARY_MIN_CHARS=0
@@ -1675,7 +1677,7 @@ assert_contains '"permissionDecision":"deny"' "$out" "mode: Enforce is enforce"
 # 72. No provider, no model for the tier, and a malformed tier are told
 # apart on the row and in the reminder, as pick-model.sh tells them apart.
 MOCKDIR2=$(mktemp -d)
-sed 's/qwen3.6:35b-a3b-q8_0/nomic-embed-text/' "$MOCKDIR/curl" > "$MOCKDIR2/curl"; chmod +x "$MOCKDIR2/curl"
+sed 's/test-prose-model/nomic-embed-text/' "$MOCKDIR/curl" > "$MOCKDIR2/curl"; chmod +x "$MOCKDIR2/curl"
 nomodel() { PATH="$MOCKDIR2:${PATH#$MOCKDIR:}" DELEGATE_BOUNDARY_MIN_CHARS= DELEGATE_METRICS_FILE="$METRICS" "$@"; }
 : > "$METRICS"
 out=$(payload "git commit -m \"$body300\"" "$tmpcwd" | nomodel bash "$HOOK")

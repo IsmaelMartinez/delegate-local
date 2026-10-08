@@ -47,7 +47,7 @@ for a in "$@"; do
 done
 if [[ $mode == models ]]; then
   case " $* " in
-    *:8080/*) printf '{"object":"list","data":[{"id":"qwen3.6:35b-a3b-q8_0","object":"model"}]}'; exit 0;;
+    *:8080/*) printf '{"object":"list","data":[{"id":"test-prose-model","object":"model"}]}'; exit 0;;
   esac
   exit 7
 fi
@@ -71,7 +71,8 @@ MOCK
   ( cd "$repo" && git init -q . && git config user.email t@t.t && git config user.name t \
     && : > f && git add f && git commit -qm init ) >/dev/null 2>&1
   (
-    export PATH="$mock:$PATH" DELEGATE_BASE_URL=http://localhost:8080/v1 DELEGATE_LOCAL_CONFIG=/dev/null
+    # DELEGATE_MODEL routes to the fixture id exactly, so no test names the shipped model (#654).
+    export PATH="$mock:$PATH" DELEGATE_BASE_URL=http://localhost:8080/v1 DELEGATE_LOCAL_CONFIG=/dev/null DELEGATE_MODEL=test-prose-model
     export DELEGATE_METRICS_FILE="$w/metrics.jsonl" DELEGATE_LOCAL_DATA_DIR="$w/data"
     export CLAUDE_CODE_SESSION_ID=fixture-session DELEGATE_NO_PREFLIGHT=1
     unset DELEGATE_PROJECT DELEGATE_BOUNDARY_MODE DELEGATE_BOUNDARY_ENFORCE DELEGATE_LOCAL_NO_METRICS

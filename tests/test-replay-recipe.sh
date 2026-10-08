@@ -552,7 +552,7 @@ cat > "$mc/curl" <<'EOF'
 url=""; out_file=""; write_out=""
 for a in "$@"; do case "$a" in http://*) url="$a";; esac; done
 case "$url" in
-  http://champ.test/v1/models) printf '{"data":[{"id":"qwen3.6:35b-a3b"},{"id":"gemma4:26b"}]}'; exit 0;;
+  http://champ.test/v1/models) printf '{"data":[{"id":"%s"},{"id":"gemma4:26b"}]}' "$MC_CHAMP"; exit 0;;
   http://cand.test/v1/models)  printf '{"data":[{"id":"a-gemma4:26b-q8"},{"id":"gemma4:26b"}]}'; exit 0;;
   */models) exit 7;;
 esac
@@ -576,12 +576,15 @@ chmod +x "$mc/curl"
 mrun() {
   PATH="$mc:$PATH" HOME="$tmp/home" DELEGATE_BASE_URL="http://champ.test/v1" DELEGATE_OTEL_ENDPOINT= \
     DELEGATE_LOCAL_DATA_DIR="$tmp/data" DELEGATE_LOCAL_CONFIG="$tmp/no-config.sh" \
-    DELEGATE_METRICS_FILE="$tmp/data/m.jsonl" MC_LOG="$mc/log" \
+    DELEGATE_METRICS_FILE="$tmp/data/m.jsonl" MC_LOG="$mc/log" MC_CHAMP="$champ_m" \
     bash "$SCRIPT" --champion "$tmp/champion" --out "$tmp/out" --recipe rp "$@" 2>&1
 }
 mlog() { cat "$mc/log" 2>/dev/null; }
 mkdir -p "$tmp/home"
-champ_m=qwen3.6:35b-a3b
+# The champion is the prose tier's first shipped preference with a neutral
+# suffix, so it resolves ahead of gemma4:26b whatever model pick-model.sh
+# ships, and the test never names it (#654).
+champ_m="$(bash "$REPO/scripts/pick-model.sh" --print-prefs | sed -n 's/^prose:\([^ ]*\).*/\1/p'):test-prose-model"
 cand_key=$(printf '%s' gemma4:26b | shasum -a 256 | cut -c1-10)
 champ_key=$(printf '%s' "$champ_m" | shasum -a 256 | cut -c1-10)
 

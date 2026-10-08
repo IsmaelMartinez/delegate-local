@@ -48,11 +48,11 @@ rc=$?
 assert_eq "0" "$rc" "a supported draft exits 0"
 assert_eq "pass" "$(jq -r '.verdict' <<<"$out")" "and is a pass"
 assert_eq "0.9" "$(jq -r '.p_supported' <<<"$out")" "p_supported is the true probability"
-assert_eq "qwen3.6:35b-a3b" "$(jq -r '.model' <<<"$out")" "model comes from the verify tier"
+assert_eq "$PROSE_MODEL" "$(jq -r '.model' <<<"$out")" "model comes from the verify tier"
 assert_eq "number" "$(jq -r '.latency_ms | type' <<<"$out")" "latency recorded"
 assert_eq "0.5" "$(jq -r '.threshold' <<<"$out")" "uncalibrated falls back to 0.5"
 assert_eq "default" "$(jq -r '.threshold_source' <<<"$out")" "and names its source as default"
-assert_contains "no calibrated threshold for qwen3.6:35b-a3b" "$(cat "$mock/err")" "and says so on stderr"
+assert_contains "no calibrated threshold for $PROSE_MODEL" "$(cat "$mock/err")" "and says so on stderr"
 prompt=$(tail -1 "$sniff" | jq -r '.messages[0].content')
 assert_contains 'Is every claim in `draft` stated in or directly implied by `facts`?' "$prompt" "the measured question is asked"
 assert_contains 'nothing is reversed, swapped or added' "$prompt" "with the measured criteria"
@@ -70,7 +70,7 @@ facts_sent=$(tail -1 "$sniff" | jq -r '.messages[0].content' | grep -o 'x*' | aw
 assert_eq "16000" "$facts_sent" "facts are cut at 16000 characters, as measured"
 
 echo "threshold"
-printf 'other-model\t0.1\nqwen3.6:35b-a3b\t0.95\n' > "$data/verify-thresholds.tsv"
+printf 'other-model\t0.1\n%s\t0.95\n' "$PROSE_MODEL" > "$data/verify-thresholds.tsv"
 out=$(run <<<'{"facts":"f","draft":"SCORE_0.9"}' 2>"$mock/err")
 rc=$?
 assert_eq "1" "$rc" "a calibrated threshold above p flags"
@@ -86,20 +86,20 @@ rm -f "$data/verify-thresholds.tsv"
 
 # Lookup order (#671): DELEGATE_VERIFY_THRESHOLD, the data dir's recorded
 # threshold, the repo's shipped one for the exact served id, then 0.5.
-MOCK_MODELS='mlx-community/Qwen3.6-35B-A3B-8bit'
+MOCK_MODELS="$SHIPPED_VERIFY_MODEL"
 write_mock
 out=$(run <<<'{"facts":"f","draft":"SCORE_0.7"}' 2>"$mock/err")
-assert_eq "0.7549 shipped flag" "$(jq -r '"\(.threshold) \(.threshold_source) \(.verdict)"' <<<"$out")" \
+assert_eq "$SHIPPED_VERIFY_THRESHOLD shipped flag" "$(jq -r '"\(.threshold) \(.threshold_source) \(.verdict)"' <<<"$out")" \
   "a served id with a shipped threshold uses it"
 assert_not_contains "no calibrated threshold" "$(cat "$mock/err")" "and prints no uncalibrated note"
-printf 'mlx-community/Qwen3.6-35B-A3B-8bit\t0.6\n' > "$data/verify-thresholds.tsv"
+printf '%s\t0.6\n' "$SHIPPED_VERIFY_MODEL" > "$data/verify-thresholds.tsv"
 out=$(run <<<'{"facts":"f","draft":"SCORE_0.7"}' 2>/dev/null)
 assert_eq "0.6 calibrated pass" "$(jq -r '"\(.threshold) \(.threshold_source) \(.verdict)"' <<<"$out")" \
   "a recorded threshold wins over the shipped one"
 out=$(DELEGATE_VERIFY_THRESHOLD=0.9 run <<<'{"facts":"f","draft":"SCORE_0.7"}' 2>/dev/null)
 assert_eq "0.9 env" "$(jq -r '"\(.threshold) \(.threshold_source)"' <<<"$out")" "DELEGATE_VERIFY_THRESHOLD wins over both"
 rm -f "$data/verify-thresholds.tsv"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 write_mock
 
 echo "id mode"
@@ -136,7 +136,7 @@ MOCK_MODELS='unrelated:model'
 write_mock
 run <<<'{"facts":"f","draft":"SCORE_0.9"}' >/dev/null 2>&1
 assert_eq "3" "$?" "no model for the verify tier exits 3"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 write_mock
 run <<<'{"facts":"f","draft":"NOLETTER"}' >/dev/null 2>"$mock/err"
 assert_eq "3" "$?" "an answer with neither option letter (coverage 0) exits 3"
@@ -163,7 +163,7 @@ assert_contains "p50_ms=" "$out" "p50 latency"
 assert_true "--dry-run records nothing" test ! -e "$data/verify-thresholds.tsv"
 run --calibrate "$set_file" >/dev/null 2>&1
 run --calibrate "$set_file" >/dev/null 2>&1
-assert_eq "$(printf 'qwen3.6:35b-a3b\t0.8')" "$(cat "$data/verify-thresholds.tsv")" "--calibrate records one line per model, replacing the last"
+assert_eq "$(printf '%s\t0.8' "$PROSE_MODEL")" "$(cat "$data/verify-thresholds.tsv")" "--calibrate records one line per model, replacing the last"
 out=$(run <<<'{"facts":"f","draft":"SCORE_0.7"}' 2>/dev/null)
 assert_eq "flag" "$(jq -r '.verdict' <<<"$out")" "the recorded threshold is then used"
 head -3 "$set_file" > "$TEST_ROOT/one-class.jsonl"
@@ -195,7 +195,7 @@ assert_true "and records no threshold" test ! -e "$data/verify-thresholds.tsv"
 out=$(run --calibrate "$TEST_ROOT/switch.jsonl" 2>&1)
 rc=$?
 assert_eq "3" "$rc" "a model change mid-calibration exits 3"
-assert_contains "changed from qwen3.6:35b-a3b to gemma4:latest" "$out" "naming both models"
+assert_contains "changed from $PROSE_MODEL to gemma4:latest" "$out" "naming both models"
 assert_true "and records no threshold" test ! -e "$data/verify-thresholds.tsv"
 write_mock
 

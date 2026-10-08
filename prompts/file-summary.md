@@ -7,7 +7,7 @@ inputs:
 
 ## When to use
 
-The agent needs a one-sentence summary of a single document — an ADR, an analysis note, a design doc, a meeting note — for a link-index, a digest, or a status update. Output is one short line describing the decision/outcome (for ADRs) or headline finding (for analyses) plus the reason. Scales to batched per-file invocations across a directory; the 2026-05-11 batch in issue #95 ran 24 such calls back-to-back at ~3–10 s each on `qwen3.6:35b-a3b-q8_0` with no hangs.
+The agent needs a one-sentence summary of a single document — an ADR, an analysis note, a design doc, a meeting note — for a link-index, a digest, or a status update. Output is one short line describing the decision/outcome (for ADRs) or headline finding (for analyses) plus the reason. Scales to batched per-file invocations across a directory; the 2026-05-11 batch in issue #95 ran 24 such calls back-to-back at ~3–10 s each on the prose-tier model with no hangs.
 
 Not for: multi-file summaries (split per file and stitch yourself), summaries that need cross-document reasoning ("which of these ADRs supersedes the others"), or any summary where the link text already carries the title/date/session number — the recipe deliberately strips those because they belong in the link.
 
