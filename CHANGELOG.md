@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.49.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.49.0...v0.49.1) (2026-10-08)
+
+
+### Maintenance
+
+* name the prose tier's role, not its model, outside pick-model.sh ([#673](https://github.com/IsmaelMartinez/delegate-local/issues/673)) ([4ce8e36](https://github.com/IsmaelMartinez/delegate-local/commit/4ce8e364379f0f905c1003bf412486a5d1c1f14e))
+
 ## [0.49.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.48.0...v0.49.0) (2026-10-08)
 
 
