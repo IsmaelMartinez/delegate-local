@@ -2,7 +2,7 @@
 
 This is the end-to-end procedure for deciding whether a new local model should replace the resident prose model, and for switching to it if it should. It is written from the 2026-10-07 comparison of the resident Qwen3.6-35B-A3B against Qwen3.8-27B and Gemma 4 26B-A4B, and it replaces the `llmfit` upgrade suggestions `audit-models.sh` used to print (#658): a hardware-fit score says nothing about how a model handles the recipes this skill actually serves, and on that day it was still recommending a Qwen2.5 coder. Every step below measures the candidate on this skill's own work, and nothing in it edits routing until the last step.
 
-Since #652 the `code`, `reasoning`, `long-context` and `verify` tiers all resolve the prose list, so "the model" in this document is the prose tier's model and a switch moves every one of them. `scripts/audit-models.sh` prints the current routing and is the place to start; the 2026-10-07 numbers are quoted with their N where they help calibrate expectations, and none of them is a threshold.
+Since #652 the `code`, `reasoning` and `long-context` tiers resolve the prose list, so "the model" in this document is the prose tier's model and a switch moves every one of them. The `verify` tier ships the prose list too, but it is a separate choice with its own per-model threshold, and this procedure leaves it alone (step 7). `scripts/audit-models.sh` prints the current routing and is the place to start; the 2026-10-07 numbers are quoted with their N where they help calibrate expectations, and none of them is a threshold.
 
 ## 1. Check the machine, then start the candidate on its own server
 
@@ -64,8 +64,10 @@ Time the candidate on a handful of real prompts, about ten, through `delegate.sh
 A candidate that holds up offline gets a trial on real traffic before any edit to the repo. Make it the model the resident server serves (restart `:8080` with `--model <hf-id>`, after the offline steps have freed the candidate server), and prepend one line to `config.sh` in the data dir so every tier that shares the prose list asks for it first:
 
 ```bash
-case "$tier" in prose|code|reasoning|long-context|verify) prefs=(<substring> "${prefs[@]}") ;; esac
+case "$tier" in prose|code|reasoning|long-context) prefs=(<substring> "${prefs[@]}") ;; esac
 ```
+
+The verify tier keeps its own line: it is chosen independently and its threshold is calibrated per model, so folding it into a prose trial would silently swap the verifier and invalidate that threshold. If the trial model should also verify, calibrate it first with `verify-draft.sh --calibrate`.
 
 Prepend rather than replace, so later changes to the shipped list still reach the machine; `audit-models.sh` warns when a tier is frozen by a replacement. Prepending to every shared tier matters on an `mlx_lm.server`: a tier left on the old list would still name the old model, and the server would load it beside the new one.
 
@@ -80,7 +82,7 @@ bash scripts/metrics-summary.sh --since <switch-minute ISO-8601>
 
 ## 8. Switch
 
-When the trial holds, make the change in the repo on a branch. Edit `PROSE_PREFS` in `scripts/pick-model.sh`, spelling the new model for every provider (its Ollama tag and its Hugging Face name, as the existing entries do), and update the prose-ordering test in `tests/run-tests.sh`, which encodes the measured order. Add a dated entry naming the model to each busy recipe's `docs/calibration/<recipe>.md` with the replay and judge numbers. Expect recipe guards written against the old model to need re-measuring: each recipe was calibrated against one model's greedy output (ADR 0009), so a guard that bound on the old model can stop binding or start over-firing on the new one. Re-run the replay per recipe after the switch and treat a regression there as a recipe edit with its own gate. Once the PR merges and the live clone is pulled, remove the `config.sh` line, and run `verify-draft.sh --calibrate` without `--dry-run` to record the new model's threshold.
+When the trial holds, make the change in the repo on a branch. Edit `PROSE_PREFS` in `scripts/pick-model.sh`, spelling the new model for every provider (its Ollama tag and its Hugging Face name, as the existing entries do), and update the prose-ordering test in `tests/run-tests.sh`, which encodes the measured order. Add a dated entry naming the model to each busy recipe's `docs/calibration/<recipe>.md` with the replay and judge numbers. Expect recipe guards written against the old model to need re-measuring: each recipe was calibrated against one model's greedy output (ADR 0009), so a guard that bound on the old model can stop binding or start over-firing on the new one. Re-run the replay per recipe after the switch and treat a regression there as a recipe edit with its own gate. Once the PR merges and the live clone is pulled, remove the `config.sh` line. If the verify tier now resolves to the new model, run `verify-draft.sh --calibrate` without `--dry-run` to record its threshold.
 
 ## 9. Rollback
 
