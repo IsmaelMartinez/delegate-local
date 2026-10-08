@@ -306,6 +306,28 @@ Quote the replay's summary and verdict lines in the PR body, with the n. A
 recipe edit with no replay line, or an inconclusive one, is a proposal, not a
 fix, and the PR should say so.
 
+### Comparing models
+
+`--candidate-model ID [--candidate-base URL]` holds the template fixed and
+varies the model instead (#656): the champion template runs on the current
+model, resolved as above, and on `ID`, which is requested by that exact id
+(`DELEGATE_MODEL`) at `--candidate-base`, or at the champion's base when it
+is omitted, never through a tier list. It is exclusive with `--candidate`.
+Serve the candidate from a second `mlx_lm.server` on its own port, for
+example `--candidate-base http://localhost:8081/v1`, rather than asking the
+resident server for it: an `mlx_lm.server` lists every cached model and
+loads whichever a request names beside the resident one, and two large
+models stacked on one server is what killed Docker before. Each arm caches
+under its own model's key, so the arms never share an output, and nothing
+is written to the metrics file.
+
+Kept cases are listed with their result and tallied on their own `Kept`
+line, failures included, but left out of the sign test, the newest third and the checks and
+length totals. Their reference is the current model's own draft, so the
+champion scores near zero on them by construction and any other model loses
+them for sounding different, not for being worse; on 2026-10-07 the edited
+cases alone tied 26-25 (Qwen3.8) and 22-21 (Gemma 4) against the incumbent.
+
 ## Apply it
 
 Work on a branch, never on `main`. The installed skill on both Claude profiles

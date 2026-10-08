@@ -23,6 +23,12 @@
 # filesystem scan, and matching is case-insensitive so one list covers every
 # provider's spelling.
 #
+# DELEGATE_MODEL=<id> replaces the tier's list with that one id, matched
+# exactly: the first provider whose /models lists it wins, and no other id is
+# ever returned. A substring list is unsafe where a server lists every model
+# it could load (an mlx_lm.server lists its whole cache); the replay's model
+# arm (#656) uses it so the candidate is the model it names.
+#
 # vision and reasoning-vision resolve a name but do not go through delegate.sh
 # (no --image passthrough); embedding goes through embed.sh.
 
@@ -135,7 +141,11 @@ resolve_via_providers() {
     for pref in "${prefs[@]}"; do
       # sort + grep -im1: daemon ordering is not stable, so without the sort a
       # two-match preference resolves differently run to run.
-      hit=$(printf '%s\n' "$models" | grep -im1 -F -- "$pref" || true)
+      if [[ -n "${DELEGATE_MODEL:-}" ]]; then
+        hit=$(printf '%s\n' "$models" | grep -m1 -Fx -- "$pref" || true)
+      else
+        hit=$(printf '%s\n' "$models" | grep -im1 -F -- "$pref" || true)
+      fi
       if [[ -n "$hit" ]]; then
         trace "provider $base: matched preference='$pref' -> model='$hit'"
         printf '%s\t%s\n' "$base" "$hit"
@@ -265,6 +275,9 @@ if override_usable; then
   source "$config"
   trace "preferences (post-override)=${prefs[*]:-}"
 fi
+
+# An exact id is the whole list, whatever the tier or config.sh says.
+[[ -n "${DELEGATE_MODEL:-}" ]] && prefs=("$DELEGATE_MODEL")
 
 # A tier that ships no list (premium-general) resolves only once config.sh
 # gives it one; say so rather than probing and blaming the installed set.

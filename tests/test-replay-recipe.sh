@@ -535,6 +535,132 @@ assert_contains "Cases:     2 (kept=1 scaffold=0 rewrote=1; newest 40)  sessions
 assert_contains "rej00001 skipped: ritual" "$out" "a stored ritual verdict is skipped and named"
 assert_contains "rej00002 skipped: ritual" "$out" "an unstored ritual case is measured, skipped and named"
 
+# #656: the model arm. The real delegate.sh runs against a mock curl serving
+# two bases: champ.test lists the champion and the candidate (an
+# mlx_lm.server lists every cached model), cand.test lists the candidate and
+# a longer id that contains it, sorted ahead of it, so a substring match would
+# request the wrong model. Every chat request is logged as "<url> <model>";
+# the candidate answers with the supplied anchors plus an invented ref, the
+# champion with "Fixed it.", so the candidate wins every edited case and
+# loses the kept one, whose reference is the champion model's own draft.
+mc="$tmp/mc"; mkdir -p "$mc"
+cat > "$mc/curl" <<'EOF'
+#!/usr/bin/env bash
+url=""; out_file=""; write_out=""
+for a in "$@"; do case "$a" in http://*) url="$a";; esac; done
+case "$url" in
+  http://champ.test/v1/models) printf '{"data":[{"id":"qwen3.6:35b-a3b"},{"id":"gemma4:26b"}]}'; exit 0;;
+  http://cand.test/v1/models)  printf '{"data":[{"id":"a-gemma4:26b-q8"},{"id":"gemma4:26b"}]}'; exit 0;;
+  */models) exit 7;;
+esac
+while (( $# > 0 )); do
+  case "$1" in -o) out_file="$2"; shift 2;; -w) write_out="$2"; shift 2;; *) shift;; esac
+done
+body=$(cat)
+m=$(jq -r '.model' <<< "$body")
+echo "$url $m" >> "$MC_LOG"
+# A case whose who is zed is refused on the candidate, as a bad request.
+[[ "$m" == gemma4:26b && "$body" == *zed* ]] && exit 22
+case "$m" in
+  gemma4:26b) c='Fixed at src/main.js:412 for #2632 with 531 tests. See also #9999.';;
+  *) c='Fixed it.';;
+esac
+jq -n --arg c "$c" '{choices:[{message:{content:$c},finish_reason:"stop"}]}' > "${out_file:-/dev/stdout}"
+[[ -n "$write_out" ]] && printf '0.001'
+exit 0
+EOF
+chmod +x "$mc/curl"
+mrun() {
+  PATH="$mc:$PATH" HOME="$tmp/home" DELEGATE_BASE_URL="http://champ.test/v1" DELEGATE_OTEL_ENDPOINT= \
+    DELEGATE_LOCAL_DATA_DIR="$tmp/data" DELEGATE_LOCAL_CONFIG="$tmp/no-config.sh" \
+    DELEGATE_METRICS_FILE="$tmp/data/m.jsonl" MC_LOG="$mc/log" \
+    bash "$SCRIPT" --champion "$tmp/champion" --out "$tmp/out" --recipe rp "$@" 2>&1
+}
+mlog() { cat "$mc/log" 2>/dev/null; }
+mkdir -p "$tmp/home"
+champ_m=qwen3.6:35b-a3b
+cand_key=$(printf '%s' gemma4:26b | shasum -a 256 | cut -c1-10)
+champ_key=$(printf '%s' "$champ_m" | shasum -a 256 | cut -c1-10)
+
+# Mutual exclusion and a lone --candidate-base are usage errors.
+EC=0; out=$(mrun --candidate "$tmp/good" --candidate-model gemma4:26b) || EC=$?
+assert_eq 2 "$EC" "--candidate and --candidate-model together exit 2"
+assert_contains "mutually exclusive" "$out" "the exclusion is named"
+EC=0; out=$(mrun --candidate-base http://cand.test/v1) || EC=$?
+assert_eq 2 "$EC" "--candidate-base without --candidate-model exits 2"
+assert_contains "--candidate-base needs --candidate-model" "$out" "the missing model is named"
+# An empty value (an unset shell variable) is an error, not an absent flag.
+for empty in --candidate-model= --candidate-base= "--candidate-model|" "--candidate-base|"; do
+  if [[ "$empty" == *"|" ]]; then set -- "${empty%|}" ""; else set -- "$empty"; fi
+  EC=0; out=$(mrun "$@") || EC=$?
+  assert_eq 2 "$EC" "an empty ${1%=} value exits 2 ($empty)"
+  assert_contains "${1%=} needs a value" "$out" "the empty ${1%=} is named ($empty)"
+done
+set --
+# Userinfo in the base would be printed in the report header; it is refused
+# before anything is printed, as pick-model.sh refuses it.
+EC=0; out=$(mrun --candidate-model gemma4:26b --candidate-base http://user:pass@cand.test/v1) || EC=$?
+assert_eq 2 "$EC" "a --candidate-base with userinfo exits 2"
+assert_contains "contains userinfo" "$out" "the refusal is named"
+assert_not_contains "pass" "$out" "the credentials are never printed"
+
+# The champion's stored drafts stand in (same template, same model); the
+# candidate is requested by its exact id at --candidate-base.
+rm -rf "$tmp/data" "$tmp/out"; rm -f "$mc/log"
+seed "$tmp/data" 2 "$champ_sha" "$champ_m"
+rows_before=$(grep -c '' "$tmp/data/m.jsonl"); drafts_before=$(find "$tmp/data/drafts" -type f | grep -c '')
+EC=0; out=$(mrun --candidate-model gemma4:26b --candidate-base http://cand.test/v1) || EC=$?
+assert_eq 0 "$EC" "a model comparison exits 0"
+assert_eq "3" "$(mlog | grep -c '^http://cand.test/v1/chat/completions gemma4:26b$')" \
+  "every candidate request names the exact candidate id at the candidate base"
+assert_eq "3" "$(mlog | grep -c '')" "the champion arm reads its stored drafts and sends nothing"
+assert_contains "model comparison" "$out" "the report is labelled a model comparison"
+assert_contains "Champion model:  $champ_m" "$out" "the champion model is named"
+assert_contains "Candidate model: gemma4:26b at http://cand.test/v1" "$out" "the candidate model and its base are named"
+assert_contains "Kept (not counted): n=1  wins=0  losses=1  ties=0  errors=0" "$out" "the kept case is reported on its own"
+assert_contains "Summary: n=2  wins=2  losses=0  ties=0  errors=0" "$out" "the kept case is left out of the tally"
+assert_contains "Sign test: p=0.250 (one-sided, 2 wins to 0)" "$out" "the sign test runs on the edited cases only"
+assert_eq "1" "$(printf '%s\n' "$out" | grep -c '^  kept0001 .*LOSS (kept, not counted)$')" "the kept case is listed with its result"
+assert_eq "3" "$(find "$tmp/out" -name "*.$champ_sha.$cand_key.out.txt" | grep -c '')" "the candidate's outputs are cached under its model's key"
+assert_eq "3" "$(find "$tmp/out" -name "*.$champ_sha.$champ_key.out.txt" | grep -c '')" "the champion's under its own"
+assert_eq "$rows_before" "$(grep -c '' "$tmp/data/m.jsonl")" "a model comparison writes no metrics row"
+assert_eq "$drafts_before" "$(find "$tmp/data/drafts" -type f | grep -c '')" "nor a draft"
+rm -f "$mc/log"
+out=$(mrun --candidate-model gemma4:26b --candidate-base http://cand.test/v1)
+assert_eq "" "$(mlog)" "a second run is served from the cache"
+
+# Without --candidate-base the candidate runs at the champion's base, and a
+# champion that has to run is resolved through the tier as today.
+rm -rf "$tmp/out"; rm -f "$mc/log"
+seed "$tmp/data" 2 "otherotherot" "$champ_m"
+out=$(mrun --candidate-model gemma4:26b)
+assert_eq "3" "$(mlog | grep -c "^http://champ.test/v1/chat/completions $champ_m\$")" "the champion arm runs on the tier's model"
+assert_eq "3" "$(mlog | grep -c '^http://champ.test/v1/chat/completions gemma4:26b$')" "the candidate runs at the champion's base by default"
+assert_contains "Candidate model: gemma4:26b at http://champ.test/v1" "$out" "the default base is named"
+
+# An id the base does not list exactly is never resolved by substring.
+rm -rf "$tmp/out"; rm -f "$mc/log"
+out=$(mrun --candidate-model gemma4 --candidate-base http://cand.test/v1)
+assert_eq "0" "$(mlog | grep -c 'cand.test')" "a candidate id listed only as a substring sends no request"
+assert_contains "ERR (candidate)" "$out" "and the case is an error"
+
+# A kept case that fails to run is a kept error, not a counted one: it is
+# outside the verdict, so it cannot hold the verdict at INCONCLUSIVE.
+seed "$tmp/data" 2 "$champ_sha" "$champ_m"
+printf '{"recipe":"rp","tier":"prose","stdin":"%s","vars":{"who":"zed"}}' "$STDIN" > "$tmp/data/drafts/20260930T100000Z-kept0001.inputs.json"
+rm -rf "$tmp/out"; rm -f "$mc/log"
+out=$(mrun --candidate-model gemma4:26b --candidate-base http://cand.test/v1)
+assert_contains "ERR (candidate)" "$out" "the refused kept case is listed as an error"
+assert_contains "Kept (not counted): n=1  wins=0  losses=0  ties=0  errors=1" "$out" "its error is tallied on the Kept line"
+assert_contains "Summary: n=2  wins=2  losses=0  ties=0  errors=0" "$out" "and not in the counted summary"
+assert_not_contains "failed to run" "$out" "a kept error does not hold the verdict"
+
+# A candidate equal to the champion's model is reported, not measured.
+rm -f "$mc/log"
+out=$(mrun --candidate-model "$champ_m")
+assert_contains "the candidate model is the champion's" "$out" "a candidate equal to the champion model is inconclusive without a run"
+assert_eq "" "$(mlog)" "and sends nothing"
+
 # #554: significance is decided on the unrounded p. 101 wins to 78 is
 # p=0.04992, printed as 0.050; comparing the print read it as not
 # significant. A 179-case replay reaching it costs minutes, so the function
