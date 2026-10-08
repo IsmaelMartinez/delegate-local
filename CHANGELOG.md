@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.49.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.48.0...v0.49.0) (2026-10-08)
+
+
+### Features
+
+* **audit-models:** replace llmfit suggestions with a model-swap runbook ([#670](https://github.com/IsmaelMartinez/delegate-local/issues/670)) ([d52539d](https://github.com/IsmaelMartinez/delegate-local/commit/d52539d8aad973c08718fa55af2673c2b4dec881))
+* **delegate:** run the draft verifier as an opt-in recipe check ([#671](https://github.com/IsmaelMartinez/delegate-local/issues/671)) ([29a73a9](https://github.com/IsmaelMartinez/delegate-local/commit/29a73a98366876d089bc72d23d30feb3f23ea332))
+
 ## [0.48.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.47.0...v0.48.0) (2026-10-08)
 
 
