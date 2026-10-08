@@ -265,3 +265,7 @@ recipe, but the shape is shared — same optional `recipient` input, same prose
 rule, same model — so the check is declared on both rather than waiting for
 this one to post its own. A mention is the one defect that notifies a real
 person before the maintainer sees the draft.
+
+### 2026-10-08 — `verify: true` (#661)
+
+The frontmatter gains `verify: true`, so `delegate.sh` runs the draft verifier on every call of this recipe and reports a flag on stderr and on the row (`docs/checks.md`). Nothing the model sees changes and the key is left out of `template_sha`, so the hash and the per-template history carry on unbroken and no replay applies. The #660 read-out behind the choice of recipes is in `docs/verify.md`.

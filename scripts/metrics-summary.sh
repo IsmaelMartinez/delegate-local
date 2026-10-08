@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Read the delegate metrics JSONL and print a summary: headline, per-source,
-# per-backend, feedback, per-project, per-recipe, trigger-rate, per-tier and
-# top-model sections. Rows missing `source` are treated as `delegate`. A
+# per-backend, feedback, per-project, per-recipe, verifier flag rate,
+# trigger-rate, per-tier and top-model sections. Rows missing `source` are treated as `delegate`. A
 # recipe more than one model served in the window gets a sub-line per model
 # (#655), since ADR 0009 binds calibration to the model.
 #
@@ -419,6 +419,26 @@ if (( n_recipe > 0 )); then
          $rows | group_by(.model) | sort_by(-length, (map(.ts) | min)) | .[]
          | "    model=\(.[0].model + (" " * (25 - (.[0].model | length))))  \(counts)"
        else empty end)
+  ' "$metrics_file"
+  echo
+fi
+
+# Verifier flag rate (#661): per recipe, the drafts the verifier flagged over
+# those it scored, with the calls it could not score (verify_error) apart.
+# Printed only when a row in the window carries `verify`.
+if jq -se 'any(.[]; (.source // "delegate") == "delegate" and .verify != null)' "$metrics_file" >/dev/null; then
+  echo "Verifier flag rate (flagged/verified per recipe):"
+  jq -L "$lib_dir" -rs '
+    include "pair";
+    map(select(src == "delegate" and .recipe != null and (.verify != null or .verify_error != null)))
+    | group_by(.recipe)
+    | map({recipe: .[0].recipe,
+           n: (map(select(.verify != null)) | length),
+           flagged: (map(select(.verify.verdict == "flag")) | length),
+           errors: (map(select(.verify_error != null)) | length)})
+    | sort_by(-.n)
+    | .[]
+    | "  \(.recipe | . + (" " * (20 - length)))  flagged=\(.flagged)/\(.n) (\(pct(.flagged; .n))%)" + (if .errors > 0 then "  errors=\(.errors)" else "" end)
   ' "$metrics_file"
   echo
 fi

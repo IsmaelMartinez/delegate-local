@@ -26,7 +26,8 @@ trap 'rm -rf "$tmp"' EXIT
 
 # --- golden template_sha for every recipe in prompts/ ----------------------
 # <recipe> <sha256 of the whole file, 12> <template_sha>: file shas as of
-# #569 (calibration notes moved to docs/calibration/); template_sha values
+# #569 (calibration notes moved to docs/calibration/), the five `verify: true`
+# recipes as of #661 (the key is not hashed); template_sha values
 # unchanged since main @ 26ebba6. A pin applies only while the file is the one it was computed on:
 # editing a recipe changes its hash by design, so an edited recipe is
 # skipped here rather than failing, and the synthetic fixture below keeps
@@ -37,11 +38,11 @@ commit-message b3aa9e994d4d a20e93b62bab
 doc-section b76ea0f2d48e d1d200883f29
 file-summary 33900e387386 f68b364cb12c
 fix-with-test eb261fac13b2 7ab4349174c9
-github-issue-body 008a8495fbfc 477bb405d75d
-maintainer-reply 0064a926a646 c9444a457a08
-maintainer-review-reply 6b8ece46ac1b 200da2e4317a
-pr-description 72bbe1905655 4426d3be28da
-pr-review-reply 66a83a31b44b 3997496bc2ab
+github-issue-body f57ed44a86e6 477bb405d75d
+maintainer-reply 76745b2cc778 c9444a457a08
+maintainer-review-reply 928a0f491059 200da2e4317a
+pr-description 2317bcc45d94 4426d3be28da
+pr-review-reply b731aa0b2d6e 3997496bc2ab
 release-announcement cacce8316052 cbf5d01878fd
 summarise-issue d316bdee43af 3c9b7cb7ef25'
 
@@ -124,6 +125,16 @@ assert_eq "stdin string"$'\n'"why string?" "$(recipe_required_inputs "$tmp/fx.md
 assert_eq "prose" "$(recipe_tier "$tmp/fx.md")" "recipe_tier: reads the frontmatter tier"
 assert_eq "Summarise."$'\n'"## not a section end"$'\n'"{{stdin}}" "$(recipe_template "$tmp/fx.md")" \
   "recipe_template: the first fence only, a heading inside it kept"
+# verify: (#661) turns on the draft verifier and shapes nothing the model
+# sees, so it stays out of template_sha like input_quality.
+awk 'NR == 2 { print; print "verify: true"; next } { print }' "$tmp/fx.md" > "$tmp/fx-verify.md"
+assert_eq "$(recipe_template_sha "$tmp/fx.md")" "$(recipe_template_sha "$tmp/fx-verify.md")" \
+  "fixture: a verify: line leaves template_sha alone"
+assert_eq "true" "$(recipe_verify "$tmp/fx-verify.md")" "recipe_verify: reads verify: true"
+assert_eq "" "$(recipe_verify "$tmp/fx.md")" "recipe_verify: nothing when the key is absent"
+assert_eq '{"facts":"piped\na-val\nb-val","draft":"the draft"}' \
+  "$(printf '%s\n"the draft"' '{"stdin":"piped","vars":{"b":"b-val","a":"a-val"},"prompt":"not a fact"}' | recipe_verify_input)" \
+  "recipe_verify_input: stdin then the vars in key order, the prompt left out"
 printf 'tier: prose\n---\n' > "$tmp/nofm.md"
 assert_eq "" "$(recipe_fm_block "$tmp/nofm.md")" "recipe_fm_block: nothing when line 1 is not ---"
 

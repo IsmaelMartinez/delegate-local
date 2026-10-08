@@ -366,6 +366,30 @@ assert_contains "maintainer-reply      n=1  hits=0  misses=1  untracked=0  ritua
   "ritual: a quarantined final's stored final_preexisting is not trusted"
 rm -rf "$qdir"
 
+# 13d. Verifier flag rate (#661): flagged/verified per recipe, verify_error
+# rows counted apart, the section shown only when a row in the window
+# carries `verify`.
+vfix=$(mktemp)
+cat > "$vfix" <<'EOF'
+{"ts":"2026-10-08T10:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100,"verify":{"model":"v","p_supported":0.9,"threshold":0.68,"verdict":"pass","latency_ms":900}}
+{"ts":"2026-10-08T10:01:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100,"verify":{"model":"v","p_supported":0.4,"threshold":0.68,"verdict":"flag","latency_ms":900}}
+{"ts":"2026-10-08T10:02:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100,"verify":{"model":"v","p_supported":0.95,"threshold":0.68,"verdict":"pass","latency_ms":900}}
+{"ts":"2026-10-08T10:03:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100,"verify_error":"timed out after 60s"}
+{"ts":"2026-10-08T10:04:00Z","source":"delegate","recipe":"pr-description","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100,"verify":{"model":"v","p_supported":0.9,"threshold":0.68,"verdict":"pass","latency_ms":900}}
+{"ts":"2026-10-08T10:05:00Z","source":"delegate","recipe":"commit-message","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+EOF
+out=$(bash "$SCRIPT" --file "$vfix" 2>&1)
+vsec=$(sed -n '/^Verifier flag rate/,/^$/p' <<<"$out")
+assert_contains "maintainer-reply      flagged=1/3 (33.3%)  errors=1" "$vsec" \
+  "verify: flagged/verified per recipe, with the verifier errors apart"
+assert_contains "pr-description        flagged=0/1 (0.0%)" "$vsec" "verify: a recipe with no flag reads 0"
+assert_not_contains "commit-message" "$vsec" "verify: a recipe never verified has no line"
+assert_not_contains "pr-description        flagged=0/1 (0.0%)  errors" "$vsec" "verify: errors= only when there are some"
+grep -v '"verify"' "$vfix" > "$vfix.none"
+out=$(bash "$SCRIPT" --file "$vfix.none" 2>&1)
+assert_not_contains "Verifier flag rate" "$out" "verify: no section when no row carries verify"
+rm -f "$vfix" "$vfix.none"
+
 # 14. Per-recipe negative gate: no recipe rows -> section hidden.
 norecipe=$(mktemp)
 cat > "$norecipe" <<'EOF'

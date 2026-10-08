@@ -53,6 +53,7 @@ make_stub() {
 #!/usr/bin/env bash
 ctx=$(cat)
 printf '%s :: %s\n' "$DELEGATE_PROMPTS_DIR $*" "$ctx" >> "${STUB_CALLS:-/dev/null}"
+printf 'DELEGATE_VERIFY=%s\n' "${DELEGATE_VERIFY:-unset}" >> "${STUB_ENV:-/dev/null}"
 case "$DELEGATE_PROMPTS_DIR" in
   *invent*) printf 'Fixed at src/main.js:412 for #2632 with 531 tests. See also #9999.\n' ;;
   *over*)   printf 'Fixed at src/main.js:412 for #2632 with 531 tests. Ticket #777 covers it.\n' ;;
@@ -144,7 +145,7 @@ champ_sha=$(recipe_template_sha "$tmp/champion/rp.md")
 mkey=$(printf '%s' stub-model | shasum -a 256 | cut -c1-10)
 run() { # extra args
   DELEGATE_REPLAY_DELEGATE_SH="$tmp/stub-delegate.sh" DELEGATE_METRICS_FILE="$tmp/data/m.jsonl" \
-    DELEGATE_REPLAY_MODEL=stub-model STUB_CALLS="$tmp/calls" \
+    DELEGATE_REPLAY_MODEL=stub-model STUB_CALLS="$tmp/calls" STUB_ENV="$tmp/env" \
     bash "$SCRIPT" --champion "$tmp/champion" --out "$tmp/out" "$@" 2>&1
 }
 calls() { cat "$tmp/calls" 2>/dev/null | grep -c ''; }
@@ -237,6 +238,8 @@ busy_run() {
 EC=0; out=$(busy_run --recipe rp --candidate "$tmp/good") || EC=$?
 assert_eq 0 "$EC" "the replay's own load does not stop it"
 assert_eq "3" "$(calls)" "every case is called while the GPU reads busy from the replay's own calls"
+# A replay writes no row, so the draft verifier (#661) would be cost only.
+assert_eq "DELEGATE_VERIFY=0" "$(sort -u "$tmp/env")" "every replay call runs with the verifier off"
 assert_not_contains "gpu-gate: waiting" "$out" "no call waits on the replay's own load"
 assert_eq "1" "$(grep -c '^-i -w [0-9][0-9]*$' "$busy/caffeinated" 2>/dev/null)" \
   "the replay holds one caffeinate -i on its pid"

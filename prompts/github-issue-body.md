@@ -1,5 +1,6 @@
 ---
 tier: prose
+verify: true
 inputs:
   stdin: string
   sections: string

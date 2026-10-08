@@ -381,7 +381,7 @@ run_wrapper() {
   read_into prompt "$work_tmp/prompt"
   [[ -n "$prompt" ]] && tail=(-- "$prompt")
   jq -j '.stdin // ""' "$inputs" \
-    | env DELEGATE_PROMPTS_DIR="$dir" DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_NO_PREFLIGHT=1 \
+    | env DELEGATE_PROMPTS_DIR="$dir" DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_NO_PREFLIGHT=1 DELEGATE_VERIFY=0 \
           DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 DELEGATE_LOCAL_NO_META=0 ${pin[@]+"${pin[@]}"} \
           bash "$delegate_sh" --recipe "$recipe" ${args[@]+"${args[@]}"} ${tail[@]+"${tail[@]}"} \
       > "$out" 2> "$err"

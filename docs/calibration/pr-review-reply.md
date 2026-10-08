@@ -49,3 +49,7 @@ written as four polished sentences, the output tracks those sentences almost
 verbatim — the recipe reshapes evidence, it does not compress it. The #450
 input, four rough note-shaped lines, is the one where it synthesises. Write
 `fix_summary` as notes rather than as prose and the recipe earns its call.
+
+### 2026-10-08 — `verify: true` (#661)
+
+The frontmatter gains `verify: true`, so `delegate.sh` runs the draft verifier on every call of this recipe and reports a flag on stderr and on the row (`docs/checks.md`). Nothing the model sees changes and the key is left out of `template_sha`, so the hash and the per-template history carry on unbroken and no replay applies. The #660 read-out behind the choice of recipes is in `docs/verify.md`.

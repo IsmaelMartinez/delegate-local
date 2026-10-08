@@ -2,9 +2,10 @@
 # verify-draft.sh — grounding check of a draft against its inputs (#659, epic
 # #663): asks decide.sh, on the verify tier's logprobs, whether every claim in
 # the draft is stated in or directly implied by the facts, and passes or flags
-# p(supported) at a threshold calibrated per model. Offline and opt-in: no
-# delegation calls it yet (inline wiring is #661). docs/verify.md has the
-# measurements behind the question and the default tier.
+# p(supported) at a threshold calibrated per model. delegate.sh runs it on a
+# recipe call's draft when the recipe sets `verify: true` or DELEGATE_VERIFY=1
+# (#661). docs/verify.md has the measurements behind the question and the
+# default tier.
 #
 # Usage:  verify-draft.sh --id <delegation id>
 #         verify-draft.sh < {"facts": "...", "draft": "..."}
@@ -40,6 +41,9 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# recipe_verify_input: the --id facts rule, shared with delegate.sh (#661).
+# shellcheck source=lib/recipe.sh
+. "$script_dir/lib/recipe.sh"
 data_dir="${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}"
 metrics_file="${DELEGATE_METRICS_FILE:-$data_dir/metrics.jsonl}"
 thresholds_file="$data_dir/verify-thresholds.tsv"
@@ -190,9 +194,7 @@ if [[ -n "$id" ]]; then
       exit 2
     fi
   done
-  input=$(jq -c --rawfile draft "$drafts_dir/$draft_file" \
-    '{facts: (([.stdin // ""] + ((.vars // {}) | to_entries | sort_by(.key) | map(.value))) | join("\n")), draft: $draft}' \
-    "$drafts_dir/$inputs_file")
+  input=$({ cat "$drafts_dir/$inputs_file"; jq -Rs . < "$drafts_dir/$draft_file"; } | recipe_verify_input)
 else
   input=$(cat)
   if ! jq -e '(.facts | type) == "string" and (.draft | type) == "string" and (.draft | length) > 0' <<<"$input" >/dev/null 2>&1; then
