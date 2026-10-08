@@ -30,7 +30,7 @@ gh run view <run-id> --log | head -500                   # full log, capped
 glab mr view <mr-iid> --comments --output json
 ```
 
-Pick the smallest input that captures what you want summarised. The 35B prose-tier model has a real first-call ceiling on the reference host: a recipe-shaped prompt against a cold 35B pays a one-time cold-LOAD (~77 s on MLX, ~18 s on Ollama) before any tokens stream, while a 0.6B-class model loads in about a second. (Earlier notes framed this as a parameter-count *generation* stall; the 2026-06-28 re-measurement traced it to cold-load — see `pr-description.md`'s 2026-06-28 note and ADR 0027.) Keep inputs small so the first call clears quickly, or set `DELEGATE_PREFLIGHT_TIMEOUT=90` and keep the model warm. The `reasoning` tier handles larger inputs because the output is shorter and more structured.
+Pick the smallest input that captures what you want summarised. The prose-tier model has a real first-call ceiling on the reference host: a recipe-shaped prompt against a cold prose model pays a one-time cold-LOAD (~77 s on MLX, ~18 s on Ollama) before any tokens stream, while a 0.6B-class model loads in about a second. (Earlier notes framed this as a parameter-count *generation* stall; the 2026-06-28 re-measurement traced it to cold-load — see `pr-description.md`'s 2026-06-28 note and ADR 0027.) Keep inputs small so the first call clears quickly, or set `DELEGATE_PREFLIGHT_TIMEOUT=90` and keep the model warm. The `reasoning` tier handles larger inputs because the output is shorter and more structured.
 
 ## Prompt template
 

@@ -22,7 +22,7 @@ The source for every attribute is one of:
 A real recent delegation row from `~/.local/share/delegate-local/metrics.jsonl`:
 
 ```json
-{"ts":"2026-05-21T21:46:56Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b-q8_0","prompt_chars":80,"context_chars":3739,"output_chars":2807,"duration_ms":19267,"queue_wait_ms":412,"generation_ms":18855,"exit_status":0,"estimated_tokens_avoided":1656}
+{"ts":"2026-05-21T21:46:56Z","source":"delegate","backend":"ollama","tier":"prose","model":"<prose-model>","prompt_chars":80,"context_chars":3739,"output_chars":2807,"duration_ms":19267,"queue_wait_ms":412,"generation_ms":18855,"exit_status":0,"estimated_tokens_avoided":1656}
 ```
 
 Most example values in the tables below come from this row, so a reader can trace a delegation end-to-end through the exporter mapping. Two exceptions: `delegate.recipe` is shown as `doc-section` for illustration (the sample row above is a bare prose-tier call with no recipe field), and the feedback-span examples in the Feedback span section below are drawn from a separate kept-row written by `delegate-feedback.sh`, not shown here.
@@ -45,7 +45,7 @@ The constant value lets dashboards filter spans from this skill (`resource.servi
 
 | Field | Value | Source | Example |
 |-------|-------|--------|---------|
-| Span name | `"{gen_ai.operation.name} {gen_ai.request.model}"` | exporter-constructed | `chat qwen3.6:35b-a3b-q8_0` |
+| Span name | `"{gen_ai.operation.name} {gen_ai.request.model}"` | exporter-constructed | `chat <prose-model>` |
 | Span kind | `CLIENT` | exporter-constant | `CLIENT` |
 | Span status | `OK` when `exit_status == 0`; `ERROR` otherwise | JSONL `exit_status` | `OK` |
 | Trace ID | generated at delegation time, written back to JSONL row | exporter-generated, persisted to `otel_trace_id` | 32 hex chars |
@@ -61,14 +61,14 @@ All attributes in this table follow the published OTel SemConv (https://opentele
 |-----------|------|--------|-----------------|---------|
 | `gen_ai.operation.name` | string | exporter-constant | https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/#gen-ai-operation-name | `chat` |
 | `gen_ai.provider.name` | string | JSONL `backend` | https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/#gen-ai-provider-name | `ollama` |
-| `gen_ai.request.model` | string | JSONL `model` | https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/#gen-ai-request-model | `qwen3.6:35b-a3b-q8_0` |
+| `gen_ai.request.model` | string | JSONL `model` | https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/#gen-ai-request-model | `<prose-model>` |
 | `gen_ai.request.temperature` | number | hardcoded `0` in `delegate.sh` | https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/#gen-ai-request-temperature | `0` |
 
 Notes on each:
 
 - `gen_ai.operation.name` is always `chat`. The OTel SemConv enumerates `chat`, `text_completion`, `embeddings`, and others; this skill routes every call through `{base}/chat/completions` (OpenAI-compatible, applies the model's chat template server-side), so `chat` is the accurate value for every provider.
 - `gen_ai.provider.name` is set from the JSONL `backend` field. Both `ollama` and `mlx` are already registered as provider strings in the SemConv registry, so the values are conventional rather than ad-hoc.
-- `gen_ai.request.model` is the model tag as Ollama or MLX sees it — `qwen3.6:35b-a3b-q8_0` for Ollama, `mlx-community/Qwen3.6-35B-A3B-8bit` for MLX. The raw tag is preserved so downstream filtering and grouping work against the same identifier a user would type into `ollama run` or `mlx_lm.generate`.
+- `gen_ai.request.model` is the model tag as Ollama or MLX sees it — an Ollama tag such as `<family>:<size>-<quant>` for Ollama, a Hugging Face id such as `mlx-community/<Model>-8bit` for MLX. The raw tag is preserved so downstream filtering and grouping work against the same identifier a user would type into `ollama run` or `mlx_lm.generate`.
 - `gen_ai.request.temperature` is hardcoded to `0` in `scripts/delegate.sh` (the skill never varies it). Emitting the attribute is still useful because Grafana's GenAI dashboards group by temperature when set.
 
 ### Private skill-specific attributes (`delegate.*`)
@@ -131,7 +131,7 @@ One span per `scripts/delegate-feedback.sh` invocation. New trace, new span ID, 
 
 | Field | Value | Source | Example |
 |-------|-------|--------|---------|
-| Span name | `"feedback {gen_ai.request.model}"` | exporter-constructed | `feedback qwen3.6:35b-a3b-q8_0` |
+| Span name | `"feedback {gen_ai.request.model}"` | exporter-constructed | `feedback <prose-model>` |
 | Span kind | `INTERNAL` | exporter-constant | `INTERNAL` |
 | Span status | `OK` always | exporter-constant | `OK` |
 | Trace ID | newly generated for this span | exporter-generated | 32 hex chars |

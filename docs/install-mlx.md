@@ -2,13 +2,13 @@
 
 MLX is the first entry in the default provider list, so starting `mlx_lm.server` is the whole configuration: the next call probes `${MLX_HOST:-http://localhost:8080}/v1/models`, finds a model the tier prefers, and routes there. A host without it running falls through to the next provider in the list. To pin MLX and nothing else, set `DELEGATE_BASE_URL="${MLX_HOST:-http://localhost:8080}/v1"`.
 
-On Apple Silicon, `mlx-lm` is an alternative inference runtime that uses Apple's native Metal kernels and unified-memory-aware KV cache. For the same Q8 model, MLX is typically 10–30% lighter on memory and faster on prefill than Ollama's llama.cpp backend (measured: 2× faster wall-clock, 25% lighter peak memory on `Qwen3.6-35B-A3B-8bit` — the rationale for preferring MLX when available is recorded in [`adr/0022-mlx-primary-backend-rationale.md`](adr/0022-mlx-primary-backend-rationale.md)). This guide covers the install steps plus the lifecycle differences vs Ollama.
+On Apple Silicon, `mlx-lm` is an alternative inference runtime that uses Apple's native Metal kernels and unified-memory-aware KV cache. For the same Q8 model, MLX is typically 10–30% lighter on memory and faster on prefill than Ollama's llama.cpp backend (measured: 2× faster wall-clock, 25% lighter peak memory on identical prose-model weights — the rationale for preferring MLX when available is recorded in [`adr/0022-mlx-primary-backend-rationale.md`](adr/0022-mlx-primary-backend-rationale.md)). This guide covers the install steps plus the lifecycle differences vs Ollama.
 
 ## Requirements
 
 - Apple Silicon Mac (M1 or later). MLX has no CUDA path.
 - `pipx` (`brew install pipx`) or a Python venv — either keeps `mlx-lm` isolated from your system Python.
-- Enough disk space for the model weights. Q8 35B models are ~35 GB; 4-bit equivalents are ~18 GB.
+- Enough disk space for the model weights. An 8-bit model takes about 1 GB per billion parameters; a 4-bit build about half that.
 
 The skill itself doesn't need a separate install — the existing `npx skills add` flow already lands the bash scripts. Only the MLX runtime is an additional dependency.
 
@@ -33,14 +33,14 @@ Both give you `mlx_lm.generate` (one-shot CLI), `mlx_lm.server` (OpenAI-compatib
 
 ## Pull a model
 
-MLX models live on HuggingFace under the `mlx-community` org. Pull a model that matches one of the tier preferences (run `bash scripts/pick-model.sh --dry-run prose` to see the prefs list). For the prose tier on the reference host:
+MLX models live on HuggingFace under the `mlx-community` org. Pull a model that matches one of the tier preferences (run `bash scripts/pick-model.sh --dry-run prose` to see the prefs list). For the prose tier, take the first prefs entry that has an MLX build and replace `REPLACE-WITH-PROSE-MODEL` below with its `mlx-community` name; the later commands on this page reuse `$MODEL`:
 
 ```bash
-# 8-bit Q8 — matches the Ollama qwen3.6:35b-a3b-q8_0 in precision
-huggingface-cli download mlx-community/Qwen3.6-35B-A3B-Instruct-8bit
-
+# 8-bit Q8 — the precision of an Ollama q8_0 tag
+MODEL="mlx-community/REPLACE-WITH-PROSE-MODEL-8bit"  # the first prose entry in scripts/pick-model.sh
 # Or 4-bit — roughly half the size, slightly lower accuracy
-huggingface-cli download mlx-community/Qwen3.6-35B-A3B-Instruct-4bit
+# MODEL="mlx-community/REPLACE-WITH-PROSE-MODEL-4bit"
+huggingface-cli download "$MODEL"
 ```
 
 `huggingface-cli` lands the weights under `~/.cache/huggingface/hub/models--mlx-community--<name>/snapshots/<hash>/`. Discovery asks the running server what it serves rather than scanning that directory, so the model becomes routable once `mlx_lm.server` is started with it, not merely once the download finishes.
@@ -53,7 +53,7 @@ huggingface-cli download mlx-community/Qwen3.6-35B-A3B-Instruct-4bit
 mlx_lm.server --port 8080 &
 ```
 
-Leave it running in the background. The first request triggers model load (5–15 s for a 35B model); subsequent requests use the warm cache. Pass `--model mlx-community/Qwen3.6-35B-A3B-8bit` to pin a specific model at startup; without it, the server loads whichever model name arrives in the first POST body.
+Leave it running in the background. The first request triggers model load (5–15 s for a model of a few tens of billions of parameters); subsequent requests use the warm cache. Pass `--model "$MODEL"` to pin a specific model at startup; without it, the server loads whichever model name arrives in the first POST body.
 
 ### Auto-start via launchd (recommended on macOS)
 
@@ -74,7 +74,7 @@ Save to `~/Library/LaunchAgents/com.local.mlx-lm-server.plist`:
 		<!-- venv: use the full path, e.g. /Users/YOU/venvs/mlx-lm/bin/mlx_lm.server -->
 		<string>/Users/YOU/venvs/mlx-lm/bin/mlx_lm.server</string>
 		<string>--model</string>
-		<string>mlx-community/Qwen3.6-35B-A3B-8bit</string>
+		<string>mlx-community/YOUR-PROSE-MODEL-8bit</string>
 		<string>--port</string>
 		<string>8080</string>
 		<string>--host</string>
@@ -125,7 +125,7 @@ Logs go to `~/Library/Logs/mlx-lm-server.log`. The `KeepAlive` key restarts the 
 Starting `mlx_lm.server` is enough — the next `delegate.sh` call probes it, finds it reachable, and routes through MLX without any env-var changes:
 
 ```bash
-mlx_lm.server --port 8080 --model mlx-community/Qwen3.6-35B-A3B-Instruct-8bit &
+mlx_lm.server --port 8080 --model "$MODEL" &   # MODEL as set under "Pull a model"
 bash scripts/delegate.sh prose "Summarise this paragraph in two sentences." </path/to/some.txt
 ```
 
@@ -135,7 +135,7 @@ To exclude every other provider (e.g. for testing), pin the list:
 DELEGATE_BASE_URL=http://localhost:8080/v1 bash scripts/delegate.sh prose "Summarise this paragraph in two sentences." </path/to/some.txt
 ```
 
-`pick-model.sh` resolves the tier against what the server reports; `delegate.sh` posts to `http://localhost:8080/v1/chat/completions` (override via `MLX_HOST`) and parses `.choices[0].message.content`. The payload includes `chat_template_kwargs: {enable_thinking: false}` so reasoning-capable models like Qwen3.6 emit their answer in `content` rather than the reasoning trace (set `DELEGATE_THINK=true` to flip it on per-call). The raw `/v1/completions` endpoint is deliberately avoided — it bypasses the model's chat template and produces whitespace-only output on instruction-tuned models. Every call appends a metrics row tagged `"backend":"mlx"` so `scripts/metrics-summary.sh` can break latency and token totals down per backend.
+`pick-model.sh` resolves the tier against what the server reports; `delegate.sh` posts to `http://localhost:8080/v1/chat/completions` (override via `MLX_HOST`) and parses `.choices[0].message.content`. The payload includes `chat_template_kwargs: {enable_thinking: false}` so reasoning-capable models such as the Qwen3 family emit their answer in `content` rather than the reasoning trace (set `DELEGATE_THINK=true` to flip it on per-call). The raw `/v1/completions` endpoint is deliberately avoided — it bypasses the model's chat template and produces whitespace-only output on instruction-tuned models. Every call appends a metrics row tagged `"backend":"mlx"` so `scripts/metrics-summary.sh` can break latency and token totals down per backend.
 
 ## Per-tier override
 
@@ -165,7 +165,7 @@ The trace shows the provider list, the prefs list, and which model matched. If "
 
 ## Stop the server (reclaim memory)
 
-`mlx_lm.server` keeps the model weights resident in unified memory between requests — that is what makes the second-request latency a fraction of the first. For a 35B 8-bit model that's ~36 GB held resident. For occasional users with other memory-hungry apps running, stop the server between sessions.
+`mlx_lm.server` keeps the model weights resident in unified memory between requests — that is what makes the second-request latency a fraction of the first. At 8-bit that is about 1 GB per billion parameters held resident. For occasional users with other memory-hungry apps running, stop the server between sessions.
 
 If running via launchd:
 

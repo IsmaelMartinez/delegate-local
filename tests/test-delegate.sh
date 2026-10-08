@@ -64,13 +64,13 @@ make_mock_curl_fail() {
   # Exits non-zero before writing a body or a TTFB, as a refused connection
   # does; delegate.sh must then default queue_wait_ms to 0.
   local dir="$1"
-  cat > "$dir/curl" <<'EOF'
+  cat > "$dir/curl" <<EOF
 #!/usr/bin/env bash
 # Discovery: pick-model.sh probes GET {base}/models before any dispatch, and
 # that request has no stdin, so this arm answers and exits before anything
 # reads stdin.
-for _a in "$@"; do
-  case "$_a" in */models) printf '%s' '{"object":"list","data":[{"id":"qwen3.6:35b-a3b"}]}'; exit 0 ;; esac
+for _a in "\$@"; do
+  case "\$_a" in */models) printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0 ;; esac
 done
 cat > /dev/null
 echo "curl: connection refused" >&2
@@ -105,13 +105,13 @@ lines=$(grep -c '^' "$metrics")
 assert_eq 1 "$lines" "metrics file has one line"
 line=$(cat "$metrics")
 assert_contains '"tier":"prose"' "$line" "metrics: tier"
-assert_contains '"model":"qwen3.6:35b-a3b"' "$line" "metrics: model"
+assert_contains "\"model\":\"$PROSE_MODEL\"" "$line" "metrics: model"
 assert_contains '"exit_status":0' "$line" "metrics: exit_status"
 assert_contains '"prompt_chars":9' "$line" "metrics: prompt_chars"
 # Sniffed payload has the expected JSON shape.
 if [[ -s "$sniff" ]]; then
   payload=$(cat "$sniff")
-  assert_contains '"model":"qwen3.6:35b-a3b"' "$payload" "payload: model field"
+  assert_contains "\"model\":\"$PROSE_MODEL\"" "$payload" "payload: model field"
   assert_contains '"enable_thinking":false' "$payload" "payload: enable_thinking:false default"
   assert_contains '"stream":false' "$payload" "payload: stream:false"
   # A bare call is greedy for every model: temperature:0 and no
@@ -176,7 +176,7 @@ assert_contains "record verdict" "$(cat "$stderr_file")" "legacy alias: the remi
 tmp=$(mktemp -d)
 MOCK_MODELS='unrelated:model'
 make_mock_curl_models_only "$tmp"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 metrics=$(mktemp); : > "$metrics"
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -679,9 +679,10 @@ assert_eq "$(( (9 + 4000 + $(printf '%s' "$line" | jq -r '.output_chars')) / 4 )
 tmp=$(mktemp -d)
 payload_sniff="$tmp/payload.json"
 argv_sniff="$tmp/argv.txt"
-MOCK_MODELS='mlx-community/Qwen3.6-35B-A3B-Instruct-4bit'
+mlx_model="mlx-community/$PROSE_PREF-test-prose-model-4bit"
+MOCK_MODELS="$mlx_model"
 mock_curl "$tmp" 'mlx-output-ok' "$payload_sniff" "$argv_sniff"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -691,7 +692,7 @@ assert_eq 0 "$EC" "MLX happy path exits 0"
 assert_contains "mlx-output-ok" "$out" "MLX output parsed from .choices[0].message.content"
 line=$(cat "$metrics")
 assert_contains '"backend":"mlx"' "$line" "MLX metrics: backend field"
-assert_contains '"model":"mlx-community/Qwen3.6-35B-A3B-Instruct-4bit"' "$line" "MLX metrics: model field"
+assert_contains "\"model\":\"$mlx_model\"" "$line" "MLX metrics: model field"
 assert_contains '"tier":"prose"' "$line" "MLX metrics: tier field"
 # Raw /v1/completions bypasses the chat template and returns whitespace on
 # instruction-tuned models.
@@ -702,7 +703,7 @@ assert_not_contains "/v1/completions" "$argv" "MLX dispatch does not hit raw /v1
 # enable_thinking:false mirrors Ollama's think:false so the answer lands in
 # .content rather than .reasoning.
 payload=$(cat "$payload_sniff")
-assert_contains '"model":"mlx-community/Qwen3.6-35B-A3B-Instruct-4bit"' "$payload" "MLX payload: model field"
+assert_contains "\"model\":\"$mlx_model\"" "$payload" "MLX payload: model field"
 assert_contains '"max_tokens":' "$payload" "MLX payload: max_tokens (OpenAI shape)"
 assert_contains '"temperature":0' "$payload" "MLX payload: bare greedy temperature=0"
 assert_not_contains '"top_p"' "$payload" "MLX payload: bare greedy omits top_p"
@@ -835,9 +836,9 @@ assert_contains '"enable_thinking":true' "$(cat "$payload_sniff")" "DELEGATE_THI
 # 13. A model name with an embedded double quote still yields valid JSON:
 # pick-model returns whatever a provider reports.
 tmp=$(mktemp -d)
-MOCK_MODELS='qwen3.6:35b"weird-name'
+MOCK_MODELS="$PROSE_PREF:test\"weird-name"
 mock_curl "$tmp"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -847,7 +848,7 @@ assert_eq 0 "$EC" "jq-metrics: weird model name still exits 0"
 line=$(cat "$metrics")
 assert_true "jq-metrics: line is valid JSON despite embedded quote in model" jq -e . <<< "$line"
 decoded_model=$(echo "$line" | jq -r '.model')
-assert_eq 'qwen3.6:35b"weird-name' "$decoded_model" "jq-metrics: model field decodes to original string"
+assert_eq "$PROSE_PREF:test\"weird-name" "$decoded_model" "jq-metrics: model field decodes to original string"
 
 # 14. Verdict nudge prints to stderr on a successful call.
 tmp=$(mktemp -d)
@@ -939,7 +940,7 @@ assert_not_contains "record verdict" "$stderr_content" "verdict-nudge NO_METRICS
 tmp=$(mktemp -d)
 MOCK_MODELS='unrelated:model'
 make_mock_curl_models_only "$tmp"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 metrics=$(mktemp); : > "$metrics"
 stderr_file=$(mktemp)
 EC=0
@@ -1123,7 +1124,7 @@ assert_eq "" "$(cat "$nudge_file")" "verdict-nudge FD=3 + NO_METRICS: NO_METRICS
 tmp=$(mktemp -d)
 MOCK_MODELS='unrelated:model'
 make_mock_curl_models_only "$tmp"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 metrics=$(mktemp); : > "$metrics"
 stderr_file=$(mktemp)
 nudge_file=$(mktemp)
@@ -1265,7 +1266,7 @@ assert_contains "pre-flight canary" "$stderr_content" "canary timeout: stderr na
 assert_contains "did not return within 10s" "$stderr_content" "canary timeout: stderr names the timeout duration"
 assert_contains "curl --max-time fired" "$stderr_content" "canary timeout: stderr names the curl flag that fired"
 assert_contains "recipe='canary-recipe'" "$stderr_content" "canary timeout: stderr names recipe"
-assert_contains "model='qwen3.6:35b-a3b'" "$stderr_content" "canary timeout: stderr names resolved model"
+assert_contains "model='$PROSE_MODEL'" "$stderr_content" "canary timeout: stderr names resolved model"
 assert_contains "DELEGATE_PREFLIGHT_TIMEOUT" "$stderr_content" "canary timeout: stderr suggests timeout override"
 assert_contains "DELEGATE_NO_PREFLIGHT=1" "$stderr_content" "canary timeout: stderr names the opt-out"
 assert_contains "hand-write" "$stderr_content" "canary timeout: stderr suggests hand-writing"
@@ -1274,7 +1275,7 @@ assert_eq 1 "$lines" "canary timeout: one metrics row"
 metric_line=$(cat "$metrics")
 assert_contains '"exit_status":3' "$metric_line" "canary timeout: metrics row tagged status:3"
 assert_contains '"recipe":"canary-recipe"' "$metric_line" "canary timeout: metrics row carries recipe name"
-assert_contains '"model":"qwen3.6:35b-a3b"' "$metric_line" "canary timeout: metrics row carries resolved model"
+assert_contains "\"model\":\"$PROSE_MODEL\"" "$metric_line" "canary timeout: metrics row carries resolved model"
 # A failed recipe row still names the template that was live.
 . "$REPO/scripts/lib/recipe.sh"
 assert_contains "\"template_sha\":\"$(recipe_template_sha "$prompts/canary-recipe.md")\"" "$metric_line" \
@@ -1523,7 +1524,7 @@ assert_eq 0 "$EC" "delegate-meta: happy path exits 0"
 stderr_content=$(cat "$stderr_file")
 assert_contains "delegate-meta:" "$stderr_content" "delegate-meta: line prefix on stderr"
 # String fields are quoted so values with spaces stay one token; integers stay bare.
-assert_contains 'model="qwen3.6:35b-a3b' "$stderr_content" "delegate-meta: model field (quoted)"
+assert_contains "model=\"$PROSE_MODEL" "$stderr_content" "delegate-meta: model field (quoted)"
 assert_contains 'tier="prose"' "$stderr_content" "delegate-meta: tier field (quoted)"
 assert_contains 'backend="mlx"' "$stderr_content" "delegate-meta: backend field (quoted)"
 assert_contains "tokens_local=" "$stderr_content" "delegate-meta: tokens_local field (bare integer)"
@@ -1630,7 +1631,7 @@ assert_eq 1 "$(grep -c '^' "$metrics")" "delegate-meta opt-out: metrics row stil
 tmp=$(mktemp -d)
 MOCK_MODELS='unrelated:model'
 make_mock_curl_models_only "$tmp"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 metrics=$(mktemp); : > "$metrics"
 stderr_file=$(mktemp)
 EC=0
@@ -1773,7 +1774,7 @@ assert_eq "$dur_val" "$((qwait_val + gen_val))" "queue-wait split on failure: su
 tmp=$(mktemp -d)
 MOCK_MODELS='unrelated:model'
 make_mock_curl_models_only "$tmp"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 metrics=$(mktemp); : > "$metrics"
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -2357,7 +2358,7 @@ assert_contains '"chat"' "$otel_body" "OT2: operation.name value is 'chat'"
 assert_contains '"gen_ai.provider.name"' "$otel_body" "OT2: gen_ai.provider.name"
 assert_contains '"mlx"' "$otel_body" "OT2: provider.name value is 'mlx'"
 assert_contains '"gen_ai.request.model"' "$otel_body" "OT2: gen_ai.request.model"
-assert_contains '"qwen3.6:35b-a3b"' "$otel_body" "OT2: request.model is the resolved model"
+assert_contains "\"$PROSE_MODEL\"" "$otel_body" "OT2: request.model is the resolved model"
 assert_contains '"gen_ai.request.temperature"' "$otel_body" "OT2: gen_ai.request.temperature"
 assert_contains '"delegate.tier"' "$otel_body" "OT2: delegate.tier"
 assert_contains '"prose"' "$otel_body" "OT2: delegate.tier value is 'prose'"
@@ -2553,7 +2554,7 @@ dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -2813,7 +2814,7 @@ tmp=$(mktemp -d)
 MOCK_MODELS='gemma4:latest'
 sniff="$tmp/payload.json"
 mock_curl "$tmp" "" "$sniff"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -3032,7 +3033,7 @@ dispatch_sniff="$tmp/dispatch.json"
 otel_sniff="$tmp/otel.json"
 invocations="$tmp/invocations.log"; : > "$invocations"
 make_mock_curl_otel_aware "$tmp" "$dispatch_sniff" "$otel_sniff" "$invocations" "ok"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -3436,7 +3437,7 @@ assert_contains '"exit_status":2' "$(cat "$metrics")" "unknown tier: metrics row
 tmp=$(mktemp -d)
 MOCK_MODELS=''
 make_mock_curl_models_only "$tmp"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 metrics=$(mktemp)
 EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
@@ -3536,13 +3537,13 @@ assert_contains "--connect-timeout 5" "$argv" "mlx dispatch passes --connect-tim
 
 # 37. A timeout (curl exit 28) names the knob to raise.
 tmp=$(mktemp -d)
-cat > "$tmp/curl" <<'EOF'
+cat > "$tmp/curl" <<EOF
 #!/usr/bin/env bash
 # Discovery: pick-model.sh probes GET {base}/models before any dispatch, and
 # that request has no stdin, so this arm answers and exits before anything
 # reads stdin.
-for _a in "$@"; do
-  case "$_a" in */models) printf '%s' '{"object":"list","data":[{"id":"qwen3.6:35b-a3b"}]}'; exit 0 ;; esac
+for _a in "\$@"; do
+  case "\$_a" in */models) printf '%s' '$(mock_models_json $MOCK_MODELS)'; exit 0 ;; esac
 done
 cat > /dev/null
 echo "curl: (28) Operation timed out" >&2
@@ -3564,7 +3565,7 @@ for arg in "\$@"; do
   case "\$arg" in
     *"/models"*)
       cat > /dev/null
-      printf '%s' '{"object":"list","data":[{"id":"qwen3.6-provider-test","object":"model"}]}'
+      printf '%s' '{"object":"list","data":[{"id":"$PROSE_PREF-provider-test","object":"model"}]}'
       exit 0
       ;;
   esac
@@ -3700,6 +3701,7 @@ make_mock_curl_empty() {
   # A well-formed response whose answer is empty with finish_reason "length".
   # Serves /v1/models too, so the test cannot pass on a resolution failure.
   local dir="$1"
+  mock_models_json $MOCK_MODELS > "$dir/models.json"
   cat > "$dir/curl" <<'EOF'
 #!/usr/bin/env bash
 out=""; url=""
@@ -3713,7 +3715,7 @@ done
 # Answer the probe before draining stdin: the models request has no stdin and
 # a blocking `cat` would hang the run.
 case "$url" in
-  */models) printf '%s' '{"data":[{"id":"qwen3.6:35b-a3b"}]}'; exit 0 ;;
+  */models) cat "$(dirname "$0")/models.json"; exit 0 ;;
 esac
 cat >/dev/null
 body='{"choices":[{"message":{"content":"","reasoning":"thinking hard"},"finish_reason":"length"}]}'
@@ -5099,7 +5101,7 @@ row=$(tail -1 "$metrics")
 assert_eq 0 "$rc" "verify: a passing draft exits 0"
 assert_eq 1 "$(vcalls)" "verify: a verify-tagged recipe runs the verifier once"
 assert_eq "pass" "$(jq -r '.verify.verdict' <<<"$row")" "verify: the row records verdict pass"
-assert_eq "0.9 0.68 qwen3.6:35b-a3b" "$(jq -r '"\(.verify.p_supported) \(.verify.threshold) \(.verify.model)"' <<<"$row")" \
+assert_eq "0.9 0.68 $PROSE_MODEL" "$(jq -r '"\(.verify.p_supported) \(.verify.threshold) \(.verify.model)"' <<<"$row")" \
   "verify: the row records p_supported, the threshold and the verifier model"
 assert_not_contains "verifier flagged" "$err" "verify: a pass prints no flag line"
 assert_contains 'verify="pass"' "$err" "verify: the meta line carries the verdict"
@@ -5120,14 +5122,14 @@ assert_not_contains "verifier flagged" "$err" "verify: an uncalibrated score nev
 assert_contains 'verify="uncalibrated"' "$err" "verify: the meta line says the verifier is uncalibrated"
 assert_not_contains "no calibrated threshold" "$err" "verify: the inline path prints no uncalibrated note"
 # A model with a shipped threshold is scored against it with no setup.
-MOCK_MODELS='mlx-community/Qwen3.6-35B-A3B-8bit'
+MOCK_MODELS="$SHIPPED_VERIFY_MODEL"
 make_mock_curl_verify "$tmp" 'Reverted abc123. SCORE_0.41'
 err=$(run_recipe vr --var who=alice)
 row=$(tail -1 "$metrics")
-assert_eq "0.7549 shipped flag" "$(jq -r '"\(.verify.threshold) \(.verify.threshold_source) \(.verify.verdict)"' <<<"$row")" \
+assert_eq "$SHIPPED_VERIFY_THRESHOLD shipped flag" "$(jq -r '"\(.verify.threshold) \(.verify.threshold_source) \(.verify.verdict)"' <<<"$row")" \
   "verify: a model with a shipped threshold is scored against it"
 assert_contains "verifier flagged" "$err" "verify: ...and a shipped-threshold flag prints the flag line"
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 
 # 661b. A flag: one stderr line, the row says flag, output, exit code and the
 # single dispatch unchanged (a flag never earns the retry).
@@ -5137,7 +5139,7 @@ rc=$?
 assert_eq 0 "$rc" "verify: a flagged draft still exits 0"
 assert_eq "Reverted abc123. SCORE_0.41" "$(cat "$tmp/stdout")" "verify: a flagged draft is returned unchanged"
 assert_eq 1 "$(dcalls)" "verify: a flag does not trigger the retry"
-assert_contains "delegate: verifier flagged a possibly unsupported claim (p_supported=0.41 < 0.68, qwen3.6:35b-a3b)" "$err" \
+assert_contains "delegate: verifier flagged a possibly unsupported claim (p_supported=0.41 < 0.68, $PROSE_MODEL)" "$err" \
   "verify: a flag prints one stderr line with p, the threshold and the model"
 assert_eq 1 "$(grep -c 'verifier flagged' <<<"$err")" "verify: exactly one flag line"
 assert_eq "flag" "$(jq -r '.verify.verdict' <<<"$(tail -1 "$metrics")")" "verify: the row records verdict flag"

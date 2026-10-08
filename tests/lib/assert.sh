@@ -75,9 +75,18 @@ mock_models_json() {
   printf '{"object":"list","data":[%s]}' "$out"
 }
 
+# The fixture prose model (#654): the prose tier's first shipped preference
+# with a neutral suffix, so it resolves through pick-model.sh's substring
+# match whatever model that file ships, and no test names the model.
+PROSE_PREF=$(bash "$REPO/scripts/pick-model.sh" --print-prefs | sed -n 's/^prose:\([^ ]*\).*/\1/p')
+PROSE_MODEL="$PROSE_PREF:test-prose-model"
+# The first id the repo ships a verifier threshold for, and that threshold,
+# for the tests of the shipped lookup.
+read -r SHIPPED_VERIFY_MODEL SHIPPED_VERIFY_THRESHOLD < <(grep -v '^#' "$REPO/scripts/lib/verify-thresholds.tsv" | head -1)
+
 # Every mock curl answers discovery from this list. Tests set MOCK_MODELS
 # before building a mock and restore it afterwards.
-MOCK_MODELS='qwen3.6:35b-a3b'
+MOCK_MODELS="$PROSE_MODEL"
 
 # mock_curl DIR [CONTENT] [PAYLOAD_SNIFF] [ARGV_SNIFF] — writes DIR/curl, a
 # provider that answers GET {base}/models from $MOCK_MODELS and every other

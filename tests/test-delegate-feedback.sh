@@ -671,7 +671,7 @@ seed_metrics_with_otel() {
   local sid="${3:-feedface12345678}"
   TS_LATEST=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   cat > "$file" <<EOF
-{"ts":"$TS_LATEST","source":"delegate","tier":"prose","model":"qwen3.6:35b","project":"otel-project","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$tid","otel_span_id":"$sid"}
+{"ts":"$TS_LATEST","source":"delegate","tier":"prose","model":"test-prose-model","project":"otel-project","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$tid","otel_span_id":"$sid"}
 EOF
 }
 
@@ -717,7 +717,7 @@ else
   echo "  FAIL  FB-OT2: body is not valid JSON"
   fail=$((fail+1))
 fi
-assert_contains '"feedback qwen3.6:35b"' "$otel_body" "FB-OT2: span name includes parent model"
+assert_contains '"feedback test-prose-model"' "$otel_body" "FB-OT2: span name includes parent model"
 assert_contains '"kind":1' "$otel_body" "FB-OT2: span kind=1 (INTERNAL)"
 assert_contains '"delegate.feedback.verdict"' "$otel_body" "FB-OT2: delegate.feedback.verdict attribute"
 assert_contains '"hit"' "$otel_body" "FB-OT2: verdict value is 'hit'"
@@ -878,7 +878,7 @@ rm -rf "$tmp"
 tmp=$(mktemp -d)
 TS_PRE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 cat > "$tmp/m.jsonl" <<EOF
-{"ts":"$TS_PRE","source":"delegate","tier":"prose","model":"qwen3.6:35b","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
+{"ts":"$TS_PRE","source":"delegate","tier":"prose","model":"test-prose-model","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
 EOF
 invocations="$tmp/invocations"; : > "$invocations"
 otel_sniff="$tmp/otel.json"
@@ -912,8 +912,8 @@ OLD_SID="1111111111111111"
 RECENT_TID="2222222222222222bbbbbbbbbbbbbbbb"
 RECENT_SID="2222222222222222"
 cat > "$tmp/m.jsonl" <<EOF
-{"ts":"$T_OLD","source":"delegate","tier":"prose","model":"qwen3.6:35b","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$OLD_TID","otel_span_id":"$OLD_SID"}
-{"ts":"$T_RECENT","source":"delegate","tier":"prose","model":"qwen3.6:35b","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$RECENT_TID","otel_span_id":"$RECENT_SID"}
+{"ts":"$T_OLD","source":"delegate","tier":"prose","model":"test-prose-model","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$OLD_TID","otel_span_id":"$OLD_SID"}
+{"ts":"$T_RECENT","source":"delegate","tier":"prose","model":"test-prose-model","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$RECENT_TID","otel_span_id":"$RECENT_SID"}
 EOF
 invocations="$tmp/invocations"; : > "$invocations"
 otel_sniff="$tmp/otel.json"
@@ -1104,7 +1104,7 @@ seed_metrics_with_recipe() {
   local sid="${4:-feedface12345678}"
   TS_LATEST=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   cat > "$file" <<EOF
-{"ts":"$TS_LATEST","source":"delegate","tier":"prose","model":"qwen3.6:35b","recipe":"$recipe","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$tid","otel_span_id":"$sid"}
+{"ts":"$TS_LATEST","source":"delegate","tier":"prose","model":"test-prose-model","recipe":"$recipe","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$tid","otel_span_id":"$sid"}
 EOF
 }
 
@@ -1163,7 +1163,7 @@ rm -rf "$tmp"
 tmp=$(mktemp -d)
 TS_PRE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 cat > "$tmp/m.jsonl" <<EOF
-{"ts":"$TS_PRE","source":"delegate","tier":"prose","model":"qwen3.6:35b","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
+{"ts":"$TS_PRE","source":"delegate","tier":"prose","model":"test-prose-model","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40}
 EOF
 invocations="$tmp/invocations"; : > "$invocations"
 otel_sniff="$tmp/otel.json"
@@ -1205,8 +1205,8 @@ OLD_SID="1111111111111111"
 RECENT_TID="2222222222222222bbbbbbbbbbbbbbbb"
 RECENT_SID="2222222222222222"
 cat > "$tmp/m.jsonl" <<EOF
-{"ts":"$T_OLD","source":"delegate","tier":"prose","model":"qwen3.6:35b","recipe":"commit-message","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$OLD_TID","otel_span_id":"$OLD_SID"}
-{"ts":"$T_RECENT","source":"delegate","tier":"prose","model":"qwen3.6:35b","recipe":"pr-description","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$RECENT_TID","otel_span_id":"$RECENT_SID"}
+{"ts":"$T_OLD","source":"delegate","tier":"prose","model":"test-prose-model","recipe":"commit-message","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$OLD_TID","otel_span_id":"$OLD_SID"}
+{"ts":"$T_RECENT","source":"delegate","tier":"prose","model":"test-prose-model","recipe":"pr-description","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":40,"otel_trace_id":"$RECENT_TID","otel_span_id":"$RECENT_SID"}
 EOF
 invocations="$tmp/invocations"; : > "$invocations"
 otel_sniff="$tmp/otel.json"

@@ -903,7 +903,7 @@ if [[ -n "$recipe" ]] \
       echo "         - retry with DELEGATE_PREFLIGHT_TIMEOUT=30 if cold-load is suspected"
       echo "         - start the provider daemon (mlx_lm.server, Docker Model Runner or ollama serve) and confirm MLX_HOST / DOCKER_MODEL_HOST / OLLAMA_HOST"
       echo "         - re-route to a smaller-parameter model on this host"
-      echo "         - hand-write the output (recommended for 35B-class prose tiers on recipe-shaped prompts — see prompts/$recipe.md)"
+      echo "         - hand-write the output (see prompts/$recipe.md for this recipe's notes on large prose-tier models)"
       echo "         - silence the probe with DELEGATE_NO_PREFLIGHT=1 (sends the full request and inherits the failure)"
       echo "         still broken? file a bug: https://github.com/${DELEGATE_GITHUB_REPO:-IsmaelMartinez/delegate-local}/issues/new?template=bug_report.md"
     } >&2

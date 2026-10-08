@@ -41,8 +41,8 @@ rm -f "$empty"
 # reports the right counts, time range, and tokens-avoided sum.
 fixture=$(mktemp)
 cat > "$fixture" <<'EOF'
-{"ts":"2026-04-29T08:00:00Z","tier":"prose","model":"qwen3.6:35b-a3b","prompt_chars":40,"context_chars":160,"output_chars":200,"duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":100}
-{"ts":"2026-04-29T08:30:00Z","tier":"prose","model":"qwen3.6:35b-a3b","prompt_chars":50,"context_chars":150,"output_chars":300,"duration_ms":5100,"exit_status":0,"estimated_tokens_avoided":125}
+{"ts":"2026-04-29T08:00:00Z","tier":"prose","model":"test-prose-model","prompt_chars":40,"context_chars":160,"output_chars":200,"duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-04-29T08:30:00Z","tier":"prose","model":"test-prose-model","prompt_chars":50,"context_chars":150,"output_chars":300,"duration_ms":5100,"exit_status":0,"estimated_tokens_avoided":125}
 {"ts":"2026-04-29T09:00:00Z","tier":"reasoning","model":"phi4-reasoning:plus","prompt_chars":30,"context_chars":120,"output_chars":250,"duration_ms":2800,"exit_status":0,"estimated_tokens_avoided":100}
 {"ts":"2026-04-29T09:15:00Z","tier":"reasoning","model":"phi4-reasoning:plus","prompt_chars":35,"context_chars":140,"output_chars":225,"duration_ms":3500,"exit_status":1,"estimated_tokens_avoided":100}
 EOF
@@ -57,7 +57,7 @@ assert_contains "2026-04-29T08:00:00Z" "$out" "fixture: first ts"
 assert_contains "2026-04-29T09:15:00Z" "$out" "fixture: last ts"
 assert_contains "prose" "$out" "fixture: prose tier appears"
 assert_contains "reasoning" "$out" "fixture: reasoning tier appears"
-assert_contains "qwen3.6:35b-a3b" "$out" "fixture: top model appears"
+assert_contains "test-prose-model" "$out" "fixture: top model appears"
 assert_contains "phi4-reasoning:plus" "$out" "fixture: second model appears"
 rm -f "$fixture"
 
@@ -66,8 +66,8 @@ rm -f "$fixture"
 # on a delegate row is not an experiment (no script writes one any more).
 mixed=$(mktemp)
 cat > "$mixed" <<'EOF'
-{"ts":"2026-05-04T08:00:00Z","source":"delegate","tier":"prose","model":"qwen3.6:35b-a3b","session":"s-1","duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":100}
-{"ts":"2026-05-04T08:05:00Z","tier":"prose","model":"qwen3.6:35b-a3b","session":"s-1","duration_ms":4300,"exit_status":0,"estimated_tokens_avoided":140}
+{"ts":"2026-05-04T08:00:00Z","source":"delegate","tier":"prose","model":"test-prose-model","session":"s-1","duration_ms":4200,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-04T08:05:00Z","tier":"prose","model":"test-prose-model","session":"s-1","duration_ms":4300,"exit_status":0,"estimated_tokens_avoided":140}
 {"ts":"2026-05-04T09:00:00Z","source":"feedback","ref_ts":"2026-05-04T08:00:00Z","kept":true,"session":"s-1"}
 {"ts":"2026-05-04T09:01:00Z","source":"opportunity","boundary":"git-commit","delegated":true,"session":"s-1"}
 {"ts":"2026-05-04T09:02:00Z","source":"opportunity","boundary":"git-commit","delegated":false,"session":"s-1"}
@@ -83,7 +83,7 @@ assert_contains "Per-source:" "$out" "mixed: per-source header present"
 assert_contains "Per-tier (delegate):" "$out" "mixed: per-tier header present for delegate rows"
 top=$(printf '%s\n' "$out" | sed -n '/^Top models:/,$p')
 assert_eq "Top models:
-  2  qwen3.6:35b-a3b" "$top" "mixed: Top models lists call rows only, no null from opportunity rows"
+  2  test-prose-model" "$top" "mixed: Top models lists call rows only, no null from opportunity rows"
 case "$out" in
   *"Per-session"*|*"experiment="*) assert_eq "absent" "present" "mixed: no experiment or per-session section" ;;
   *)                               assert_eq "absent" "absent"  "mixed: no experiment or per-session section" ;;
@@ -165,8 +165,8 @@ rm -f "$revised"
 # 7. Per-backend section is hidden with a single backend.
 single=$(mktemp)
 cat > "$single" <<'EOF'
-{"ts":"2026-05-12T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
-{"ts":"2026-05-12T10:05:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4500,"exit_status":0,"estimated_tokens_avoided":110}
+{"ts":"2026-05-12T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"test-prose-model","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-12T10:05:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"test-prose-model","duration_ms":4500,"exit_status":0,"estimated_tokens_avoided":110}
 EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$single" 2>&1) || EC=$?
@@ -180,10 +180,10 @@ rm -f "$single"
 # 8. Two backends: the Per-backend section appears.
 mixed=$(mktemp)
 cat > "$mixed" <<'EOF'
-{"ts":"2026-05-12T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
-{"ts":"2026-05-12T10:05:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4500,"exit_status":0,"estimated_tokens_avoided":110}
-{"ts":"2026-05-12T10:10:00Z","source":"delegate","backend":"mlx","tier":"prose","model":"mlx-community/Qwen3.6-35B-A3B-Instruct-8bit","duration_ms":3200,"exit_status":0,"estimated_tokens_avoided":105}
-{"ts":"2026-05-12T10:15:00Z","source":"delegate","backend":"mlx","tier":"prose","model":"mlx-community/Qwen3.6-35B-A3B-Instruct-8bit","duration_ms":3400,"exit_status":0,"estimated_tokens_avoided":115}
+{"ts":"2026-05-12T10:00:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"test-prose-model","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-05-12T10:05:00Z","source":"delegate","backend":"ollama","tier":"prose","model":"test-prose-model","duration_ms":4500,"exit_status":0,"estimated_tokens_avoided":110}
+{"ts":"2026-05-12T10:10:00Z","source":"delegate","backend":"mlx","tier":"prose","model":"mlx-community/test-prose-model","duration_ms":3200,"exit_status":0,"estimated_tokens_avoided":105}
+{"ts":"2026-05-12T10:15:00Z","source":"delegate","backend":"mlx","tier":"prose","model":"mlx-community/test-prose-model","duration_ms":3400,"exit_status":0,"estimated_tokens_avoided":115}
 EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$mixed" 2>&1) || EC=$?
@@ -196,9 +196,9 @@ rm -f "$mixed"
 # 9. Rows with no backend field are bucketed as 'ollama'.
 backcompat=$(mktemp)
 cat > "$backcompat" <<'EOF'
-{"ts":"2026-04-29T08:00:00Z","source":"delegate","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
-{"ts":"2026-04-29T08:30:00Z","source":"delegate","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4500,"exit_status":0,"estimated_tokens_avoided":110}
-{"ts":"2026-05-12T10:10:00Z","source":"delegate","backend":"mlx","tier":"prose","model":"mlx-community/Qwen3.6-35B-A3B-Instruct-8bit","duration_ms":3200,"exit_status":0,"estimated_tokens_avoided":105}
+{"ts":"2026-04-29T08:00:00Z","source":"delegate","tier":"prose","model":"test-prose-model","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-04-29T08:30:00Z","source":"delegate","tier":"prose","model":"test-prose-model","duration_ms":4500,"exit_status":0,"estimated_tokens_avoided":110}
+{"ts":"2026-05-12T10:10:00Z","source":"delegate","backend":"mlx","tier":"prose","model":"mlx-community/test-prose-model","duration_ms":3200,"exit_status":0,"estimated_tokens_avoided":105}
 EOF
 EC=0
 out=$(bash "$SCRIPT" --file "$backcompat" 2>&1) || EC=$?
@@ -1142,9 +1142,9 @@ rm -f "$cp4"
 # golden below is the pre-#655 output for this fixture).
 onemodel=$(mktemp)
 cat > "$onemodel" <<'EOF'
-{"ts":"2026-10-01T10:00:00Z","source":"delegate","otel_span_id":"o1","recipe":"commit-message","project":"alpha","session":"s1","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
-{"ts":"2026-10-01T10:01:00Z","source":"delegate","otel_span_id":"o2","recipe":"commit-message","project":"alpha","session":"s2","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":100}
-{"ts":"2026-10-01T10:02:00Z","source":"delegate","otel_span_id":"o3","recipe":"summarise-issue","project":"alpha","session":"s2","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":6000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-01T10:00:00Z","source":"delegate","otel_span_id":"o1","recipe":"commit-message","project":"alpha","session":"s1","tier":"prose","model":"test-prose-model","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-01T10:01:00Z","source":"delegate","otel_span_id":"o2","recipe":"commit-message","project":"alpha","session":"s2","tier":"prose","model":"test-prose-model","duration_ms":5000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-01T10:02:00Z","source":"delegate","otel_span_id":"o3","recipe":"summarise-issue","project":"alpha","session":"s2","tier":"prose","model":"test-prose-model","duration_ms":6000,"exit_status":0,"estimated_tokens_avoided":100}
 {"ts":"2026-10-01T11:00:00Z","source":"feedback","ref_id":"o1","ref_ts":"2026-10-01T10:00:00Z","kept":true}
 {"ts":"2026-10-01T11:01:00Z","source":"feedback","ref_id":"o2","ref_ts":"2026-10-01T10:01:00Z","kept":false,"scaffold":true,"reason":"trimmed"}
 {"ts":"2026-10-01T11:02:00Z","source":"opportunity","project":"alpha","session":"s1","boundary":"git-commit","delegated":true}
@@ -1182,7 +1182,7 @@ Per-tier (delegate):
   prose           n=3  p50=5000ms  p95=6000ms
 
 Top models:
-  3  qwen3.6:35b-a3b
+  3  test-prose-model
 EOF
 )
 out=$(bash "$SCRIPT" --file "$onemodel" 2>&1)
@@ -1191,11 +1191,11 @@ rm -f "$onemodel"
 
 twomodel=$(mktemp)
 cat > "$twomodel" <<'EOF'
-{"ts":"2026-10-02T10:00:00Z","source":"delegate","otel_span_id":"t1","recipe":"commit-message","project":"alpha","session":"s1","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
-{"ts":"2026-10-02T10:01:00Z","source":"delegate","otel_span_id":"t2","recipe":"commit-message","project":"alpha","session":"s1","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-02T10:00:00Z","source":"delegate","otel_span_id":"t1","recipe":"commit-message","project":"alpha","session":"s1","tier":"prose","model":"test-prose-model","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-02T10:01:00Z","source":"delegate","otel_span_id":"t2","recipe":"commit-message","project":"alpha","session":"s1","tier":"prose","model":"test-prose-model","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
 {"ts":"2026-10-02T10:02:00Z","source":"delegate","recipe":"commit-message","project":"alpha","session":"s2","tier":"prose","model":"Gemma4:26b-a4b","duration_ms":3000,"exit_status":0,"estimated_tokens_avoided":100}
 {"ts":"2026-10-02T10:03:00Z","source":"delegate","otel_span_id":"t4","recipe":"commit-message","project":"alpha","session":"s3","tier":"prose","model":"Gemma4:26b-a4b","duration_ms":3000,"exit_status":0,"estimated_tokens_avoided":100}
-{"ts":"2026-10-02T10:04:00Z","source":"delegate","otel_span_id":"t5","recipe":"summarise-issue","project":"alpha","session":"s1","tier":"prose","model":"qwen3.6:35b-a3b","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
+{"ts":"2026-10-02T10:04:00Z","source":"delegate","otel_span_id":"t5","recipe":"summarise-issue","project":"alpha","session":"s1","tier":"prose","model":"test-prose-model","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100}
 {"ts":"2026-10-02T11:00:00Z","source":"feedback","ref_id":"t1","ref_ts":"2026-10-02T10:00:00Z","kept":true}
 {"ts":"2026-10-02T11:01:00Z","source":"feedback","ref_id":"t2","ref_ts":"2026-10-02T10:01:00Z","kept":false,"reason":"rewrote"}
 {"ts":"2026-10-02T11:02:00Z","source":"feedback","ref_ts":"2026-10-02T10:02:00Z","kept":true}
@@ -1206,7 +1206,7 @@ out=$(bash "$SCRIPT" --file "$twomodel" 2>&1)
 recipes=$(printf '%s\n' "$out" | sed -n '/^Per-recipe/,/^$/p')
 assert_eq "Per-recipe (delegate):
   commit-message        n=4  hits=2  misses=1  untracked=1  sessions=3
-    model=qwen3.6:35b-a3b            n=2  hits=1  misses=1  untracked=0  sessions=1
+    model=test-prose-model           n=2  hits=1  misses=1  untracked=0  sessions=1
     model=Gemma4:26b-a4b             n=2  hits=1  misses=0  untracked=1  sessions=2
   summarise-issue       n=1  hits=1  misses=0  untracked=0  sessions=1" "$recipes" "per-model: a two-model recipe splits by model with n per model; the ts-only verdict lands on its delegate row's model"
 assert_not_contains "model=" "$(printf '%s\n' "$out" | sed -n '/^  summarise-issue/,/^$/p')" \

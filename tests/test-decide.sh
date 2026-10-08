@@ -70,7 +70,7 @@ echo "logprob backend"
 : > "$sniff"
 out=$(run --backend logprob <<<"$request")
 assert_eq "logprob" "$(jq -r '.backend' <<<"$out")" "backend labelled logprob"
-assert_eq "qwen3.6:35b-a3b" "$(jq -r '.model' <<<"$out")" "model comes from pick-model"
+assert_eq "$PROSE_MODEL" "$(jq -r '.model' <<<"$out")" "model comes from pick-model"
 assert_eq "0.6667" "$(jq -r '.answers.outage.probabilities.true' <<<"$out")" "A renormalised over the option letters"
 assert_eq "0.3333" "$(jq -r '.answers.outage.probabilities.false' <<<"$out")" "byte-level ' B' token counted for B"
 assert_eq "0.9" "$(jq -r '.answers.outage.coverage' <<<"$out")" "coverage is the raw letter mass"
