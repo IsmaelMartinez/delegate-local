@@ -20,7 +20,7 @@ The output is one JSON line, `{"model","p_supported","threshold","verdict","late
 
 ## The verify tier
 
-`decide.sh --tier verify` resolves through `pick-model.sh`, whose `verify` tier ships the prose preference list, so by default the check runs on the resident prose model and costs no extra memory. A better verifier is one `config.sh` line away, for example `case "$tier" in verify) prefs=(qwen3.8 "${prefs[@]}") ;; esac` (the file is sourced with `$tier` and `prefs` already set), followed by one `--calibrate` run for the newly resolved model. Mind the memory budget before doing that on a shared server: the 27B loads about 28 GB beside the resident 35 GB.
+`decide.sh --tier verify` resolves through `pick-model.sh`, whose `verify` tier ships the prose preference list, so by default the check runs on the resident prose model and costs no extra memory. A better verifier is one `config.sh` line away, for example `case "$tier" in verify) prefs=(qwen3.8 "${prefs[@]}") ;; esac` (the file is sourced with `$tier` and `prefs` already set), followed by one `--calibrate` run for the newly resolved model, but only when that model has a server of its own: `mlx_lm.server` holds one model at a time, so a verifier on the prose model's server swaps it out on every verified call (the decision at the end of this page has the measurement). Mind the memory budget too: the 27B loads about 28 GB beside the resident 35 GB.
 
 ## Thresholds and `--calibrate`
 
@@ -47,7 +47,7 @@ On the 120-row synthetic grounding set above, Qwen3.8-27B reached AUROC 0.972 at
 
 With `commit-message` excluded, and each model's threshold set so that it flags 5% of kept drafts, Qwen3.8 at 0.679 caught 7 of the 13 rewrites identified by hand as factual errors and flagged 95 of 244 rewrites, while Qwen3.6 at 0.755 caught 5 of 13 and flagged 56 of 244. At Qwen3.8's 0.679, flagged drafts were rewritten 57% of the time against 25% for unflagged ones, a 2.3x lift, which meets #660's keep rule of at most 5% of kept drafts flagged and at least twice the rewrite rate.
 
-What that means per recipe, on Qwen3.8 at the deployed threshold of 0.6792, as flagged over scored drafts by verdict outcome:
+What that means per recipe, as flagged over scored drafts by verdict outcome. First Qwen3.8 at its 5%-of-kept threshold of 0.6792:
 
 | Recipe | Kept | Scaffold | Rewrote | All |
 |---|---|---|---|---|
@@ -59,8 +59,22 @@ What that means per recipe, on Qwen3.8 at the deployed threshold of 0.6792, as f
 | the five together | 6/192 (3%) | 61/333 | 95/244 | 162/769 (21%) |
 | `commit-message` (not enabled) | 37/76 | | | |
 
-So about one verified draft in five will carry a flag, and on `maintainer-review-reply` 42% will, most of them drafts that were later rewritten. A flag is therefore a common event on the long reply recipe, not a rare alarm, and it should be read as "check this one" rather than "this one is wrong".
+Then the resident Qwen3.6-35B-A3B at its 5%-of-kept threshold of 0.7549, the verifier deployed (see the decision below):
+
+| Recipe | Kept | Scaffold | Rewrote | All |
+|---|---|---|---|---|
+| `github-issue-body` | 4/33 | 3/19 | 5/47 | 12/99 |
+| `maintainer-reply` | 0/16 | 9/62 | 8/50 | 17/128 |
+| `maintainer-review-reply` | 0/2 | 6/48 | 28/115 | 34/165 |
+| `pr-description` | 0/7 | 13/119 | 13/23 | 26/149 |
+| `pr-review-reply` | 5/134 | 5/85 | 2/9 | 12/228 |
+| the five together | 9/192 (5%) | 36/333 | 56/244 | 101/769 (13%) |
+| `commit-message` (not enabled) | 13/76 | | | |
+
+On Qwen3.8 about one verified draft in five carries a flag, and on `maintainer-review-reply` 42% do; on Qwen3.6 it is about one in eight overall and 21% on `maintainer-review-reply`. Either way most flags land on drafts that were later rewritten, and a flag is a common event on the long reply recipe, not a rare alarm, to be read as "check this one" rather than "this one is wrong". Over the five recipes, 55% of Qwen3.6's flagged drafts were rewritten against 28% of its unflagged ones, about 2.0x, at the edge of the keep rule; the same computation on Qwen3.8 gives 59% against 25%.
 
 The caveats are real and should travel with the result. `commit-message` was excluded after seeing the data, not before. Thirteen factual-error cases is a small N. Most flagged rewrites were drafts discarded in favour of pre-approved text rather than drafts with a factual error, so the lift measures "this draft did not ship" more than "this draft was wrong". And on planted errors Qwen3.8 caught 56 of 60 but on real factual errors only about half, because a real error usually confuses facts that are all present in the input, which is harder to see than a fact the input never states.
 
-Decision: keep, opt-in on the five non-commit recipes (`maintainer-reply`, `maintainer-review-reply`, `pr-description`, `pr-review-reply`, `github-issue-body`), wired as described in [`checks.md`](checks.md#the-draft-verifier). On the maintainer's machine the verify tier is Qwen3.8 through `config.sh` (`verify) prefs=(qwen3.8 "${prefs[@]}") ;;`) with 0.6792 recorded for it in `verify-thresholds.tsv`; while it is loaded it adds about 28 GB beside the 35 GB prose model. Elsewhere the verify tier falls back to the prose model at no extra memory, and needs its own `--calibrate` run, since the uncalibrated 0.5 passes almost every draft on Qwen3.6. The raw data is in the data dir's `spikes/verify-readout-2026-10-07/`.
+Decision: keep, opt-in on the five non-commit recipes (`maintainer-reply`, `maintainer-review-reply`, `pr-description`, `pr-review-reply`, `github-issue-body`), wired as described in [`checks.md`](checks.md#the-draft-verifier), with the resident prose model as the verifier: Qwen3.6-35B-A3B at a threshold of 0.7549 in `verify-thresholds.tsv`, which flags 5% of kept non-commit drafts, catches 5 of the 13 factual-error rewrites and flags 56 of 244 rewrites. Qwen3.8 reads better on paper (7 of 13, 95 of 244), and a live smoke test on it behaved as intended (a correct `maintainer-reply` passed at p 0.96, a planted "Linux and macOS" error was flagged at p 0.0002), but it cannot share the prose model's server. Measured on 2026-10-08 against the live `mlx_lm.server` on `:8080`, the server holds one model at a time and swaps on demand: alternating 1-token requests between the two models cost 9-11 s per switch against 0.2-0.3 s repeated, at 43.7 GB RSS. A verify tier on another model on the same server therefore reloads on every verified call, and the next prose delegation then trips the 10 s pre-flight canary (observed: exit 3).
+
+The rule that follows: a verifier model different from the prose model needs its own server, for example `mlx_lm.server --port 8081` plus a `config.sh` verify arm that prepends that base to `DELEGATE_BASE_URL`, and the memory for both (Qwen3.8 is about 28 GB beside the 35 GB prose model); otherwise use the prose model, which costs nothing extra. Whichever model the verify tier resolves needs its own `--calibrate` run, or a recorded threshold, since the uncalibrated 0.5 passes almost every draft on Qwen3.6. The raw data is in the data dir's `spikes/verify-readout-2026-10-07/`.
