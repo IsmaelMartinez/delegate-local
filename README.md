@@ -55,12 +55,12 @@ ${OLLAMA_HOST:-http://localhost:11434}/v1
 
 MLX leads because [ADR 0022](docs/adr/0022-mlx-primary-backend-rationale.md) measured it at roughly an order of magnitude lower latency than Ollama on identical weights. A provider that is down costs one refused connection and is skipped; a host running only Ollama routes there with no configuration.
 
-On Apple Silicon, MLX is the recommended provider. Install and auto-start via launchd are documented in [docs/install-mlx.md](docs/install-mlx.md). The quick version:
+On Apple Silicon, MLX is the recommended provider. Install and auto-start via launchd are documented in [docs/install-mlx.md](docs/install-mlx.md). The quick version, after replacing `REPLACE-WITH-PROSE-MODEL` with the `mlx-community` build of the first prose entry that `--print-prefs` lists:
 
 ```bash
 python3 -m venv ~/venvs/mlx-lm && ~/venvs/mlx-lm/bin/pip install mlx-lm
 bash scripts/pick-model.sh --print-prefs | grep '^prose:'   # the names the prose tier matches, best first
-MODEL=mlx-community/<an MLX build of the first prose preference>
+MODEL="mlx-community/REPLACE-WITH-PROSE-MODEL"  # the first prose entry in scripts/pick-model.sh
 ~/venvs/mlx-lm/bin/huggingface-cli download "$MODEL"
 ~/venvs/mlx-lm/bin/mlx_lm.server --model "$MODEL" --port 8080 &
 ```

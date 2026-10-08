@@ -33,14 +33,14 @@ Both give you `mlx_lm.generate` (one-shot CLI), `mlx_lm.server` (OpenAI-compatib
 
 ## Pull a model
 
-MLX models live on HuggingFace under the `mlx-community` org. Pull a model that matches one of the tier preferences (run `bash scripts/pick-model.sh --dry-run prose` to see the prefs list). For the prose tier, take the first prefs entry that has an MLX build:
+MLX models live on HuggingFace under the `mlx-community` org. Pull a model that matches one of the tier preferences (run `bash scripts/pick-model.sh --dry-run prose` to see the prefs list). For the prose tier, take the first prefs entry that has an MLX build and replace `REPLACE-WITH-PROSE-MODEL` below with its `mlx-community` name; the later commands on this page reuse `$MODEL`:
 
 ```bash
 # 8-bit Q8 — the precision of an Ollama q8_0 tag
-huggingface-cli download mlx-community/<prose-model>-8bit
-
+MODEL="mlx-community/REPLACE-WITH-PROSE-MODEL-8bit"  # the first prose entry in scripts/pick-model.sh
 # Or 4-bit — roughly half the size, slightly lower accuracy
-huggingface-cli download mlx-community/<prose-model>-4bit
+# MODEL="mlx-community/REPLACE-WITH-PROSE-MODEL-4bit"
+huggingface-cli download "$MODEL"
 ```
 
 `huggingface-cli` lands the weights under `~/.cache/huggingface/hub/models--mlx-community--<name>/snapshots/<hash>/`. Discovery asks the running server what it serves rather than scanning that directory, so the model becomes routable once `mlx_lm.server` is started with it, not merely once the download finishes.
@@ -53,7 +53,7 @@ huggingface-cli download mlx-community/<prose-model>-4bit
 mlx_lm.server --port 8080 &
 ```
 
-Leave it running in the background. The first request triggers model load (5–15 s for a model of a few tens of billions of parameters); subsequent requests use the warm cache. Pass `--model mlx-community/<prose-model>-8bit` to pin a specific model at startup; without it, the server loads whichever model name arrives in the first POST body.
+Leave it running in the background. The first request triggers model load (5–15 s for a model of a few tens of billions of parameters); subsequent requests use the warm cache. Pass `--model "$MODEL"` to pin a specific model at startup; without it, the server loads whichever model name arrives in the first POST body.
 
 ### Auto-start via launchd (recommended on macOS)
 
@@ -125,7 +125,7 @@ Logs go to `~/Library/Logs/mlx-lm-server.log`. The `KeepAlive` key restarts the 
 Starting `mlx_lm.server` is enough — the next `delegate.sh` call probes it, finds it reachable, and routes through MLX without any env-var changes:
 
 ```bash
-mlx_lm.server --port 8080 --model mlx-community/<prose-model>-8bit &
+mlx_lm.server --port 8080 --model "$MODEL" &   # MODEL as set under "Pull a model"
 bash scripts/delegate.sh prose "Summarise this paragraph in two sentences." </path/to/some.txt
 ```
 
