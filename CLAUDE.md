@@ -22,7 +22,7 @@ Delegate, with or without a recipe (a recipe's tier comes from its frontmatter; 
 echo "<context>" | bash scripts/delegate.sh prose "<prompt>"
 bash scripts/delegate.sh --recipe commit-message --var diff_stat=... --var why=... --var recent_commits="$(git log --oneline -5)" "commit message"
 bash scripts/pick-model.sh <code|prose|reasoning|long-context|vision|embedding|premium-general|reasoning-vision>
-bash scripts/audit-models.sh        # read-only: tier routing plus llmfit upgrade suggestions
+bash scripts/audit-models.sh        # read-only: tier routing; trialling a model is docs/model-swap.md
 ```
 
 Record a verdict on every delegation, pinned with the `id="..."` the `delegate-meta:` line printed. `hit` means kept as-is, `scaffold` edited and shipped, `miss` rewritten or discarded; scaffold and miss need a reason, and `--final` stores the shipped text beside the draft:

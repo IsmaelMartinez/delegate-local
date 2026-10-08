@@ -72,17 +72,6 @@ EOF
   chmod +x "$dir/curl"
 }
 
-# audit-models.sh needs an llmfit stub.
-make_mock_llmfit() {
-  local dir="$1"
-  cat > "$dir/llmfit" <<'EOF'
-#!/usr/bin/env bash
-# Minimal stub: any `recommend --json` prints an empty model list.
-if [[ "$*" == *--json* ]]; then echo '{"models":[]}'; else echo ""; fi
-EOF
-  chmod +x "$dir/llmfit"
-}
-
 run() {
   # run <PATH> <cmd...> -> $OUT, $ERR, $EC. HOME is sandboxed so a real
   # per-user override config cannot leak in; DELEGATE_LOCAL_CONFIG is forwarded.
@@ -468,15 +457,22 @@ assert_eq "0" "$EC" "audit: no provider reachable -> exit 0"
 assert_contains "unreachable" "$OUT" "audit: no provider reachable -> marks the provider unreachable"
 rm -rf "$tmp"
 
-# B. Provider present, llmfit missing -> graceful skip, exit 0.
+# B. The llmfit upgrade suggestions are gone (#658): even with an llmfit on
+# PATH the audit never calls it, and it points at the model-trial runbook.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:qwen3-coder:30b,gemma4:latest"
+cat > "$tmp/llmfit" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$tmp/llmfit.calls"
+echo '{"models":[]}'
+EOF
+chmod +x "$tmp/llmfit"
 EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
-assert_eq "0" "$EC" "audit: no llmfit -> exit 0"
-assert_contains "Upgrade check skipped" "$OUT" "audit: no llmfit -> skip message"
+assert_eq "0" "$EC" "audit: exits 0 with llmfit on PATH"
+assert_eq "no" "$([[ -e "$tmp/llmfit.calls" ]] && echo yes || echo no)" "audit: never calls llmfit (#658)"
+assert_absent_out "llmfit" "audit: prints no llmfit section (#658)"
+assert_contains "docs/model-swap.md" "$OUT" "audit: points at the model-trial runbook (#658)"
 rm -rf "$tmp"
-
-# The "no jq" path is not simulated: macOS 15+ ships /usr/bin/jq.
 
 echo
 echo "=== pick-model.sh: --print-providers / --print-installed ==="
@@ -539,53 +535,6 @@ assert_eq "0" "$EC" "audit: reachable provider -> exit 0"
 assert_contains "reachable" "$OUT" "audit: reports provider reachability"
 assert_contains "qwen3-coder:30b" "$OUT" "audit: inventory is what the provider serves"
 assert_contains "reasoning-vision" "$OUT" "audit: routing table covers the scaffolded tiers"
-rm -rf "$tmp"
-
-# No ollama binary still gets the full report, upgrade check included: the
-# cross-check reads what the providers serve, not `ollama list` (#492), so an
-# MLX- or Docker-only host is no longer told the check was skipped.
-tmp=$(mktemp -d)
-make_mock_provider "$tmp" "1:qwen3.6:35b-a3b-q8_0"
-make_mock_llmfit "$tmp"
-EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
-assert_eq "0" "$EC" "audit: no ollama binary -> exit 0"
-assert_contains "prose" "$OUT" "audit: still prints tier routing without the ollama CLI"
-assert_contains "Top llmfit recommendations" "$OUT" "audit: the upgrade check runs without the ollama CLI (#492)"
-assert_absent_out "Upgrade check skipped" "audit: no ollama is not a reason to skip the upgrade check (#492)"
-rm -rf "$tmp"
-
-# [installed] is judged against the provider inventory: an llmfit candidate
-# whose stem matches a served model is installed, one that does not is not.
-tmp=$(mktemp -d)
-make_mock_provider "$tmp" "1:qwen3.6:35b-a3b-q8_0"
-cat > "$tmp/llmfit" <<'EOF'
-#!/usr/bin/env bash
-if [[ "$*" == *--json* ]]; then
-  echo '{"models":[{"name":"Qwen/Qwen3.6-35B-A3B-Instruct-Q8_0","provider":"Qwen","score":90,"estimated_tps":40,"parameter_count":"35B","release_date":"2026-01-01"},{"name":"Qwen/Qwen2.5-Coder-7B-Instruct","provider":"Qwen","score":80,"estimated_tps":80,"parameter_count":"7.6B","release_date":"2025-01-01"}]}'
-else echo ""; fi
-EOF
-chmod +x "$tmp/llmfit"
-EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
-assert_contains "Qwen/Qwen3.6-35B-A3B-Instruct-Q8_0  [installed]" "$OUT" "audit: a served model is [installed] whichever provider serves it (#492)"
-assert_contains "Qwen/Qwen2.5-Coder-7B-Instruct  [not installed]" "$OUT" "audit: an unserved candidate is [not installed]"
-assert_contains "No strong upgrades found" "$OUT" "audit: the installed leader beats the candidate, so nothing is suggested"
-rm -rf "$tmp"
-
-# llmfit is asked once per distinct argument list: prose, reasoning and
-# long-context all map to the "general" use-case, so three identical calls
-# collapsed to one (#565); only code maps to "coding".
-tmp=$(mktemp -d)
-make_mock_provider "$tmp" "1:qwen3.6:35b-a3b-q8_0"
-cat > "$tmp/llmfit" <<EOF
-#!/usr/bin/env bash
-echo "\$*" >> "$tmp/llmfit.calls"
-if [[ "\$*" == *--json* ]]; then echo '{"models":[]}'; else echo ""; fi
-EOF
-chmod +x "$tmp/llmfit"
-EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
-assert_eq "2" "$(wc -l < "$tmp/llmfit.calls" | tr -d ' ')" "audit: llmfit runs once per distinct use-case, not once per tier (#565)"
-assert_eq "1" "$(grep -c -- '--use-case general' "$tmp/llmfit.calls")" "audit: the three general-use-case tiers share one llmfit call"
-assert_eq "$(sort -u "$tmp/llmfit.calls" | wc -l | tr -d ' ')" "$(wc -l < "$tmp/llmfit.calls" | tr -d ' ')" "audit: no llmfit argument list is repeated"
 rm -rf "$tmp"
 
 # The embedding tier resolves like every other tier, with no per-tier

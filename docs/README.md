@@ -9,6 +9,7 @@ This index lists the live documentation. The authoritative project scope and pla
 - [`self-improvement-loop.md`](self-improvement-loop.md) — the calibration procedure: the `self-improve.sh` bundle, quarantined finals, the replay gate, the daily launchd runner (its plist is [`launchd/`](launchd/)) and verdict recording.
 - [`env.md`](env.md) — every `DELEGATE_*` environment variable the scripts read, with its default and effect.
 - [`verify.md`](verify.md) — `verify-draft.sh`, the offline grounding check of a draft against its inputs: the question it asks, the verify tier, threshold calibration and the 2026-10-07 measurements.
+- [`model-swap.md`](model-swap.md) — how to trial and switch the prose-tier model: the candidate server, paired replay, blind judge, grounding, trigger gate, speed, the `config.sh` live trial, the switch checklist and rollback.
 
 ## Architecture Decision Records — `adr/`
 
