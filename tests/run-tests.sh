@@ -38,6 +38,8 @@ assert_contains() {
   fi
 }
 
+assert_absent_out() { case "$OUT" in *"$1"*) echo "  FAIL  $2"; fail=$((fail+1));; *) echo "  PASS  $2"; pass=$((pass+1));; esac; }
+
 # Mock curl answering GET {base}/models. $2 is a space-separated "port:id,id"
 # spec: a port absent from it exits 7 (unreachable), a port with no ids
 # answers an empty list (reachable, serving nothing).
@@ -138,6 +140,20 @@ make_mock_provider "$tmp" "1:gemma4:latest"
 EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
 assert_eq "gemma4:latest" "$OUT" "prose falls to gemma4 when no qwen3.6"
 rm -rf "$tmp"
+
+# 6b. Every shipped spelling matches the MLX id of the same model too (#653):
+# MLX serves HuggingFace names, which hyphenate where Ollama and Docker Model
+# Runner do not (gemma-4 vs gemma4). The ids are real mlx-community repos.
+for spec in "prose mlx-community/gemma-4-26b-a4b-it-8bit" \
+            "prose mlx-community/meta-llama-Llama-4-Scout-17B-16E-4bit" \
+            "reasoning-vision mlx-community/Phi-4-reasoning-vision-15B-4bit"; do
+  t="${spec%% *}"; id="${spec#* }"
+  tmp=$(mktemp -d)
+  make_mock_provider "$tmp" "1:$id"
+  EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" "$t" || true
+  assert_eq "$id" "$OUT" "$t resolves the MLX id $id when it is the only candidate"
+  rm -rf "$tmp"
+done
 
 # 7. Prose tier prefers qwen3.6 when installed (the new preference).
 tmp=$(mktemp -d)
@@ -380,6 +396,67 @@ run "$tmp:$SAFE_PATH" env DELEGATE_TO_OLLAMA_CONFIG="$tmp/config.sh" bash "$PICK
 assert_eq "qwen3.6:35b-a3b" "$OUT" "legacy DELEGATE_TO_OLLAMA_CONFIG is ignored"
 rm -rf "$tmp"
 
+# 26. The documented one-line override prepends to the shipped list (#653):
+# the named model wins when served, and the shipped list still answers when
+# it is not.
+tmp=$(mktemp -d)
+cat > "$tmp/config.sh" <<'EOF'
+case "$tier" in
+  prose) prefs=(gemma-4-26b "${prefs[@]}") ;;
+esac
+EOF
+make_mock_provider "$tmp" "1:mlx-community/Qwen3.6-35B-A3B-8bit,mlx-community/gemma-4-26b-a4b-it-8bit"
+EC=0
+DELEGATE_LOCAL_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+assert_eq "mlx-community/gemma-4-26b-a4b-it-8bit" "$OUT" "prepend override: the prepended model wins"
+make_mock_provider "$tmp" "1:mlx-community/Qwen3.6-35B-A3B-8bit"
+EC=0
+DELEGATE_LOCAL_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$PICK" prose || true
+assert_eq "mlx-community/Qwen3.6-35B-A3B-8bit" "$OUT" "prepend override: the shipped list still answers"
+unset DELEGATE_LOCAL_CONFIG
+rm -rf "$tmp"
+
+echo
+echo "=== audit-models.sh: frozen config.sh warning (#653) ==="
+
+# A config.sh that reassigns a tier to a full list (the old init.sh output)
+# shadows every later change to the shipped list; the audit says so, naming
+# the tiers, even where the copy still equals the shipped list today.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "1:qwen3.6:35b-a3b"
+cat > "$tmp/config.sh" <<'EOF'
+case "$tier" in
+  code) prefs=("qwen3-coder-next" "qwen3-coder" "deepseek-r1" "qwen3.5") ;;
+  prose) prefs=("qwen3.6" "qwen3-next" "gemma4:latest" "gemma4" "llama4" "qwen3.5") ;;
+  embedding) prefs=("nomic-embed-text" "bge-large") ;;
+  premium-general) prefs=("qwen3.5:122b" "qwen3.5-122b") ;;
+esac
+EOF
+EC=0
+DELEGATE_LOCAL_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
+assert_eq "0" "$EC" "frozen config: audit still exits 0"
+assert_contains "config.sh replaces the shipped preferences for: code prose embedding" "$OUT" "frozen config: the audit names every tier it freezes"
+assert_absent_out "embedding premium-general" "frozen config: an opt-in for a tier that ships no list is not a frozen copy"
+unset DELEGATE_LOCAL_CONFIG
+
+# A prepend, an append and a missing file draw no warning.
+cat > "$tmp/config.sh" <<'EOF'
+case "$tier" in
+  prose) prefs=(gemma-4-26b "${prefs[@]}") ;;
+  code) prefs=("${prefs[@]}" qwen3-coder) ;;
+  premium-general) prefs=("qwen3.5-122b") ;;
+esac
+EOF
+EC=0
+DELEGATE_LOCAL_CONFIG="$tmp/config.sh" run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
+assert_eq "0" "$EC" "prepend config: audit exits 0"
+assert_absent_out "replaces the shipped preferences" "prepend config: no frozen-copy warning"
+EC=0
+DELEGATE_LOCAL_CONFIG="$tmp/does-not-exist.sh" run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
+assert_absent_out "replaces the shipped preferences" "missing config: no frozen-copy warning"
+unset DELEGATE_LOCAL_CONFIG
+rm -rf "$tmp"
+
 echo
 echo "=== audit-models.sh ==="
 
@@ -474,7 +551,6 @@ EC=0; run "$tmp:$SAFE_PATH" bash "$AUDIT" || true
 assert_eq "0" "$EC" "audit: no ollama binary -> exit 0"
 assert_contains "prose" "$OUT" "audit: still prints tier routing without the ollama CLI"
 assert_contains "Top llmfit recommendations" "$OUT" "audit: the upgrade check runs without the ollama CLI (#492)"
-assert_absent_out() { case "$OUT" in *"$1"*) echo "  FAIL  $2"; fail=$((fail+1));; *) echo "  PASS  $2"; pass=$((pass+1));; esac; }
 assert_absent_out "Upgrade check skipped" "audit: no ollama is not a reason to skip the upgrade check (#492)"
 rm -rf "$tmp"
 

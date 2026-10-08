@@ -8,7 +8,7 @@ Every `DELEGATE_*` variable a script under `scripts/` reads, listed once. All ar
 |---|---|---|---|
 | `DELEGATE_BASE_URL` | `${MLX_HOST:-http://localhost:8080}/v1 ${DOCKER_MODEL_HOST:-http://localhost:12434}/engines/v1 ${OLLAMA_HOST:-http://localhost:11434}/v1` | Space-separated, ordered list of OpenAI-compatible base URLs; the first reachable one serving a model the tier prefers wins. Entries with `user:pass@` are refused. | `pick-model.sh`, `audit-models.sh` |
 | `DELEGATE_PROBE_TIMEOUT` | `1` | Seconds for each `GET {base}/models` probe. | `pick-model.sh`, `audit-models.sh`, `eval-skill-triggers.sh` |
-| `DELEGATE_LOCAL_CONFIG` | `<data dir>/config.sh` | Per-user routing overrides sourced after the shipped tier preferences. | `pick-model.sh` |
+| `DELEGATE_LOCAL_CONFIG` | `<data dir>/config.sh` | Per-user routing overrides sourced after the shipped tier preferences. Prepend to a tier, e.g. `prose) prefs=(gemma-4-26b "${prefs[@]}") ;;`; a tier reassigned to a full list stops following the shipped one, and the audit warns about it. | `pick-model.sh`, `audit-models.sh` |
 | `DELEGATE_PREFLIGHT_TIMEOUT` | `10` | Seconds the 1-token canary may take before a recipe call exits 3. | `delegate.sh` |
 | `DELEGATE_NO_PREFLIGHT` | unset | `1` skips the canary on recipe calls. | `delegate.sh` |
 | `DELEGATE_REQUEST_TIMEOUT` | `600` | `curl --max-time` in seconds for the generation request. | `delegate.sh` |

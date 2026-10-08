@@ -42,6 +42,14 @@ while IFS= read -r tier; do
   fi
   printf "  %-17s -> %s\n" "$tier" "$model"
 done < <(bash "$pick" --print-prefs | cut -d: -f1)
+# A frozen copy (the old init.sh output) shadows every later change to the
+# shipped lists without changing the routing table above (#653).
+frozen=$(bash "$pick" --print-frozen-tiers | tr '\n' ' ')
+if [[ -n "$frozen" ]]; then
+  echo "  warning: config.sh replaces the shipped preferences for: ${frozen% }"
+  echo "  Later changes to those shipped lists never reach this machine. Prepend"
+  echo "  instead, e.g. prose) prefs=(gemma-4-26b \"\${prefs[@]}\") ;; or drop the tier."
+fi
 echo
 
 if ! command -v llmfit >/dev/null 2>&1; then
@@ -185,7 +193,7 @@ echo
 cat <<'EOF'
 === Next steps ===
 - On Ollama, verify the tag matches the HF name (Ollama sometimes re-packages).
-- After any pull, edit scripts/pick-model.sh prefs if the model-name pattern
-  changed, then re-run this script.
+- After any pull, if no shipped spelling matches the new id, prepend one to
+  its tier in config.sh (README "Personalising routing"), then re-run this script.
 - Prefer the smallest model sufficient for the task (speed + energy).
 EOF
