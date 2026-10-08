@@ -1,6 +1,6 @@
 # delegate-local
 
-An agent skill that routes summarisation, triage, and bulk-text tasks to locally-installed models (Ollama or MLX) instead of the cloud API. Keeps content on-device, preserves the agent's context window, and uses `llmfit` to keep the model set current.
+An agent skill that routes summarisation, triage, and bulk-text tasks to locally-installed models (Ollama or MLX) instead of the cloud API. Keeps content on-device and preserves the agent's context window.
 
 ## 30-second quickstart
 
@@ -41,8 +41,7 @@ git diff HEAD~5 | bash scripts/delegate.sh prose "Summarise in 3 bullets."
 ## Requirements
 
 - At least one OpenAI-compatible model server running locally: [Ollama](https://ollama.com) with a model pulled, [`mlx-lm`](https://github.com/ml-explore/mlx-lm) on Apple Silicon, or Docker Model Runner (see [Providers](#providers) below)
-- `jq` (for `audit-models.sh`)
-- `llmfit` (optional, enables upgrade suggestions based on your hardware)
+- `jq` (for `delegate.sh` and `pick-model.sh`)
 
 ## Providers
 
@@ -224,7 +223,7 @@ The mechanisms are fork-friendly out of the box — routing, metrics, and the fe
 - `SKILL.md` — triggering description and usage patterns the agent reads.
 - `scripts/delegate.sh <tier> "<prompt>"` (or `--recipe NAME ["<prompt>"]`, which takes its tier from the recipe and makes the prompt optional) — wraps `pick-model.sh` + the backend's HTTP API (Ollama or MLX, auto-selected) with `think:false` and `temperature:0` defaults. Appends one JSON line per call to `~/.local/share/delegate-local/metrics.jsonl`. Use this instead of bare `ollama run` or hand-rolled `curl` calls.
 - `scripts/pick-model.sh <tier>` — resolves a tier to the best installed model via substring preference lists. Tiers are `code`, `prose`, `reasoning`, and `long-context` (active), plus `vision`, `embedding`, `premium-general`, and `reasoning-vision` (scaffolded). `code`, `reasoning` and `long-context` share the `prose` list, so on a server like `mlx_lm.server` that advertises every cached model they resolve the resident prose model rather than load a second one beside it (#652); `premium-general` ships an empty list and resolves nothing until `config.sh` gives it one. Edit this file (not the skill body) when your installed set changes.
-- `scripts/audit-models.sh` — prints installed models, tier routing, and llmfit-driven upgrade suggestions filtered to first-party providers. Read-only; never pulls.
+- `scripts/audit-models.sh` — prints the providers, installed models and tier routing, and warns when `config.sh` freezes a tier's list. Read-only; never pulls. Trialling and switching a model is the procedure in [`docs/model-swap.md`](docs/model-swap.md).
 - `scripts/metrics-summary.sh` — reads the metrics JSONL and prints volume per tier, p50/p95 latency, total tokens-avoided, top models by frequency, and per-project / per-recipe hit-rate. Pass `--since YYYY-MM-DD` or `--days N` to window every section to recent rows. Read-only.
 - `scripts/delegate-feedback.sh [--id <id>|--ts <iso8601>] [--final <path|->] <verdict>`, where the verdict is `hit`, `scaffold "<reason>"` or `miss "<reason>"` — records whether you used a delegation's output as-is (hit), rewrote or discarded it (miss), or edited it and shipped it (scaffold), appending a `feedback` row to the metrics JSONL. The reason is required on scaffold and miss and the call exits 2 without one; every row carries `verdict_source:"agent"`, the one verdict tier (ADR 0030). `--id` pins the verdict to the row whose `otel_span_id` the `delegate-meta:` line printed as `id="..."` (the nudge already carries it); without a pin the verdict attaches to the one delegate row inside the last 5 minutes and refuses when there are several, since parallel sessions delegate seconds apart (#474). This is the calibration signal `metrics-summary.sh` rolls up. `--final` stores the text that actually shipped beside the draft `delegate.sh` already captured, which is what turns a rejection from a prose description into a diffable pair (ADR 0029). Flags may appear anywhere on the line, including after the reason; `--` before the verdict ends flag parsing so a reason can name one verbatim. When the boundary hook has already stored what a credited post sent, the verdict adopts it without `--final` and records `final_source:"posted"`.
 - `scripts/self-improve.sh` — the gate and evidence bundle for the recurring calibration session. Exits 10 in silence when nothing has been delegated since its watermark, and 0 with the bundle when something has: verdict tally, per-recipe keep rates worst-first, clustered deterministic check failures, and for every rejection the reason plus, where the pair was captured, `DROPPED` (anchors the human had to put back), `INVENTED` (values the model made up, where the human put something in their place) or `CUT` (material removed, where they put nothing back), and `SHAPE` (list where prose shipped). A recipe that ran under more than one template in the window gets a per-template line, which is the post-merge read for an edit. The procedure a session follows is [`docs/self-improvement-loop.md`](docs/self-improvement-loop.md).
@@ -324,17 +323,15 @@ More capable local models will shift these numbers but probably not by an order 
 
 The skill intentionally avoids frameworks. Local models are good summarisers and weak agents; delegation is a shell pipe, not an orchestration layer. The `pick-model.sh` preference lists are the single point of truth for routing — no hardcoded model names in the skill body.
 
-`audit-models.sh` cross-checks llmfit's `installed` flag against the models the reachable providers serve (the same union `pick-model.sh --print-installed` reports, so MLX and Docker Model Runner count as much as Ollama) because llmfit tracks its own HuggingFace GGUF cache rather than any provider's store. It filters suggestions to Alibaba/Google/Meta/Microsoft/DeepSeek/Mistral/Zhipu so third-party fine-tunes that Ollama won't have under the same name don't pollute the output.
+`audit-models.sh` reports routing only. A model change is decided by a measured trial rather than a hardware-fit score: [`docs/model-swap.md`](docs/model-swap.md) runs the candidate beside the resident model, replays the busiest recipes on both, and checks grounding, triggers and speed before a one-line `config.sh` trial.
 
 ## Related projects
 
-This skill sits at the intersection of three personal projects, and is observed by a fourth. These are the upstream author's portfolio infrastructure — useful context for the design decisions, but none of them is required to use or fork the skill (`llmfit` remains an optional PATH check either way).
+This skill sits at the intersection of two personal projects, and is observed by a third. These are the upstream author's portfolio infrastructure — useful context for the design decisions, but none of them is required to use or fork the skill.
 
 [`local-brain`](https://github.com/IsmaelMartinez/local-brain) is the source of the framing this skill operationalises. The core finding — local models are strong summarisers and weak agents, so delegation is a shell pipe rather than an orchestration layer — comes directly from that work, and is why this skill is implemented as bash scripts rather than a framework.
 
 [`ai-model-advisor`](https://github.com/IsmaelMartinez/ai-model-advisor) supplies the tier classification (`code` / `prose` / `reasoning` / `long-context`) and the "smallest model sufficient" environmental philosophy that `pick-model.sh` encodes. When you change the preference order in that script, the rationale you are applying is the one ai-model-advisor argues for: bigger is not better when a 9GB model handles the prompt in half the time.
-
-[`llmfit`](https://github.com/IsmaelMartinez/llmfit) is an optional dependency that enables hardware-aware upgrade suggestions in `audit-models.sh`. When llmfit is not on PATH the audit prints routing only and skips the upgrade-check section with a hint. When it is present, the audit feeds llmfit's hardware-scored recommendations through a first-party-provider filter and surfaces upgrades that beat the installed leader by 3+ points. Patterns the audit script learns about Ollama-vs-HuggingFace name mappings (`hf_stem` normalisation) flow back to llmfit when worth generalising.
 
 [`repo-butler`](https://github.com/IsmaelMartinez/repo-butler) tracks repo health across the portfolio. No integration work is needed here — repo-butler picks up new repos automatically once they exist on GitHub, and this one is now visible to it. It monitors the upstream repo only; forks are not observed and lose nothing by it.
 

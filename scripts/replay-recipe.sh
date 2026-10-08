@@ -42,8 +42,10 @@
 #                     requested by that exact id (DELEGATE_MODEL), never
 #                     through a tier list. Kept cases are listed and tallied
 #                     apart but left out of the sign test, because their
-#                     reference is the current model's own draft. Exclusive
-#                     with --candidate
+#                     reference is a model's own draft (usually, not always,
+#                     the current model's; the corpus is not filtered by
+#                     model), which measures similarity, not quality.
+#                     Exclusive with --candidate
 #   --candidate-base URL
 #                     the OpenAI-compatible base serving ID (e.g. a second
 #                     mlx_lm.server on http://localhost:8081/v1); default the
@@ -555,9 +557,9 @@ else
   fi
 fi
 kept_n=$(grep -c '|kept|' "$cases_tmp"); scaffold_n=$(grep -c '|scaffold|' "$cases_tmp"); rewrote_n=$(grep -c '|rewrote|' "$cases_tmp")
-# In a model comparison a kept case's reference is the champion model's own
-# draft, so the champion cannot lose it on anchors and the candidate rarely
-# ties it: those cases are scored and listed but tallied apart, and the sign
+# In a model comparison a kept case's reference is a model's own draft,
+# usually but not always the champion model's, so it rewards sounding like
+# that draft rather than quality: those cases are scored and listed but tallied apart, and the sign
 # test, the newest third and the checks and length totals read the edited
 # cases alone.
 counted_n=$n_cases
@@ -653,7 +655,7 @@ if [[ -z "$cand_dir" ]]; then
 fi
 
 if [[ -n "$candidate_model" ]]; then
-  echo "Kept (not counted): n=$kept_n  wins=$kept_wins  losses=$kept_losses  ties=$kept_ties  errors=$kept_errors  (the reference is $model's own draft)"
+  echo "Kept (not counted): n=$kept_n  wins=$kept_wins  losses=$kept_losses  ties=$kept_ties  errors=$kept_errors  (the reference is a model's own draft)"
 fi
 echo "Summary: n=$counted_n  wins=$wins  losses=$losses  ties=$ties  errors=$errors"
 echo "Checks failed: champion=$champ_checks  candidate=$cand_checks"

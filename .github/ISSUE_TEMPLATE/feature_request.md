@@ -24,4 +24,4 @@ If this maps to an existing phase in `ROADMAP.md`, note which one. If it is a ne
 
 ## Anything else
 
-Links to related projects, prior discussions, or upstream Ollama / llmfit issues.
+Links to related projects, prior discussions, or upstream Ollama / MLX issues.
