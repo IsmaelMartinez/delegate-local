@@ -1224,20 +1224,30 @@ if (( verify_on == 1 )); then
   fi
   if (( verify_rc <= 1 )) && jq -e '.verdict' <<<"$verify_json" >/dev/null 2>&1; then
     # verify-draft.sh's stderr on a score is only its uncalibrated-threshold
-    # note; inline it would print on every call, so it is dropped here and
-    # left to the standalone script, and the row's threshold says what was used.
-    if [[ "$(jq -r '.verdict' <<<"$verify_json")" == "flag" ]]; then
+    # note; inline it would print on every call, so it is dropped here. A
+    # score against that 0.5 fallback (threshold_source "default") is no
+    # verdict at all: it passes almost every draft, so it is recorded as
+    # "uncalibrated", never flags, and the meta line is the one notice.
+    if [[ "$(jq -r '.threshold_source' <<<"$verify_json")" == "default" ]]; then
+      verify_json=$(jq -c '.verdict = "uncalibrated"' <<<"$verify_json")
+    elif [[ "$(jq -r '.verdict' <<<"$verify_json")" == "flag" ]]; then
       echo "delegate: verifier flagged a possibly unsupported claim ($(jq -r '"p_supported=\(.p_supported) < \(.threshold), \(.model)"' <<<"$verify_json")) — check the draft against the facts before posting." >&2
     fi
   else
     verify_json=""
     # A curl --max-time on decide.sh's request is named as the timeout it
-    # is; otherwise verify-draft.sh's own last word on why.
+    # is; otherwise decide.sh's own reason (no model for the tier, a failed
+    # request), which verify-draft.sh follows with a generic line, and only
+    # then verify-draft.sh's last word.
     if grep -q 'curl: (28)' "$verify_err"; then
       verify_error="timed out after ${verify_timeout}s"
     else
-      verify_error=$(grep '^verify-draft: ' "$verify_err" | tail -n 1)
-      verify_error="${verify_error#verify-draft: }"
+      verify_error=$(grep '^decide: ' "$verify_err" | tail -n 1)
+      verify_error="${verify_error#decide: }"
+      if [[ -z "$verify_error" ]]; then
+        verify_error=$(grep '^verify-draft: ' "$verify_err" | tail -n 1)
+        verify_error="${verify_error#verify-draft: }"
+      fi
       [[ -n "$verify_error" ]] || verify_error="verify-draft.sh exited $verify_rc"
     fi
     echo "delegate: verifier unavailable ($verify_error); the draft is returned unverified." >&2

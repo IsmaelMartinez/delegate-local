@@ -5107,11 +5107,27 @@ assert_contains '"facts":"The fix landed in abc123.\nbob\nalice"' "$(jq -r '.mes
   "verify: the facts are the piped stdin then each --var value in key order, without the prompt"
 assert_contains '--max-time 60 ' "$(cat "$tmp/vargv")" "verify: the verifier call is bounded at 60 s by default"
 assert_eq "Fixed in abc123. SCORE_0.9" "$(cat "$tmp/stdout")" "verify: the draft is returned unchanged"
-# No threshold recorded or given: verify-draft.sh falls back to 0.5 with a
-# note, which the inline path does not print on every call.
+assert_eq "env" "$(jq -r '.verify.threshold_source' <<<"$(tail -1 "$metrics")")" "verify: an env threshold is recorded as its source"
+# No threshold given, recorded or shipped for the model: verify-draft.sh
+# falls back to 0.5, which is not a meaningful verdict, so the row says
+# uncalibrated, nothing flags, and the meta line is the only notice.
+make_mock_curl_verify "$tmp" 'Reverted abc123. SCORE_0.41'
 err=$(run_recipe vr --var who=alice)
-assert_eq "0.5" "$(jq -r '.verify.threshold' <<<"$(tail -1 "$metrics")")" "verify: an uncalibrated model is scored at 0.5"
+row=$(tail -1 "$metrics")
+assert_eq "0.5 default uncalibrated" "$(jq -r '"\(.verify.threshold) \(.verify.threshold_source) \(.verify.verdict)"' <<<"$row")" \
+  "verify: an uncalibrated model's score is recorded as uncalibrated, not pass or flag"
+assert_not_contains "verifier flagged" "$err" "verify: an uncalibrated score never prints the flag line"
+assert_contains 'verify="uncalibrated"' "$err" "verify: the meta line says the verifier is uncalibrated"
 assert_not_contains "no calibrated threshold" "$err" "verify: the inline path prints no uncalibrated note"
+# A model with a shipped threshold is scored against it with no setup.
+MOCK_MODELS='mlx-community/Qwen3.6-35B-A3B-8bit'
+make_mock_curl_verify "$tmp" 'Reverted abc123. SCORE_0.41'
+err=$(run_recipe vr --var who=alice)
+row=$(tail -1 "$metrics")
+assert_eq "0.7549 shipped flag" "$(jq -r '"\(.verify.threshold) \(.verify.threshold_source) \(.verify.verdict)"' <<<"$row")" \
+  "verify: a model with a shipped threshold is scored against it"
+assert_contains "verifier flagged" "$err" "verify: ...and a shipped-threshold flag prints the flag line"
+MOCK_MODELS='qwen3.6:35b-a3b'
 
 # 661b. A flag: one stderr line, the row says flag, output, exit code and the
 # single dispatch unchanged (a flag never earns the retry).
@@ -5149,6 +5165,14 @@ row=$(tail -1 "$metrics")
 assert_eq 0 "$rc" "verify: an unscorable answer leaves the exit code at 0"
 assert_contains "coverage 0" "$(jq -r '.verify_error' <<<"$row")" "verify: verify-draft's own reason is recorded"
 assert_eq "Fixed in abc123. NOLETTER" "$(cat "$tmp/stdout")" "verify: ...and the draft is returned"
+# No model resolves for the verify tier: decide.sh's own reason is the
+# diagnostic one, not verify-draft.sh's generic "unavailable" line after it.
+printf '%s\n' 'case "$tier" in verify) prefs=(no-such-verifier) ;; esac' > "$tmp/config.sh"
+make_mock_curl_verify "$tmp" 'Fixed in abc123. SCORE_0.9'
+err=$(run_recipe DELEGATE_LOCAL_CONFIG="$tmp/config.sh" vr --var who=alice)
+row=$(tail -1 "$metrics")
+assert_eq "no model resolves for tier 'verify'" "$(jq -r '.verify_error' <<<"$row")" "verify: decide.sh's reason is recorded as verify_error"
+assert_contains "delegate: verifier unavailable (no model resolves for tier 'verify')" "$err" "verify: ...and named on stderr"
 
 # 661e. DELEGATE_VERIFY=0 switches a tagged recipe off.
 make_mock_curl_verify "$tmp" 'Fixed in abc123. SCORE_0.41'

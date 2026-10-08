@@ -17,8 +17,12 @@
 # the template's own instructions are not mistaken for facts). Facts are cut
 # at 16000 characters, as measured.
 #
-# Prints one JSON line: {"model","p_supported","threshold","verdict","latency_ms"},
-# verdict "pass" when p_supported >= threshold, else "flag".
+# Prints one JSON line: {"model","p_supported","threshold","threshold_source",
+# "verdict","latency_ms"}, verdict "pass" when p_supported >= threshold, else
+# "flag". The threshold is the first of DELEGATE_VERIFY_THRESHOLD ("env"), the
+# data dir's verify-thresholds.tsv ("calibrated"), the repo's
+# lib/verify-thresholds.tsv for the exact served id ("shipped"), and 0.5
+# ("default", with a stderr note).
 #
 # --calibrate scores every row of FILE.jsonl ({facts, draft, label}, label one
 # of supported, contradicted or unsupported; the last two count as not
@@ -35,8 +39,8 @@
 #              letter); --calibrate also exits 3, recording nothing, when any
 #              row could not be scored or the resolved model changed mid-run.
 #
-# Env:  DELEGATE_VERIFY_THRESHOLD overrides the recorded threshold (0-1); with
-#       neither, 0.5 and a one-line stderr note. DELEGATE_LOCAL_DATA_DIR and
+# Env:  DELEGATE_VERIFY_THRESHOLD overrides the recorded and shipped
+#       thresholds (0-1); with none of the three, 0.5 and a one-line stderr note. DELEGATE_LOCAL_DATA_DIR and
 #       DELEGATE_METRICS_FILE locate the thresholds, metrics and drafts.
 set -euo pipefail
 
@@ -204,14 +208,24 @@ fi
 
 line=$(score "$input") || exit 3
 IFS=$'\t' read -r model p latency <<<"$line"
+# The first of: the env override, this machine's --calibrate record, the
+# repo's shipped value for the exact served id, 0.5. threshold_source names
+# which, so a caller can tell a calibrated verdict from the 0.5 fallback.
+lookup_threshold() { # file
+  [[ -f "$1" ]] && awk -F'\t' -v m="$model" '$1 == m { t = $2 } END { print t }' "$1"
+}
 threshold="$env_threshold"
-if [[ -z "$threshold" && -f "$thresholds_file" ]]; then
-  threshold=$(awk -F'\t' -v m="$model" '$1 == m { t = $2 } END { print t }' "$thresholds_file")
+source_name="env"
+if [[ -z "$threshold" ]]; then
+  threshold=$(lookup_threshold "$thresholds_file" || true); source_name="calibrated"
 fi
 if [[ -z "$threshold" ]]; then
-  threshold=0.5
+  threshold=$(lookup_threshold "$script_dir/lib/verify-thresholds.tsv" || true); source_name="shipped"
+fi
+if [[ -z "$threshold" ]]; then
+  threshold=0.5; source_name="default"
   echo "verify-draft: no calibrated threshold for $model; using 0.5 (run --calibrate)" >&2
 fi
-jq -nc --arg m "$model" --argjson p "$p" --argjson t "$threshold" --argjson ms "$latency" \
-  '{model: $m, p_supported: $p, threshold: $t, verdict: (if $p >= $t then "pass" else "flag" end), latency_ms: $ms}'
+jq -nc --arg m "$model" --argjson p "$p" --argjson t "$threshold" --arg src "$source_name" --argjson ms "$latency" \
+  '{model: $m, p_supported: $p, threshold: $t, threshold_source: $src, verdict: (if $p >= $t then "pass" else "flag" end), latency_ms: $ms}'
 jq -ne --argjson p "$p" --argjson t "$threshold" '$p >= $t' >/dev/null || exit 1

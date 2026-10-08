@@ -385,9 +385,31 @@ assert_contains "maintainer-reply      flagged=1/3 (33.3%)  errors=1" "$vsec" \
 assert_contains "pr-description        flagged=0/1 (0.0%)" "$vsec" "verify: a recipe with no flag reads 0"
 assert_not_contains "commit-message" "$vsec" "verify: a recipe never verified has no line"
 assert_not_contains "pr-description        flagged=0/1 (0.0%)  errors" "$vsec" "verify: errors= only when there are some"
+assert_not_contains "    model=" "$vsec" "verify: one verifier model, no per-model sub-lines"
 grep -v '"verify"' "$vfix" > "$vfix.none"
 out=$(bash "$SCRIPT" --file "$vfix.none" 2>&1)
-assert_not_contains "Verifier flag rate" "$out" "verify: no section when no row carries verify"
+vsec=$(sed -n '/^Verifier flag rate/,/^$/p' <<<"$out")
+assert_contains "maintainer-reply      flagged=0/0 (0.0%)  errors=1" "$vsec" \
+  "verify: a window where every verifier call failed still shows the section"
+grep -v '"verify' "$vfix" > "$vfix.none"
+out=$(bash "$SCRIPT" --file "$vfix.none" 2>&1)
+assert_not_contains "Verifier flag rate" "$out" "verify: no section when no row carries verify or verify_error"
+# Two verifier models (or thresholds) in the window: a sub-line per pair,
+# as the per-recipe rollup splits by model, and uncalibrated scores (the 0.5
+# fallback) left out of flagged/verified and counted on their own.
+cat > "$vfix" <<'EOF'
+{"ts":"2026-10-08T10:00:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100,"verify":{"model":"q36","p_supported":0.9,"threshold":0.7549,"verdict":"pass","latency_ms":900}}
+{"ts":"2026-10-08T10:01:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100,"verify":{"model":"q36","p_supported":0.4,"threshold":0.7549,"verdict":"flag","latency_ms":900}}
+{"ts":"2026-10-08T10:02:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100,"verify":{"model":"q38","p_supported":0.95,"threshold":0.6792,"verdict":"pass","latency_ms":900}}
+{"ts":"2026-10-08T10:03:00Z","source":"delegate","recipe":"maintainer-reply","tier":"prose","model":"q","duration_ms":4000,"exit_status":0,"estimated_tokens_avoided":100,"verify":{"model":"other","p_supported":0.3,"threshold":0.5,"threshold_source":"default","verdict":"uncalibrated","latency_ms":900}}
+EOF
+out=$(bash "$SCRIPT" --file "$vfix" 2>&1)
+vsec=$(sed -n '/^Verifier flag rate/,/^$/p' <<<"$out")
+assert_contains "maintainer-reply      flagged=1/3 (33.3%)  uncalibrated=1" "$vsec" \
+  "verify: uncalibrated scores are counted apart, not as verified"
+assert_contains "    model=q36 t=0.7549" "$vsec" "verify: a sub-line per verifier model and threshold"
+assert_contains "flagged=1/2 (50.0%)" "$(grep 'model=q36' <<<"$vsec")" "verify: ...with that pair's own rate"
+assert_contains "flagged=0/1 (0.0%)" "$(grep 'model=q38 t=0.6792' <<<"$vsec")" "verify: ...for each pair"
 rm -f "$vfix" "$vfix.none"
 
 # 14. Per-recipe negative gate: no recipe rows -> section hidden.
