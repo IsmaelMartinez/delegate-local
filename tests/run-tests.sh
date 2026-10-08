@@ -183,6 +183,17 @@ EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" long-context || true
 assert_eq "qwen3.6:35b-a3b" "$OUT" "long-context picks qwen3.6 first"
 rm -rf "$tmp"
 
+# 9b. verify tier (#659) ships the prose prefs, so the grounding check runs on
+# the resident prose model at no extra memory until config.sh swaps it.
+tmp=$(mktemp -d)
+make_mock_provider "$tmp" "1:gemma4:latest,qwen3.6:35b-a3b"
+EC=0; run "$tmp:$SAFE_PATH" bash "$PICK" verify || true
+assert_eq "qwen3.6:35b-a3b" "$OUT" "verify resolves to the prose model"
+rm -rf "$tmp"
+EC=0; run "$SAFE_PATH" bash "$PICK" --print-prefs || true
+assert_eq "$(printf '%s\n' "$OUT" | sed -n 's/^prose://p')" "$(printf '%s\n' "$OUT" | sed -n 's/^verify://p')" \
+  "--print-prefs lists verify with the prose prefs"
+
 # 10. --dry-run with a matching install: stdout = model, stderr has the trace.
 tmp=$(mktemp -d)
 make_mock_provider "$tmp" "1:qwen3.6:35b-a3b,gemma4:latest"

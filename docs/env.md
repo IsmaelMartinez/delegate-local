@@ -89,6 +89,7 @@ Every `DELEGATE_*` variable a script under `scripts/` reads, listed once. All ar
 | `DELEGATE_CLEF_URL` | `http://127.0.0.1:8765` | Base URL of a SystemOne endpoint (`POST /v1/systemone`), such as Clef served locally from the data dir's `spikes/clef/`. | `decide.sh` |
 | `DELEGATE_CLEF_MODEL` | `clef-flash` | The `model` sent when the request names none. | `decide.sh` |
 | `DELEGATE_DECIDE_TIMEOUT` | `120` | Seconds for each decision request, on either backend. | `decide.sh` |
+| `DELEGATE_VERIFY_THRESHOLD` | the resolved model's line in `<data dir>/verify-thresholds.tsv`, else `0.5` | p(supported) at or above which `verify-draft.sh` passes a draft (0-1); overrides the threshold `--calibrate` recorded. | `verify-draft.sh` |
 
 ## Embeddings
 

@@ -8,6 +8,7 @@ This index lists the live documentation. The authoritative project scope and pla
 - [`boundary-hook.md`](boundary-hook.md) — the opt-in `PreToolUse`, `PostToolUse` and `Stop` hooks that credit, enforce and capture delegations at commit, PR, issue and comment boundaries, with their install.
 - [`self-improvement-loop.md`](self-improvement-loop.md) — the calibration procedure: the `self-improve.sh` bundle, quarantined finals, the replay gate, the daily launchd runner (its plist is [`launchd/`](launchd/)) and verdict recording.
 - [`env.md`](env.md) — every `DELEGATE_*` environment variable the scripts read, with its default and effect.
+- [`verify.md`](verify.md) — `verify-draft.sh`, the offline grounding check of a draft against its inputs: the question it asks, the verify tier, threshold calibration and the 2026-10-07 measurements.
 
 ## Architecture Decision Records — `adr/`
 

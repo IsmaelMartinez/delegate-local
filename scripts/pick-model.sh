@@ -2,7 +2,7 @@
 # Pick the best installed local-LLM model for a task tier.
 # Usage: pick-model.sh [--dry-run] <tier>
 #   tier ∈ {code, prose, reasoning, long-context,
-#           vision, embedding, premium-general, reasoning-vision}
+#           vision, embedding, premium-general, reasoning-vision, verify}
 # Prints the model name on stdout; exit 1 when no match, 2 on usage error.
 # --dry-run also traces the resolution to stderr. --print-providers,
 # --print-installed and --print-prefs take no tier and exist so callers never
@@ -29,7 +29,7 @@
 set -euo pipefail
 
 # Single source of truth for the tier names; delegate.sh reads this line.
-TIERS="code|prose|reasoning|long-context|vision|embedding|premium-general|reasoning-vision"
+TIERS="code|prose|reasoning|long-context|vision|embedding|premium-general|reasoning-vision|verify"
 
 # Space-separated substrings per tier; --print-prefs emits them all so
 # external callers never duplicate the lists.
@@ -53,6 +53,9 @@ EMBEDDING_PREFS="nomic-embed-text bge-large"
 # `premium-general) prefs=("qwen3.5-122b") ;;`.
 PREMIUM_GENERAL_PREFS=""
 REASONING_VISION_PREFS="phi4-reasoning-vision phi-4-reasoning-vision qwen3-vl:30b-a3b-thinking qwen3-vl-30b-a3b-thinking"
+# verify (#659, verify-draft.sh) ships the prose list so the grounding check
+# costs no extra memory; config.sh swaps the verifier with one line.
+VERIFY_PREFS="$PROSE_PREFS"
 
 dry_run=0
 print_prefs=0
@@ -82,6 +85,7 @@ if (( print_prefs )); then
   printf 'embedding:%s\n' "$EMBEDDING_PREFS"
   printf 'premium-general:%s\n' "$PREMIUM_GENERAL_PREFS"
   printf 'reasoning-vision:%s\n' "$REASONING_VISION_PREFS"
+  printf 'verify:%s\n' "$VERIFY_PREFS"
   exit 0
 fi
 
@@ -169,6 +173,7 @@ set_shipped_prefs() {
     embedding)        prefs=($EMBEDDING_PREFS) ;;
     premium-general)  prefs=($PREMIUM_GENERAL_PREFS) ;;
     reasoning-vision) prefs=($REASONING_VISION_PREFS) ;;
+    verify)           prefs=($VERIFY_PREFS) ;;
     *) return 1 ;;
   esac
 }
