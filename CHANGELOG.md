@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.48.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.47.0...v0.48.0) (2026-10-08)
+
+
+### Features
+
+* **eval:** add --decide mode to eval-skill-triggers.sh ([#649](https://github.com/IsmaelMartinez/delegate-local/issues/649)) ([dd0c584](https://github.com/IsmaelMartinez/delegate-local/commit/dd0c5843c902351a2f06f0dae04f9866a51b42ed))
+* **gpu-gate:** add thermal and utilization gate for batch inference ([#650](https://github.com/IsmaelMartinez/delegate-local/issues/650)) ([2873634](https://github.com/IsmaelMartinez/delegate-local/commit/287363400a44ca82c8877dd0c21573030eaf1728))
+* **metrics:** split per-recipe rates by model and add --model filter ([#664](https://github.com/IsmaelMartinez/delegate-local/issues/664)) ([8387e22](https://github.com/IsmaelMartinez/delegate-local/commit/8387e22eeefbfca1e084556bcdd53b19cf2074d2))
+* **pick-model:** spell shipped prefs for MLX and warn on a frozen config.sh ([#668](https://github.com/IsmaelMartinez/delegate-local/issues/668)) ([2669875](https://github.com/IsmaelMartinez/delegate-local/commit/26698750549b67242aef6fa093dbc96a7d53a7dd))
+* **replay-recipe:** add --candidate-model for two-model comparison ([#669](https://github.com/IsmaelMartinez/delegate-local/issues/669)) ([0d752b4](https://github.com/IsmaelMartinez/delegate-local/commit/0d752b442c8f8c605a0453b4c98bf251db068a65))
+* **verify:** add verify-draft.sh for offline grounding checks ([#665](https://github.com/IsmaelMartinez/delegate-local/issues/665)) ([784447c](https://github.com/IsmaelMartinez/delegate-local/commit/784447c4820ce16cfd87450af48161947016dbd8))
+
+
+### Bug Fixes
+
+* **gpu-gate:** gate utilisation on the first call only and keep batches awake ([#666](https://github.com/IsmaelMartinez/delegate-local/issues/666)) ([3ed67c4](https://github.com/IsmaelMartinez/delegate-local/commit/3ed67c4bacd49d08a7cceea125d1839e45077bf2))
+* **pick-model:** fold code, reasoning, long-context into the prose tier ([#667](https://github.com/IsmaelMartinez/delegate-local/issues/667)) ([9c7f721](https://github.com/IsmaelMartinez/delegate-local/commit/9c7f7214131bb5f8ceb9d39be5bcf720b435b089))
+
+
+### Documentation
+
+* **adr:** ADR 0033 on typed decision questions and Clef ([#647](https://github.com/IsmaelMartinez/delegate-local/issues/647)) ([1de5da7](https://github.com/IsmaelMartinez/delegate-local/commit/1de5da7c873e63f2e63ca3f721d97dfeef5f5cbb))
+
 ## [0.47.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.46.0...v0.47.0) (2026-10-06)
 
 
