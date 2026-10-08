@@ -47,6 +47,20 @@ On the 120-row synthetic grounding set above, Qwen3.8-27B reached AUROC 0.972 at
 
 With `commit-message` excluded, and each model's threshold set so that it flags 5% of kept drafts, Qwen3.8 at 0.679 caught 7 of the 13 rewrites identified by hand as factual errors and flagged 95 of 244 rewrites, while Qwen3.6 at 0.755 caught 5 of 13 and flagged 56 of 244. At Qwen3.8's 0.679, flagged drafts were rewritten 57% of the time against 25% for unflagged ones, a 2.3x lift, which meets #660's keep rule of at most 5% of kept drafts flagged and at least twice the rewrite rate.
 
+What that means per recipe, on Qwen3.8 at the deployed threshold of 0.6792, as flagged over scored drafts by verdict outcome:
+
+| Recipe | Kept | Scaffold | Rewrote | All |
+|---|---|---|---|---|
+| `github-issue-body` | 2/33 | 5/19 | 11/47 | 18/99 |
+| `maintainer-reply` | 0/16 | 5/62 | 9/50 | 14/128 |
+| `maintainer-review-reply` | 0/2 | 12/48 | 57/115 | 69/165 |
+| `pr-description` | 0/7 | 26/119 | 15/23 | 41/149 |
+| `pr-review-reply` | 4/134 | 13/85 | 3/9 | 20/228 |
+| the five together | 6/192 (3%) | 61/333 | 95/244 | 162/769 (21%) |
+| `commit-message` (not enabled) | 37/76 | | | |
+
+So about one verified draft in five will carry a flag, and on `maintainer-review-reply` 42% will, most of them drafts that were later rewritten. A flag is therefore a common event on the long reply recipe, not a rare alarm, and it should be read as "check this one" rather than "this one is wrong".
+
 The caveats are real and should travel with the result. `commit-message` was excluded after seeing the data, not before. Thirteen factual-error cases is a small N. Most flagged rewrites were drafts discarded in favour of pre-approved text rather than drafts with a factual error, so the lift measures "this draft did not ship" more than "this draft was wrong". And on planted errors Qwen3.8 caught 56 of 60 but on real factual errors only about half, because a real error usually confuses facts that are all present in the input, which is harder to see than a fact the input never states.
 
 Decision: keep, opt-in on the five non-commit recipes (`maintainer-reply`, `maintainer-review-reply`, `pr-description`, `pr-review-reply`, `github-issue-body`), wired as described in [`checks.md`](checks.md#the-draft-verifier). On the maintainer's machine the verify tier is Qwen3.8 through `config.sh` (`verify) prefs=(qwen3.8 "${prefs[@]}") ;;`) with 0.6792 recorded for it in `verify-thresholds.tsv`; while it is loaded it adds about 28 GB beside the 35 GB prose model. Elsewhere the verify tier falls back to the prose model at no extra memory, and needs its own `--calibrate` run, since the uncalibrated 0.5 passes almost every draft on Qwen3.6. The raw data is in the data dir's `spikes/verify-readout-2026-10-07/`.

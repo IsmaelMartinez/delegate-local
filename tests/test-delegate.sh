@@ -5107,6 +5107,11 @@ assert_contains '"facts":"The fix landed in abc123.\nbob\nalice"' "$(jq -r '.mes
   "verify: the facts are the piped stdin then each --var value in key order, without the prompt"
 assert_contains '--max-time 60 ' "$(cat "$tmp/vargv")" "verify: the verifier call is bounded at 60 s by default"
 assert_eq "Fixed in abc123. SCORE_0.9" "$(cat "$tmp/stdout")" "verify: the draft is returned unchanged"
+# No threshold recorded or given: verify-draft.sh falls back to 0.5 with a
+# note, which the inline path does not print on every call.
+err=$(run_recipe vr --var who=alice)
+assert_eq "0.5" "$(jq -r '.verify.threshold' <<<"$(tail -1 "$metrics")")" "verify: an uncalibrated model is scored at 0.5"
+assert_not_contains "no calibrated threshold" "$err" "verify: the inline path prints no uncalibrated note"
 
 # 661b. A flag: one stderr line, the row says flag, output, exit code and the
 # single dispatch unchanged (a flag never earns the retry).

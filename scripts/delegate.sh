@@ -1223,9 +1223,9 @@ if (( verify_on == 1 )); then
     verify_rc=$?
   fi
   if (( verify_rc <= 1 )) && jq -e '.verdict' <<<"$verify_json" >/dev/null 2>&1; then
-    # verify-draft.sh's only stderr on a score is the uncalibrated-threshold
-    # note, which the caller should see.
-    cat "$verify_err" >&2
+    # verify-draft.sh's stderr on a score is only its uncalibrated-threshold
+    # note; inline it would print on every call, so it is dropped here and
+    # left to the standalone script, and the row's threshold says what was used.
     if [[ "$(jq -r '.verdict' <<<"$verify_json")" == "flag" ]]; then
       echo "delegate: verifier flagged a possibly unsupported claim ($(jq -r '"p_supported=\(.p_supported) < \(.threshold), \(.model)"' <<<"$verify_json")) — check the draft against the facts before posting." >&2
     fi
