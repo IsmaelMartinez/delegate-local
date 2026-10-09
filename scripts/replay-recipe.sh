@@ -31,7 +31,8 @@
 #   replay-recipe.sh --recipe NAME [--candidate DIR] [--champion DIR]
 #                    [--limit N] [--seed FILE] [--out DIR]
 #   replay-recipe.sh --recipe NAME --candidate-model ID [--candidate-base URL]
-#                    [--champion DIR] [--limit N] [--seed FILE] [--out DIR]
+#                    [--edited-only] [--champion DIR] [--limit N] [--seed FILE]
+#                    [--out DIR]
 #
 #   --recipe NAME     recipe to replay (required)
 #   --candidate DIR   prompts directory holding the edited NAME.md; without
@@ -50,6 +51,10 @@
 #                     the OpenAI-compatible base serving ID (e.g. a second
 #                     mlx_lm.server on http://localhost:8081/v1); default the
 #                     base the champion resolves to
+#   --edited-only     with --candidate-model: take the newest N scaffold and
+#                     rewrote cases and leave the kept ones out of the run
+#                     too, since a model comparison does not count them and
+#                     generating them only adds GPU time (eval-model.sh, #678)
 #   --champion DIR    the live prompts directory. Default: the recipe as
 #                     committed on `main` (DELEGATE_REPLAY_BASE overrides the
 #                     ref), materialised in a temp dir, so an edit made on a
@@ -98,6 +103,7 @@ candidate_model=""
 candidate_base=""
 recipe=""
 limit=40
+edited_only=0
 seed=""
 out_dir="$data_dir/replay"
 
@@ -117,6 +123,7 @@ while (($# > 0)); do
       [[ -n "${1#*=}" ]] || { echo "replay-recipe: ${1%%=*} needs a value" >&2; exit 2; }
       if [[ "$1" == --candidate-model=* ]]; then candidate_model="${1#*=}"; else candidate_base="${1#*=}"; fi
       shift;;
+    --edited-only) edited_only=1; shift;;
     --champion) champion="${2:?--champion requires a directory}"; shift 2;;
     --champion=*) champion="${1#--champion=}"; shift;;
     --limit) limit="${2:?--limit requires a number}"; shift 2;;
@@ -141,6 +148,11 @@ if [[ -n "$candidate" && -n "$candidate_model" ]]; then
 fi
 if [[ -n "$candidate_base" && -z "$candidate_model" ]]; then
   echo "replay-recipe: --candidate-base needs --candidate-model" >&2; exit 2
+fi
+# Kept cases are a template edit's regression guard, so only a model
+# comparison, which leaves them out of its tally, may skip them.
+if (( edited_only )) && [[ -z "$candidate_model" ]]; then
+  echo "replay-recipe: --edited-only needs --candidate-model (kept cases guard a template edit)" >&2; exit 2
 fi
 # The base is printed in the report header, so a user:pass@ in it is refused
 # here, before anything is printed, as pick-model.sh refuses it; the URL is
@@ -315,6 +327,7 @@ suspect_file="$(dirname "$metrics_file")/suspect-finals.tsv"
 # final_preexisting, or measured here as delegate-feedback.sh measures it for
 # a verdict recorded before the field.
 while IFS='|' read -r id ts verdict draft final inputs sha checks rmodel ritual session; do
+  (( edited_only )) && [[ "$verdict" == kept ]] && continue
   [[ -f "$draft" && -f "$final" && -f "$inputs" ]] || continue
   if [[ "$verdict" != kept ]]; then
     qreason=$(suspect_reason "$suspect_file" "$(basename "$final")")
@@ -335,7 +348,11 @@ mv "$usable_tmp" "$cases_tmp"
 
 n_cases=$(grep -c '' "$cases_tmp")
 if (( n_cases == 0 )); then
-  echo "replay-recipe: no replayable case for '$recipe' (a case needs inputs_file, a verdict and a stored final, or a --seed)" >&2
+  if (( edited_only )); then
+    echo "replay-recipe: no replayable edited case for '$recipe' (--edited-only takes scaffold and rewrote cases with a stored final)" >&2
+  else
+    echo "replay-recipe: no replayable case for '$recipe' (a case needs inputs_file, a verdict and a stored final, or a --seed)" >&2
+  fi
   exit 3
 fi
 
@@ -567,7 +584,9 @@ counted_n=$n_cases
 # The distinct sessions the cases come from (#588): two sessions once made
 # most of one template's case set.
 sessions_n=$(cut -d'|' -f10 "$cases_tmp" | awk 'NF' | sort -u | grep -c '')
-echo "Cases:     $n_cases (kept=$kept_n scaffold=$scaffold_n rewrote=$rewrote_n; newest $limit)  sessions=$sessions_n"
+scope="newest $limit"
+(( edited_only )) && scope="newest $limit edited"
+echo "Cases:     $n_cases (kept=$kept_n scaffold=$scaffold_n rewrote=$rewrote_n; $scope)  sessions=$sessions_n"
 echo
 
 wins=0; losses=0; ties=0; errors=0; kept_errors=0
