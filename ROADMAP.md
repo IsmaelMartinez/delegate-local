@@ -23,13 +23,15 @@ are strong summarisers and weak agents. If a task needs multi-step reasoning,
 repo-wide context, or tool-calling, it does not belong in this skill even if the
 surface looks textual.
 
-## Where we are (2026-10-01)
+## Where we are (2026-10-09)
 
 The skill installs via `npx skills add` (or `cp -r`) and routes the `code`,
 `prose`, `reasoning` and `long-context` tiers, where `code`, `reasoning` and
-`long-context` follow the `prose` list (#652); `vision`, `embedding` and
-`reasoning-vision` resolve when a matching model is served, and
-`premium-general` resolves only when `config.sh` opts in. It ships 13 recipes since #616 retired ten unused ones. Recipe calls run
+`long-context` follow the `prose` list (#652), as does `verify`, the model
+`verify-draft.sh` asks whether a draft's claims are in its input (opt-in per
+recipe, `docs/verify.md`); `vision`, `embedding` and `reasoning-vision`
+resolve when a matching model is served, and `premium-general` resolves only
+when `config.sh` opts in. It ships 13 recipes since #616 retired ten unused ones. Recipe calls run
 a pre-flight canary, weak-input labels, deterministic output checks and at most
 one retry (`docs/checks.md`), and store the draft, the rendered input and the
 structured inputs beside the metrics row so a rejection can be diffed against
@@ -54,9 +56,22 @@ finals, ritual tagging, scorer fixes, input-quality labels), the shared
 libraries (`lib/recipe.sh`, `lib/checks.sh`, `lib/text.sh`, `lib/hook.sh`) and a
 single verdict model replaced duplicated code, and v0.44.0 removed `init.sh`,
 the legacy `DELEGATE_TO_OLLAMA_*` aliases and the sampler overrides. Wave 4 is
-merged: the recipe keep list (#568), CLAUDE.md to about 3k tokens (#571),
+merged and released: the recipe keep list (#568), CLAUDE.md to about 3k tokens (#571),
 calibration history out of the recipe files (#569), the SKILL.md body halved
 (#570), and this file, the docs tree and the env-var table (#572).
+
+Two October efforts followed. The Clef spike (epic #642, ADR 0033) found that
+the question format, not the model, is the lever: `scripts/decide.sh` asks
+typed questions of the resident model's logprobs, which revived the trigger
+gate as `eval-skill-triggers.sh --decide` (#649), and batch callers wait on
+`scripts/lib/gpu-gate.sh` when the machine is hot or busy (#650). Model
+portability (epic #663) made trying a model cheap and safe: `config.sh`
+prepends to the shipped lists instead of freezing them (#653), rates and
+replays split by model (#655, #656), the grounding verifier shipped opt-in
+(#659 to #661), and `docs/model-swap.md` is the trial runbook (#658, #676).
+v0.50.0 adds `scripts/eval-model.sh`, one report card per candidate model
+against the prose tier's, so a new model is measured with one command before
+anyone trials it (ADR 0034, #680).
 
 The OpenTelemetry → Loki/Grafana observability pipeline stays in the core:
 `scripts/lib/otel.sh` span emission (opt-in via `DELEGATE_OTEL_ENDPOINT`), the
@@ -87,46 +102,52 @@ read online at thirty rows. The schedule half is #558, which stays open until
 the installed LaunchAgent has advanced the watermark within 26 hours on 7
 consecutive days.
 
-## Active work: the Lean and correct plan (epic #574)
+## Active work (2026-10-09)
 
 This is the resume point. When a session is asked to "continue with what we
-were doing", it starts here. The plan is epic #574 in the "Lean and correct"
-milestone: a review-driven simplify-and-fix plan in five waves, whose issue
-body holds the batch checklist, the scorecard and the open decisions. The epic,
-not this file, is the source of truth for status, so read it first with
-`gh issue view 574`.
+were doing", it starts here. Three tracking epics are open, and their issue
+bodies, not this file, are the source of truth for status, so read them first
+with `gh issue view 663`, `gh issue view 574` and `gh issue view 642`. In
+order:
 
-As of 2026-10-01, waves 1 to 3 are merged and released (v0.40.1 to v0.44.0)
-and wave 4 is merged (#568, #569, #570, #571, #572). The wave-4 trigger-eval
-gate could not score: `eval-skill-triggers.sh --local` sends no
-`enable_thinking:false`, so the resident prose model spends its output budget
-thinking and returns no score on main or the branch. #570 left the SKILL.md
-frontmatter byte-identical, so triggering cannot have moved. #638 revived the
-gate as `eval-skill-triggers.sh --decide` (one `decide.sh` question per query on
-the resident model, 0.955 recall and 1.000 negative precision on 2026-10-07). What remains:
+- The Gemma 4 prose trial (#662, the last item of epic #663). Since
+  2026-10-09T12:47:19Z the data dir's `config.sh` puts the candidate ahead of
+  the shipped prose list, and `verify` moves with it because the shared MLX
+  server swaps models rather than stacking them. A cloud routine comments on
+  #662 on 2026-10-30 when the read-out is due; the issue holds the commands,
+  the keep criteria and the rollback (delete `config.sh`).
+- New models. Run `eval-model.sh` before any trial; only a TRIAL card starts
+  one (`docs/model-swap.md`). The 2026-10-09 shortlist of five low-active
+  models all stopped (#679, ADR 0034): 1 to 2B active parameters halve the GPU
+  time but invent or drop facts. The nearest, Gemma 4 E4B, is the one to
+  measure again when its family updates.
+- Wave 5 of the Lean and correct plan (epic #574): #573, recipe-quality
+  follow-ups one replay-gated edit at a time, and decision D9, narrowing
+  recipe scopes once the #588 ritual tags give honest rates. Both wait for
+  the #662 decision, because every recipe guard was calibrated on the shipped
+  model and a switch resets that calibration.
+- The Clef spike (epic #642) is measured and recorded in ADR 0033. What is
+  left is its closing summary and a heat-gate call in the `--decide`
+  per-query loop of `eval-skill-triggers.sh`.
 
-- The wave-4 release, if `gh release list` does not yet show one after
-  v0.44.0: approve the release PR's held runs, then merge it.
-- Wave 5: #573, recipe-quality follow-ups after the #538 and #535
-  per-template reads, one replay-gated edit at a time.
-
-Two decisions are open on the epic: D8, whether the boundary hook keeps forcing
-a delegation before posting text that is already written, and D9, narrowing
-recipe scopes once the #588 ritual tags give honest rates. The maintainer
-still has manual steps: create the release GitHub App (the `RELEASE_APP_ID`
-variable and the `RELEASE_APP_PRIVATE_KEY` secret, #549), add the
-`ANTHROPIC_API_KEY` secret for the CI trigger eval, install the self-improve
-LaunchAgent (#558), and run `self-improve.sh --quarantine` on the live data dir.
+The maintainer still has manual steps: create the release GitHub App (the
+`RELEASE_APP_ID` variable and the `RELEASE_APP_PRIVATE_KEY` secret, #549), add
+the `ANTHROPIC_API_KEY` secret for the CI trigger eval, and run
+`self-improve.sh --quarantine` on the live data dir.
 
 The working method is the same for every batch:
 
-- The session coordinates. Each issue goes to its own worktree agent on
-  branch `w<wave>/<issue>-<slug>`, with a failing test first, and at most five
-  PRs are in flight. Issues that edit the same files run one after another
-  rather than in parallel; the paragraphs they share in CLAUDE.md are the
-  usual conflict.
+- The session coordinates. Each issue goes to its own worktree agent on its
+  own branch (`w<wave>/<issue>-<slug>` or `mp/<issue>-<slug>`), with a failing
+  test first, and at most five PRs are in flight. Issues that edit the same
+  files run one after another rather than in parallel; the paragraphs they
+  share in CLAUDE.md are the usual conflict.
 - Branches are never stacked. Commit and PR text is delegated through the
   live skill's recipes, and verdicts are recorded with `--id` and `--final`.
+- Long local runs (replay, `eval-model.sh`, calibration) go one at a time
+  through the heat gate and from a copy of the scripts, not the worktree
+  being edited, because bash reads a script as it runs. Check free memory
+  before loading a second model on the shared server.
 - The coordinator runs the Copilot review loop on each PR, replies to every
   comment, resolves the threads, and asks the maintainer to merge each PR. It
   never merges on its own.
@@ -138,8 +159,10 @@ The working method is the same for every batch:
 
 ## Where we're going (next, priority-ordered)
 
-1. Finish the Lean and correct plan above (epic #574).
-2. Re-verify the install on a genuinely clean machine (not the maintainer's
+1. Decide the prose tier from the #662 read-out, and switch the shipped list
+   only if its criteria hold.
+2. Finish the Lean and correct plan (#573, D9) on whichever model that leaves.
+3. Re-verify the install on a genuinely clean machine (not the maintainer's
    live clone) and keep the install path covered as the headline trust surface.
 
 Anything beyond this is a fresh, evidence-gated decision. Re-introducing an
