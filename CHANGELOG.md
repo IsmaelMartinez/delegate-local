@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.50.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.49.1...v0.50.0) (2026-10-09)
+
+
+### Features
+
+* **eval-model:** one report card per candidate model against the prose tier's ([#680](https://github.com/IsmaelMartinez/delegate-local/issues/680)) ([6b9ea90](https://github.com/IsmaelMartinez/delegate-local/commit/6b9ea909bc9a01324471a87daa3869f92b5f209f))
+
+
+### Documentation
+
+* **model-swap:** describe the server swap and move verify with a prose trial ([#676](https://github.com/IsmaelMartinez/delegate-local/issues/676)) ([d8489a5](https://github.com/IsmaelMartinez/delegate-local/commit/d8489a56e088eef8a925dea3b5fe0c073b616c26))
+
 ## [0.49.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.49.0...v0.49.1) (2026-10-08)
 
 
