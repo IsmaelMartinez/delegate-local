@@ -430,6 +430,9 @@ out=$(DELEGATE_EVAL_CLOCK='' MC_UTIL=1 MC_SLEEP_CAND=2.4 MC_SLEEP_CHAMP=1.2 run 
 assert_contains "GPU busy-seconds/call" "$out" "with ioreg readable, GPU busy-seconds are reported"
 assert_contains "(GPU busy-seconds per call)" "$out" "and are the cost measure"
 assert_eq "true" "$(card '.cost.ratio > 1')" "the slower candidate costs more GPU time"
+last_end=$(tail -n 1 "$data"/evals/2*/cost.tsv | cut -f4)
+last_read=$(tail -n 1 "$data"/evals/2*/gpu.txt | cut -d' ' -f1)
+assert_true "the sampler reads once more after the last call ends" awk -v a="$last_read" -v b="$last_end" 'BEGIN { exit !(a > b) }'
 
 echo "== the recipes come from the metrics when not named =="
 fresh

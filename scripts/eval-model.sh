@@ -336,6 +336,9 @@ else
       fi
     done
   done
+  # One more read after the last call, which the attribution below counts up
+  # to half a second past its end as it does every call's (ioreg lags).
+  [[ -n "$sampler_pid" ]] && sleep 1
   stop_sampler
   [[ -f "$run_dir/gpu.txt" ]] || : > "$run_dir/gpu.txt"
   # Per arm: calls, transport errors, then seconds, prompt and output tokens
