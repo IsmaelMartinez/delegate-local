@@ -61,13 +61,13 @@ Time the candidate on a handful of real prompts, about ten, through `delegate.sh
 
 ## 7. The live trial
 
-A candidate that holds up offline gets a trial on real traffic before any edit to the repo. While its server is still up, record its verifier threshold: run step 4 again without `--dry-run`, which writes the candidate's row to `verify-thresholds.tsv` in the data dir (a read-out over real kept drafts, as in `docs/verify.md`, can set the row instead). Then stop the candidate server and prepend one line to `config.sh` in the data dir so every tier that shares the prose list asks for it first:
+A candidate that holds up offline gets a trial on real traffic before any edit to the repo. While its server is still up, record its verifier threshold: run step 4 again without `--dry-run`, which writes the candidate's row to `verify-thresholds.tsv` in the data dir. Then read the row back. A threshold of 0.999 or more means the model's scores pile up near 1 (Gemma 4 on 2026-10-09: 462 of 715 drafts scored 1.0, and the 5%-of-kept threshold landed at 0.9999), where flags turn on rounding; replace that row before the trial with a value a little below the pile, such as 0.99, chosen from a read-out over real kept drafts as in `docs/verify.md`. Then stop the candidate server and prepend one line to `config.sh` in the data dir so every tier that shares the prose list asks for it first:
 
 ```bash
 case "$tier" in prose|code|reasoning|long-context|verify) prefs=(<substring> "${prefs[@]}") ;; esac
 ```
 
-The first trial call swaps the shared server to the candidate, so there is no need to restart it. The line includes `verify` because a verifier on a different model than prose only works from its own server: on the shared one every verified delegation would swap models twice. A model whose scores pile up near 1 (Gemma 4 on 2026-10-09: 462 of 715 drafts scored 1.0, and the 5%-of-kept threshold landed at 0.9999) needs a threshold set a little below the pile, such as 0.99, or its flags turn on rounding.
+The first trial call swaps the shared server to the candidate, so there is no need to restart it. The line includes `verify` because a verifier on a different model than prose only works from its own server: on the shared one every verified delegation would swap models twice.
 
 Prepend rather than replace, so later changes to the shipped list still reach the machine; `audit-models.sh` warns when a tier is frozen by a replacement. Prepending to every shared tier matters on an `mlx_lm.server`: a tier left on the old list would still name the old model, and the server would swap back to it on every call to that tier.
 
