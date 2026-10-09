@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.50.0...v0.50.1) (2026-10-09)
+
+
+### Documentation
+
+* **roadmap:** bring status and active work up to 2026-10-09 ([#682](https://github.com/IsmaelMartinez/delegate-local/issues/682)) ([a00b2e9](https://github.com/IsmaelMartinez/delegate-local/commit/a00b2e956923bdf5fcfd5225b027cc784cbe9ddb))
+
 ## [0.50.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.49.1...v0.50.0) (2026-10-09)
 
 
