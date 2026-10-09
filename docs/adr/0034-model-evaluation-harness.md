@@ -154,8 +154,19 @@ answered yes to every trigger query. LiquidAI's LFM2-24B-A2B, at about 2B
 active within 24B, failed the other way. It cost 0.44 times the champion's
 GPU time but wrote 85 tokens a call against 215, dropping the facts the
 shipped text kept (205 against 31 on github-issue-body), and the replay
-rejected it on five of six recipes. At one to two billion active parameters
-the heat saving costs the writing, by invention or by omission.
+rejected it on five of six recipes. inclusionAI's Ling-mini-2.0, at about
+1.4B active, ran at 0.47 times the champion's GPU time, won no edited case on
+four recipes (and lost all twenty on two), and its failed checks rose from 8
+to 102 across the replay. At one to two billion active parameters the heat saving costs the
+writing, by invention or by omission.
+
+Google's Gemma 4 E4B came closest. Its roughly 4B effective parameters ran at
+0.61 times the champion's GPU time, it passed the trigger gate (recall 0.955,
+negative precision 0.933) and the replay rejected it on three recipes rather
+than five, but its failed checks rose from 8 to 26 and its grounding AUROC
+was 0.724. None of the five shortlisted models (#679) is worth a trial, and
+the cheapest that writes close to the champion, Gemma 4 E4B, is the one to
+measure again when a newer small model from that family arrives.
 
 The card is only as good as the corpus behind it. The replay needs edited
 cases whose inputs are still stored (drafts are kept 14 days). The grounding
