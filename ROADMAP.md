@@ -105,10 +105,12 @@ consecutive days.
 ## Active work (2026-10-09)
 
 This is the resume point. When a session is asked to "continue with what we
-were doing", it starts here. Three tracking epics are open, and their issue
-bodies, not this file, are the source of truth for status, so read them first
-with `gh issue view 663`, `gh issue view 574` and `gh issue view 642`. In
-order:
+were doing", it starts here. This section is the current order and status
+across the three open tracking epics. Their issue bodies (`gh issue view 663`,
+`574`, `642`) hold each item's scope, decisions and history, but their
+checklists can lag: #642's tasks are unticked although #638 shipped in #649
+and the rest are closed, and #574's resume note dates from 2026-10-02. Check
+an item's issue and PRs for live state before acting on it. In order:
 
 - The Gemma 4 prose trial (#662, the last item of epic #663). Since
   2026-10-09T12:47:19Z the data dir's `config.sh` puts the candidate ahead of
