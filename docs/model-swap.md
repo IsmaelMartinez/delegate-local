@@ -2,7 +2,7 @@
 
 This is the end-to-end procedure for deciding whether a new local model should replace the resident prose model, and for switching to it if it should. It is written from the 2026-10-07 comparison of the resident Qwen3.6-35B-A3B against Qwen3.8-27B and Gemma 4 26B-A4B, and it replaces the `llmfit` upgrade suggestions `audit-models.sh` used to print (#658): a hardware-fit score says nothing about how a model handles the recipes this skill actually serves, and on that day it was still recommending a Qwen2.5 coder. Every step below measures the candidate on this skill's own work, and nothing in it edits routing until the last step.
 
-Since #652 the `code`, `reasoning` and `long-context` tiers resolve the prose list, so "the model" in this document is the prose tier's model and a switch moves every one of them. The `verify` tier ships the prose list too, but it is a separate choice with its own per-model threshold, and this procedure leaves it alone (step 7). `scripts/audit-models.sh` prints the current routing and is the place to start; the 2026-10-07 numbers are quoted with their N where they help calibrate expectations, and none of them is a threshold.
+Since #652 the `code`, `reasoning` and `long-context` tiers resolve the prose list, so "the model" in this document is the prose tier's model and a switch moves every one of them. The `verify` tier ships the prose list too, but it carries a per-model threshold, so step 7 moves it with the trial only once the candidate's threshold is recorded. `scripts/audit-models.sh` prints the current routing and is the place to start; the 2026-10-07 numbers are quoted with their N where they help calibrate expectations, and none of them is a threshold.
 
 ## 1. Check the machine, then start the candidate on its own server
 
@@ -42,7 +42,7 @@ DELEGATE_BASE_URL=http://127.0.0.1:8081/v1 DELEGATE_MODEL=<id> \
   bash scripts/verify-draft.sh --calibrate ~/.local/share/delegate-local/spikes/clef/grounding/ground.jsonl --dry-run
 ```
 
-The set is the 120 rows in the data dir under `spikes/clef/grounding/ground.jsonl`, outside the repo: 60 drafts that shipped unedited and 60 copies each carrying one planted contradicted or unsupported claim. The run prints AUROC, the chosen threshold and recall per label; `--dry-run` keeps it from recording a threshold for a model that is not live yet, and dropping the flag records one once the model is switched. On 2026-10-07, at n=120 each, Qwen3.8 scored AUROC 0.972, Gemma 4 0.932 and the resident Qwen3.6 0.882. [`verify.md`](verify.md) has the question, the threshold rule and the full table.
+The set is the 120 rows in the data dir under `spikes/clef/grounding/ground.jsonl`, outside the repo: 60 drafts that shipped unedited and 60 copies each carrying one planted contradicted or unsupported claim. The run prints AUROC, the chosen threshold and recall per label; `--dry-run` keeps it from recording a threshold for a model that may never go live; step 7 runs it again without the flag for a candidate that is about to. On 2026-10-07, at n=120 each, Qwen3.8 scored AUROC 0.972, Gemma 4 0.932 and the resident Qwen3.6 0.882. [`verify.md`](verify.md) has the question, the threshold rule and the full table.
 
 ## 5. Trigger gate
 
@@ -61,13 +61,13 @@ Time the candidate on a handful of real prompts, about ten, through `delegate.sh
 
 ## 7. The live trial
 
-A candidate that holds up offline gets a trial on real traffic before any edit to the repo. Stop the candidate server first, then prepend one line to `config.sh` in the data dir so every tier that shares the prose list asks for it first:
+A candidate that holds up offline gets a trial on real traffic before any edit to the repo. While its server is still up, record its verifier threshold: run step 4 again without `--dry-run`, which writes the candidate's row to `verify-thresholds.tsv` in the data dir (a read-out over real kept drafts, as in `docs/verify.md`, can set the row instead). Then stop the candidate server and prepend one line to `config.sh` in the data dir so every tier that shares the prose list asks for it first:
 
 ```bash
 case "$tier" in prose|code|reasoning|long-context|verify) prefs=(<substring> "${prefs[@]}") ;; esac
 ```
 
-The first trial call swaps the shared server to the candidate, so there is no need to restart it. Include `verify` in that line too, and calibrate the candidate as a verifier before the line goes live (step 4, or a read-out over real kept drafts as in `docs/verify.md`), recording its threshold in the data dir's `verify-thresholds.tsv`. A verifier on a different model than prose only works from its own server: on the shared one every verified delegation would swap models twice. A model whose scores pile up near 1 (Gemma 4 on 2026-10-09: 462 of 715 drafts scored 1.0, and the 5%-of-kept threshold landed at 0.9999) needs a threshold set a little below the pile, such as 0.99, or its flags turn on rounding.
+The first trial call swaps the shared server to the candidate, so there is no need to restart it. The line includes `verify` because a verifier on a different model than prose only works from its own server: on the shared one every verified delegation would swap models twice. A model whose scores pile up near 1 (Gemma 4 on 2026-10-09: 462 of 715 drafts scored 1.0, and the 5%-of-kept threshold landed at 0.9999) needs a threshold set a little below the pile, such as 0.99, or its flags turn on rounding.
 
 Prepend rather than replace, so later changes to the shipped list still reach the machine; `audit-models.sh` warns when a tier is frozen by a replacement. Prepending to every shared tier matters on an `mlx_lm.server`: a tier left on the old list would still name the old model, and the server would swap back to it on every call to that tier.
 
