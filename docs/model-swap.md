@@ -8,7 +8,7 @@ Since #652 the `code`, `reasoning` and `long-context` tiers resolve the prose li
 
 Check free memory and the thermal state before loading anything. `memory_pressure` (or Activity Monitor) gives the first; the second is the same read the heat gate uses, `source scripts/lib/gpu-gate.sh` followed by `gpu_gate_thermal`, which prints macOS's thermal state (0 nominal, 1 fair, 2 serious, 3 critical). Look for other sessions running batches as well, since a replay competes with them for the GPU.
 
-Never ask the shared `:8080` server for the candidate. An `mlx_lm.server` lists every model in the Hugging Face cache from `/v1/models` and loads whichever one a request names beside the resident model, so anything that routes to the candidate there by substring stacks a second set of weights on the server every session shares. Start the candidate on its own server instead:
+Never ask the shared `:8080` server for the candidate. An `mlx_lm.server` lists every model in the Hugging Face cache from `/v1/models` and loads whichever one a request names. On 2026-10-08 the server swapped rather than stacked: each switch between Qwen3.6 and Qwen3.8 cost 9-11 s against 0.2-0.3 s for a repeat, with one model resident afterwards. So anything that routes to the candidate there by substring evicts the model every other session is using, and their next call pays the reload; a prose call right after a switch can trip the 10 s pre-flight canary and exit 3. Start the candidate on its own server instead:
 
 ```bash
 mlx_lm.server --model <hf-id> --port 8081
@@ -61,15 +61,15 @@ Time the candidate on a handful of real prompts, about ten, through `delegate.sh
 
 ## 7. The live trial
 
-A candidate that holds up offline gets a trial on real traffic before any edit to the repo. Make it the model the resident server serves (restart `:8080` with `--model <hf-id>`, after the offline steps have freed the candidate server), and prepend one line to `config.sh` in the data dir so every tier that shares the prose list asks for it first:
+A candidate that holds up offline gets a trial on real traffic before any edit to the repo. Stop the candidate server first, then prepend one line to `config.sh` in the data dir so every tier that shares the prose list asks for it first:
 
 ```bash
-case "$tier" in prose|code|reasoning|long-context) prefs=(<substring> "${prefs[@]}") ;; esac
+case "$tier" in prose|code|reasoning|long-context|verify) prefs=(<substring> "${prefs[@]}") ;; esac
 ```
 
-The verify tier keeps its own line: it is chosen independently and its threshold is calibrated per model, so folding it into a prose trial would silently swap the verifier and invalidate that threshold. If the trial model should also verify, calibrate it first with `verify-draft.sh --calibrate`.
+The first trial call swaps the shared server to the candidate, so there is no need to restart it. Include `verify` in that line too, and calibrate the candidate as a verifier before the line goes live (step 4, or a read-out over real kept drafts as in `docs/verify.md`), recording its threshold in the data dir's `verify-thresholds.tsv`. A verifier on a different model than prose only works from its own server: on the shared one every verified delegation would swap models twice. A model whose scores pile up near 1 (Gemma 4 on 2026-10-09: 462 of 715 drafts scored 1.0, and the 5%-of-kept threshold landed at 0.9999) needs a threshold set a little below the pile, such as 0.99, or its flags turn on rounding.
 
-Prepend rather than replace, so later changes to the shipped list still reach the machine; `audit-models.sh` warns when a tier is frozen by a replacement. Prepending to every shared tier matters on an `mlx_lm.server`: a tier left on the old list would still name the old model, and the server would load it beside the new one.
+Prepend rather than replace, so later changes to the shipped list still reach the machine; `audit-models.sh` warns when a tier is frozen by a replacement. Prepending to every shared tier matters on an `mlx_lm.server`: a tier left on the old list would still name the old model, and the server would swap back to it on every call to that tier.
 
 Note the minute the line went live, and read the trial against it:
 
