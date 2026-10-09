@@ -5,6 +5,7 @@ inputs:
   diff_stat: string
   why: string
   type: string?
+  scope: string?
 echo_guard_vars: recent_commits
 input_quality:
   recent_commits: one_line_exemplar
@@ -80,6 +81,14 @@ subject prefix — for example a value of `chore` means the subject MUST start w
 in the vocabulary — and SKIP the priority list below entirely. If no value
 appears after the colon, ignore it and select the type from the priority list.
 
+SCOPE override (highest priority): {{scope}}
+If a value appears after the colon immediately above, the subject MUST read
+`<TYPE>(<value>):` with that value copied verbatim inside the parentheses — for
+example a value of `AI-447` with type `fix` means the subject MUST start with
+`fix(AI-447):`, a value of `design` with type `feat` means it MUST start with
+`feat(design):` — and the SCOPE rule below is SKIPPED. If no value appears
+after the colon, ignore it and follow the SCOPE rule below.
+
 TYPE selection — first match wins, non-negotiable. Stop at the first rule
 that matches. `feat:` means a NEW user-facing capability, so it is checked ahead of the
 path-scope and keyword rules: a new recipe is a feat, but a new ADR, an
@@ -142,6 +151,7 @@ Output ONLY the commit message itself, nothing else.
 - `{{diff_stat}}` — output of `git diff --cached --stat` (and optionally the full `git diff --cached` if small).
 - `{{why}}` — one or two sentences explaining the motivation: what bug, what user-visible change, what reviewer feedback. Authored by the agent, not gathered from a command.
 - `{{type}}` — OPTIONAL. The conventional-commit type (any type in the flavor vocabulary, e.g. `feat`, `fix`, `docs`) when the caller already knows it. When set, it overrides the TYPE-selection priority list and forces the subject prefix verbatim, sidestepping the model's type inference entirely. Omit it to let the priority rules choose; an omitted value is blanked by `delegate.sh` so the placeholder collapses to empty. When set, it also feeds the frontmatter `subject_type: {{type}}` check (ADR 0014), which warns on stderr if the emitted subject does not start with that type — the deterministic backstop for the recurring "model ignored the explicit override" MISS.
+- `{{scope}}` — OPTIONAL. The conventional-commit scope when the caller already knows it: the ticket key a project puts in every subject (`fix(AI-447):`) or the area its recent examples scope by (`feat(design):`). When set, it is copied verbatim into `<type>(<scope>):` and the model's inference from the examples is bypassed, which is the same lever as `{{type}}` for the same reason: the SCOPE rule on its own held on neither prompt-text attempt (see the 2026-10-02 and 2026-10-09 entries in `docs/calibration/commit-message.md`). An omitted value is blanked by `delegate.sh` so the placeholder collapses to empty. The wrapper's `subject_type` check strips the `(scope)` before comparing, so the two overrides never fight.
 - `{{flavor_commit_subject_max}}` — subject-length ceiling in characters. Injected from the flavor profile (ADR 0013), not passed via `--var`: shipped default `72` (the git subject convention), overridable per-user through `~/.local/share/delegate-local/profile.sh` (generate one with `scripts/onboard.sh` or `scripts/derive-flavor.sh`).
 - `{{flavor_commit_types}}` — allowed conventional-commit type vocabulary for the subject prefix. Injected from the flavor profile, not passed via `--var`: shipped default `feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert` (the @commitlint/config-conventional standard enum), overridable per-user.
 - `{{flavor_commit_body_shape}}` — the body's structural instruction. Injected from the flavor profile and DERIVED from `{{flavor_commit_body_max_words}}` rather than shipped as a constant: at or below 60 words it resolves to `one short flowing-prose paragraph of one or two sentences`, above it to `1-2 short flowing-prose paragraphs`. The derivation runs after the profile is read, so tightening the cap cannot leave the prompt asking for a shape that does not fit inside it. Set `FLAVOR_COMMIT_BODY_SHAPE` in `profile.sh` to override it outright.
@@ -159,7 +169,7 @@ bash scripts/delegate.sh --recipe commit-message \
   "Match the example commit messages exactly in shape and tone. Keep subject ≤ 72 chars. Use the feat: prefix."
 ```
 
-The trailing prompt arg is the reinforcement instruction; the recipe template carries the structural directives. When you already know the type, pass it as `--var type=<type>` — the template substitutes it as a highest-priority override that short-circuits the priority-list reasoning entirely, which is the most reliable lever because the model copies a literal token rather than inferring a rule (see the 2026-06-04 calibration entry). Leave `--var type` off to let the priority list choose. The `Use the <type>: prefix.` suffix is the call-site reinforcement for the no-explicit-type case — walk the TYPE-selection priority list in the template body top to bottom, take the first matching rule's type, and substitute it literally into the trailing prompt. (The mapping is intentionally not re-enumerated here so it cannot drift out of sync with the list above.) The 2026-05-23 entry in `docs/calibration/commit-message.md` documents why this hint is part of the recipe rather than a workaround.
+The trailing prompt arg is the reinforcement instruction; the recipe template carries the structural directives. When you already know the type, pass it as `--var type=<type>` — the template substitutes it as a highest-priority override that short-circuits the priority-list reasoning entirely, which is the most reliable lever because the model copies a literal token rather than inferring a rule (see the 2026-06-04 calibration entry). Leave `--var type` off to let the priority list choose. When the project scopes its subjects — the recent examples read `<type>(<scope>):`, or the WHY carries a ticket key the subject is expected to repeat — pass `--var scope=<value>` as well; the model copies the literal into `<type>(<scope>):` where the SCOPE rule alone has not held. The `Use the <type>: prefix.` suffix is the call-site reinforcement for the no-explicit-type case — walk the TYPE-selection priority list in the template body top to bottom, take the first matching rule's type, and substitute it literally into the trailing prompt. (The mapping is intentionally not re-enumerated here so it cannot drift out of sync with the list above.) The 2026-05-23 entry in `docs/calibration/commit-message.md` documents why this hint is part of the recipe rather than a workaround.
 
 ## Anti-hallucination guards (each line addresses a real past MISS)
 

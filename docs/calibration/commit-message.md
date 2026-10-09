@@ -219,3 +219,60 @@ scope, so even an edit that worked would show only its cost. This is the
 second prompt-text attempt at scope. The next attempt should be a check
 (`scope_match` against `recent_commits`, like `subject_type`) or a caller
 `--var scope`, and should not reword the rule again.
+
+### 2026-10-09 — `scope` as a caller-supplied override, the third attempt
+
+The daily bundle (watermark 2026-10-08T09:02:20Z) carried eleven
+`commit-message` scaffolds whose reason is scope alone or scope first: seven
+on `plg-agent-skills` ("added ticket scope", "missing AI-559 scope and Refs
+line", "added AI-559 scope") and four on `ismaelmartinez.me.uk` ("added design
+scope", "added terminal scope"). In every one the scope value sat in the
+input: the recent examples read `feat(AI-447):` or `feat(design):`, and on
+the work repo the WHY also ended `Refs AI-447`. The bundle's `DROPPED` line
+names `447` or `559` on each of the seven, and on two of the four site
+commits the shipped body is byte-identical to the draft's, so the whole edit
+was inserting `(design)`. Model on every row:
+`mlx-community/Qwen3.6-35B-A3B-8bit`.
+
+Per the 2026-10-02 entry this is not a third rewording. The recipe gains an
+optional `scope: string?` input and a `SCOPE override (highest priority)`
+block beside the TYPE override, with the same shape and the same reasoning
+(the 2026-06-04 finding that the model copies a literal token far more
+reliably than it infers a rule). The SCOPE rule itself is untouched for
+callers that pass nothing. The `scope_match` check the previous entry also
+named needs `scripts/lib/checks.sh`, which the loop session cannot edit; it
+remains the right backstop and is left for a hand-written PR.
+
+Two replays against `a20e93b62bab` (candidate `428278a78a72`). The corpus
+alone, where no stored case passes `scope`, measures only what the empty
+override block costs:
+
+    Summary: n=40  wins=5  losses=4  ties=31  errors=0
+    Checks failed: champion=3  candidate=2
+    Newest third (14 cases): wins=2  losses=1
+    Verdict: INCONCLUSIVE — 5 wins to 4 is not yet significant (p=0.500)
+
+The second run seeds seven of the eleven cases above with their stored
+inputs plus the `scope` the shipped subject carried (`AI-559`, `AI-447`,
+`design`), the shipped text as reference (`--seed`, ids `seed-scope-*`; the
+seed file is not committed because the work-repo inputs are not public):
+
+    Summary: n=40  wins=8  losses=2  ties=30  errors=0
+    Checks failed: champion=1  candidate=1
+    Newest third (14 cases): wins=6  losses=1
+    Verdict: INCONCLUSIVE — 8 wins to 2 is not yet significant (p=0.055)
+
+The seeded cases themselves went 5 wins, 2 ties, 0 losses; the two losses
+are the same two no-scope corpus cases the first run lost (`0e32a109`,
+`d08e5500`), which is the noise floor of the empty block. Reading the
+cached outputs: the candidate wrote `feat(AI-447):`, `fix(AI-559):` and so
+on on all six ticket-key seeds where the champion wrote a bare type, and
+ignored `scope=design` on the one word-scope seed, writing `fix:` on both
+arms. So the override is reliable for a ticket key and unproven for an area
+word, and the measurement as a whole is one win short of the gate.
+
+This is a proposal, not a fix: INCONCLUSIVE at p=0.055. It is also inert
+until callers pass the var, so the online read will show nothing until
+`SKILL.md`'s commit-message guidance and the boundary hook's nudge name
+`--var scope`, which this session could not edit. Re-read after ten
+`commit-message` calls that pass it, on this model.
