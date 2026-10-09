@@ -667,6 +667,27 @@ out=$(mrun --candidate-model "$champ_m")
 assert_contains "the candidate model is the champion's" "$out" "a candidate equal to the champion model is inconclusive without a run"
 assert_eq "" "$(mlog)" "and sends nothing"
 
+# --edited-only (#678): the kept cases a model comparison does not count are
+# left out of the run as well, so they cost no call; without a model
+# comparison it is refused, since kept cases guard a template edit.
+EC=0; out=$(mrun --edited-only) || EC=$?
+assert_eq 2 "$EC" "--edited-only without --candidate-model exits 2"
+assert_contains "--edited-only needs --candidate-model" "$out" "the missing model comparison is named"
+seed "$tmp/data" 2 "$champ_sha" "$champ_m"
+rm -rf "$tmp/out"; rm -f "$mc/log"
+EC=0; out=$(mrun --candidate-model gemma4:26b --candidate-base http://cand.test/v1 --edited-only) || EC=$?
+assert_eq 0 "$EC" "an edited-only comparison exits 0"
+assert_eq "2" "$(mlog | grep -c '^http://cand.test/v1/chat/completions gemma4:26b$')" "the kept case sends no candidate request"
+assert_contains "(kept=0 scaffold=0 rewrote=2; newest 40 edited)" "$out" "only the edited cases are taken"
+assert_contains "Summary: n=2  wins=2  losses=0  ties=0  errors=0" "$out" "the counted tally is unchanged"
+assert_eq "0" "$(printf '%s\n' "$out" | grep -c 'kept0001')" "the kept case is not listed"
+# A corpus with no edited case is exit 3, named as such.
+: > "$tmp/data/m.jsonl"
+printf '{"ts":"2026-09-30T10:00:00Z","source":"delegate","recipe":"rp","model":"%s","exit_status":0,"otel_span_id":"kept0001","draft_file":"20260930T100000Z-kept0001.draft.txt","inputs_file":"20260930T100000Z-kept0001.inputs.json","template_sha":"%s","checks_failed":0}\n{"ts":"2026-09-30T10:00:00Z","source":"feedback","ref_id":"kept0001","kept":true}\n' "$champ_m" "$champ_sha" >> "$tmp/data/m.jsonl"
+EC=0; out=$(mrun --candidate-model gemma4:26b --candidate-base http://cand.test/v1 --edited-only) || EC=$?
+assert_eq 3 "$EC" "only kept cases under --edited-only is exit 3"
+assert_contains "no replayable edited case" "$out" "and says why"
+
 # #554: significance is decided on the unrounded p. 101 wins to 78 is
 # p=0.04992, printed as 0.050; comparing the print read it as not
 # significant. A 179-case replay reaching it costs minutes, so the function

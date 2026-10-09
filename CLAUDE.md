@@ -38,6 +38,7 @@ Read the metrics and run the calibration loop:
 bash scripts/metrics-summary.sh --days 7          # or --since YYYY-MM-DD
 bash scripts/self-improve.sh --peek --days 7      # evidence bundle; exit 10 = nothing new; without --peek it advances the watermark
 bash scripts/replay-recipe.sh --recipe maintainer-reply --candidate /path/to/worktree/prompts   # gate a recipe edit before its PR
+bash scripts/eval-model.sh --model <id> --base http://127.0.0.1:8081/v1   # a new model's report card against the prose tier's (ADR 0034)
 ```
 
 The validation pipeline CI runs on every PR, runnable locally:

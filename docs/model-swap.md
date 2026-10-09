@@ -4,6 +4,10 @@ This is the end-to-end procedure for deciding whether a new local model should r
 
 Since #652 the `code`, `reasoning` and `long-context` tiers resolve the prose list, so "the model" in this document is the prose tier's model and a switch moves every one of them. The `verify` tier ships the prose list too, but it is a separate choice with its own per-model threshold, and this procedure leaves it alone (step 7). `scripts/audit-models.sh` prints the current routing and is the place to start; the 2026-10-07 numbers are quoted with their N where they help calibrate expectations, and none of them is a threshold.
 
+## The report card
+
+`scripts/eval-model.sh --model <id>` runs steps 2 and 4 to 6 in one command against the candidate's own server (default `http://127.0.0.1:8081/v1`, so do step 1 first) and ends with one verdict, STOP, INCONCLUSIVE, TRIAL or HOLD, by the bars in ADR 0034. Its cost step sends the same stored prompts to both models and reads GPU busy-seconds per call, and counts the calls that ran to `max_tokens`, came back empty or reasoned although thinking was off. It caches each model's grounding and trigger results, so the current model is measured once, replays edited cases only, and skips the replay once a cheaper step has stopped the candidate. Each card is written under `<data dir>/evals/`. A TRIAL still goes through the blind judge (step 3) before the live trial (step 7); the steps below say what each number means and how to run one by hand.
+
 ## 1. Check the machine, then start the candidate on its own server
 
 Check free memory and the thermal state before loading anything. `memory_pressure` (or Activity Monitor) gives the first; the second is the same read the heat gate uses, `source scripts/lib/gpu-gate.sh` followed by `gpu_gate_thermal`, which prints macOS's thermal state (0 nominal, 1 fair, 2 serious, 3 critical). Look for other sessions running batches as well, since a replay competes with them for the GPU.

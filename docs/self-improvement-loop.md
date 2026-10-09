@@ -330,6 +330,12 @@ and an arm can lose them for sounding different rather than for being worse;
 on 2026-10-07 the edited
 cases alone tied 26-25 (Qwen3.8) and 22-21 (Gemma 4) against the incumbent.
 
+`--edited-only` (#678) leaves the kept cases out of the run as well as the
+tally, so a model comparison spends no calls on cases it does not count; it
+needs `--candidate-model`, since kept cases are a template edit's regression
+guard. `scripts/eval-model.sh` replays the busiest recipes this way as one
+step of a model's report card (ADR 0034).
+
 ## Apply it
 
 Work on a branch, never on `main`. The installed skill on both Claude profiles
