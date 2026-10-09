@@ -316,8 +316,9 @@ is omitted, never through a tier list. It is exclusive with `--candidate`.
 Serve the candidate from a second `mlx_lm.server` on its own port, for
 example `--candidate-base http://localhost:8081/v1`, rather than asking the
 resident server for it: an `mlx_lm.server` lists every cached model and
-loads whichever a request names beside the resident one, and two large
-models stacked on one server is what killed Docker before. Each arm caches
+loads whichever a request names, swapping out the model every other
+session is using (about 10 s per switch, measured 2026-10-08), so a replay
+aimed at the shared server evicts the resident model on every case. Each arm caches
 under its own model's key, so the arms never share an output, and nothing
 is written to the metrics file.
 

@@ -2,13 +2,13 @@
 
 This is the end-to-end procedure for deciding whether a new local model should replace the resident prose model, and for switching to it if it should. It is written from the 2026-10-07 comparison of the resident Qwen3.6-35B-A3B against Qwen3.8-27B and Gemma 4 26B-A4B, and it replaces the `llmfit` upgrade suggestions `audit-models.sh` used to print (#658): a hardware-fit score says nothing about how a model handles the recipes this skill actually serves, and on that day it was still recommending a Qwen2.5 coder. Every step below measures the candidate on this skill's own work, and nothing in it edits routing until the last step.
 
-Since #652 the `code`, `reasoning` and `long-context` tiers resolve the prose list, so "the model" in this document is the prose tier's model and a switch moves every one of them. The `verify` tier ships the prose list too, but it is a separate choice with its own per-model threshold, and this procedure leaves it alone (step 7). `scripts/audit-models.sh` prints the current routing and is the place to start; the 2026-10-07 numbers are quoted with their N where they help calibrate expectations, and none of them is a threshold.
+Since #652 the `code`, `reasoning` and `long-context` tiers resolve the prose list, so "the model" in this document is the prose tier's model and a switch moves every one of them. The `verify` tier ships the prose list too, but it carries a per-model threshold, so step 7 moves it with the trial only once the candidate's threshold is recorded. `scripts/audit-models.sh` prints the current routing and is the place to start; the 2026-10-07 numbers are quoted with their N where they help calibrate expectations, and none of them is a threshold.
 
 ## 1. Check the machine, then start the candidate on its own server
 
 Check free memory and the thermal state before loading anything. `memory_pressure` (or Activity Monitor) gives the first; the second is the same read the heat gate uses, `source scripts/lib/gpu-gate.sh` followed by `gpu_gate_thermal`, which prints macOS's thermal state (0 nominal, 1 fair, 2 serious, 3 critical). Look for other sessions running batches as well, since a replay competes with them for the GPU.
 
-Never ask the shared `:8080` server for the candidate. An `mlx_lm.server` lists every model in the Hugging Face cache from `/v1/models` and loads whichever one a request names beside the resident model, so anything that routes to the candidate there by substring stacks a second set of weights on the server every session shares. Start the candidate on its own server instead:
+Never ask the shared `:8080` server for the candidate. An `mlx_lm.server` lists every model in the Hugging Face cache from `/v1/models` and loads whichever one a request names. On 2026-10-08 the server swapped rather than stacked: each switch between Qwen3.6 and Qwen3.8 cost 9-11 s against 0.2-0.3 s for a repeat, with one model resident afterwards. So anything that routes to the candidate there by substring evicts the model every other session is using, and their next call pays the reload; a prose call right after a switch can trip the 10 s pre-flight canary and exit 3. Start the candidate on its own server instead:
 
 ```bash
 mlx_lm.server --model <hf-id> --port 8081
@@ -42,7 +42,7 @@ DELEGATE_BASE_URL=http://127.0.0.1:8081/v1 DELEGATE_MODEL=<id> \
   bash scripts/verify-draft.sh --calibrate ~/.local/share/delegate-local/spikes/clef/grounding/ground.jsonl --dry-run
 ```
 
-The set is the 120 rows in the data dir under `spikes/clef/grounding/ground.jsonl`, outside the repo: 60 drafts that shipped unedited and 60 copies each carrying one planted contradicted or unsupported claim. The run prints AUROC, the chosen threshold and recall per label; `--dry-run` keeps it from recording a threshold for a model that is not live yet, and dropping the flag records one once the model is switched. On 2026-10-07, at n=120 each, Qwen3.8 scored AUROC 0.972, Gemma 4 0.932 and the resident Qwen3.6 0.882. [`verify.md`](verify.md) has the question, the threshold rule and the full table.
+The set is the 120 rows in the data dir under `spikes/clef/grounding/ground.jsonl`, outside the repo: 60 drafts that shipped unedited and 60 copies each carrying one planted contradicted or unsupported claim. The run prints AUROC, the chosen threshold and recall per label; `--dry-run` keeps it from recording a threshold for a model that may never go live; step 7 runs it again without the flag for a candidate that is about to. On 2026-10-07, at n=120 each, Qwen3.8 scored AUROC 0.972, Gemma 4 0.932 and the resident Qwen3.6 0.882. [`verify.md`](verify.md) has the question, the threshold rule and the full table.
 
 ## 5. Trigger gate
 
@@ -61,15 +61,15 @@ Time the candidate on a handful of real prompts, about ten, through `delegate.sh
 
 ## 7. The live trial
 
-A candidate that holds up offline gets a trial on real traffic before any edit to the repo. Make it the model the resident server serves (restart `:8080` with `--model <hf-id>`, after the offline steps have freed the candidate server), and prepend one line to `config.sh` in the data dir so every tier that shares the prose list asks for it first:
+A candidate that holds up offline gets a trial on real traffic before any edit to the repo. While its server is still up, record its verifier threshold: run step 4 again without `--dry-run`, which writes the candidate's row to `verify-thresholds.tsv` in the data dir. Then read the row back. A threshold of 0.999 or more means the model's scores pile up near 1 (Gemma 4 on 2026-10-09: 462 of 715 drafts scored 1.0, and the 5%-of-kept threshold landed at 0.9999), where flags turn on rounding; replace that row before the trial with a value a little below the pile, such as 0.99, chosen from a read-out over real kept drafts as in `docs/verify.md`. Then stop the candidate server and prepend one line to `config.sh` in the data dir so every tier that shares the prose list asks for it first:
 
 ```bash
-case "$tier" in prose|code|reasoning|long-context) prefs=(<substring> "${prefs[@]}") ;; esac
+case "$tier" in prose|code|reasoning|long-context|verify) prefs=(<substring> "${prefs[@]}") ;; esac
 ```
 
-The verify tier keeps its own line: it is chosen independently and its threshold is calibrated per model, so folding it into a prose trial would silently swap the verifier and invalidate that threshold. If the trial model should also verify, calibrate it first with `verify-draft.sh --calibrate`.
+The first trial call swaps the shared server to the candidate, so there is no need to restart it. The line includes `verify` because a verifier on a different model than prose only works from its own server: on the shared one every verified delegation would swap models twice.
 
-Prepend rather than replace, so later changes to the shipped list still reach the machine; `audit-models.sh` warns when a tier is frozen by a replacement. Prepending to every shared tier matters on an `mlx_lm.server`: a tier left on the old list would still name the old model, and the server would load it beside the new one.
+Prepend rather than replace, so later changes to the shipped list still reach the machine; `audit-models.sh` warns when a tier is frozen by a replacement. Prepending to every shared tier matters on an `mlx_lm.server`: a tier left on the old list would still name the old model, and the server would swap back to it on every call to that tier.
 
 Note the minute the line went live, and read the trial against it:
 
@@ -82,7 +82,7 @@ bash scripts/metrics-summary.sh --since <switch-minute ISO-8601>
 
 ## 8. Switch
 
-When the trial holds, make the change in the repo on a branch. Edit `PROSE_PREFS` in `scripts/pick-model.sh`, spelling the new model for every provider (its Ollama tag and its Hugging Face name, as the existing entries do), and update the prose-ordering test in `tests/run-tests.sh`, which encodes the measured order. Add a dated entry naming the model to each busy recipe's `docs/calibration/<recipe>.md` with the replay and judge numbers. Expect recipe guards written against the old model to need re-measuring: each recipe was calibrated against one model's greedy output (ADR 0009), so a guard that bound on the old model can stop binding or start over-firing on the new one. Re-run the replay per recipe after the switch and treat a regression there as a recipe edit with its own gate. Once the PR merges and the live clone is pulled, remove the `config.sh` line. If the verify tier now resolves to the new model, run `verify-draft.sh --calibrate` without `--dry-run` to record its threshold.
+When the trial holds, make the change in the repo on a branch. Edit `PROSE_PREFS` in `scripts/pick-model.sh`, spelling the new model for every provider (its Ollama tag and its Hugging Face name, as the existing entries do), and update the prose-ordering test in `tests/run-tests.sh`, which encodes the measured order. Add a dated entry naming the model to each busy recipe's `docs/calibration/<recipe>.md` with the replay and judge numbers. Expect recipe guards written against the old model to need re-measuring: each recipe was calibrated against one model's greedy output (ADR 0009), so a guard that bound on the old model can stop binding or start over-firing on the new one. Re-run the replay per recipe after the switch and treat a regression there as a recipe edit with its own gate. Once the PR merges and the live clone is pulled, remove the `config.sh` line. The verifier threshold step 7 recorded stays in the data dir's `verify-thresholds.tsv` under the same model id, so do not run `--calibrate` for it again: that would replace a threshold chosen from real drafts (Gemma 4's 0.99) with the synthetic set's. To ship it to other machines, add the row to `scripts/lib/verify-thresholds.tsv` in the switch PR. That row covers only the id you calibrated: thresholds are looked up by the exact served id, so the same weights under another provider's spelling (an Ollama tag, a Docker Model Runner name) fall back to the uncalibrated 0.5, which records `uncalibrated` and never flags, until a `--calibrate` run on that provider ships its own row.
 
 ## 9. Rollback
 
