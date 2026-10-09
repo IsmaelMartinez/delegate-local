@@ -60,8 +60,12 @@ else
   touch "$mock/busy"; sleep "\$s"; rm -f "$mock/busy"
 fi
 # MC_HOT: the first full-length call heats the machine to serious (2), which
-# the osascript stub then reports.
+# the osascript stub then reports; MC_HOT_FIRST: the candidate's one-token
+# first call (a cold load) does.
 if [[ -n "\${MC_HOT:-}" ]] && [[ "\$(printf '%s' "\$body" | jq -r '.max_tokens')" == 4096 ]]; then
+  echo 2 > "$mock/thermal"
+fi
+if [[ -n "\${MC_HOT_FIRST:-}" && "\$m" == "${CAND}" ]] && [[ "\$(printf '%s' "\$body" | jq -r '.max_tokens')" == 1 ]]; then
   echo 2 > "$mock/thermal"
 fi
 # MC_THINK: the candidate answers with a reasoning trace in the server's
@@ -407,6 +411,12 @@ EC=0; out=$(MC_HOT=1 DELEGATE_GPU_GATE=1 DELEGATE_GPU_WAIT_MAX=0 run --model "$C
 assert_eq 75 "$EC" "a machine the first arm heats stops the run with 75"
 assert_eq "1 0" "$(grep -c "cand.test.* \[0,false,4096\]$" "$mock/log") $(grep -c "champ.test.* \[0,false,4096\]$" "$mock/log")" \
   "before the second arm's call is sent"
+# A candidate whose cold load heats the machine stops the run before the
+# champion's warm-up.
+fresh
+EC=0; out=$(MC_HOT_FIRST=1 DELEGATE_GPU_GATE=1 DELEGATE_GPU_WAIT_MAX=0 run --model "$CAND" --base http://cand.test/v1 --prompts 2 2>&1) || EC=$?
+assert_eq 75 "$EC" "a cold load that heats the machine stops the run with 75"
+assert_eq 0 "$(grep -c '^http://champ.test' "$mock/log")" "before the champion's warm-up is sent"
 fresh
 # The one test on the real clock: ioreg is sampled in real time, twice a
 # second, so each call lasts long enough to hold several samples.

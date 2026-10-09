@@ -302,6 +302,8 @@ elif (( ${#prompts[@]} == 0 )); then
 else
   echo "eval-model: cost, ${#prompts[@]} prompts on both models ..." >&2
   cand_first=$(first_call "$base" "$model")
+  # The candidate's first call can include a long cold load.
+  gate
   first_call "$champ_base" "$champ_model" >/dev/null
   # Twice a second while the calls run; the two seconds before the first
   # read the idle level, which the busy-seconds are counted above. The loop
