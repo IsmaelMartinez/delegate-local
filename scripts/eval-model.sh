@@ -64,7 +64,7 @@
 # did not rise across the replay; else HOLD. The blind judge
 # (docs/model-swap.md step 3) stays a manual read.
 #
-# Writes <data dir>/evals/<UTC time>-<model slug>/ (report.txt, card.json and
+# Writes <data dir>/evals/<UTC time>-<model slug>.<suffix>/ (report.txt, card.json and
 # each step's output) under umask 077 and nothing to the metrics file; the
 # trigger gate leaves its raw results under the checkout's evals/results/, as
 # it always does.
@@ -187,9 +187,13 @@ gpu_gate_keep_awake
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 slug=$(printf '%s' "$model" | tr '/' '_' | tr -c 'A-Za-z0-9._-' '-' | cut -c1-60)
-run_dir="$data_dir/evals/$stamp-$slug"
 cache_dir="$data_dir/evals/cache"
-mkdir -p "$run_dir" "$cache_dir" || { echo "eval-model: cannot create $run_dir" >&2; exit 2; }
+mkdir -p "$cache_dir" || { echo "eval-model: cannot create $cache_dir" >&2; exit 2; }
+# mktemp -d makes the run directory atomically under a unique suffix, so two
+# runs that start in the same second on models whose names slug alike never
+# write into one.
+run_dir=$(mktemp -d "$data_dir/evals/$stamp-$slug.XXXXXX") \
+  || { echo "eval-model: cannot create a run directory under $data_dir/evals" >&2; exit 2; }
 work_tmp=$(mktemp -d)
 sampler_pid=""
 # The stop file ends the loop within half a second even if the signal is

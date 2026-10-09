@@ -87,6 +87,12 @@ printf '| "PerformanceStatistics" = {"Device Utilization %%"=%s}\n' "\$u"
 EOF
 printf '#!/usr/bin/env bash\ncat "%s/thermal" 2>/dev/null || echo 0\n' "$mock" > "$mock/osascript"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$mock/caffeinate"
+# MC_DATE pins the run directory's timestamp; every other call is the real date.
+cat > "$mock/date" <<'EOF'
+#!/usr/bin/env bash
+[[ -n "${MC_DATE:-}" && "$*" == "-u +%Y%m%dT%H%M%SZ" ]] && { echo "$MC_DATE"; exit 0; }
+exec /bin/date "$@"
+EOF
 chmod +x "$mock"/*
 
 # Stubs: each logs its argv, its pinned model and its cwd, then answers.
@@ -433,6 +439,12 @@ assert_eq "rp1 rp2 rp3" "$(sed -n 's/^replay --recipe \([^ ]*\) .*/\1/p' "$TEST_
 : > "$TEST_ROOT/stub.log"
 run --model "$CAND" --base http://cand.test/v1 --skip cost,grounding,trigger --recipes rp2 >/dev/null 2>&1
 assert_eq "rp2" "$(sed -n 's/^replay --recipe \([^ ]*\) .*/\1/p' "$TEST_ROOT/stub.log")" "--recipes names them"
+
+echo "== two runs in one second keep their own directories =="
+fresh
+MC_DATE=20261009T120000Z run --model "$CAND" --base http://cand.test/v1 --skip cost,replay,grounding,trigger >/dev/null 2>&1
+MC_DATE=20261009T120000Z run --model "$CAND" --base http://cand.test/v1 --skip cost,replay,grounding,trigger >/dev/null 2>&1
+assert_eq 2 "$(find "$data/evals" -maxdepth 1 -name '20261009T120000Z-*' | grep -c '')" "the same second and slug give two run directories"
 
 echo "== --skip takes a list however it is spaced =="
 fresh
