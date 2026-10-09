@@ -17,8 +17,8 @@ when Qwen3.6-35B-A3B, Qwen3.8-27B and Gemma 4 26B-A4B were compared by hand:
 a paired replay per busy recipe, a blind judge over the edited cases, a
 grounding calibration, the trigger gate and a speed bench, each from a
 script in the data dir's `spikes/`. `docs/model-swap.md` (#658) turned that
-into an eight-step runbook. Steps 2, 4, 5 and 6 are commands a script can
-run; step 3, the blind judge, needs a judge outside the two arms.
+into a nine-step runbook. Steps 2, 4, 5 and 6 are commands a script can run;
+step 3, the blind judge, needs a judge outside the two arms.
 
 Public sources do not answer the question. llmfit 1.1.16 ranks models by
 hardware fit and a quality estimate that tracks size: it rates gpt-oss-20b at
@@ -51,21 +51,27 @@ lettered questions, for the draft verifier and for the trigger gate a
 `scripts/eval-model.sh --model ID [--base URL]` produces one report card for a
 candidate served on its own port, against whatever the prose tier currently
 resolves to (the champion), measured on this skill's own work, and ends with
-one verdict. Both models are asked for by exact id, so neither arm can resolve
-to another cached model and the shared server is never asked for the
-candidate; a `--base` that is the champion's server is refused unless
-`--same-server` says the provider holds both models at once. The four steps
-run in the order below, the long one last.
+one verdict. The candidate is always asked for by its exact id, so it cannot
+resolve to another cached model and the shared server is never asked for
+it; a `--base` that is the champion's server is refused unless `--same-server`
+says the provider holds both models at once. The champion is asked for by
+exact id in the cost, grounding and trigger steps; the replay resolves it
+through each recipe's tier, as a delegation does, and counts a case that
+ran on any other model as an error. The four steps run in the order below,
+the long one last.
 
 The cost step sends the rendered inputs of the newest delegations to both
 servers, alternating which goes first, with `delegate.sh`'s request. It
 reports seconds, prompt and output tokens per call, and GPU busy-seconds per
 call: ioreg's utilisation above the idle level read before the first call,
-each sample counted once, for the call that was running. It also counts the
-calls that ran to `max_tokens`, came back empty, or carried a reasoning trace
-although the request turned thinking off. Busy-seconds are the cost measure,
-with wall seconds where ioreg reads nothing. The cost step is measured fresh
-on both arms every run, because load and heat differ between runs.
+each sample counted once, for the call that was running. Those are summed
+over the prompts both models answered, so a model that fails the long
+prompts is not averaged over the short ones. It also counts the calls that
+failed (a transport error or an empty answer), ran to `max_tokens` or carried
+a reasoning trace although the request turned thinking off. Busy-seconds are
+the cost measure, with wall seconds where ioreg reads nothing. The cost step
+is measured fresh on both arms every run, because load and heat differ
+between runs.
 
 The grounding step runs `verify-draft.sh --calibrate --dry-run` on the
 labelled set in the data dir, which records AUROC and the threshold in the
@@ -86,16 +92,21 @@ The verdict is one of four:
 
 - STOP when any of these holds. A recipe's replay is a REJECT (the one-sided
   sign test at p < 0.05 against the candidate). The trigger gate fails its
-  own bar, recall and negative precision of at least 0.9. Grounding AUROC is
-  more than 0.05 under the champion's. The candidate does not answer
-  `decide.sh`'s lettered questions at all. It answers empty on more calls
-  than the champion. Its cost per call is over 1.5 times the champion's.
+  own bar, recall and negative precision of at least 0.9, or cannot score on
+  the candidate at all. Grounding AUROC is more than 0.05 under the
+  champion's, or the verifier cannot score half its rows because the
+  candidate opens a lettered question with neither letter. The candidate
+  fails more calls than the champion. Its cost per call is over 1.5 times
+  the champion's.
 - INCONCLUSIVE when no bar stopped it but a step that could have did not run,
   through an error or `--skip`.
-- TRIAL when it is cheaper, at most 0.9 times the champion's cost, or better:
-  a replay ACCEPT, or AUROC at least 0.05 over.
-- HOLD otherwise: level with the champion and no cheaper, so a switch would
-  buy nothing.
+- TRIAL when it is cheaper, at most 0.9 times the champion's cost, or better
+  (a replay ACCEPT, or AUROC at least 0.05 over), and its failed checks and
+  length flags did not rise across the replay. That last condition is the
+  replay's own rule, under which such a rise holds back an ACCEPT.
+- HOLD otherwise: level with the champion and no cheaper, or ahead with the
+  checks or length flags rising, so a switch would buy nothing or would buy
+  it with worse output.
 
 Each bar has a reason. 0.05 AUROC is about 1.7 standard errors at 60
 positives and 60 negatives near 0.9, and it sits inside the spread the
@@ -104,8 +115,10 @@ candidate that runs the laptop half again as hot on every delegation; the
 dense 27B, at three times, is the case it is for. 0.9 asks a switch to buy at
 least a tenth off the heat. A model that cannot answer a lettered question
 would break the verifier and the trigger gate wherever the verify tier
-follows prose. An empty answer is a failed delegation, since `delegate.sh`
-exits on one.
+follows prose; the trigger gate stops at its first unscorable query, so one
+is enough there, while the verifier only loses the drafts it cannot score,
+so it stops the card at half. A transport error or an empty answer is a
+failed delegation, since `delegate.sh` exits on either.
 
 A TRIAL verdict leads to the runbook's blind judge (step 3) and then the live
 trial (step 7). The judge stays manual because it needs a judge that is
@@ -114,8 +127,10 @@ arms' outputs.
 
 ## Consequences
 
-Trying a new model is now one command and minutes for a small one, and the
-champion's slow measurements are paid once. The runbook keeps its steps as
+Trying a new model is now one command. The first full card against a
+champion took 32 minutes on 2026-10-09: 232 replay calls, of which 112 generated
+the champion's own outputs. Those are cached like its grounding and trigger
+results, so the next candidate pays only for its own calls. The runbook keeps its steps as
 the explanation of what each number means. The card leads it.
 
 The first use, on 2026-10-09 (#679), added three checks no stubbed test would
@@ -130,12 +145,27 @@ the lettered questions, without running the replay. Active parameters
 predict heat only for a model that answers in the shape `delegate.sh` asks
 for.
 
+IBM's Granite 4.0-H-Tiny, at about 1B active, showed both sides of the heat
+argument. It used 0.44 and 0.57 times the champion's GPU time per call on two
+runs and answered cleanly, but the replay rejected it on four of six recipes
+(1 win to 17 losses on commit-message) with five times the champion's
+invented anchors (72 against 14). Its grounding AUROC was 0.519, and it
+answered yes to every trigger query. LiquidAI's LFM2-24B-A2B, at about 2B
+active within 24B, failed the other way. It cost 0.44 times the champion's
+GPU time but wrote 85 tokens a call against 215, dropping the facts the
+shipped text kept (205 against 31 on github-issue-body), and the replay
+rejected it on five of six recipes. At one to two billion active parameters
+the heat saving costs the writing, by invention or by omission.
+
 The card is only as good as the corpus behind it. The replay needs edited
 cases whose inputs are still stored (drafts are kept 14 days). The grounding
 set lives in the data dir and is not shipped, so on another machine that step
 is reported as not measured and does not gate. The champion runs on the
-shared server, so another session's calls can slow either arm's cost step;
-alternating the arms evens that out but does not remove it.
+shared server, where another session's calls queue ahead of its cost calls,
+while the candidate has a server to itself. So outside load can only make
+the candidate look cheaper. The heat gate waits for a busy GPU before the
+first call, and runbook step 1 says to check for other sessions; a cheaper
+verdict close to the 0.9 bar deserves a second run on a quiet machine.
 
 This is revisited when watts become readable without sudo, when a model
 needs a request shape `delegate.sh` does not send (a reasoning toggle other

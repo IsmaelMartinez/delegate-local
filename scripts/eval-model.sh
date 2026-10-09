@@ -8,28 +8,33 @@
 #              models in alternation with delegate.sh's request: seconds per
 #              call, output tokens per call and per second, GPU busy-seconds
 #              per call (ioreg's Device Utilization over each call, less the
-#              level read before the first), the calls that ran to max_tokens,
-#              answered empty or carried a reasoning trace although thinking
-#              was off, and the candidate's first call. On Apple silicon active
-#              parameters, not size, set this.
+#              level read before the first), all over the prompts both models
+#              answered; and the calls that failed (a transport error or an
+#              empty answer), ran to max_tokens or carried a reasoning trace
+#              although thinking was off, and the candidate's first call. On
+#              Apple silicon active parameters, not size, set the cost.
 #   replay     replay-recipe.sh --candidate-model --edited-only per recipe:
-#              the sign test on the cases the agent edited, and the anchors
-#              each arm dropped, restated (over) and invented. The long step,
-#              so it runs last and not at all once the cost step stops the
-#              candidate as a writer; a judging failure still lets it run.
+#              the sign test on the cases the agent edited, the anchors each
+#              arm dropped, restated (over) and invented, and each arm's failed
+#              checks and length flags. The long step, so it runs last and not
+#              at all once the cost step stops the candidate as a writer; a
+#              judging failure still lets it run.
 #   grounding  verify-draft.sh --calibrate --dry-run on the labelled grounding
 #              set: AUROC and threshold in the verifier role, which moves with
 #              the prose tier on a server that swaps models.
 #   trigger    eval-skill-triggers.sh --decide: the skill's description, read
 #              by the model.
 #
-# The candidate runs on its own server: an mlx_lm.server swaps models rather
-# than stacking them, so asking the shared one for the candidate evicts the
-# model every other session uses. The champion is whatever the prose tier
-# resolves to, asked for by its exact id. Grounding and trigger results are
-# cached per model and input hash under <data dir>/evals/cache, so a champion
-# measured once costs nothing again; the replay keeps its own per-arm cache;
-# cost is measured fresh on both, back to back.
+# The candidate runs on its own server and is always asked for by its exact
+# id: an mlx_lm.server swaps models rather than stacking them, so asking the
+# shared one for the candidate evicts the model every other session uses.
+# The champion is whatever the prose tier resolves to, asked for by its exact
+# id in the cost, grounding and trigger steps; the replay resolves it through
+# each recipe's tier as a delegation does, and counts a case that ran on any
+# other model as an error. Grounding and trigger results are cached per model
+# and input hash under <data dir>/evals/cache, so a champion measured once
+# costs nothing again; the replay keeps its own per-arm cache; cost is
+# measured fresh on both, back to back.
 #
 # Usage:  eval-model.sh --model ID [--base URL] [--recipes A,B,...] [--limit N]
 #                       [--prompts N] [--grounding FILE] [--skip STEP,...]
@@ -42,24 +47,27 @@
 #   --limit N         newest N edited cases per recipe (default 20)
 #   --prompts N       prompts in the cost step (default 8)
 #   --grounding FILE  the labelled set (default <data dir>/spikes/clef/
-#                     grounding/ground.jsonl); when absent the step is noted
-#                     as not measured
+#                     grounding/ground.jsonl); the default absent, the step is
+#                     noted as not measured; a named file absent is an error
 #   --skip LIST       steps to leave out: cost, replay, grounding, trigger
 #   --same-server     allow --base to be the champion's base, for a provider
 #                     that holds both models at once
 #
 # Verdict (ADR 0034): STOP when a recipe's replay is REJECT, the trigger gate
-# fails, grounding AUROC is more than 0.05 under the champion's, the candidate
-# does not answer decide.sh's lettered questions at all (the verifier and the
-# trigger gate run on them), it answers empty on more calls than the champion,
-# or the cost per call is over 1.5 times the
-# champion's; else INCONCLUSIVE when a step that could have stopped it did not
-# run; else TRIAL when the candidate is cheaper (at most 0.9 times) or better
-# (a replay ACCEPT, or AUROC 0.05 or more over); else HOLD. The blind judge
+# fails or cannot score on the candidate, grounding AUROC is more than 0.05
+# under the champion's, the verifier cannot score half its rows on the
+# candidate, the candidate fails more calls than the champion (each a failed
+# delegation), or its cost per call is over 1.5 times the champion's; else
+# INCONCLUSIVE when a step that could have stopped it did not run; else TRIAL
+# when the candidate is cheaper (at most 0.9 times) or better (a replay
+# ACCEPT, or AUROC 0.05 or more over) and its failed checks and length flags
+# did not rise across the replay; else HOLD. The blind judge
 # (docs/model-swap.md step 3) stays a manual read.
 #
 # Writes <data dir>/evals/<UTC time>-<model slug>/ (report.txt, card.json and
-# each step's output) under umask 077 and nothing to the metrics file.
+# each step's output) under umask 077 and nothing to the metrics file; the
+# trigger gate leaves its raw results under the checkout's evals/results/, as
+# it always does.
 # Env:  DELEGATE_LOCAL_DATA_DIR, DELEGATE_METRICS_FILE as every other script;
 #       DELEGATE_GPU_* the heat gate (lib/gpu-gate.sh), waited on before each
 #       step and each cost call; DELEGATE_EVAL_SCRIPTS the directory the step
@@ -85,6 +93,7 @@ recipes=""
 limit=20
 n_prompts=8
 grounding="$data_dir/spikes/clef/grounding/ground.jsonl"
+grounding_named=0
 skip=""
 same_server=0
 
@@ -96,7 +105,7 @@ while (( $# > 0 )); do
     --recipes) need_value "$@"; recipes="$2"; shift 2 ;;
     --limit) need_value "$@"; limit="$2"; shift 2 ;;
     --prompts) need_value "$@"; n_prompts="$2"; shift 2 ;;
-    --grounding) need_value "$@"; grounding="$2"; shift 2 ;;
+    --grounding) need_value "$@"; grounding="$2"; grounding_named=1; shift 2 ;;
     --skip) need_value "$@"; skip="$2"; shift 2 ;;
     --same-server) same_server=1; shift ;;
     -h|--help) sed -n '/^# Usage:/,/^# Exit:/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
@@ -105,9 +114,17 @@ while (( $# > 0 )); do
 done
 
 [[ -n "$model" ]] || { echo "eval-model: --model is required (the candidate's exact served id)" >&2; exit 2; }
+# One spelling for the step list, so "cost, replay" skips both, as validated.
+skip="${skip//[[:space:]]/}"
 for n in "$limit" "$n_prompts"; do
-  case "$n" in ''|*[!0-9]*|0) echo "eval-model: --limit and --prompts take a positive number" >&2; exit 2 ;; esac
+  case "$n" in ''|*[!0-9]*) echo "eval-model: --limit and --prompts take a positive number" >&2; exit 2 ;; esac
+  (( 10#$n > 0 )) || { echo "eval-model: --limit and --prompts take a positive number" >&2; exit 2; }
 done
+# Base 10 whatever the spelling: (( )) reads 08 as a bad octal number.
+limit=$((10#$limit)); n_prompts=$((10#$n_prompts))
+if (( grounding_named )) && [[ ! -f "$grounding" ]]; then
+  echo "eval-model: --grounding $grounding not found" >&2; exit 2
+fi
 for s in ${skip//,/ }; do
   case "$s" in cost|replay|grounding|trigger) ;; *) echo "eval-model: --skip takes cost, replay, grounding or trigger, not '$s'" >&2; exit 2 ;; esac
 done
@@ -129,10 +146,12 @@ champ_model="${resolution#*$'\t'}"
 if [[ "$model" == "$champ_model" ]]; then
   echo "eval-model: $model is the prose tier's current model; there is nothing to compare it with" >&2; exit 2
 fi
-same_base() { # two bases name one server: localhost and 127.0.0.1 are one host
+same_base() { # two bases name one server: localhost, [::1] and 127.0.0.1 are one host
   local a b
   a=$(printf '%s' "${1%/}" | tr '[:upper:]' '[:lower:]'); b=$(printf '%s' "${2%/}" | tr '[:upper:]' '[:lower:]')
-  [[ "${a/:\/\/localhost/://127.0.0.1}" == "${b/:\/\/localhost/://127.0.0.1}" ]]
+  a="${a/:\/\/localhost/://127.0.0.1}"; a="${a/:\/\/\[::1\]/://127.0.0.1}"
+  b="${b/:\/\/localhost/://127.0.0.1}"; b="${b/:\/\/\[::1\]/://127.0.0.1}"
+  [[ "$a" == "$b" ]]
 }
 if same_base "$base" "$champ_base" && (( ! same_server )); then
   cat >&2 <<EOF
@@ -173,7 +192,15 @@ cache_dir="$data_dir/evals/cache"
 mkdir -p "$run_dir" "$cache_dir" || { echo "eval-model: cannot create $run_dir" >&2; exit 2; }
 work_tmp=$(mktemp -d)
 sampler_pid=""
-stop_sampler() { [[ -n "$sampler_pid" ]] && kill "$sampler_pid" 2>/dev/null; wait "$sampler_pid" 2>/dev/null; sampler_pid=""; }
+# The stop file ends the loop within half a second even if the signal is
+# missed, so the wait cannot outlast it.
+stop_sampler() {
+  [[ -n "$sampler_pid" ]] || return 0
+  : > "$work_tmp/sampler.stop"
+  kill "$sampler_pid" 2>/dev/null
+  wait "$sampler_pid" 2>/dev/null
+  sampler_pid=""
+}
 trap 'stop_sampler; rm -rf "$work_tmp"' EXIT
 
 # DELEGATE_EVAL_CLOCK (a test seam) names a file holding the time, which the
@@ -217,12 +244,13 @@ gate first
 # Cost: the same prompts to both servers, alternating which goes first, so
 # heat and other sessions' load fall on both arms alike.
 # ---------------------------------------------------------------------------
-cost_measure=""; cost_ratio=""
+cost_measure=""; cost_ratio=""; cost_raw=""
 : > "$run_dir/cost.tsv"
 # cost_call <arm> <base> <model> <prompt file> <i>: one line to cost.tsv —
 # arm, i, start, end, prompt and output tokens, finish reason, 1 when the
-# answer carried a reasoning trace (a server's reasoning field, or <think> in
-# the content) although the request turned thinking off, and 1 when it
+# answer carried a reasoning trace (a server's reasoning field, or a think
+# tag in the content: a template that opens the block in the prompt leaves
+# only </think>) although the request turned thinking off, and 1 when it
 # answered at all: a reasoning model can spend the whole budget thinking and
 # return empty content, which costs the GPU like any call and fails the
 # delegation it stands for (delegate.sh exits on empty content).
@@ -238,7 +266,7 @@ cost_call() {
     printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$5" "$t0" "$t1" "$(jq -r '.choices[0] as $c
         | [(.usage.prompt_tokens // 0), (.usage.completion_tokens // 0), ($c.finish_reason // "-"),
            (if (($c.message.reasoning // $c.message.reasoning_content // "") != "")
-               or (($c.message.content // "") | test("<think>")) then 1 else 0 end),
+               or (($c.message.content // "") | test("</?think>")) then 1 else 0 end),
            (if ($c.message.content // "" | gsub("\\s"; "")) != "" then 1 else 0 end)] | @tsv' <<<"$body")" >> "$run_dir/cost.tsv"
   else
     printf '%s\t%s\t%s\t%s\terror\terror\t-\t0\t0\n' "$1" "$5" "$t0" "$t1" >> "$run_dir/cost.tsv"
@@ -276,35 +304,50 @@ else
   cand_first=$(first_call "$base" "$model")
   first_call "$champ_base" "$champ_model" >/dev/null
   # Twice a second while the calls run; the two seconds before the first
-  # read the idle level, which the busy-seconds are counted above.
+  # read the idle level, which the busy-seconds are counted above. The loop
+  # ends with this script ($$ is its pid in the subshell too), so a run killed
+  # past its EXIT trap leaves no sampler behind.
   if [[ -n "$(gpu_gate_util)" ]]; then
-    ( while :; do printf '%s %s\n' "$(now)" "$(gpu_gate_util)"; sleep 0.5; done ) > "$run_dir/gpu.txt" 2>/dev/null &
+    ( while [[ ! -f "$work_tmp/sampler.stop" ]] && kill -0 "$$" 2>/dev/null; do
+        printf '%s %s\n' "$(now)" "$(gpu_gate_util)"; sleep 0.5
+      done ) > "$run_dir/gpu.txt" 2>/dev/null &
     sampler_pid=$!
     sleep 2
   fi
   i=0
   for p in "${prompts[@]}"; do
     i=$((i + 1))
-    gate
-    if (( i % 2 )); then
-      cost_call candidate "$base" "$model" "$p" "$i"; cost_call champion "$champ_base" "$champ_model" "$p" "$i"
-    else
-      cost_call champion "$champ_base" "$champ_model" "$p" "$i"; cost_call candidate "$base" "$model" "$p" "$i"
-    fi
+    order="candidate champion"
+    (( i % 2 )) || order="champion candidate"
+    # The gate before every call, as lib/gpu-gate.sh asks of a batch: the
+    # first arm can be what heats the machine past the limit.
+    for arm in $order; do
+      gate
+      if [[ "$arm" == candidate ]]; then
+        cost_call candidate "$base" "$model" "$p" "$i"
+      else
+        cost_call champion "$champ_base" "$champ_model" "$p" "$i"
+      fi
+    done
   done
   stop_sampler
   [[ -f "$run_dir/gpu.txt" ]] || : > "$run_dir/gpu.txt"
-  # Per arm: calls, errors, seconds, prompt and output tokens, and GPU
-  # busy-seconds: the utilisation over the idle level (read in the two
-  # seconds before the first call), each sample counted once, for the latest
-  # call started before it and up to half a second past that call's end, as
-  # ioreg lags. The calls run one at a time, in cost.tsv's order.
+  # Per arm: calls, transport errors, then seconds, prompt and output tokens
+  # and GPU busy-seconds summed over the prompts both arms answered (so a
+  # model that fails the long prompts is not averaged over the short ones),
+  # then the calls that ran to max_tokens, carried a reasoning trace or came
+  # back empty, and the number of prompts both answered. GPU busy-seconds are
+  # the utilisation over the idle level (read in the two seconds before the
+  # first call), each sample counted once, for the latest call started
+  # before it and up to half a second past that call's end, as ioreg lags.
+  # The calls run one at a time, in cost.tsv's order.
   awk -F'\t' -v gpu="$run_dir/gpu.txt" '
-    BEGIN { n = 0; while ((getline line < gpu) > 0) { split(line, a, " "); if (a[2] != "") { n++; t[n] = a[1]; u[n] = a[2] } } }
-    { arm = $1; calls[arm]++
+    BEGIN { n = 0; while ((getline line < gpu) > 0) { split(line, g, " "); if (g[2] != "") { n++; t[n] = g[1]; u[n] = g[2] } } }
+    { arm = $1; calls[arm]++; asked[$2] = 1
       if ($5 == "error") { err[arm]++; next }
-      s[arm] += $4 - $3; pt[arm] += $5; ct[arm] += $6; capped[arm] += ($7 == "length"); think[arm] += $8; empty[arm] += ($9 == 0)
-      m++; c0[m] = $3; c1[m] = $4; who[m] = arm }
+      capped[arm] += ($7 == "length"); think[arm] += $8; empty[arm] += ($9 == 0)
+      key = arm SUBSEP $2; ok[key] = 1; dur[key] = $4 - $3; ptk[key] = $5; ctk[key] = $6
+      m++; c0[m] = $3; c1[m] = $4; who[m] = key }
     END {
       idle = 0; k = 0
       for (j = 1; j <= n; j++) if (m && t[j] < c0[1]) { idle += u[j]; k++ }
@@ -314,40 +357,52 @@ else
         while (r < m && c0[r + 1] <= t[j]) r++
         if (r && t[j] <= c1[r] + 0.5) { d = u[j] - idle; if (d > 0) busy[who[r]] += d / 100 * (t[j] - t[j - 1]) }
       }
-      for (arm in calls)
-        printf "%s\t%d\t%d\t%.3f\t%d\t%d\t%.3f\t%d\t%d\t%d\t%d\n", arm, calls[arm], err[arm] + 0, s[arm], pt[arm], ct[arm],
-          busy[arm] + 0, (n > 0), capped[arm] + 0, think[arm] + 0, empty[arm] + 0
+      for (i in asked) if (ok["candidate" SUBSEP i] && ok["champion" SUBSEP i]) {
+        pairs++
+        for (q = 1; q <= 2; q++) { a = (q == 1 ? "candidate" : "champion"); key = a SUBSEP i
+          s[a] += dur[key]; pt[a] += ptk[key]; ct[a] += ctk[key]; b[a] += busy[key] }
+      }
+      for (q = 1; q <= 2; q++) { a = (q == 1 ? "candidate" : "champion")
+        printf "%s\t%d\t%d\t%.3f\t%d\t%d\t%.3f\t%d\t%d\t%d\t%d\t%d\n", a, calls[a], err[a], s[a], pt[a], ct[a],
+          b[a], (n > 0), capped[a], think[a], empty[a], pairs }
     }' "$run_dir/cost.tsv" > "$work_tmp/cost.sum"
   arm_cost() { awk -F'\t' -v a="$1" '$1 == a' "$work_tmp/cost.sum"; }
-  IFS=$'\t' read -r _ c_calls c_err c_s c_pt c_ct c_busy util_ok c_cap c_think c_empty <<<"$(arm_cost candidate)"
-  IFS=$'\t' read -r _ h_calls h_err h_s h_pt h_ct h_busy _ h_cap h_think h_empty <<<"$(arm_cost champion)"
-  c_ok=$(( ${c_calls:-0} - ${c_err:-0} )); h_ok=$(( ${h_calls:-0} - ${h_err:-0} ))
-  if (( c_ok == 0 || h_ok == 0 || c_err > ${c_calls:-0} / 2 || h_err > ${h_calls:-0} / 2 )); then
-    reasons_open+=("cost: more than half the calls failed (candidate ${c_err:-?}, champion ${h_err:-?} of ${#prompts[@]})")
+  IFS=$'\t' read -r _ c_calls c_err c_s c_pt c_ct c_busy util_ok c_cap c_think c_empty pairs <<<"$(arm_cost candidate)"
+  IFS=$'\t' read -r _ h_calls h_err h_s h_pt h_ct h_busy _ h_cap h_think h_empty _ <<<"$(arm_cost champion)"
+  c_ok=$((c_calls - c_err)); h_ok=$((h_calls - h_err))
+  c_fail=$((c_err + c_empty)); h_fail=$((h_err + h_empty))
+  if (( pairs == 0 )); then
+    reasons_open+=("cost: no prompt was answered by both models (transport errors: candidate $c_err, champion $h_err of ${#prompts[@]})")
   else
     # GPU busy-seconds when ioreg could be read, else wall seconds: one
     # stream keeps the GPU near saturation, so the two track each other.
-    if [[ "${util_ok:-0}" == 1 ]] && awk -v c="$c_busy" -v h="$h_busy" 'BEGIN { exit !(c > 0 && h > 0) }'; then
+    # Both arms are summed over the same prompts, so the ratio of the sums is
+    # the ratio per call. The bars read it unrounded (cost_raw); the report
+    # and the reasons print it to two places, which would carry 1.504 under 1.5.
+    if [[ "$util_ok" == 1 ]] && awk -v c="$c_busy" -v h="$h_busy" 'BEGIN { exit !(c > 0 && h > 0) }'; then
       cost_measure="GPU busy-seconds per call"
-      cost_ratio=$(awk -v c="$c_busy" -v co="$c_ok" -v h="$h_busy" -v ho="$h_ok" 'BEGIN { printf "%.2f", (c / co) / (h / ho) }')
+      cost_raw=$(awk -v c="$c_busy" -v h="$h_busy" 'BEGIN { printf "%.6f", c / h }')
     else
       cost_measure="seconds per call"
-      cost_ratio=$(awk -v c="$c_s" -v co="$c_ok" -v h="$h_s" -v ho="$h_ok" 'BEGIN { if (c > 0 && h > 0) printf "%.2f", (c / co) / (h / ho) }')
+      cost_raw=$(awk -v c="$c_s" -v h="$h_s" 'BEGIN { if (c > 0 && h > 0) printf "%.6f", c / h }')
     fi
+    [[ -n "$cost_raw" ]] && cost_ratio=$(awk -v r="$cost_raw" 'BEGIN { printf "%.2f", r }')
     # A reasoning trace the request turned off is the usual cause of a cost
     # far above the champion's, so the reason names it.
     think_note=""
-    (( ${c_think:-0} > 0 )) && think_note=", and it reasoned before answering on $c_think of $c_ok calls although thinking was off"
-    if [[ -z "$cost_ratio" ]]; then
+    (( c_think > 0 )) && think_note=", and it reasoned before answering on $c_think of $c_ok calls although thinking was off"
+    if [[ -z "$cost_raw" ]]; then
       reasons_open+=("cost: no time measured on one arm")
-    elif awk -v r="$cost_ratio" 'BEGIN { exit !(r > 1.5) }'; then
+    elif awk -v r="$cost_raw" 'BEGIN { exit !(r > 1.5) }'; then
       reasons_stop+=("cost: $cost_ratio times the champion's $cost_measure$think_note"); writer_stop=1
-    elif awk -v r="$cost_ratio" 'BEGIN { exit !(r <= 0.9) }'; then
+    elif awk -v r="$cost_raw" 'BEGIN { exit !(r <= 0.9) }'; then
       reasons_go+=("cheaper: $cost_ratio times the champion's $cost_measure$think_note")
     fi
-    if (( ${c_empty:-0} > ${h_empty:-0} )); then
-      reasons_stop+=("no answer: the candidate returned empty content on $c_empty of $c_ok calls, each a failed delegation"); writer_stop=1
-    fi
+  fi
+  # A transport error or an empty answer is a delegation that failed, whatever
+  # the cost of the calls that worked.
+  if (( c_fail > h_fail )); then
+    reasons_stop+=("failed calls: the candidate failed $c_fail of $c_calls (transport errors $c_err, empty answers $c_empty) against the champion's $h_fail, each a failed delegation"); writer_stop=1
   fi
 fi
 
@@ -395,29 +450,41 @@ trigger_run() {
     cp "$work_tmp/t.err" "$3.err"
   fi
 }
-# off_format <err file>: the model answered a lettered decide.sh question with
-# neither letter (a reasoning model's <think>, or prose) — the verifier and the
-# trigger gate cannot run on it at all, which is not a passing fault.
-off_format() { grep -qE 'neither option letter|answer letters held only' "$1" 2>/dev/null; }
-letter_stop="the candidate does not answer decide.sh's lettered questions (it opens with something other than an option letter), so the verifier and the trigger gate would break on it"
+# A model that opens a lettered decide.sh question with neither letter (a
+# reasoning model's <think>, or prose) gets no score. verify-draft.sh names
+# each such row; eval-skill-triggers.sh stops at the first such query, so there
+# one is enough to leave the gate without a score.
+off_format_rows() { grep -c 'neither option letter' "$1" 2>/dev/null; }
+trigger_off_format() { grep -q 'answer letters held only' "$1" 2>/dev/null; }
 field() { sed -n "s/.* $1=\([^ ]*\).*/\1/p" "$2" | head -n 1; }
+# milli X: an AUROC (printed to three places) in thousandths, so the 0.05 bars
+# compare integers and +0.050 is not lost to 0.9 + 0.05 in floating point.
+milli() { awk -v x="$1" 'BEGIN { printf "%d", x * 1000 + 0.5 }'; }
 
 g_cand=""; g_champ=""
 if skipped grounding; then
   reasons_open+=("grounding skipped")
 elif [[ -z "$ground_sha" ]]; then
-  : # no labelled set on this machine: reported, not gating
+  : # the default set is not on this machine: reported, not gating
 else
   grounding_run "$base" "$model" "$run_dir/grounding-candidate.txt"
   grounding_run "$champ_base" "$champ_model" "$run_dir/grounding-champion.txt"
   g_cand=$(field auroc "$run_dir/grounding-candidate.txt"); g_champ=$(field auroc "$run_dir/grounding-champion.txt")
-  if [[ -z "$g_cand" ]] && off_format "$run_dir/grounding-candidate.txt.err"; then
-    reasons_stop+=("grounding: $letter_stop")
-  elif [[ -z "$g_cand" || -z "$g_champ" ]]; then
-    reasons_open+=("grounding: the verifier question could not be scored on $([[ -z "$g_cand" ]] && echo the candidate || echo the champion)")
-  elif awk -v c="$g_cand" -v h="$g_champ" 'BEGIN { exit !(c < h - 0.05) }'; then
+  if [[ -z "$g_cand" ]]; then
+    g_bad=$(off_format_rows "$run_dir/grounding-candidate.txt.err")
+    g_rows=$(grep -c . "$grounding")
+    if (( ${g_bad:-0} > 0 && g_bad * 2 >= g_rows )); then
+      reasons_stop+=("grounding: the candidate opened the verifier's lettered question with neither letter on $g_bad of $g_rows rows, so the verifier would break on it")
+    elif (( ${g_bad:-0} > 0 )); then
+      reasons_open+=("grounding: $g_bad of $g_rows rows could not be scored (the answer opened with neither letter)")
+    else
+      reasons_open+=("grounding: the verifier question could not be scored on the candidate")
+    fi
+  elif [[ -z "$g_champ" ]]; then
+    reasons_open+=("grounding: the verifier question could not be scored on the champion")
+  elif (( $(milli "$g_cand") < $(milli "$g_champ") - 50 )); then
     reasons_stop+=("grounding: AUROC $g_cand against the champion's $g_champ")
-  elif awk -v c="$g_cand" -v h="$g_champ" 'BEGIN { exit !(c >= h + 0.05) }'; then
+  elif (( $(milli "$g_cand") >= $(milli "$g_champ") + 50 )); then
     reasons_go+=("better grounding: AUROC $g_cand against $g_champ")
   fi
 fi
@@ -432,9 +499,8 @@ else
   case "$t_cand_rc" in
     0) ;;
     1) reasons_stop+=("trigger gate: recall $(field recall "$run_dir/trigger-candidate.txt"), negative precision $(field negative-precision "$run_dir/trigger-candidate.txt") under the bar") ;;
-    *) if off_format "$run_dir/trigger-candidate.txt.err"; then
-         # Named once: grounding has usually said it already.
-         [[ " ${reasons_stop[*]-} " == *"$letter_stop"* ]] || reasons_stop+=("trigger gate: $letter_stop")
+    *) if trigger_off_format "$run_dir/trigger-candidate.txt.err"; then
+         reasons_stop+=("trigger gate: it cannot score on the candidate (a query's answer letters held under half the model's mass, and the gate stops at the first)")
        else
          reasons_open+=("trigger gate: no score on the candidate")
        fi ;;
@@ -473,11 +539,11 @@ else
     # Every field is non-empty ("-" for none): the report reads the rows back
     # with a tab IFS, which would merge an empty field into its neighbour.
     if (( rc == 3 )); then
-      printf '%s\tnone\t0\t0\t0\t0\t0\t-\t0 0 0\t0 0 0\n' "$r" >> "$work_tmp/replay.tsv"; continue
+      printf '%s\tnone\t0\t0\t0\t0\t0\t-\t0 0 0\t0 0 0\t0 0\t0 0\n' "$r" >> "$work_tmp/replay.tsv"; continue
     fi
     verdict=$(sed -n 's/^Verdict: \([A-Z]*\).*/\1/p' "$out" | tail -n 1)
     if (( rc != 0 )) || [[ -z "$verdict" ]]; then
-      printf '%s\terror\t0\t0\t0\t0\t0\t-\t0 0 0\t0 0 0\n' "$r" >> "$work_tmp/replay.tsv"
+      printf '%s\terror\t0\t0\t0\t0\t0\t-\t0 0 0\t0 0 0\t0 0\t0 0\n' "$r" >> "$work_tmp/replay.tsv"
       reasons_open+=("replay: $r did not run (exit $rc)"); continue
     fi
     summary=$(sed -n 's/^Summary: n=\([0-9]*\)  wins=\([0-9]*\)  losses=\([0-9]*\)  ties=\([0-9]*\)  errors=\([0-9]*\).*/\1 \2 \3 \4 \5/p' "$out" | tail -n 1)
@@ -489,7 +555,12 @@ else
     anchors=$(awk '$3 ~ /^(kept|scaffold|rewrote)$/ && $4 ~ /^[0-9]+(\/[0-9]+)+=[0-9]+$/ && $5 ~ /^[0-9]+(\/[0-9]+)+=[0-9]+$/ {
         split($4, a, /[\/=]/); split($5, b, /[\/=]/); hd += a[2]; ho += a[3]; hi += a[4]; cd += b[2]; co += b[3]; ci += b[4] }
       END { printf "%d %d %d\t%d %d %d", hd, ho, hi, cd, co, ci }' "$out")
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$verdict" "$n" "$w" "$l" "$t" "$e" "$p" "$anchors" >> "$work_tmp/replay.tsv"
+    # Each arm's failed checks and length flags over the counted cases, as the
+    # replay totals them: a rise holds back its own ACCEPT, and the card's TRIAL.
+    checks=$(sed -n 's/^Checks failed: champion=\([0-9]*\)  candidate=\([0-9]*\).*/\1 \2/p' "$out" | tail -n 1)
+    lengths=$(sed -n 's/^Length flags: champion=\([0-9]*\)  candidate=\([0-9]*\).*/\1 \2/p' "$out" | tail -n 1)
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$verdict" "$n" "$w" "$l" "$t" "$e" "$p" "$anchors" \
+      "${checks:-0 0}" "${lengths:-0 0}" >> "$work_tmp/replay.tsv"
     case "$verdict" in
       REJECT) reasons_stop+=("replay: $r REJECT, $l losses to $w wins (p=$p)") ;;
       ACCEPT) reasons_go+=("better on $r: replay ACCEPT, $w wins to $l (p=$p)") ;;
@@ -505,12 +576,22 @@ fi
 # Verdict and report.
 # ---------------------------------------------------------------------------
 join_reasons() { local IFS=';'; printf '%s' "$*" | sed 's/;/; /g'; }
+# The replay's own rule, across every recipe it ran: a rise in failed checks
+# or length flags holds back a win, so it holds back a TRIAL too.
+blocks=()
+# Fields 11 and 12 of a replay row (the anchors take 9 and 10).
+read -r hc cc hl cl < <(awk -F'\t' '{ split($11, c, " "); split($12, f, " "); hc += c[1]; cc += c[2]; hl += f[1]; cl += f[2] }
+  END { printf "%d %d %d %d\n", hc, cc, hl, cl }' "$work_tmp/replay.tsv")
+(( cc > hc )) && blocks+=("failed checks rose from $hc to $cc across the replay")
+(( cl > hl )) && blocks+=("length flags rose from $hl to $cl across the replay")
 if (( ${#reasons_stop[@]} > 0 )); then
   verdict="STOP"; why=$(join_reasons "${reasons_stop[@]}")
 elif (( ${#reasons_open[@]} > 0 )); then
   verdict="INCONCLUSIVE"; why=$(join_reasons "${reasons_open[@]}")
-elif (( ${#reasons_go[@]} > 0 )); then
+elif (( ${#reasons_go[@]} > 0 && ${#blocks[@]} == 0 )); then
   verdict="TRIAL"; why="$(join_reasons "${reasons_go[@]}"); worth a live trial (docs/model-swap.md step 7) after the blind judge (step 3)"
+elif (( ${#reasons_go[@]} > 0 )); then
+  verdict="HOLD"; why="$(join_reasons "${reasons_go[@]}"), but $(join_reasons "${blocks[@]}"), which holds a switch back as it holds back a replay ACCEPT"
 else
   verdict="HOLD"; why="it matches the champion without being cheaper or better, so a switch would buy nothing"
 fi
@@ -524,33 +605,38 @@ tok_s() { awk -v c="$1" -v s="$2" 'BEGIN { if (s > 0) printf "%.0f", c / s; else
   echo "Champion:  $champ_model at $champ_base (weights ${champ_gb} GB)"
   echo "Machine:   $chip, ${mem_gb} GB; thermal state ${thermal_start:-?} at start, ${thermal_end:-?} at end"
   echo
-  if [[ -n "$cost_ratio" ]]; then
-    echo "Cost, ${#prompts[@]} stored prompts sent to both (candidate / champion):"
-    echo "  seconds per call         $(per_call "$c_s" "$c_ok") / $(per_call "$h_s" "$h_ok")"
-    echo "  prompt tokens per call   $(per_call "$c_pt" "$c_ok" %.0f) / $(per_call "$h_pt" "$h_ok" %.0f) (each model's own tokenizer)"
-    echo "  output tokens per call   $(per_call "$c_ct" "$c_ok" %.0f) / $(per_call "$h_ct" "$h_ok" %.0f)"
+  if [[ -n "${c_calls:-}" ]]; then
+    first_txt="${cand_first} s"
+    [[ "$cand_first" == error ]] && first_txt="failed"
+    echo "Cost, ${#prompts[@]} stored prompts sent to both, $pairs answered by both (candidate / champion):"
+    echo "  seconds per call         $(per_call "$c_s" "$pairs") / $(per_call "$h_s" "$pairs")"
+    echo "  prompt tokens per call   $(per_call "$c_pt" "$pairs" %.0f) / $(per_call "$h_pt" "$pairs" %.0f) (each model's own tokenizer)"
+    echo "  output tokens per call   $(per_call "$c_ct" "$pairs" %.0f) / $(per_call "$h_ct" "$pairs" %.0f)"
     echo "  output tokens per second $(tok_s "$c_ct" "$c_s") / $(tok_s "$h_ct" "$h_s")"
-    echo "  ran to max_tokens        $c_cap of $c_ok / $h_cap of $h_ok"
-    echo "  empty answer             $c_empty of $c_ok / $h_empty of $h_ok"
-    echo "  reasoning trace          $c_think of $c_ok / $h_think of $h_ok (thinking requested off)"
-    if [[ "${util_ok:-0}" == 1 ]]; then
-      echo "  GPU busy-seconds/call    $(per_call "$c_busy" "$c_ok") / $(per_call "$h_busy" "$h_ok")"
+    if [[ "$util_ok" == 1 ]]; then
+      echo "  GPU busy-seconds/call    $(per_call "$c_busy" "$pairs") / $(per_call "$h_busy" "$pairs")"
     fi
-    echo "  candidate first call     ${cand_first:-?} s (includes any lazy load)"
-    echo "  ratio                    $cost_ratio ($cost_measure)"
+    echo "  transport errors         $c_err of $c_calls / $h_err of $h_calls"
+    echo "  empty answer             $c_empty of $c_ok / $h_empty of $h_ok"
+    echo "  ran to max_tokens        $c_cap of $c_ok / $h_cap of $h_ok"
+    echo "  reasoning trace          $c_think of $c_ok / $h_think of $h_ok (thinking requested off)"
+    echo "  candidate first call     $first_txt (includes any lazy load)"
+    echo "  ratio                    ${cost_ratio:--} (${cost_measure:-not measured})"
   else
     echo "Cost: not measured"
   fi
   echo
-  echo "Replay, newest $limit edited cases per recipe (candidate against champion; anchors dropped/over/invented, champion | candidate):"
+  echo "Replay, newest $limit edited cases per recipe (candidate against champion; anchors dropped/over/invented, then failed checks and length flags, champion | candidate):"
   if [[ -s "$work_tmp/replay.tsv" ]]; then
-    while IFS=$'\t' read -r r v n w l t e p ha ca; do
+    while IFS=$'\t' read -r r v n w l t e p ha ca rc_ rl_; do
       case "$v" in
         none) printf '  %-24s no edited case\n' "$r" ;;
         error) printf '  %-24s did not run (see %s)\n' "$r" "$run_dir/replay-$r.err" ;;
-        *) printf '  %-24s n=%-3s W%-3s L%-3s T%-3s p=%-6s %-13s %s | %s\n' "$r" "$n" "$w" "$l" "$t" "$p" "$v" "${ha// //}" "${ca// //}" ;;
+        *) printf '  %-24s n=%-3s W%-3s L%-3s T%-3s p=%-6s %-13s %s | %s  checks %s  length %s\n' "$r" "$n" "$w" "$l" "$t" "$p" "$v" \
+             "${ha// //}" "${ca// //}" "${rc_// /|}" "${rl_// /|}" ;;
       esac
     done < "$work_tmp/replay.tsv"
+    echo "  across the replay: failed checks $hc | $cc, length flags $hl | $cl (a rise holds back a TRIAL, as it holds back a replay ACCEPT)"
   else
     echo "  ${replay_note:-not run}"
   fi
@@ -596,21 +682,26 @@ tok_s() { awk -v c="$1" -v s="$2" 'BEGIN { if (s > 0) printf "%.0f", c / s; else
 jq -n --arg ts "$stamp" --arg model "$model" --arg base "$base" --arg cand_gb "$cand_gb" \
   --arg champ "$champ_model" --arg champ_base "$champ_base" --arg champ_gb "$champ_gb" \
   --arg chip "$chip" --arg mem "$mem_gb" --arg th0 "${thermal_start:-}" --arg th1 "${thermal_end:-}" \
-  --arg measure "$cost_measure" --arg ratio "$cost_ratio" --arg first "${cand_first:-}" \
+  --arg measure "$cost_measure" --arg ratio "$cost_raw" --arg first "${cand_first:-}" \
+  --arg pairs "${pairs:-}" --arg c_fail "${c_fail:-}" --arg h_fail "${h_fail:-}" \
   --arg g_cand "$g_cand" --arg g_champ "$g_champ" --arg t_cand_rc "$t_cand_rc" \
   --arg verdict "$verdict" --arg why "$why" --arg replay "$(cat "$work_tmp/replay.tsv")" '
   def num: if . == "" or . == "?" or . == "-" or . == "error" then null else tonumber end;
+  # arm k (0 champion, 1 candidate) of a replay row: its anchors, failed checks and length flags
+  def arm($r; $k): ($r[8 + $k] | split(" ") | map(num)) as $a
+    | {dropped: $a[0], over: $a[1], invented: $a[2],
+       checks: ($r[10] | split(" ") | .[$k] | num), length: ($r[11] | split(" ") | .[$k] | num)};
   {schema: 1, ts: $ts,
    candidate: {model: $model, base: $base, weights_gb: ($cand_gb | num)},
    champion: {model: $champ, base: $champ_base, weights_gb: ($champ_gb | num)},
    machine: {chip: $chip, memory_gb: ($mem | num), thermal_start: ($th0 | num), thermal_end: ($th1 | num)},
-   cost: {measure: (if $measure == "" then null else $measure end), ratio: ($ratio | num), candidate_first_call_s: ($first | num)},
-   replay: [$replay | split("\n")[] | select(. != "") | split("\t")
-            | {recipe: .[0], verdict: .[1], n: (.[2] | num), wins: (.[3] | num), losses: (.[4] | num), ties: (.[5] | num),
-               errors: (.[6] | num), p: (.[7] | num),
-               champion: (.[8] | split(" ") | map(num) | {dropped: .[0], over: .[1], invented: .[2]}),
-               candidate: (.[9] | split(" ") | map(num) | {dropped: .[0], over: .[1], invented: .[2]})}],
+   cost: {measure: (if $measure == "" then null else $measure end), ratio: ($ratio | num), candidate_first_call_s: ($first | num),
+          prompts_both_answered: ($pairs | num), candidate_failed_calls: ($c_fail | num), champion_failed_calls: ($h_fail | num)},
+   replay: [$replay | split("\n")[] | select(. != "") | split("\t") as $r
+            | {recipe: $r[0], verdict: $r[1], n: ($r[2] | num), wins: ($r[3] | num), losses: ($r[4] | num), ties: ($r[5] | num),
+               errors: ($r[6] | num), p: ($r[7] | num), champion: arm($r; 0), candidate: arm($r; 1)}],
    grounding: {candidate_auroc: ($g_cand | num), champion_auroc: ($g_champ | num)},
    trigger: {candidate_exit: ($t_cand_rc | num)},
-   verdict: $verdict, why: $why}' > "$run_dir/card.json"
+   verdict: $verdict, why: $why}' > "$run_dir/card.json.tmp" && mv "$run_dir/card.json.tmp" "$run_dir/card.json" \
+  || { echo "eval-model: could not write $run_dir/card.json; the report above stands" >&2; exit 2; }
 exit 0
