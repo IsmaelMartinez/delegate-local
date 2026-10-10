@@ -219,3 +219,76 @@ scope, so even an edit that worked would show only its cost. This is the
 second prompt-text attempt at scope. The next attempt should be a check
 (`scope_match` against `recent_commits`, like `subject_type`) or a caller
 `--var scope`, and should not reword the rule again.
+
+### 2026-10-10 — merge commits: a MERGE-COMMIT rule, tried twice and reverted
+
+Six `commit-message` rejections on `pr-agent`, three on 2026-10-04 and three on
+2026-10-09, five scaffold and one miss, all on
+`mlx-community/Qwen3.6-35B-A3B-8bit`, name the same defect: the caller's WHY
+said "Merge upstream/main into the PR branch" or "merge, not rebase", the draft
+carried `chore:` (five times) or `docs:` (once), and every shipped message was
+`Merge upstream main into <branch>` with no type. The `DROPPED` lines on the
+pairs add `#4010 #3990` and `3728 3787`, the PRs whose changes conflicted,
+which the drafts also lost. The recipe was doing what it says: every subject
+rule demands a `<TYPE>:` prefix and "When to use" names the squash-merge single
+commit as the only shape, so a merge commit is a shape it excludes, and the
+boundary hook routes every `git commit` here regardless.
+
+Tried, as one edit per replay, against `a20e93b62bab` on
+`mlx-community/gemma-4-26b-a4b-it-8bit` (the prose tier during the #662 trial,
+so both arms ran on it and no case was scored from its stored draft). First a
+MERGE-COMMIT block between the TYPE override and the TYPE selection list,
+fired by the changes or the WHY describing a merge, with
+`Correct: Merge origin/main into feature/retry-backoff` as its one-shot:
+
+    Summary: n=60  wins=10  losses=12  ties=38  errors=0
+    Checks failed: champion=2  candidate=3
+    Newest third (20 cases): wins=0  losses=6
+    Verdict: INCONCLUSIVE — 12 losses to 10 wins is not yet significant (p=0.416).
+
+The three merge cases in the window all flipped to wins (dropped anchors 5, 2
+and 2 against 1, 1 and 1), but the outputs showed two defects. On the case
+whose WHY said "into the PR branch" the candidate wrote
+`Merge origin/main into feature/review-chunking`: `origin/main` and `feature/`
+copied out of the Correct example, the branch invented, the copy-from-the-
+prohibition failure the pr-description history records for `AI-815`. And on a
+mixed commit whose diff stat mentioned "merge of upstream/main" beside two code
+edits, and whose WHY dictated the subject "Apply review suggestions and merge
+main", the rule fired anyway and derived a target from a file path:
+`Merge upstream/main into pr_agent/git_providers/gerrit_provider.py`.
+
+Second wording: fire only when the WHY says the merge is the whole commit,
+both refs copied from the WHY "never from this rule's example and never
+derived from a file path", "the PR branch" written as such, and a one-shot of
+`Merge <source ref> into <target branch>` with no literal refs:
+
+    Summary: n=60  wins=8  losses=12  ties=40  errors=0
+    Checks failed: champion=2  candidate=6
+    Newest third (20 cases): wins=0  losses=4
+    Verdict: INCONCLUSIVE — 12 losses to 8 wins is not yet significant (p=0.252).
+
+That cured both defects: the mixed commit went back to a tie, and the three
+merge cases won with the refs the WHY gave (`Merge upstream/main into the PR
+branch`, `… into fix/suggestion-fence-around-code-fences`, `… into PR 3752`)
+and the conflicting PR numbers in the body. The cost is everything else. The
+losses sit on non-merge cases the rule never fired on, where the longer prompt
+perturbed the body (anchors dropped or carried past the shipped text), and the
+failed checks tripled on the same cases (an 87-character subject, a `Refs`
+tail). The replay's columns cannot see the `Merge` word, so the gate charges
+the rule's cost on 57 cases and credits its cure on 3; a rule that fires on
+one commit in twenty cannot pass a sign test on the corpus as a whole, and the
+rise in failed checks would hold the verdict regardless. Reverted; the recipe
+is unchanged.
+
+This is the same result the 2026-10-02 SCOPE attempt reached, and the same
+lesson as the loop's own rule about widening a closed shape. The next attempt
+should not be prompt text in this recipe. The cheapest fix is outside it: a
+merge commit's message is git's own (`Merge branch 'x' into y`), so the
+boundary hook should pass a `git commit` made while `MERGE_HEAD` exists without
+demanding a draft, as #607 already passes text the human has seen; failing that, a
+caller `--var subject` override beside `--var type`, which the model copies as
+a literal token rather than inferring a rule (the 2026-06-04 finding). Either
+needs `scripts/` or `SKILL.md`, which the loop session cannot edit, so this
+entry is the hand-off. Re-measure after the hook change lands: the six pairs
+are the regression set, and the verdict on each should be a hit with the
+caller's own text.
