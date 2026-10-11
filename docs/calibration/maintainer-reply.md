@@ -269,3 +269,100 @@ person before the maintainer sees the draft.
 ### 2026-10-08 — `verify: true` (#661)
 
 The frontmatter gains `verify: true`, so `delegate.sh` runs the draft verifier on every call of this recipe and reports a flag on stderr and on the row (`docs/checks.md`). Nothing the model sees changes and the key is left out of `template_sha`, so the hash and the per-template history carry on unbroken and no replay applies. The #660 read-out behind the choice of recipes is in `docs/verify.md`.
+
+### 2026-10-11 — a clean approve is one sentence: CLEAN-APPROVE tried, replay inconclusive, reverted
+
+The defect, measured on the daily bundle for 2026-10-10/11 (watermark
+2026-10-10T01:53:03Z, 19 verdicts, 10 of them on this recipe, all on
+`pr-agent`, model `mlx-community/gemma-4-26b-a4b-it-8bit`): on a clean
+approve the caller's lead already closes on the verdict ("Thanks for bumping
+html2text and refreshing the lock with it, approving and merging."), the
+piped facts are the PR's own summary ("PR #4055 bumps html2text from
+2024.2.26 to 2025.4.15 in pyproject.toml and uv.lock. The review found
+nothing for the contributor to change."), and the draft obeys NO-FACT-DROP by
+appending one or two sentences that restate that summary after the verdict.
+Seven of the ten reasons say so in the same words ("a clean approve is one
+sentence", "restates the piped facts back", "appended two sentences restating
+the PR's own diff"). The shipped text takes one of two shapes: the lead alone
+(four cases: the facts only described the change), or the lead with the
+verified result folded in as a clause before its closing verdict ("Thanks for
+applying both changes, the two new cases fail on main and pass here with the
+full suite green on the merged tree, so merging.", three cases). The 7-day
+check clusters agree: `no_context_echo` 11 and `max_context_ratio` 10 are the
+same drafts, and 96 stored finals across the reply recipes end on
+", approving and merging." or ", merging.", so the one-sentence close is the
+maintainer's house style and not a one-off.
+
+What was tried, so the next pass can reuse the wording rather than
+rediscover it: a named block after NO-MERGE-ASK, with pointers from item 2
+(the one exception to the verbatim lead), item 3 (no facts sentence when it
+applies) and NO-FACT-DROP (the change's own description does not bear on the
+diagnosis), plus a one-line skeleton in the Correct examples and in the
+expected-output section.
+
+> CLEAN-APPROVE — non-negotiable:
+> When the Lead block closes on the maintainer's approval or merge (its last
+> words approve the change or say it is merging) and ASK-OR-NONE gives no
+> question, the whole reply is that one sentence: nothing follows the lead's
+> closing verdict, no facts sentence, no sentence on what the change does, no
+> sentence that nothing needed changing. The facts that survive are the
+> verified results the Facts block states (what held, what passed or failed
+> and where, what was measured), and they go inside the lead's sentence as a
+> clause before its closing verdict, so "<the lead's praise>, approving and
+> merging." becomes "<the lead's praise>, <the verified result as a clause>,
+> approving and merging." with the praise and the verdict kept as written.
+> The change's own description (its PR number, what it bumps, raises, adds or
+> moves, from what to what) and a line saying there is nothing to change or
+> that the decision is an approval are not facts to carry: the lead already
+> answers them, and under this block they are left out, not folded in.
+> Wrong: <the lead, closing on the verdict>. <what the PR does, as a
+> sentence>. <that nothing needed changing>.
+> Correct: <the lead's praise>, <the verified result, as a clause>, <the
+> lead's closing verdict>.
+> Correct, when the Facts block only describes the change: <the lead,
+> verbatim, alone>.
+
+The replay (`replay-recipe.sh --recipe maintainer-reply`, champion
+`c9444a457a08`, candidate `b22e69f1e832`, model
+`mlx-community/gemma-4-26b-a4b-it-8bit`, the newest 40 cases: kept 3,
+scaffold 15, rewrote 22, six sessions):
+
+```
+Summary: n=40  wins=12  losses=6  ties=22  errors=0
+Checks failed: champion=11  candidate=14
+Length flags: champion=1  candidate=0
+Newest third (14 cases): wins=6  losses=2
+Sign test: p=0.119 (one-sided, 12 wins to 6)
+Verdict: INCONCLUSIVE — more wins than losses, but failed checks rose from 11 to 14.
+```
+
+The wins sit where the evidence pointed: on the clean-approve cases the
+candidate returned the lead alone or the lead with the verified result folded
+in (the 7db8142b case went from carrying ten supplied anchors past the shipped
+text to zero; e36601fd from six to one), and the newest third is 6 to 2. Two
+things stopped it being a fix. First, the sign test is not there at 12 to 6,
+and the whole rise in failed checks is `no_padding_tail` matching the
+caller's own lead: ", approving and merging." is a trailing participial
+clause by the check's regex, "approving" is not in the auto-strip allowlist,
+and a reply that ends on the lead, which is exactly what shipped, fails the
+check and spends the retry on every clean approve. The edd8ea96 loss is that
+alone: the candidate's output was the shipped shape to the clause, zero on
+every anchor column, and lost on the check. The check is not wrong on this
+recipe in general (the 4dabdb37 draft of 2026-10-04 ended on a model-written
+", naming deleted files ..." tail), so the fix is an exemption for a tail
+that is verbatim from the `lead` var, as `no_fact_as_question` already skips
+a question the caller supplied in a var, and that is a `scripts/lib/checks.sh`
+change the loop session cannot make. Second, prompt sensitivity of the kind
+the 2026-09-16 entry recorded: on 5403052f (opener plus a two-sentence lead
+ending "Approving.", facts that restate the approval) the candidate returned
+"Please provide the input blocks (Recipient, Opener, Lead, Facts, Ask,
+Sign-off, and ASK-OR-NONE) so that I can draft the reply", a refusal the
+champion does not produce on the same input, and db7fdf55 (a lead that is a
+finding, not an approval, with a dense fact list) dropped 13 anchors the
+champion carried. A guard whose trigger reads "closes on the approval" is
+being read more widely than its words.
+
+Reverted; the template is unchanged. Retry the block only after the check
+exemption lands, and re-run the replay then: without it a candidate that
+produces the shipped shape cannot pass the gate, because the shipped shape
+itself fails `no_padding_tail`.
