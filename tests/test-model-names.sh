@@ -13,7 +13,7 @@ set -u
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib/assert.sh"
 
-ALLOWED_RE='^(scripts/pick-model\.sh|tests/run-tests\.sh|scripts/lib/verify-thresholds\.tsv|docs/adr/|docs/calibration/|CHANGELOG\.md|docs/verify\.md|docs/model-swap\.md|tests/fixtures/)'
+ALLOWED_RE='^(scripts/pick-model\.sh|tests/run-tests\.sh|scripts/lib/verify-thresholds\.tsv|docs/adr/|docs/calibration/|CHANGELOG\.md|docs/verify\.md|tests/fixtures/)'
 
 echo "== model names stay in routing, routing tests, calibration data and history =="
 assert_true "the shipped prose list has a first preference to search for" test -n "$PROSE_PREF"

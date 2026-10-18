@@ -140,8 +140,7 @@ assert_eq 0 "$EC" "opt-out: still exits 0"
 assert_false "opt-out: metrics file not created" test -f "$metrics"
 
 # 3b. The legacy DELEGATE_TO_OLLAMA_* names are no longer read (#567): the row
-# is written and the meta line and the verdict reminder printed although the
-# three opt-outs are set.
+# is written and the meta line printed although the two opt-outs are set.
 tmp=$(mktemp -d)
 mock_curl "$tmp"
 metrics=$(mktemp); rm -f "$metrics"
@@ -149,26 +148,10 @@ EC=0
 out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   DELEGATE_METRICS_FILE="$metrics" \
   DELEGATE_TO_OLLAMA_NO_METRICS=1 DELEGATE_TO_OLLAMA_NO_META=1 \
-  DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE=1 \
   bash "$SCRIPT" prose "Summarise" </dev/null 2>&1) || EC=$?
 assert_eq 0 "$EC" "legacy alias: exits 0"
 assert_eq 1 "$(cat "$metrics" 2>/dev/null | grep -c '"source":"delegate"')" "legacy alias: DELEGATE_TO_OLLAMA_NO_METRICS is ignored"
 assert_contains "delegate-meta:" "$out" "legacy alias: DELEGATE_TO_OLLAMA_NO_META is ignored"
-assert_contains "record verdict" "$out" "legacy alias: DELEGATE_TO_OLLAMA_NO_VERDICT_NUDGE is ignored"
-
-# 3c. The legacy fd name is not validated either: an FD of 0, which the
-# DELEGATE_LOCAL_ name refuses with exit 2, leaves the reminder on stderr.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp); rm -f "$metrics"
-stderr_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=0 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 0 "$EC" "legacy alias: DELEGATE_TO_OLLAMA_VERDICT_NUDGE_FD=0 is not validated"
-assert_contains "record verdict" "$(cat "$stderr_file")" "legacy alias: the reminder stays on stderr"
 
 # 4. pick-model failure (no matching model served) is reflected in metrics +
 # exit. The mock serves a model no tier prefers rather than nothing: without a
@@ -850,292 +833,6 @@ assert_true "jq-metrics: line is valid JSON despite embedded quote in model" jq 
 decoded_model=$(echo "$line" | jq -r '.model')
 assert_eq "$PROSE_PREF:test\"weird-name" "$decoded_model" "jq-metrics: model field decodes to original string"
 
-# 14. Verdict nudge prints to stderr on a successful call.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp)
-stderr_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 0 "$EC" "verdict-nudge: happy path exits 0"
-stderr_content=$(cat "$stderr_file")
-assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge: prints to stderr on success"
-# The nudge is the only place most callers read the verdict contract, so it
-# names all three verdicts and --final.
-assert_contains "scaffold" "$stderr_content" "verdict-nudge: names the scaffold verdict"
-assert_contains "--final" "$stderr_content" "verdict-nudge: names --final so the pair gets captured"
-assert_contains "delegate-feedback.sh --source agent --id " "$stderr_content" "verdict-nudge: names --source agent and --id"
-# Each verdict is its own complete command on its own line: `a | b | c` runs
-# as a pipeline and `a, b or c` passes `hit,` as the verdict. The note after a
-# command is a shell comment so a whole-line copy still runs.
-nudge_cmds=$(printf '%s\n' "$stderr_content" | grep -F 'delegate-feedback.sh')
-assert_eq 3 "$(printf '%s\n' "$nudge_cmds" | grep -c '')" "verdict-nudge: three verdict commands, one per line"
-nudge_re='bash scripts/delegate-feedback\.sh --source agent --id [0-9a-f]{16} (scaffold "<reason>"|miss "<reason>"|hit)( +# [a-z -]+)?$'
-assert_eq 3 "$(printf '%s\n' "$nudge_cmds" | grep -Ec "$nudge_re")" "verdict-nudge: every line is one complete command plus an optional # note"
-assert_eq 1 "$(printf '%s\n' "$nudge_cmds" | grep -Ec -- '--id [0-9a-f]{16} hit( |$)')" "verdict-nudge: a hit command"
-assert_eq 1 "$(printf '%s\n' "$nudge_cmds" | grep -Ec -- '--id [0-9a-f]{16} scaffold "<reason>"')" "verdict-nudge: a scaffold command"
-assert_eq 1 "$(printf '%s\n' "$nudge_cmds" | grep -Ec -- '--id [0-9a-f]{16} miss "<reason>"')" "verdict-nudge: a miss command"
-assert_lacks ',| \| | or ' "$nudge_cmds" "verdict-nudge: no command line joins alternatives with ',', '|' or 'or'"
-# One tier (ADR 0030): there is no human taste judgment to drop the flag for.
-assert_lacks 'drop --source|taste judgment' "$stderr_content" "verdict-nudge: no human-tier hand-off"
-# stdout holds only the model output so downstream pipes keep working.
-assert_not_contains "record verdict" "$out" "verdict-nudge: stdout unaffected"
-
-# 14a. A non-TTY caller still gets the nudge (#149): a `[[ -t 2 ]]` gate would
-# silence it for Agent SDK tool calls, routines and `2>logfile` redirects.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp)
-stderr_file=$(mktemp)
-EC=0
-out=$(echo "some context" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  bash "$SCRIPT" prose "Summarise" 2>"$stderr_file") || EC=$?
-assert_eq 0 "$EC" "verdict-nudge non-TTY: exits 0 with piped stdin and redirected stderr"
-stderr_content=$(cat "$stderr_file")
-assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge non-TTY: nudge still printed when neither stdin nor stderr is a TTY"
-# Also with stdout explicitly piped.
-EC=0
-piped=$(echo "ctx" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  bash "$SCRIPT" prose "Summarise" 2>"$stderr_file" | cat) || EC=$?
-assert_eq 0 "$EC" "verdict-nudge non-TTY: exits 0 with stdout piped through cat"
-stderr_content=$(cat "$stderr_file")
-assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge non-TTY: nudge still printed with stdout piped through cat"
-
-# 15. DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 silences the nudge but keeps
-# the rest of the behaviour intact (metrics row still written, model
-# output still on stdout). For users who genuinely don't want the noise.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp)
-stderr_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 0 "$EC" "verdict-nudge opt-out: still exits 0"
-stderr_content=$(cat "$stderr_file")
-assert_not_contains "record verdict" "$stderr_content" "verdict-nudge opt-out: silenced"
-assert_eq 1 "$(grep -c '^' "$metrics")" "verdict-nudge opt-out: metrics row still written"
-
-# 16. NO_METRICS=1 also silences the nudge: there is no row to verdict.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp); rm -f "$metrics"
-stderr_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_NO_METRICS=1 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 0 "$EC" "verdict-nudge NO_METRICS: still exits 0"
-stderr_content=$(cat "$stderr_file")
-assert_not_contains "record verdict" "$stderr_content" "verdict-nudge NO_METRICS: silenced"
-
-# 17. A non-zero exit also silences the nudge: there is no output to judge.
-tmp=$(mktemp -d)
-MOCK_MODELS='unrelated:model'
-make_mock_curl_models_only "$tmp"
-MOCK_MODELS="$PROSE_MODEL"
-metrics=$(mktemp); : > "$metrics"
-stderr_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 1 "$EC" "verdict-nudge on failure: still exits 1"
-stderr_content=$(cat "$stderr_file")
-assert_not_contains "record verdict" "$stderr_content" "verdict-nudge on failure: silenced"
-
-# 17a. DELEGATE_LOCAL_VERDICT_NUDGE_FD=N redirects the nudge to fd N, for
-# callers that capture 2>&1 and want stderr clean (#139).
-
-# 17a-1. fd 3 redirected to a file: nudge lands there, not on fd 2.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp)
-stderr_file=$(mktemp)
-nudge_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
-assert_eq 0 "$EC" "verdict-nudge FD=3: happy path exits 0"
-stderr_content=$(cat "$stderr_file")
-nudge_content=$(cat "$nudge_file")
-assert_not_contains "record verdict" "$stderr_content" "verdict-nudge FD=3: fd 2 stays clean"
-assert_contains "delegate: record verdict" "$nudge_content" "verdict-nudge FD=3: nudge lands on fd 3"
-assert_not_contains "record verdict" "$out" "verdict-nudge FD=3: stdout unaffected"
-
-# 17a-2. fd 3 set but not redirected: the call still succeeds and the failed
-# write is absorbed, so no "Bad file descriptor" lands on the fd 2 the caller
-# wanted clean.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp)
-stderr_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 0 "$EC" "verdict-nudge FD=3 no redirect: still exits 0"
-stderr_content=$(cat "$stderr_file")
-assert_not_contains "record verdict" "$stderr_content" "verdict-nudge FD=3 no redirect: fd 2 stays clean"
-assert_false "verdict-nudge FD=3 no redirect: failed write absorbed silently" grep -qi "bad file descriptor" <<< "$stderr_content"
-assert_eq 1 "$(grep -c '^' "$metrics")" "verdict-nudge FD=3 no redirect: metrics row still written"
-
-# 17a-3. An explicit FD=2 behaves like unset.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp)
-stderr_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_VERDICT_NUDGE_FD=2 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 0 "$EC" "verdict-nudge FD=2 (default-equivalent): exits 0"
-stderr_content=$(cat "$stderr_file")
-assert_contains "delegate: record verdict" "$stderr_content" "verdict-nudge FD=2: nudge lands on fd 2 (back-compat)"
-
-# 17a-4. FD=1 is allowed: the nudge lands inline on stdout.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp)
-stderr_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_VERDICT_NUDGE_FD=1 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 0 "$EC" "verdict-nudge FD=1: exits 0"
-assert_contains "record verdict" "$out" "verdict-nudge FD=1: nudge lands on stdout"
-stderr_content=$(cat "$stderr_file")
-assert_not_contains "record verdict" "$stderr_content" "verdict-nudge FD=1: fd 2 stays clean"
-
-# 17a-5. FD=0 is rejected with exit 2 before the model is contacted.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp)
-stderr_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_VERDICT_NUDGE_FD=0 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 2 "$EC" "verdict-nudge FD=0: exits 2 (stdin rejected)"
-stderr_content=$(cat "$stderr_file")
-assert_contains "DELEGATE_LOCAL_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=0: error names the env var"
-assert_contains "valid: 1-9" "$stderr_content" "verdict-nudge FD=0: error mentions the valid shape (1-9 single-digit range)"
-assert_false "verdict-nudge FD=0: no metrics row (rejection fires pre-flight)" test -s "$metrics"
-
-# 17a-6. FD=foo (non-numeric) is rejected. exit 2.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp)
-stderr_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_VERDICT_NUDGE_FD=foo \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 2 "$EC" "verdict-nudge FD=foo: exits 2 (non-numeric rejected)"
-stderr_content=$(cat "$stderr_file")
-assert_contains "DELEGATE_LOCAL_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=foo: error names the env var"
-
-# 17a-7. FD=-1 (negative) is rejected.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp)
-stderr_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_VERDICT_NUDGE_FD=-1 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 2 "$EC" "verdict-nudge FD=-1: exits 2 (negative rejected)"
-
-# 17a-7b. FD=10 (multi-digit) is rejected: bash 3.2 has no reliable `>&$N`
-# for N>=10, so the validation fails loud rather than the write failing silently.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp)
-stderr_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_VERDICT_NUDGE_FD=10 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 2 "$EC" "verdict-nudge FD=10: exits 2 (multi-digit rejected)"
-stderr_content=$(cat "$stderr_file")
-assert_contains "DELEGATE_LOCAL_VERDICT_NUDGE_FD" "$stderr_content" "verdict-nudge FD=10: error names the env var"
-
-# 17a-7c. FD=99 is also rejected.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp)
-stderr_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_VERDICT_NUDGE_FD=99 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file") || EC=$?
-assert_eq 2 "$EC" "verdict-nudge FD=99: exits 2 (multi-digit rejected)"
-
-# 17a-8. FD set and NO_VERDICT_NUDGE=1: suppression beats redirect.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp)
-stderr_file=$(mktemp)
-nudge_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
-  DELEGATE_LOCAL_NO_VERDICT_NUDGE=1 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
-assert_eq 0 "$EC" "verdict-nudge FD=3 + NO_VERDICT_NUDGE: exits 0"
-assert_eq "" "$(cat "$nudge_file")" "verdict-nudge FD=3 + NO_VERDICT_NUDGE: NO_VERDICT_NUDGE wins (no nudge on fd 3)"
-stderr_content=$(cat "$stderr_file")
-assert_not_contains "record verdict" "$stderr_content" "verdict-nudge FD=3 + NO_VERDICT_NUDGE: fd 2 also stays clean"
-
-# 17a-9. FD set and NO_METRICS=1: no row, so no nudge.
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp); rm -f "$metrics"
-stderr_file=$(mktemp)
-nudge_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
-  DELEGATE_LOCAL_NO_METRICS=1 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
-assert_eq 0 "$EC" "verdict-nudge FD=3 + NO_METRICS: exits 0"
-assert_eq "" "$(cat "$nudge_file")" "verdict-nudge FD=3 + NO_METRICS: NO_METRICS wins (no nudge on fd 3)"
-
-# 17a-10. FD set on a non-zero exit: no nudge.
-tmp=$(mktemp -d)
-MOCK_MODELS='unrelated:model'
-make_mock_curl_models_only "$tmp"
-MOCK_MODELS="$PROSE_MODEL"
-metrics=$(mktemp); : > "$metrics"
-stderr_file=$(mktemp)
-nudge_file=$(mktemp)
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_LOCAL_VERDICT_NUDGE_FD=3 \
-  bash "$SCRIPT" prose "Summarise" </dev/null 2>"$stderr_file" 3>>"$nudge_file") || EC=$?
-assert_eq 1 "$EC" "verdict-nudge FD=3 on failure: still exits 1"
-assert_eq "" "$(cat "$nudge_file")" "verdict-nudge FD=3 on failure: silenced"
-
 # 18. Pre-flight canary on --recipe (#110): a 1-token probe fails loud before
 # the input investment is sunk. The mock tells the canary from the dispatch by
 # its `"num_predict":1` / `"max_tokens":1` signature, behaves per $4 on the
@@ -1535,8 +1232,8 @@ meta_line=$(grep '^delegate-meta:' "$stderr_file")
 tokens_val=$(printf '%s' "$meta_line" | grep -oE 'tokens_local=[0-9]+' | cut -d= -f2)
 assert_true "delegate-meta: tokens_local is a non-negative integer ($tokens_val)" grep -qE '^[0-9]+$' <<< "$tokens_val"
 
-# 19a. The meta line names the row it wrote so the nudge can hand the pin
-# back (#474). The value must be the row's ts byte for byte: a reformatted
+# 19a. The meta line names the row it wrote so the caller can pin a verdict
+# to it (#474). The value must be the row's ts byte for byte: a reformatted
 # or re-read clock matches no row.
 tmp=$(mktemp -d)
 mock_curl "$tmp"
@@ -1555,8 +1252,6 @@ row_id=$(jq -r '.otel_span_id' "$metrics")
 assert_true "delegate-meta id: the metrics row carries a 16-hex otel_span_id ($row_id)" grep -qE '^[0-9a-f]{16}$' <<< "$row_id"
 meta_id=$(grep '^delegate-meta:' "$stderr_file" | grep -oE 'id="[^"]*"' | cut -d'"' -f2)
 assert_eq "$row_id" "$meta_id" "delegate-meta id: id field is the metrics row's otel_span_id, byte for byte"
-assert_contains "--id $row_id " "$(grep 'record verdict' "$stderr_file")" \
-  "verdict-nudge: the copyable command already carries --id with the row's span id"
 
 # 19c. A row that could not be appended is not a row: the call still
 # succeeds, but the meta line names no ts/id and nothing nudges for a verdict.
@@ -1610,8 +1305,8 @@ meta_line=$(grep '^delegate-meta:' "$stderr_file")
 assert_contains 'model="' "$meta_line" "delegate-meta ts: meta line still printed with metrics off"
 assert_not_contains ' ts="' "$meta_line" "delegate-meta ts: no ts field when no row was written"
 
-# 20. DELEGATE_LOCAL_NO_META=1 silences the meta line only; the nudge and
-# the metrics row are unaffected.
+# 20. DELEGATE_LOCAL_NO_META=1 silences the meta line only; the metrics row
+# is unaffected.
 tmp=$(mktemp -d)
 mock_curl "$tmp"
 metrics=$(mktemp)
@@ -1624,7 +1319,6 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
 assert_eq 0 "$EC" "delegate-meta opt-out: still exits 0"
 stderr_content=$(cat "$stderr_file")
 assert_not_contains "delegate-meta:" "$stderr_content" "delegate-meta opt-out: silenced"
-assert_contains "record verdict" "$stderr_content" "delegate-meta opt-out: verdict nudge unaffected"
 assert_eq 1 "$(grep -c '^' "$metrics")" "delegate-meta opt-out: metrics row still written"
 
 # 21. A non-zero exit silences the meta line.
@@ -3106,53 +2800,6 @@ out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
   bash "$SCRIPT" reasoning "infer something" </dev/null 2>/dev/null)
 assert_contains "<think>" "$out" "strip-think: reasoning tier + STRIP_THINK=0 preserves trace"
 
-# 31. Flavor profile (ADR 0013): {{flavor_*}} placeholders come from
-# scripts/flavor-defaults.sh unless a per-user profile.sh overrides them.
-tmp=$(mktemp -d)
-sniff="$tmp/payload.json"
-mock_curl "$tmp" "" "$sniff"
-metrics=$(mktemp)
-prompts="$tmp/prompts"; mkdir -p "$prompts"
-cat > "$prompts/flav.md" <<'EOF'
-# flav
-
-## When to use
-Flavor test recipe.
-
-## Prompt template
-
-```
-SUBJECT MAX: {{flavor_commit_subject_max}}
-TYPES: {{flavor_commit_types}}
-```
-
-## Calibration notes
-n/a
-EOF
-# 31a. No profile installed -> shipped defaults fill the placeholders.
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
-  DELEGATE_LOCAL_PROFILE="$tmp/nonexistent.sh" \
-  bash "$SCRIPT" --recipe flav prose "go" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "flavor: exits 0 with shipped defaults"
-payload=$(cat "$sniff")
-assert_contains 'SUBJECT MAX: 72' "$payload" "flavor: default subject max injected"
-assert_contains 'TYPES: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert' "$payload" "flavor: default type vocabulary injected"
-# 31b. A per-user profile overrides the defaults.
-prof="$tmp/profile.sh"
-printf 'FLAVOR_COMMIT_SUBJECT_MAX=50\nFLAVOR_COMMIT_TYPES="feat, fix, docs"\n' > "$prof"
-chmod 600 "$prof"
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
-  DELEGATE_LOCAL_PROFILE="$prof" \
-  bash "$SCRIPT" --recipe flav prose "go" </dev/null 2>&1) || EC=$?
-assert_eq 0 "$EC" "flavor: exits 0 with profile override"
-payload=$(cat "$sniff")
-assert_contains 'SUBJECT MAX: 50' "$payload" "flavor: profile override subject max injected"
-assert_contains 'TYPES: feat, fix, docs' "$payload" "flavor: profile override type vocabulary injected"
-
 # 32. Output checks (ADR 0014): a recipe's `checks:` block runs on the final
 # output, warns on stderr and puts checks_failed=N on the meta line. What
 # each check decides is tests/test-checks.sh; these cases cover the wiring.
@@ -3211,212 +2858,6 @@ assert_contains "checks_failed=1" "$out" "checks: body_required failure rides th
 mock_curl "$tmp" 'feat: a subject\n\nthe body explains the change in full'
 assert_lacks "body_required' FAILED|checks_failed=" "$(run_recipe bodyreq)" \
   "checks: body_required passes when a body is present"
-
-# --- #277 dir 5: --recipe auto inference -----------------------------------
-read -r -d '' DIFF_SAMPLE <<'DIFF' || true
-diff --git a/foo.txt b/foo.txt
-index e69de29..4b825dc 100644
---- a/foo.txt
-+++ b/foo.txt
-@@ -0,0 +1 @@
-+hello
-DIFF
-
-# A1. --recipe auto + piped diff resolves to commit-message. recent_commits
-# and diff_stat are passed so the git backfill (A4) is skipped.
-tmp=$(mktemp -d)
-sniff="$tmp/payload.json"
-mock_curl "$tmp" "" "$sniff"
-metrics=$(mktemp); : > "$metrics"
-prompts="$tmp/prompts"; mkdir -p "$prompts"
-cat > "$prompts/commit-message.md" <<'EOF'
-# commit-message
-
-## When to use
-Stub.
-
-## Prompt template
-
-```
-RECENT
-{{recent_commits}}
-STAT
-{{diff_stat}}
-WHY
-{{why}}
-```
-
-## Calibration notes
-n/a
-EOF
-EC=0
-err="$tmp/err.txt"
-out=$(printf '%s' "$DIFF_SAMPLE" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_PROMPTS_DIR="$prompts" \
-  bash "$SCRIPT" --recipe auto --var recent_commits=rc --var diff_stat=ds --var why=because prose "go" 2>"$err") || EC=$?
-assert_eq 0 "$EC" "--recipe auto (diff): exits 0"
-assert_contains "inferred commit-message" "$(cat "$err")" "--recipe auto (diff): announces inference on stderr"
-assert_contains '"recipe":"commit-message"' "$(cat "$metrics")" "--recipe auto (diff): metrics recipe=commit-message"
-payload=$(cat "$sniff")
-assert_contains 'WHY' "$payload" "--recipe auto (diff): commit-message template used"
-assert_contains 'because' "$payload" "--recipe auto (diff): {{why}} from --var substituted"
-
-# A2. --recipe auto + non-diff context -> exit 2, clear "could not infer".
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp); : > "$metrics"
-prompts="$tmp/prompts"; mkdir -p "$prompts"
-EC=0
-out=$(printf 'just some prose, not a diff at all' | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_PROMPTS_DIR="$prompts" \
-  bash "$SCRIPT" --recipe auto prose "go" 2>&1) || EC=$?
-assert_eq 2 "$EC" "--recipe auto (non-diff): exit 2"
-assert_contains "could not infer" "$out" "--recipe auto (non-diff): clear error"
-
-# A3. --recipe auto with no piped context -> exit 2, "needs context".
-tmp=$(mktemp -d)
-mock_curl "$tmp"
-metrics=$(mktemp); : > "$metrics"
-prompts="$tmp/prompts"; mkdir -p "$prompts"
-EC=0
-out=$(env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_PROMPTS_DIR="$prompts" \
-  bash "$SCRIPT" --recipe auto prose "go" </dev/null 2>&1) || EC=$?
-assert_eq 2 "$EC" "--recipe auto (no stdin): exit 2"
-assert_contains "needs context" "$out" "--recipe auto (no stdin): clear error"
-
-# A stub commit-message recipe with the three placeholders the auto path fills.
-make_auto_cm_recipe() {
-  local dir="$1"; mkdir -p "$dir"
-  cat > "$dir/commit-message.md" <<'EOF'
-# commit-message
-
-## When to use
-Stub.
-
-## Prompt template
-
-```
-RECENT
-{{recent_commits}}
-STAT
-{{diff_stat}}
-WHY
-{{why}}
-```
-
-## Calibration notes
-n/a
-EOF
-}
-
-# A4. diff_stat comes from the piped diff, not the index (the repo stages
-# a.txt, the diff names foo.txt); recent_commits is backfilled from git log.
-if command -v git >/dev/null 2>&1; then
-  tmp=$(mktemp -d)
-  sniff="$tmp/payload.json"
-  mock_curl "$tmp" "" "$sniff"
-  metrics=$(mktemp); : > "$metrics"
-  prompts="$tmp/prompts"; make_auto_cm_recipe "$prompts"
-  repo="$tmp/gitrepo"; mkdir -p "$repo"
-  (
-    cd "$repo"
-    git init -q
-    git config user.email t@t.t; git config user.name t
-    printf 'one\n' > a.txt; git add a.txt; git commit -qm "initial commit"
-    printf 'two\n' >> a.txt; git add a.txt
-  )
-  EC=0
-  out=$(cd "$repo" && printf '%s' "$DIFF_SAMPLE" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-    DELEGATE_METRICS_FILE="$metrics" \
-    DELEGATE_PROMPTS_DIR="$prompts" \
-    bash "$SCRIPT" --recipe auto --var why=because prose "go") || EC=$?
-  assert_eq 0 "$EC" "--recipe auto (backfill): exit 0 with only --var why"
-  payload=$(cat "$sniff")
-  assert_contains 'initial commit' "$payload" "--recipe auto (backfill): recent_commits from git log"
-  assert_contains 'foo.txt' "$payload" "--recipe auto (backfill): diff_stat derived from the piped diff"
-  assert_not_contains "a.txt" "$payload" "--recipe auto (backfill): diff_stat does NOT leak the staged index file"
-  # The backfilled exemplar keeps bodies but drops trailer lines (#501): a
-  # Refs or Co-Authored-By line copied from a prior commit names the wrong
-  # issue every time, and no_example_echo only catches it after the fact.
-  # GitHub's own squash trailer is spelled Co-authored-by, so the filter is
-  # case-insensitive and every trailer it names is exercised.
-  ( cd "$repo" && git commit -q --allow-empty -m "feat: second commit" -m "A body line that stays." \
-      -m "Refs: #999" -m "Co-Authored-By: Someone <s@x.y>" -m "Co-authored-by: GitHub Squash <g@x.y>" \
-      -m "Claude-Session: https://claude.ai/code/session_TRAILER" -m "Signed-off-by: Dev <d@x.y>" )
-  : > "$sniff"
-  EC=0
-  out=$(cd "$repo" && printf '%s' "$DIFF_SAMPLE" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-    DELEGATE_METRICS_FILE="$metrics" \
-    DELEGATE_PROMPTS_DIR="$prompts" \
-    bash "$SCRIPT" --recipe auto --var why=because prose "go") || EC=$?
-  payload=$(cat "$sniff")
-  assert_contains 'A body line that stays.' "$payload" "--recipe auto (backfill): commit bodies are kept as shape anchors"
-  for trailer in "Refs: #999" "Co-Authored-By" "Co-authored-by" "Claude-Session" "Signed-off-by"; do
-    assert_not_contains "$trailer" "$payload" "--recipe auto (backfill): $trailer is stripped from recent_commits (#501)"
-  done
-  rm -rf "$tmp" "$metrics"
-
-  # A5. A clean tree with the diff piped from elsewhere still fills diff_stat.
-  tmp=$(mktemp -d)
-  sniff="$tmp/payload.json"
-  mock_curl "$tmp" "" "$sniff"
-  metrics=$(mktemp); : > "$metrics"
-  prompts="$tmp/prompts"; make_auto_cm_recipe "$prompts"
-  repo="$tmp/gitrepo2"; mkdir -p "$repo"
-  (
-    cd "$repo"
-    git init -q
-    git config user.email t@t.t; git config user.name t
-    printf 'one\n' > a.txt; git add a.txt; git commit -qm "initial commit"
-  )  # nothing staged after the commit — clean tree
-  EC=0
-  out=$(cd "$repo" && printf '%s' "$DIFF_SAMPLE" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-    DELEGATE_METRICS_FILE="$metrics" \
-    DELEGATE_PROMPTS_DIR="$prompts" \
-    bash "$SCRIPT" --recipe auto --var why=because prose "go" 2>&1) || EC=$?
-  assert_eq 0 "$EC" "--recipe auto (clean tree): exit 0 — diff_stat from piped diff, no hard-fail"
-  rm -rf "$tmp" "$metrics"
-else
-  echo "  SKIP  --recipe auto (backfill): git not on PATH"
-fi
-
-# A6. A diff larger than the pipe buffer (#480): the sniff used to run
-# `printf | grep -q`, and grep exiting on line one left printf with SIGPIPE, so
-# every diff over ~64 KiB fell through to "could not infer" under pipefail.
-tmp=$(mktemp -d)
-sniff="$tmp/payload.json"
-mock_curl "$tmp" "" "$sniff"
-metrics=$(mktemp); : > "$metrics"
-prompts="$tmp/prompts"; mkdir -p "$prompts"
-cat > "$prompts/commit-message.md" <<'EOF2'
-# commit-message
-
-## When to use
-Stub.
-
-## Prompt template
-
-```
-WHY
-{{why}}
-```
-
-## Calibration notes
-n/a
-EOF2
-big_diff=$(printf '%s\n' "$DIFF_SAMPLE"; awk 'BEGIN { for (i = 0; i < 3000; i++) printf "+%s\n", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }')
-EC=0
-err="$tmp/err.txt"
-out=$(printf '%s' "$big_diff" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_METRICS_FILE="$metrics" \
-  DELEGATE_PROMPTS_DIR="$prompts" \
-  bash "$SCRIPT" --recipe auto --var recent_commits=rc --var diff_stat=ds --var why=because prose "go" 2>"$err") || EC=$?
-assert_eq 0 "$EC" "--recipe auto (>64 KiB diff): exits 0, not 'could not infer' (#480)"
-assert_contains '"recipe":"commit-message"' "$(cat "$metrics")" "--recipe auto (>64 KiB diff): metrics recipe=commit-message"
 
 # N. An unknown tier (pick-model exit 2) and a real tier with no model (exit
 # 1) need opposite remedies, so delegate.sh must keep them apart.
@@ -4165,13 +3606,6 @@ assert_contains "check 'body_max_words' FAILED — body is 12 words (> 10)" "$(r
   "body_max_words: over-limit body fails with both counts named"
 assert_contains '"checks_failed_names":["body_max_words"]' "$(tail -1 "$metrics")" \
   "body_max_words: named on the metrics row"
-# 42f. The limit can come from the flavor profile.
-mk_check_recipe bwf 'body_max_words: {{flavor_commit_body_max_words}}'
-printf 'FLAVOR_COMMIT_BODY_MAX_WORDS=3\n' > "$tmp/profile.sh"
-chmod 600 "$tmp/profile.sh"
-mock_curl "$tmp" 'subject\n\none two three four five'
-assert_contains "body is 5 words (> 3)" "$(run_recipe DELEGATE_LOCAL_PROFILE="$tmp/profile.sh" bwf)" \
-  "body_max_words: the limit comes from the flavor profile"
 
 # 43a. no_single_item_list: one sentence of verdict, then a single numbered ask.
 mk_check_recipe sil 'no_single_item_list: true'
@@ -4624,18 +4058,13 @@ assert_contains '"retried":true' "$(tail -1 "$metrics")" \
 assert_not_contains '"checks_failed_names"' "$(tail -1 "$metrics")" "context-ratio: a clean retry leaves no failed check on the row"
 unset recipe_stdin
 
-# --- 50. maintainer-review-reply sets min_context_chars: 900 (#514): 2 of
-# the 5 shipped replies in the spike set, 789 chars on 832 of facts and 813
-# on 693, failed the ratio under the default 400 floor although the
-# maintainer shipped them, and no shipped reply in that set over 900 chars
-# of facts exceeds it. Run against the REAL recipe so the value is proved
-# through the wrapper, not just read off the file ---
-tmp=$(mktemp -d)
-metrics=$(mktemp)
-mrr="$REPO/prompts/maintainer-review-reply.md"
-mrr_fm=$(awk '/^---[[:space:]]*$/{d++; if (d==2) exit; next} d==1' "$mrr")
-assert_true "review-reply floor: maintainer-review-reply.md declares min_context_chars: 900" \
-  grep -qE '^[[:space:]]+min_context_chars:[[:space:]]*900[[:space:]]*$' <<< "$mrr_fm"
+# --- 50. min_context_chars: 900 (#514): replies of 789 chars on 832 of facts
+# and 813 on 693 failed the ratio under the default 400 floor although the
+# maintainer shipped them, and none over 900 chars of facts exceeded it. A
+# fixture recipe declaring the floor proves the value through the wrapper ---
+fresh
+mk_check_recipe mrr $'no_padding_tail: true\nno_single_item_list: true\nno_context_echo: true\nmax_context_ratio: 0.8\nmin_context_chars: 900' \
+  $'{{verdict}}\n{{stdin}}' $'inputs:\n  stdin: string\n  verdict: string'
 # Facts long enough to cut at any length; the cut lands mid-line so the
 # trailing character is never a newline (which $(cat) would strip).
 mrr_facts=""
@@ -4653,8 +4082,8 @@ run_mrr() {
   # first pass lands on the row.
   mrr_ctx_at "$1" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
     DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
-    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$REPO/prompts" \
-    bash "$SCRIPT" --recipe maintainer-review-reply --var verdict="the change is right" prose "go" 2>&1 >/dev/null
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+    bash "$SCRIPT" --recipe mrr --var verdict="the change is right" prose "go" 2>&1 >/dev/null
 }
 # Measured the way delegate.sh measures it: $(cat) strips trailing newlines.
 mrr_ctx_900=$(mrr_ctx_at 900)
@@ -4768,12 +4197,14 @@ assert_contains '"checks_run":2' "$(tail -1 "$metrics")" \
   "fact-question: undeclared, only the declared and default checks are counted"
 unset recipe_stdin
 
-# --- 52. maintainer-reply takes the lead from the caller (#517): the judgment
-# sentence is a required input, so a call without it exits 2 naming it before
-# any dispatch, and the rendered input the model saw (#516) carries the lead
-# text between the opener and the facts. Run against the REAL recipe so the
-# contract is proved through the wrapper, not read off the file ---
+# --- 52. A required input comes from the caller (#517): a call without it
+# exits 2 naming it before any dispatch, and the rendered input the model saw
+# (#516) carries the lead text between the opener and the facts. A fixture
+# recipe stands in for the lead-taking reply recipe ---
 tmp=$(mktemp -d)
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+mk_check_recipe mrl '' $'{{opener}}\n{{lead}}\n{{ask}}\n{{stdin}}' \
+  $'inputs:\n  stdin: string\n  lead: string\n  ask: string?\n  opener: string?'
 data="$tmp/data"; mkdir -p "$data"
 metrics="$data/metrics.jsonl"
 mr_facts='The token drop is on the Teams side, in its MSAL cache, not in teams-for-linux.'
@@ -4784,19 +4215,19 @@ mr_opener='Thanks for the clear report.'
 # a metrics row or a non-2 exit.
 make_mock_curl_models_only "$tmp"
 out=$(printf '%s\n' "$mr_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$REPO/prompts" \
-  bash "$SCRIPT" --recipe maintainer-reply --var ask="whether the token survives a cold start" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe mrl --var ask="whether the token survives a cold start" \
     --var opener="$mr_opener" prose "go" 2>&1 >/dev/null)
 rc=$?
-assert_eq 2 "$rc" "lead: a maintainer-reply call without --var lead= exits 2"
+assert_eq 2 "$rc" "lead: a call without --var lead= exits 2"
 assert_contains "missing required inputs: lead" "$out" "lead: the refusal names lead as the missing input"
 assert_false "lead: the refusal writes no metrics row" test -s "$metrics"
 # 52b. With it, the stored input holds the lead verbatim, after the opener
 # and before the piped facts, so the model was shown it in that position.
 mock_curl "$tmp" 'Your trace was right, and this one is not ours to fix. The drop is in the MSAL cache on the Teams side. Could you check whether the token survives a cold start?'
 printf '%s\n' "$mr_facts" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
-  DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$REPO/prompts" \
-  bash "$SCRIPT" --recipe maintainer-reply --var lead="$mr_lead" --var ask="whether the token survives a cold start" \
+  DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
+  bash "$SCRIPT" --recipe mrl --var lead="$mr_lead" --var ask="whether the token survives a cold start" \
     --var opener="$mr_opener" prose "go" >/dev/null 2>&1
 row=$(tail -1 "$metrics")
 input_name=$(printf '%s' "$row" | jq -r '.input_file // ""')
@@ -4857,11 +4288,16 @@ unset recipe_stdin
 # input gets which weak-shape detector; a weak input is named on ONE stderr
 # warning line and recorded on the row as an `input_quality` array, and the
 # call goes ahead, because an exit-2 refusal writes no row and teaches callers
-# to pad or to skip delegating. Run against the REAL recipes so the
-# declarations are proved through the wrapper. ---
+# to pad or to skip delegating. Fixture recipes declare the shapes. ---
 tmp=$(mktemp -d)
 data="$tmp/data"; mkdir -p "$data"
 metrics="$data/metrics.jsonl"
+prompts="$tmp/prompts"; mkdir -p "$prompts"
+mk_check_recipe iqcm '' $'{{recent_commits}}\n{{diff_stat}}\n{{why}}\n{{stdin}}' \
+  $'inputs:\n  recent_commits: string\n  diff_stat: string\n  why: string\ninput_quality:\n  recent_commits: one_line_exemplar\n  stdin: no_diff'
+mk_check_recipe iqprd '' $'{{recent_prs}}\n{{diff_stat}}\n{{context}}' \
+  $'inputs:\n  recent_prs: string\n  diff_stat: string\n  context: string\ninput_quality:\n  recent_prs: titles_only'
+mk_check_recipe iqnone '' 'GO {{stdin}}'
 mock_curl "$tmp" 'fix: keep the cache warm\n\nThe cache was cold on every start, so the first call paid the load.'
 iq_fuller='commit 1c7b48a0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6
 Author:     A <a@example.com>
@@ -4883,7 +4319,7 @@ iq_run() { # stdin-text, then delegate.sh args; stderr to $iq_err, row to $iq_ro
   : > "$metrics"
   iq_err=$(printf '%s' "$stdin_text" | env -i PATH="$tmp:$SAFE_PATH" HOME="$HOME" \
     DELEGATE_LOCAL_DATA_DIR="$data" DELEGATE_NO_PREFLIGHT=1 DELEGATE_NO_RETRY=1 \
-    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$REPO/prompts" \
+    DELEGATE_METRICS_FILE="$metrics" DELEGATE_PROMPTS_DIR="$prompts" \
     bash "$SCRIPT" "$@" 2>&1 >/dev/null)
   iq_rc=$?
   iq_row=$(tail -1 "$metrics" 2>/dev/null)
@@ -4893,7 +4329,7 @@ iq_warn_lines() { printf '%s\n' "$iq_err" | grep -c 'weak input'; }
 
 # 54a. commit-message with one subject line as its exemplar and no diff: both
 # labels on the row, both named on one warning line, the call still ships.
-iq_run "" --recipe commit-message --var recent_commits="fix: typo in README" \
+iq_run "" --recipe iqcm --var recent_commits="fix: typo in README" \
   --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
 assert_eq 0 "$iq_rc" "input-quality: a weak commit-message input is never refused"
 assert_eq '["one_line_exemplar","no_diff"]' "$(iq_field)" \
@@ -4904,7 +4340,7 @@ assert_contains "recent_commits=one_line_exemplar" "$iq_err" \
 assert_contains "stdin=no_diff" "$iq_err" "input-quality: the warning names the missing diff"
 
 # 54b. A --oneline list is one line per exemplar: no exemplar carries a body.
-iq_run "$iq_diff" --recipe commit-message \
+iq_run "$iq_diff" --recipe iqcm \
   --var recent_commits=$'8b9065f0 chore: update roadmap (#403)\n60e03baa chore(deps): bump the group (#404)\nbc012022 feat: lockfile tool (#400)' \
   --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
 assert_eq '["one_line_exemplar"]' "$(iq_field)" \
@@ -4912,18 +4348,18 @@ assert_eq '["one_line_exemplar"]' "$(iq_field)" \
 
 # 54c. The gather step's own output (--pretty=fuller) with a diff piped is the
 # legitimate input: no field, no warning.
-iq_run "$iq_diff" --recipe commit-message --var recent_commits="$iq_fuller" \
+iq_run "$iq_diff" --recipe iqcm --var recent_commits="$iq_fuller" \
   --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
 assert_eq '"absent"' "$(iq_field)" "input-quality: fuller exemplars and a diff leave no field"
 assert_eq 0 "$(iq_warn_lines)" "input-quality: fuller exemplars and a diff print no warning"
 
 # 54d. A diff stat piped where the diff belongs is still no diff.
-iq_run " x.sh | 2 +-" --recipe commit-message --var recent_commits="$iq_fuller" \
+iq_run " x.sh | 2 +-" --recipe iqcm --var recent_commits="$iq_fuller" \
   --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
 assert_eq '["no_diff"]' "$(iq_field)" "input-quality: a piped diff stat is flagged no_diff"
 
 # 54e. pr-description given merged-PR titles only.
-iq_run "" --recipe pr-description \
+iq_run "" --recipe iqprd \
   --var recent_prs=$'#400 feat(audio): scenes that loop\n#399 Arcade music round 2' \
   --var diff_stat=" x.sh | 2 +-" --var context="Adds a thing." prose "go"
 assert_eq 0 "$iq_rc" "input-quality: a titles-only pr-description input is never refused"
@@ -4933,20 +4369,20 @@ assert_contains "recent_prs=titles_only" "$iq_err" "input-quality: the warning n
 # 54f. The gather step's envelope with a one-paragraph body and --limit 1 has
 # no blank line at all once $(...) trims the trailing newline; its BODY: line
 # is what marks it as carrying a body, so it is not flagged.
-iq_run "" --recipe pr-description \
+iq_run "" --recipe iqprd \
   --var recent_prs=$'<<<EXAMPLE_BEGIN PR #545>>>\nTITLE: fix: keep the first draft\nBODY:\nKeeps the first draft when the retry fails. Closes #550.\n<<<EXAMPLE_END>>>' \
   --var diff_stat=" x.sh | 2 +-" --var context="Adds a thing." prose "go"
 assert_eq '"absent"' "$(iq_field)" "input-quality: a gathered example with a body is not titles-only"
 assert_eq 0 "$(iq_warn_lines)" "input-quality: a gathered example prints no warning"
 
 # 54g. A body pasted without the envelope still has its paragraph break.
-iq_run "" --recipe pr-description \
+iq_run "" --recipe iqprd \
   --var recent_prs=$'fix: keep the first draft\n\nKeeps the first draft when the retry fails.' \
   --var diff_stat=" x.sh | 2 +-" --var context="Adds a thing." prose "go"
 assert_eq '"absent"' "$(iq_field)" "input-quality: a pasted title and body are not titles-only"
 
 # 54h. A recipe that declares nothing never carries the field.
-iq_run "one fact about the bug" --recipe summarise-issue --var kind=issue --var N_FACTS=3 prose "go"
+iq_run "one fact about the bug" --recipe iqnone prose "go"
 assert_eq '"absent"' "$(iq_field)" "input-quality: an undeclaring recipe carries no field"
 
 # 54h2. A subject-only --pretty=fuller entry has a blank line between its
@@ -4959,27 +4395,27 @@ CommitDate: Mon Sep 28 07:15:19 2026 +0100
 
     chore(main): release 0.40.2 (#586)
     '
-iq_run "$iq_diff" --recipe commit-message --var recent_commits="$iq_fuller_subject_only" \
+iq_run "$iq_diff" --recipe iqcm --var recent_commits="$iq_fuller_subject_only" \
   --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
 assert_eq '["one_line_exemplar"]' "$(iq_field)" \
   "input-quality: a subject-only fuller entry is flagged despite its header gap"
 
 # 54h3. Subjects separated by blank lines are still subjects only.
-iq_run "$iq_diff" --recipe commit-message \
+iq_run "$iq_diff" --recipe iqcm \
   --var recent_commits=$'fix: typo in README\n\nfeat(cli): add --dry-run\n\nchore(deps): bump jq' \
   --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
 assert_eq '["one_line_exemplar"]' "$(iq_field)" \
   "input-quality: a blank-separated subject list is flagged"
 
 # 54h4. A pasted subject and body, no git headers, carries a body.
-iq_run "$iq_diff" --recipe commit-message \
+iq_run "$iq_diff" --recipe iqcm \
   --var recent_commits=$'fix: Loki sync survives bad rows\n\nOne malformed row used to stop the whole sync; it is now skipped.' \
   --var diff_stat=" x.sh | 2 +-" --var why="the cache was cold" prose "go"
 assert_eq '"absent"' "$(iq_field)" "input-quality: a pasted subject and body are not flagged"
 
 # 54h4b. A `#N `-prefixed line is a title whatever its wording, so a
 # blank-separated list mixing conventional and plain titles is titles-only.
-iq_run "" --recipe pr-description \
+iq_run "" --recipe iqprd \
   --var recent_prs=$'#400 feat(audio): scenes that loop\n\n#399 Arcade music round 2' \
   --var diff_stat=" x.sh | 2 +-" --var context="Adds a thing." prose "go"
 assert_eq '["titles_only"]' "$(iq_field)" \
@@ -4987,11 +4423,11 @@ assert_eq '["titles_only"]' "$(iq_field)" \
 
 # 54h5. An envelope whose BODY: is empty carries no body, alone or twice over
 # with the blank separator the gather step prints between examples.
-iq_run "" --recipe pr-description \
+iq_run "" --recipe iqprd \
   --var recent_prs=$'<<<EXAMPLE_BEGIN PR #586>>>\nTITLE: chore(main): release 0.40.2\nBODY:\n\n<<<EXAMPLE_END>>>' \
   --var diff_stat=" x.sh | 2 +-" --var context="Adds a thing." prose "go"
 assert_eq '["titles_only"]' "$(iq_field)" "input-quality: one empty BODY: envelope is titles-only"
-iq_run "" --recipe pr-description \
+iq_run "" --recipe iqprd \
   --var recent_prs=$'<<<EXAMPLE_BEGIN PR #586>>>\nTITLE: chore(main): release 0.40.2\nBODY:\n\n<<<EXAMPLE_END>>>\n\n<<<EXAMPLE_BEGIN PR #580>>>\nTITLE: chore(main): release 0.40.1\nBODY:\n\n<<<EXAMPLE_END>>>' \
   --var diff_stat=" x.sh | 2 +-" --var context="Adds a thing." prose "go"
 assert_eq '["titles_only"]' "$(iq_field)" "input-quality: two empty BODY: envelopes are titles-only"
@@ -5000,11 +4436,11 @@ assert_eq '["titles_only"]' "$(iq_field)" "input-quality: two empty BODY: envelo
 # adding it did not start a new per-template bucket.
 . "$REPO/scripts/lib/recipe.sh"
 awk '!/^input_quality:/ && !/^  (recent_commits|stdin): (one_line_exemplar|no_diff)$/' \
-  "$REPO/prompts/commit-message.md" > "$tmp/no-iq.md"
-if cmp -s "$tmp/no-iq.md" "$REPO/prompts/commit-message.md"; then
+  "$prompts/iqcm.md" > "$tmp/no-iq.md"
+if cmp -s "$tmp/no-iq.md" "$prompts/iqcm.md"; then
   echo "  FAIL  input-quality: commit-message declares no input_quality block"; fail=$((fail+1))
 else
-  assert_eq "$(recipe_template_sha "$tmp/no-iq.md")" "$(recipe_template_sha "$REPO/prompts/commit-message.md")" \
+  assert_eq "$(recipe_template_sha "$tmp/no-iq.md")" "$(recipe_template_sha "$prompts/iqcm.md")" \
     "input-quality: the declaration leaves template_sha unchanged"
 fi
 
@@ -5204,14 +4640,6 @@ assert_eq 0 "$(vcalls)" "verify: a bare call never runs the verifier"
 err=$(run_recipe DELEGATE_LOCAL_NO_METRICS=1 DELEGATE_VERIFY_THRESHOLD=0.68 vr --var who=alice)
 assert_contains "verifier flagged" "$err" "verify: the flag line prints with metrics off"
 assert_eq 0 "$(wc -l < "$metrics" | tr -d ' ')" "verify: ...and no row is written"
-
-# 661i. The five reply and description recipes are tagged; commit-message is
-# not (its stored inputs lack the diff, so claims read from it look unsupported).
-. "$REPO/scripts/lib/recipe.sh"
-for r in maintainer-reply maintainer-review-reply pr-description pr-review-reply github-issue-body; do
-  assert_eq "true" "$(recipe_verify "$REPO/prompts/$r.md")" "verify: $r is tagged verify: true"
-done
-assert_eq "" "$(recipe_verify "$REPO/prompts/commit-message.md")" "verify: commit-message is not tagged"
 unset recipe_stdin
 
 finish

@@ -2,6 +2,8 @@
 
 Date: 2026-06-23
 
+Superseded by ADR 0035 (2026-10-18): the commit-message recipe and its bench were archived.
+
 ## Status
 
 Accepted.

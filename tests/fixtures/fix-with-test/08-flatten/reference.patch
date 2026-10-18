@@ -1,5 +1,0 @@
-<<<<<<< SEARCH
-            out += x
-=======
-            out += flatten(x)
->>>>>>> REPLACE

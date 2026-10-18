@@ -2,6 +2,8 @@
 
 Date: 2026-06-22
 
+Superseded by ADR 0035 (2026-10-18): code-draft, fix-with-test and apply-and-test.sh were archived.
+
 ## Status
 
 Superseded in part by ADR 0030 / #624 (2026-10-01): scaffold now means edited and shipped, not discarded-but-useful; the text below records the original decision.

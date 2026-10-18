@@ -2,6 +2,8 @@
 
 Date: 2026-06-19
 
+Superseded by ADR 0035 (2026-10-18): the commit-message recipe was archived.
+
 ## Status
 
 Accepted. Records a learning that, until this ADR, lived only in the archived

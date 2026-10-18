@@ -2,6 +2,8 @@
 
 Date: 2026-06-06
 
+Superseded by ADR 0035 (2026-10-18): the flavor profile and the onboarding wizard left main with the commit-message recipe they served.
+
 ## Status
 
 Accepted. The direction was first recorded as Proposed on 2026-06-06, before any implementation; it has since been built (`scripts/onboard.sh`, `scripts/derive-flavor.sh`, `scripts/flavor-defaults.sh`, `scripts/load-flavor.sh`), as the two implementation-status sections at the end record, with the recipe preview step still unbuilt.

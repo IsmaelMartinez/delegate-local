@@ -8,13 +8,13 @@ Thanks for taking the time to look. This repo is one Claude Code skill, two bash
 
 `scripts/pick-model.sh` is the single source of truth for tier-to-model routing. Each tier (`code`, `prose`, `reasoning`, `long-context`, plus the scaffolded `vision`, `embedding`, `premium-general`, `reasoning-vision`) holds a substring-matched preference list, highest capability first; `code`, `reasoning` and `long-context` reuse the `prose` list and `premium-general` ships empty (#652), so no default tier loads a second large model beside the prose one. When the installed model set changes, edit the `prefs` arrays in this script — never hardcode model names in `SKILL.md` or in shell pipes.
 
-`scripts/delegate.sh` wraps `pick-model.sh` plus the backend's HTTP completions API and appends one JSON line per call to `~/.local/share/delegate-local/metrics.jsonl`. Every call goes to `POST {base}/chat/completions` on the first provider in `DELEGATE_BASE_URL` that is reachable and serving a model the tier prefers; the list defaults to MLX, Docker Model Runner and Ollama on their standard ports, built from `MLX_HOST` / `DOCKER_MODEL_HOST` / `OLLAMA_HOST`. `scripts/audit-models.sh` is read-only and never pulls; it prints the providers, the models they serve and the tier routing, and points at `docs/model-swap.md` for trialling a new model. `scripts/metrics-summary.sh` is the read-only rollup over the metrics JSONL.
+`scripts/delegate.sh` wraps `pick-model.sh` plus the backend's HTTP completions API and appends one JSON line per call to `~/.local/share/delegate-local/metrics.jsonl`. Every call goes to `POST {base}/chat/completions` on the first provider in `DELEGATE_BASE_URL` that is reachable and serving a model the tier prefers; the list defaults to MLX, Docker Model Runner and Ollama on their standard ports, built from `MLX_HOST` / `DOCKER_MODEL_HOST` / `OLLAMA_HOST`. `scripts/audit-models.sh` is read-only and never pulls; it prints the providers, the models they serve and the tier routing. `scripts/metrics-summary.sh` is the read-only rollup over the metrics JSONL.
 
-`prompts/` is the calibrated-recipe library — each `prompts/<task>.md` ships a proven prompt skeleton with anti-hallucination guards drawn from real session feedback. To add a recipe (or graduate a recurring delegation pattern into one), follow the flow documented in [`prompts/README.md`](prompts/README.md); `tests/test-prompts-library.sh` enforces the required structure.
+`prompts/` holds the three recipes that fit the large-input shape ADR 0035 narrowed the skill to; [`prompts/README.md`](prompts/README.md) describes their structure and `tests/test-prompts-library.sh` enforces it. The project is wound down: a new recipe, hook or calibration tool needs a new ADR that answers ADR 0035's signposts first.
 
 `docs/adr/` records the load-bearing design decisions; read them before proposing changes that contradict one. The ADRs whose features were archived in the 2026-06-19 lean-core reset carry a note pointing at the `pre-cleanup-2026-06-19` tag.
 
-`ROADMAP.md` is the authoritative project plan: what the skill is, where it stands after the 2026-06-19 lean-core reset, and the priority-ordered next steps. Consult it before starting non-trivial work.
+`ROADMAP.md` is the authoritative project plan: what the skill is, where it stands after the 2026-10-18 wind-down, and the steps left. Consult it before starting non-trivial work.
 
 ## Running the validation pipeline
 
@@ -27,7 +27,7 @@ bash scripts/eval-skill-triggers.sh   # shape check (no model call)
 bash tests/run-tests.sh
 ```
 
-Each kept script has its own per-script test file under `tests/` (`test-delegate.sh`, `test-delegate-feedback.sh`, `test-metrics-summary.sh`, `test-prompts-library.sh`, `test-eval-skill-triggers.sh`, `test-onboard.sh`, `test-project-name.sh`, and the two validator tests). The authoritative list of gates is [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which runs every `tests/test-*.sh` file it finds — run the one that matches the script you touched, and run the full set before opening the PR to match CI.
+Each kept script has its own per-script test file under `tests/` (`test-delegate.sh`, `test-delegate-feedback.sh`, `test-metrics-summary.sh`, `test-prompts-library.sh`, `test-eval-skill-triggers.sh`, `test-project-name.sh`, and the two validator tests). The authoritative list of gates is [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which runs every `tests/test-*.sh` file it finds — run the one that matches the script you touched, and run the full set before opening the PR to match CI.
 
 If you edit the `description` field in `SKILL.md` frontmatter, run the trigger eval against a real model before opening the PR:
 

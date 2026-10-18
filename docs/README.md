@@ -1,15 +1,13 @@
 # docs
 
-This index lists the live documentation. The authoritative project scope and plan is [`../ROADMAP.md`](../ROADMAP.md); the recipe conventions are in [`../prompts/README.md`](../prompts/README.md). Finished plans, specs and research notes that nothing live cites any more were removed in #572 and remain in git history.
+This index lists the live documentation. The authoritative project scope and plan is [`../ROADMAP.md`](../ROADMAP.md); the recipe conventions are in [`../prompts/README.md`](../prompts/README.md). The project was wound down by [ADR 0035](adr/0035-narrow-to-large-piped-inputs-and-wind-down.md); what it taught is in [`learnings.md`](learnings.md). Documents for removed tooling (the boundary hooks, the self-improvement loop, the model-swap runbook) are recoverable from commit `a00b2e9`, and older ones removed in #572 remain in git history.
 
 ## Reference
 
+- [`learnings.md`](learnings.md) — what the experiment taught about cost, quality, enforcement, latency and engineering habits, and how to measure it again.
 - [`checks.md`](checks.md) — what a recipe call runs around the request: the pre-flight canary, weak-input labels, the deterministic output checks and the single retry.
-- [`boundary-hook.md`](boundary-hook.md) — the opt-in `PreToolUse`, `PostToolUse` and `Stop` hooks that credit, enforce and capture delegations at commit, PR, issue and comment boundaries, with their install.
-- [`self-improvement-loop.md`](self-improvement-loop.md) — the calibration procedure: the `self-improve.sh` bundle, quarantined finals, the replay gate, the daily launchd runner (its plist is [`launchd/`](launchd/)) and verdict recording.
 - [`env.md`](env.md) — every `DELEGATE_*` environment variable the scripts read, with its default and effect.
-- [`verify.md`](verify.md) — `verify-draft.sh`, the offline grounding check of a draft against its inputs: the question it asks, the verify tier, threshold calibration and the 2026-10-07 measurements.
-- [`model-swap.md`](model-swap.md) — how to trial and switch the prose-tier model: the candidate server, paired replay, blind judge, grounding, trigger gate, speed, the `config.sh` live trial, the switch checklist and rollback.
+- [`verify.md`](verify.md) — `verify-draft.sh`, the offline grounding check of a draft against its inputs (dormant since ADR 0035).
 
 ## Architecture Decision Records — `adr/`
 
@@ -34,4 +32,4 @@ Per-tool and per-backend setup, one file each. The universal `npx skills add` in
 
 ## Kept because something live cites them
 
-Two design notes from the removed trees stay where they are because a live file links to them: [`superpowers/specs/2026-06-22-supervised-draft-delegation-design.md`](superpowers/specs/2026-06-22-supervised-draft-delegation-design.md) (cited by ADR 0025 and `prompts/code-draft.md`) and [`research/2026-06-15-phase-e-verdict-automation-design.md`](research/2026-06-15-phase-e-verdict-automation-design.md) (cited by ADR 0015).
+Two design notes from the removed trees stay where they are because a live file links to them: [`superpowers/specs/2026-06-22-supervised-draft-delegation-design.md`](superpowers/specs/2026-06-22-supervised-draft-delegation-design.md) (cited by ADR 0025) and [`research/2026-06-15-phase-e-verdict-automation-design.md`](research/2026-06-15-phase-e-verdict-automation-design.md) (cited by ADR 0015).

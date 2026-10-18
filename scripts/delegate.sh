@@ -12,18 +12,11 @@
 #       pipe); the tier comes from the recipe's frontmatter `tier:`, --tier
 #       overrides it. A lone positional is the tier only when it exactly
 #       matches a tier name, otherwise it is the prompt (#411).
-#   --recipe auto   infer the recipe from stdin: a unified diff -> commit-message
-#                   with diff_stat computed from the diff and recent_commits
-#                   backfilled from git log; anything else exits 2, never a guess.
 #
 # Tiers: read from pick-model.sh, the single source of truth.
 #
 # Env:
 #   DELEGATE_LOCAL_NO_METRICS=1         skip the metrics row (and the draft capture)
-#   DELEGATE_LOCAL_NO_VERDICT_NUDGE=1   silence the verdict reminder on stderr
-#   DELEGATE_LOCAL_VERDICT_NUDGE_FD=N   fd for the reminder, 1-9 (default 2); the
-#                                       caller must redirect fd N or the write is
-#                                       silently lost
 #   DELEGATE_LOCAL_NO_META=1            silence the `delegate-meta:` stderr line
 #   DELEGATE_PREFLIGHT_TIMEOUT=<s>      recipe-call canary timeout (default 10;
 #                                       0 disables); a stalled probe exits 3
@@ -39,8 +32,8 @@
 #   DELEGATE_METRICS_FILE=<path>        override the metrics destination
 #   DELEGATE_PROJECT=<name>             the project the delegation is FOR, when
 #                                       the cwd is not it (#342); --project wins
-#   CLAUDE_CODE_SESSION_ID=<uuid>       stamped on the row as `session` so the
-#                                       hooks can credit this session (#476)
+#   CLAUDE_CODE_SESSION_ID=<uuid>       stamped on the row as `session` so a
+#                                       session's rows read in order (#476)
 #   DELEGATE_PROMPTS_DIR=<path>         override prompts/ (default <script_dir>/../prompts)
 #   DELEGATE_THINK=true|false           default false; enable_thinking via the
 #                                       chat template
@@ -129,15 +122,6 @@ while (($# > 0)); do
       positional+=("$1"); shift;;
   esac
 done
-
-# Validated up-front so a bad value fails before the cold-load cost. 1-9 only:
-# bash 3.2 has no `{var}>file` form, so multi-digit FDs via `>&$N` are
-# unreliable on the target platform, and 0 (stdin) is nonsense.
-nudge_fd="${DELEGATE_LOCAL_VERDICT_NUDGE_FD:-2}"
-if ! [[ "$nudge_fd" =~ ^[1-9]$ ]]; then
-  echo "delegate: DELEGATE_LOCAL_VERDICT_NUDGE_FD='${DELEGATE_LOCAL_VERDICT_NUDGE_FD:-}' is not a single-digit positive file descriptor (valid: 1-9; 0 is stdin and is rejected, multi-digit FDs are unreliable on bash 3.2)" >&2
-  exit 2
-fi
 
 # Reject a --var value that is nothing but an unreplaced `<placeholder>` copied
 # from a recipe's Invocation block: the model summarises the placeholder and
@@ -306,8 +290,8 @@ capture_draft() {
   printf '%s' "$names"
 }
 
-# Returns 0 only when a row was appended: the meta line and the verdict nudge
-# name that row's ts and id, so both are gated on this status (#474). Failure
+# Returns 0 only when a row was appended: the meta line names that row's ts
+# and id, so it is gated on this status (#474). Failure
 # is non-fatal for the delegation itself.
 log_metric() {
   [[ "${DELEGATE_LOCAL_NO_METRICS:-}" == "1" ]] && return 1
@@ -414,49 +398,6 @@ emit_failure() {
 context=""
 if [[ -p /dev/stdin || -s /dev/stdin ]]; then
   context=$(cat)
-fi
-
-# --recipe auto (#277): one high-confidence mapping, a unified diff on stdin
-# -> commit-message. diff_stat is computed FROM the piped diff so it matches
-# what was piped even when the index is clean; recent_commits is real repo
-# state, so it is backfilled from git log; `why` is never inferable and stays
-# a required --var. Anything else is an explicit error, never a guess.
-if [[ "$recipe" == "auto" ]]; then
-  if [[ -z "$context" ]]; then
-    echo "delegate: --recipe auto needs context on stdin to infer a recipe (none piped). Pass --recipe NAME explicitly; see prompts/README.md." >&2
-    exit 2
-  fi
-  # A here-string, not `printf | grep -q`: grep exits on the first match and
-  # printf then takes SIGPIPE on any diff over the pipe buffer, so under
-  # pipefail every diff past ~64 KiB fell through to "could not infer" (#480).
-  if grep -Eq '^diff --git |^@@ ' <<<"$context"; then
-    recipe="commit-message"
-    _auto_have_var() { local k="$1" v; for v in ${recipe_vars[@]+"${recipe_vars[@]}"}; do [[ "$v" == "$k="* ]] && return 0; done; return 1; }
-    if ! _auto_have_var diff_stat; then
-      # awk over the piped diff, not `git diff --stat`, so the summary reflects
-      # exactly what was piped.
-      _auto_ds=$(printf '%s\n' "$context" | awk '
-        /^diff --git / { if (f != "") printf " %s | +%d -%d\n", f, a, d; f=$3; sub(/^a\//,"",f); a=0; d=0; next }
-        /^\+\+\+ / || /^--- / { next }
-        /^\+/ { a++ }
-        /^-/  { d++ }
-        END { if (f != "") printf " %s | +%d -%d\n", f, a, d }')
-      [[ -n "$_auto_ds" ]] && recipe_vars+=("diff_stat=$_auto_ds")
-    fi
-    if ! _auto_have_var recent_commits; then
-      # Bodies stay (bodyless anchors produced subject-only messages); the
-      # trailer lines go, because a `Refs:` or Co-Authored-By line copied
-      # from a previous commit names the wrong issue every time (#501).
-      # Case-insensitive: GitHub's squash trailer is Co-authored-by.
-      _auto_rc=$(git log -3 --pretty=fuller 2>/dev/null \
-        | grep -viE '^[[:space:]]*(Refs|Co-Authored-By|Claude-Session|Signed-off-by):' || true)
-      [[ -n "$_auto_rc" ]] && recipe_vars+=("recent_commits=$_auto_rc")
-    fi
-    echo "delegate: --recipe auto inferred commit-message from the piped diff" >&2
-  else
-    echo "delegate: --recipe auto could not infer a recipe from the piped context (expected a unified diff for commit-message). Pass --recipe NAME explicitly; see prompts/README.md." >&2
-    exit 2
-  fi
 fi
 
 # Resolve recipe template (if any) and substitute {{key}} placeholders.
@@ -666,25 +607,6 @@ if [[ -n "$recipe" ]]; then
     recipe_checks="${recipe_checks//\{\{$key\}\}/$value}"
     satisfied_keys="${satisfied_keys}{{${key}}}"$'\n'
   done
-
-  # Per-user flavor profile (ADR 0013), injected as {{flavor_*}} placeholders
-  # AFTER the --var loop so an explicit --var flavor_x= still wins. Gated on
-  # the template using one, so other recipes skip the loader subprocess.
-  # Process substitution, not a pipe, so the substitutions land in this shell.
-  if [[ "$recipe_template$recipe_checks" == *'{{flavor_'* ]]; then
-    while IFS='=' read -r fkey fval; do
-      # Only flavor_* keys, so a value with an embedded newline cannot
-      # substitute a non-flavor placeholder.
-      [[ "$fkey" != flavor_* ]] && continue
-      # The checks block always resolves flavor refs so subject_max stays in
-      # sync with the prompt's cap.
-      recipe_checks="${recipe_checks//\{\{$fkey\}\}/$fval}"
-      if ! printf '%s' "$satisfied_keys" | grep -Fxq "{{${fkey}}}"; then
-        recipe_template="${recipe_template//\{\{$fkey\}\}/$fval}"
-        satisfied_keys="${satisfied_keys}{{${fkey}}}"$'\n'
-      fi
-    done < <(bash "$script_dir/load-flavor.sh" 2>/dev/null)
-  fi
 
   # Optional inputs the caller did not supply collapse to empty BEFORE the
   # unsubstituted-placeholder guard, so an optional placeholder in the body
@@ -1254,8 +1176,8 @@ if (( verify_on == 1 )); then
   fi
   rm -f "$verify_err"
 fi
-# row_written is what the meta line's ts/id and the verdict nudge are gated
-# on: they name the row this call wrote, so they are only true when one was.
+# row_written is what the meta line's ts/id are gated on: they name the row
+# this call wrote, so they are only true when one was.
 row_written=false
 log_metric "$ts_start" "$tier" "$model" "$prompt_chars" "$context_chars" "$output_chars" "$duration_ms" "$status" "$recipe" "$queue_wait_ms" "$generation_ms" "$otel_trace_id" "$otel_span_id" "$metric_sampling_temperature" "$delegate_project" "$checks_run" "$checks_failed" "$checks_autofixed" "$checks_failed_names" "$draft_file" "$retried" "${retry_chars:-}" "$input_file" "$template_sha" "$inputs_file" "$retry_failed" && row_written=true
 emit_otel_span "$start_epoch_ms" "$duration_ms" "$status" "$otel_trace_id" "$otel_span_id" "$model" "$backend" "$tier" "$recipe" "$prompt_chars" "$context_chars" "$output_chars" "$queue_wait_ms" "$generation_ms" "$tokens_local" "${recipe_template}${prompt}" "$context" "$output" "$delegate_project" "${retry_chars:-}"
@@ -1292,31 +1214,7 @@ if [[ "${DELEGATE_LOCAL_NO_META:-}" != "1" ]] \
   echo "delegate-meta: $meta" >&2
 fi
 
-# Verdict nudge: without it the metrics file accumulates untracked rows and
-# the recipe library cannot self-correct. Fires unconditionally on success
-# when a row was written: a TTY-only gate silently skipped the Agent SDK
-# callers whose verdicts matter most (#149). DELEGATE_LOCAL_VERDICT_NUDGE_FD
-# routes it off stderr for callers capturing 2>&1 (#139).
-if [[ "$row_written" == "true" ]] \
-   && [[ "${DELEGATE_LOCAL_NO_VERDICT_NUDGE:-}" != "1" ]] \
-   && (( status == 0 )); then
-  # The fd!=2 path wraps echo + redirect in `{ ...; } 2>/dev/null` so bash's
-  # own "Bad file descriptor" (raised by the shell, not by echo) is absorbed
-  # rather than leaking to the fd 2 the caller wanted clean (macOS bash 3.2.57).
-  # The nudge names the WHOLE contract with `--id` pre-filled (#474): ts is
-  # second-precision and siblings share it. Each verdict is a complete command
-  # on its own line, because the line is copied as printed (`a | b | c` ran as
-  # a pipeline); the note after each is a shell comment so a copy still runs.
-  nudge_msg="delegate: record verdict → bash scripts/delegate-feedback.sh --source agent --id $otel_span_id hit                  # shipped as-is
-delegate:                  bash scripts/delegate-feedback.sh --source agent --id $otel_span_id scaffold \"<reason>\"  # edited and shipped
-delegate:                  bash scripts/delegate-feedback.sh --source agent --id $otel_span_id miss \"<reason>\"      # thrown away
-delegate:   on scaffold/miss also pass --final <path|-> naming what you shipped instead. The draft is already saved; the pair is what calibrates the recipe."
-  if (( nudge_fd == 2 )); then
-    echo "$nudge_msg" >&2
-  else
-    { echo "$nudge_msg" >&"$nudge_fd"; } 2>/dev/null
-  fi
-fi
-
+# No verdict reminder since ADR 0035: a verdict per call cost more than the
+# calibration it fed. delegate-feedback.sh --id still records one on request.
 printf '%s\n' "$output"
 exit $status

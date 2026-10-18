@@ -3,6 +3,8 @@
 Status: accepted.
 Date: 2026-10-09
 
+Superseded by ADR 0035 (2026-10-18): eval-model.sh was archived with the replay gate it built on; ADR 0035 lists the signposts a new model would have to meet.
+
 ## Context
 
 Open models arrive every few weeks, and the question for each is the same:

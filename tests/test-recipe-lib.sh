@@ -26,25 +26,14 @@ trap 'rm -rf "$tmp"' EXIT
 
 # --- golden template_sha for every recipe in prompts/ ----------------------
 # <recipe> <sha256 of the whole file, 12> <template_sha>: file shas as of
-# #569 (calibration notes moved to docs/calibration/), the five `verify: true`
-# recipes as of #661 (the key is not hashed); template_sha values
-# unchanged since main @ 26ebba6. A pin applies only while the file is the one it was computed on:
+# ADR 0035 (2026-10-18, wording outside the template only); template_sha
+# values unchanged since main @ 26ebba6. A pin applies only while the file is the one it was computed on:
 # editing a recipe changes its hash by design, so an edited recipe is
 # skipped here rather than failing, and the synthetic fixture below keeps
 # pinning the reader's behaviour after every recipe has moved on.
-golden='bulk-classify 8468f9ad218c 7b63da5f5be8
-code-draft 1ce7c3fd334f 015fe4d5f44c
-commit-message b3aa9e994d4d a20e93b62bab
-doc-section b76ea0f2d48e d1d200883f29
-file-summary 33900e387386 f68b364cb12c
-fix-with-test eb261fac13b2 7ab4349174c9
-github-issue-body f57ed44a86e6 477bb405d75d
-maintainer-reply 76745b2cc778 c9444a457a08
-maintainer-review-reply 928a0f491059 200da2e4317a
-pr-description 2317bcc45d94 4426d3be28da
-pr-review-reply b731aa0b2d6e 3997496bc2ab
-release-announcement cacce8316052 cbf5d01878fd
-summarise-issue d316bdee43af 3c9b7cb7ef25'
+golden='bulk-classify 183609d32f28 7b63da5f5be8
+file-summary 1d11dd2a3019 f68b364cb12c
+summarise-issue 78a5a5a3d31a 3c9b7cb7ef25'
 
 skipped=0
 while read -r name file_sha want; do

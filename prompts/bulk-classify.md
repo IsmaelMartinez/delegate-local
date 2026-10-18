@@ -66,11 +66,7 @@ bash scripts/delegate.sh --recipe bulk-classify \
   < "$CLAUDE_JOB_DIR/tmp/items.txt"
 ```
 
-After the call, verify (see Expected output shape) and record the verdict:
-
-```bash
-bash scripts/delegate-feedback.sh hit   # or: miss "<reason>"
-```
+After the call, verify the output against Expected output shape before using it.
 
 ## Anti-hallucination guards (each line addresses a recurring miss-mode)
 
@@ -89,7 +85,7 @@ bash scripts/delegate-feedback.sh hit   # or: miss "<reason>"
 #421 | packaging | AppImage fails to launch on Ubuntu 24.04 due to a missing libfuse2.
 ```
 
-Verify before recording verdict: exactly one output line per input item, in input order; every category is one of the supplied set verbatim (grep-check against `--var categories` if unsure); each line matches the `output_format` exactly; verbatim item text (where the format requires it) is unparaphrased; no header, preamble, or trailing summary.
+Verify before using it: exactly one output line per input item, in input order; every category is one of the supplied set verbatim (grep-check against `--var categories` if unsure); each line matches the `output_format` exactly; verbatim item text (where the format requires it) is unparaphrased; no header, preamble, or trailing summary.
 
 ## Calibration notes
 

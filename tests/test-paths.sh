@@ -71,12 +71,9 @@ got=$(env -i PATH="$SAFE_PATH" HOME="$H" bash "$REPO/scripts/sync-metrics-to-lok
       | sed -n 's/.*metrics file not found: //p' | head -1)
 assert_eq "$H/.local/share/delegate-local/metrics.jsonl" "$got" "sync-metrics-to-loki: same default"
 
-echo "--- config.sh and profile.sh ---"
+echo "--- config.sh ---"
 # pick-model.sh is the only reader of a hand-written config.sh; resolving it
 # needs a provider, so the default is covered structurally.
-onb=$(env -i PATH="$SAFE_PATH" HOME="$H" bash "$REPO/scripts/onboard.sh" 2>&1 || true)
-assert_contains "$H/.local/share/delegate-local/profile.sh" "$onb" \
-  "onboard: profile.sh target under the data dir"
 if grep -q 'config="${DELEGATE_LOCAL_CONFIG:-${DELEGATE_LOCAL_DATA_DIR:-$HOME/.local/share/delegate-local}/config.sh}"' "$REPO/scripts/pick-model.sh"; then
   echo "  PASS  pick-model: config.sh resolves through the data dir"; pass=$((pass+1))
 else echo "  FAIL  pick-model: config.sh default not on the data dir"; fail=$((fail+1)); fi
@@ -89,7 +86,7 @@ assert_eq "" "$leftovers" "scripts: no legacy data-file default remains"
 
 # ...and the hint itself is still present where it should be.
 for s in metrics-summary delegate-feedback; do
-  if grep -q 'onboard.sh --migrate-data' "$REPO/scripts/$s.sh"; then
+  if grep -q 'migrate it: copy it to' "$REPO/scripts/$s.sh"; then
     echo "  PASS  $s: points a legacy install at the migration"; pass=$((pass+1))
   else echo "  FAIL  $s: lost the migration hint"; fail=$((fail+1)); fi
 done
