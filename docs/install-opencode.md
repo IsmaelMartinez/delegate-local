@@ -21,7 +21,7 @@ Use `cp -r` instead of `ln -s` on filesystems without symlink support. The direc
 
 ## Verify
 
-Ask OpenCode for something the skill should fire on (a summary of a long log, a triage pass) and confirm it announces "Delegated to <model> (<tier> tier)" before producing the output. The audit script confirms both that the skill is reachable and that `ollama list` shows installed models in the resolved tiers:
+Ask OpenCode for something the skill should fire on (a summary of a long log, a triage pass) and confirm it says the input was read locally and names the model. The audit script confirms both that the skill is reachable and that `ollama list` shows installed models in the resolved tiers:
 
 ```bash
 bash ~/.config/opencode/skills/delegate-local/scripts/audit-models.sh

@@ -162,8 +162,12 @@ Left dormant rather than archived, because they cost nothing per session and
 cutting them means surgery in `delegate.sh` for no user-visible gain: the
 OpenTelemetry spans and the Loki/Grafana stack, the verdict analytics in
 `metrics-summary.sh`, `verify-draft.sh`, `decide.sh` and its Clef backend,
-`embed.sh` and `semantic-search.sh`, and the recipe-specific checks in
-`scripts/lib/checks.sh`. They go with the repository if it is archived, or in
+`embed.sh` and `semantic-search.sh`, the recipe-specific checks in
+`scripts/lib/checks.sh`, and the per-call capture of the draft, rendered input
+and `inputs.json` under `drafts/` (its readers were the replay gate and the
+calibration bundle; `DELEGATE_NO_DRAFT_CAPTURE=1` turns it off, and it is the
+first thing a second pass should default off, since it stores the very inputs
+the skill keeps on the device). They go with the repository if it is archived, or in
 a second pass if it is not.
 
 ## Consequences

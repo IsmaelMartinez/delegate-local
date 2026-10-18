@@ -21,7 +21,7 @@ For project-scoped install replace `~/.claude/skills/` with `<project>/.claude/s
 
 ## Verify
 
-Ask Claude Code something the skill should fire on, for example "summarise this build log" or "draft a commit message for this diff", and confirm it announces "Delegated to <model> (<tier> tier)" before producing the output. If it answers without delegating, check that `~/.claude/skills/delegate-local/SKILL.md` exists and that `ollama list` shows at least one installed model in the resolved tier. The audit script gives both signals at once:
+Ask Claude Code something the skill should fire on, for example "pull the failing tests out of this 4,000-line build log", and confirm it says the input was read locally and names the model. If it answers without delegating, check that `~/.claude/skills/delegate-local/SKILL.md` exists and that `ollama list` shows at least one installed model in the resolved tier. The audit script gives both signals at once:
 
 ```bash
 bash ~/.claude/skills/delegate-local/scripts/audit-models.sh

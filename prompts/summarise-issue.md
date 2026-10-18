@@ -9,9 +9,9 @@ inputs:
 
 ## When to use
 
-The user wants a timeline-style summary of a long-running GitHub issue, MR/PR thread, or CI log — typically pasted as a comment on the same issue ("status as of <date>") or as a status update elsewhere. Input is text-heavy: issue body + comments, or a build log, or an MR discussion thread. Output is a short structured rundown of "what happened, what's blocking, what's next."
+The agent needs a timeline-style summary of a long-running GitHub issue, MR/PR thread, or CI log it has not read, to know what happened, what is blocking and what is next. The output is for the agent: if a status comment is to be posted, the agent writes it from this summary rather than posting the draft (ADR 0035). Input is text-heavy: issue body + comments, or a build log, or an MR discussion thread. Output is a short structured rundown of "what happened, what's blocking, what's next."
 
-This is the recipe SKILL.md calls out by example (`cat build.log | bash scripts/delegate.sh reasoning "List only the lines indicating test failures..."`). The `reasoning` tier is the default here, not `prose` — the task is filtering and classification, not generation of new prose.
+The `reasoning` tier is the default here, not `prose` — the task is filtering and classification, not generation of new prose.
 
 For short issues (≤ 5 comments, single failure mode), do not delegate — the setup overhead dominates. The recipe's threshold is roughly: if the input does not benefit from being structured, the output won't either.
 
@@ -109,9 +109,9 @@ gh run view <run-id> --log-failed \
 - "Every claim must point back to a specific comment, date, or log line. If you cannot, drop the claim" — the citation-rate discipline from the Phase 7 T3 fixture (its scorer was archived out of `main` in 22395b2). Forces the model to anchor against the input instead of pattern-matching on the issue title and inventing.
 - "Do NOT summarise comments as a group" — observed in similar timeline-summary tasks: the prose tier produces "the team agreed to defer the fix" when one specific commenter said it and others didn't. Group-level claims hide the source.
 - "Do NOT include emoji or reaction-style commentary" — GitHub comments often contain emoji reactions that the model copies into the summary; the recipe forbids it explicitly.
-- "Output ONLY the markdown sections" — the prose tier's anti-padding directive from SKILL.md.
+- "Output ONLY the markdown sections" — the anti-padding directive every prose prompt carried (it lived in SKILL.md until ADR 0035).
 
-The `reasoning` tier (not `prose`) is intentional. SKILL.md is explicit: "For analytical work over a diff or log, use `reasoning` even if the input is text-heavy" — and this recipe is exactly that. The output is short and structured; the cost is on the filtering, not the generation.
+The `reasoning` tier (not `prose`) is intentional: analytical work over a thread or log goes to `reasoning` even when the input is text-heavy (SKILL.md "Routing"), and this recipe is exactly that. The output is short and structured; the cost is on the filtering, not the generation.
 
 ## Expected output shape
 

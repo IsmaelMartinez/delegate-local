@@ -220,18 +220,6 @@ for recipe_file in "$PROMPTS_DIR"/*.md; do
   ' "$recipe_file" | tr '\n' ' ')
   [[ -z "$inv" ]] && continue
   tier_alt=$(printf '%s' "$VALID_TIERS" | tr ' ' '|' | sed 's/^|//; s/|$//')
-  # Sentinels prove the scan reaches the trailing prompt on both shapes; a
-  # truncated scan makes every FAIL below unreachable.
-  case "$base" in
-    *)                 sentinel='' ;;
-  esac
-  if [[ -n "$sentinel" ]]; then
-    if printf '%s' "$inv" | grep -qF "$sentinel"; then
-      echo "  PASS  $base.md invocation scan reaches the trailing prompt"; pass=$((pass+1))
-    else
-      echo "  FAIL  $base.md invocation scan truncated before the trailing prompt"; fail=$((fail+1))
-    fi
-  fi
   if printf '%s' "$inv" | grep -qE "(^|[[:space:]])($tier_alt)([[:space:]]|\$)"; then
     echo "  FAIL  $base.md invocation still passes a tier"; fail=$((fail+1))
   else

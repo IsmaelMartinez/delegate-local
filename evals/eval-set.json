@@ -74,8 +74,8 @@
     },
     {
       "id": "p12",
-      "tag": "paraphrase",
-      "expect": "trigger",
+      "tag": "adjacent",
+      "expect": "no-trigger",
       "query": "can you write up a timeline + correlation comment for issue #142 from these CI workflow logs? i need the dates of failures, what changed between the last passing run and the first hung run, and a one-paragraph conclusion. logs in ~/Downloads/ci-runs.json"
     },
     {

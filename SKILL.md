@@ -36,13 +36,17 @@ When the content may leave the machine and the user has not asked for a local mo
 ```bash
 grep -nE 'ERROR|FAIL|panic' build.log | bash scripts/delegate.sh reasoning \
   "Group these log lines by root cause. One line per cause: the cause, then the line numbers it covers."
-split -l 400 -d big.log /tmp/chunk.
-for c in /tmp/chunk.*; do
-  bash scripts/delegate.sh reasoning "List each line that reports a timeout, quoted with its line number. If none, reply REFUSE: none." < "$c"
+d="${TMPDIR:-/tmp}/delegate-chunks.$$"; mkdir -p "$d"
+grep -n '' big.log | split -l 400 -a 4 - "$d/chunk."
+for c in "$d"/chunk.*; do
+  bash scripts/delegate.sh reasoning "Each line starts with its line number and a colon. List each line that reports a timeout as <number>: <quoted line>. If none, reply REFUSE: none." < "$c"
 done
+rm -r "$d"
 ```
 
-`delegate.sh <tier> "<prompt>"` takes the input on stdin, resolves the tier with `pick-model.sh`, and posts to the winning provider's `{base}/chat/completions` with `temperature:0` and thinking off. The answer is plain text on stdout. After each successful call a `delegate-meta:` line on stderr names the `model`, `tier`, `backend`, `tokens_local` (characters in and out divided by 4, which is what stayed local, not a saving) and `duration_ms`. Each call appends one row to `~/.local/share/delegate-local/metrics.jsonl`; `DELEGATE_LOCAL_NO_METRICS=1` opts out. The first call to a model that is not loaded can take tens of seconds; a call that runs well past a minute with no output should be killed and split.
+`grep -n` numbers the lines before the split, so every anchor is a line number in the original file; a fresh directory per run keeps leftover chunks out, and a four-letter suffix leaves room for any number of chunks.
+
+`delegate.sh <tier> "<prompt>"` takes the input on stdin, resolves the tier with `pick-model.sh`, and posts to the winning provider's `{base}/chat/completions` with `temperature:0` and thinking off. The answer is plain text on stdout. After each successful call a `delegate-meta:` line on stderr names the `model`, `tier`, `backend`, `tokens_local` (characters in and out divided by 4, which is what stayed local, not a saving) and `duration_ms`; in your reply, say the input was read locally and name the model, e.g. "Read locally by <model> (reasoning tier), 41k characters in 12 s." Each call appends one row to `~/.local/share/delegate-local/metrics.jsonl`; `DELEGATE_LOCAL_NO_METRICS=1` opts out. The first call to a model that is not loaded can take tens of seconds; a call that runs well past a minute with no output should be killed and split.
 
 Single-quote any prompt that names a literal `$VARNAME`, or pass it through a `<<'EOF'` heredoc, so the shell does not expand it. Never put secrets in a prompt: it lands in shell history and, on recipe calls, in the stored input.
 
