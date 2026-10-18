@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.51.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.50.0...v0.51.0) (2026-10-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* the commit-message, pr-description, maintainer-reply, maintainer-review-reply, pr-review-reply, github-issue-body, doc-section, release-announcement, code-draft and fix-with-test recipes, --recipe auto, the three hooks, onboard.sh and the flavor profile are removed, and delegate.sh no longer prints a verdict reminder.
+
+### Code Improvements
+
+* narrow the skill to large piped inputs and wind it down (ADR 0035) ([#686](https://github.com/IsmaelMartinez/delegate-local/issues/686)) ([c68901d](https://github.com/IsmaelMartinez/delegate-local/commit/c68901ddf491690ba14cad312a04f5ab8c7d4006))
+
+
+### Documentation
+
+* **roadmap:** bring status and active work up to 2026-10-09 ([#682](https://github.com/IsmaelMartinez/delegate-local/issues/682)) ([a00b2e9](https://github.com/IsmaelMartinez/delegate-local/commit/a00b2e956923bdf5fcfd5225b027cc784cbe9ddb))
+
 ## [0.50.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.49.1...v0.50.0) (2026-10-09)
 
 
