@@ -2,7 +2,7 @@
 # Audit the models the running providers serve: reachability, inventory, tier
 # routing and a frozen-config.sh warning. Installs nothing. The provider list
 # comes from pick-model.sh so the audit cannot report an inventory routing does
-# not consult. Choosing a new model is the trial in docs/model-swap.md (#658).
+# not consult.
 
 set -euo pipefail
 
@@ -49,5 +49,3 @@ if [[ -n "$frozen" ]]; then
   echo "  instead, e.g. prose) prefs=(gemma-4-26b \"\${prefs[@]}\") ;; or drop the tier."
 fi
 echo
-
-echo "To trial or switch a model, follow docs/model-swap.md."

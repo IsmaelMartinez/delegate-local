@@ -66,11 +66,7 @@ bash scripts/delegate.sh --recipe bulk-classify \
   < "$CLAUDE_JOB_DIR/tmp/items.txt"
 ```
 
-After the call, verify (see Expected output shape) and record the verdict:
-
-```bash
-bash scripts/delegate-feedback.sh hit   # or: miss "<reason>"
-```
+After the call, verify the output against Expected output shape before using it.
 
 ## Anti-hallucination guards (each line addresses a recurring miss-mode)
 
@@ -79,7 +75,7 @@ bash scripts/delegate-feedback.sh hit   # or: miss "<reason>"
 - "If an item begins with its own identifier ... reproduce that identifier verbatim ... do NOT replace it with a sequential ... index" — a 2026-06-16 cross-model probe on `qwq:32b` renumbered `#412`/`#418` issues as `1, 2, 3` in the NUMBER field, breaking the link back to the source item. The primary reasoning model (`deepseek-r1:32b`) preserved the identifiers; the guard hardens the weaker-model path so the output stays joinable to its input.
 - "if an item fits none well, use the closest listed category (or the explicit catch-all ...)" — the closed-list escape hatch. Without a defined fallback the model invents a new bucket for the awkward item; naming `other` (when the caller lists it) gives the awkward items a predictable home, per the REFUSE/escape-hatch pattern in SKILL.md.
 - "Output ONLY the per-item lines. No header row, no preamble, no trailing summary" — reasoning-tier models otherwise wrap the output in a `## Classification` header or close with a count summary, which the parser then has to strip.
-- The `reasoning` tier (not `prose`) is intentional, the same argument the retired `ci-log-triage` recipe made: classification is filtering and assignment, not prose generation. Per SKILL.md's 2026-05-03 v7 finding, independent per-item classification with priority-ordered keyword rules scales down well to local reasoning models; spell the category boundaries out as hard rules in `--var categories` if the default assignment drifts.
+- The `reasoning` tier (not `prose`) is intentional, the same argument the retired `ci-log-triage` recipe made: classification is filtering and assignment, not prose generation. Per the 2026-05-03 v7 finding (once in SKILL.md, now in `docs/learnings.md` "Quality and calibration"), independent per-item classification with priority-ordered keyword rules scales down well to local reasoning models; spell the category boundaries out as hard rules in `--var categories` if the default assignment drifts.
 
 ## Expected output shape
 
@@ -89,7 +85,7 @@ bash scripts/delegate-feedback.sh hit   # or: miss "<reason>"
 #421 | packaging | AppImage fails to launch on Ubuntu 24.04 due to a missing libfuse2.
 ```
 
-Verify before recording verdict: exactly one output line per input item, in input order; every category is one of the supplied set verbatim (grep-check against `--var categories` if unsure); each line matches the `output_format` exactly; verbatim item text (where the format requires it) is unparaphrased; no header, preamble, or trailing summary.
+Verify before using it: exactly one output line per input item, in input order; every category is one of the supplied set verbatim (grep-check against `--var categories` if unsure); each line matches the `output_format` exactly; verbatim item text (where the format requires it) is unparaphrased; no header, preamble, or trailing summary.
 
 ## Calibration notes
 

@@ -1,7 +1,0 @@
-<<<<<<< SEARCH
-def rng(a, b):
-    return list(range(a, b))
-=======
-def rng(a, b):
-    return list(range(a, b + 1))
->>>>>>> REPLACE

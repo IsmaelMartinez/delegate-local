@@ -9,3 +9,7 @@ The 95%+ first-pass rate on a 24-call batch is the empirical anchor for treating
 ### Tier choice
 
 Prose tier (`qwen3.6:35b-a3b-q8_0` by default). The task is generating one sentence of prose from a document body; it is not classification, not extraction, not analysis. Anyone reaching for `reasoning` here is over-spending — the 2026-05-11 batch confirmed prose-tier is sufficient when the subject-required guard is in the prompt.
+
+### 2026-10-18 — kept by ADR 0035
+
+One of the three recipes left after the wind-down to large piped inputs. The prompt template is unchanged; "Verify before recording verdict" became "Verify before using it", since verdicts are no longer requested.

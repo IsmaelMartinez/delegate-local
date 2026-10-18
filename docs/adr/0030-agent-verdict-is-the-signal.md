@@ -3,6 +3,8 @@
 Status: accepted. Supersedes ADR 0015.
 Date: 2026-09-13
 
+Superseded by ADR 0035 (2026-10-18): verdicts are no longer requested after each call; delegate-feedback.sh stays as an optional tool.
+
 ## Context
 
 ADR 0015 split verdicts into two tiers. A human recording a taste judgment

@@ -13,3 +13,7 @@ First dogfood against `deepseek-r1:32b` (reasoning tier, Ollama): four `#NNN`-pr
 ### 2026-06-16 — cross-model effectiveness probe + identifier hardening
 
 A two-model effectiveness probe (2 varied inputs each, scored against the verify-criteria) ran the recipe on the primary reasoning model (`deepseek-r1:32b`) and a different-architecture second model (`qwq:32b`). Both held the format and one-line-per-item discipline. The probe surfaced one cross-model weakness the line-count check missed: `qwq` renumbered the `#412`/`#418` issue identifiers as a sequential `1, 2, 3` in the NUMBER field, breaking the join back to the source items, while `deepseek-r1` preserved them. The carry-the-item's-own-identifier directive (and its guard) were added in response, so the output stays joinable to its input on the weaker-model path. The P0/P1/P2 and issue-area taxonomies both classified sensibly on the primary model (the path-traversal TODO correctly went P0).
+
+### 2026-10-18 — kept by ADR 0035
+
+One of the three recipes left after the wind-down to large piped inputs. The prompt template is unchanged; "Verify before recording verdict" became "Verify before using it", since verdicts are no longer requested. The invocation no longer ends with a verdict command.

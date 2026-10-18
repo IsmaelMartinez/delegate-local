@@ -43,9 +43,8 @@ fi
 
 readme=$(cat "$PROMPTS_DIR/README.md")
 
-# 2. README points to delegate.sh and delegate-feedback.sh as the integration surface.
+# 2. README points to delegate.sh as the integration surface.
 assert_contains "scripts/delegate.sh" "$readme" "README references delegate.sh"
-assert_contains "scripts/delegate-feedback.sh" "$readme" "README references delegate-feedback.sh"
 assert_contains "SKILL.md" "$readme" "README references SKILL.md"
 
 # 3. Every prompts/<task>.md (excluding README itself) is structurally valid.
@@ -171,59 +170,8 @@ skill_body=$(cat "$REPO/SKILL.md")
 assert_contains "## Recipes" "$skill_body" "SKILL.md has '## Recipes' section"
 assert_contains "prompts/" "$skill_body" "SKILL.md '## Recipes' references prompts/"
 
-# 6. Recipe-specific structure. The wording inside a template is judged by
-# the offline replay gate (ADR 0031, scripts/replay-recipe.sh) and is not
-# pinned here, so a replay-accepted wording edit needs no test edit (#566).
-# What stays is what a script or a caller depends on: declared inputs,
-# placeholders and where they sit, declared checks, and the gather command.
-
-# maintainer-reply.md (#517): the judgment sentence is the caller's. `lead`
-# is a required input (no trailing `?`, so delegate.sh exits 2 without it and
-# the boundary hook's nudge names it), and the template places {{lead}}
-# exactly once, after the opener and before the facts, so the reply carries
-# it verbatim in that position.
-maintainer_reply_template=$(extract_fenced "$PROMPTS_DIR/maintainer-reply.md" "## Prompt template")
-maintainer_reply_fm=$(awk '/^---[[:space:]]*$/{d++; if (d==2) exit; next} d==1' "$PROMPTS_DIR/maintainer-reply.md")
-if printf '%s\n' "$maintainer_reply_fm" | grep -qE '^[[:space:]]+lead:[[:space:]]*string[[:space:]]*$'; then
-  echo "  PASS  maintainer-reply.md declares lead as a required input (#517)"; pass=$((pass+1))
-else
-  echo "  FAIL  maintainer-reply.md does not declare lead: string as a required input (#517)"; fail=$((fail+1))
-fi
-lead_count=$(printf '%s' "$maintainer_reply_template" | grep -o '{{lead}}' | grep -c '')
-if (( lead_count == 1 )); then
-  echo "  PASS  maintainer-reply.md prompt template carries {{lead}} exactly once (#517)"; pass=$((pass+1))
-else
-  echo "  FAIL  maintainer-reply.md prompt template carries {{lead}} $lead_count times, expected exactly once (#517)"; fail=$((fail+1))
-fi
-opener_line=$(printf '%s\n' "$maintainer_reply_template" | grep -n -F '{{opener}}' | head -1 | cut -d: -f1)
-lead_line=$(printf '%s\n' "$maintainer_reply_template" | grep -n -F '{{lead}}' | head -1 | cut -d: -f1)
-stdin_line=$(printf '%s\n' "$maintainer_reply_template" | grep -n -F '{{stdin}}' | head -1 | cut -d: -f1)
-if [[ -n "$opener_line" && -n "$lead_line" && -n "$stdin_line" ]] \
-   && (( opener_line < lead_line && lead_line < stdin_line )); then
-  echo "  PASS  maintainer-reply.md prompt template places {{lead}} after {{opener}} and before {{stdin}} (#517)"; pass=$((pass+1))
-else
-  echo "  FAIL  maintainer-reply.md prompt template must place {{lead}} after {{opener}} and before {{stdin}} (opener=$opener_line lead=$lead_line stdin=$stdin_line) (#517)"; fail=$((fail+1))
-fi
-
-# pr-description.md: the gather block fetches more than one example and
-# strips the generated-by footer: no_example_echo treats a line as convention
-# only when more than one exemplar carries it.
-pr_description_gather=$(awk '
-  /^## Context to gather first[[:space:]]*$/ { in_section=1; next }
-  in_section && /^## / { exit }
-  in_section { print }
-' "$PROMPTS_DIR/pr-description.md")
-# Asserted on the number, not the absence of `--limit 1`, so `--limit 0` or
-# no --limit also fails.
-pr_description_limit=$(printf '%s' "$pr_description_gather" \
-  | sed -nE 's/^.*[[:space:]]--limit[[:space:]]+([0-9]+).*$/\1/p' | head -n 1)
-if [[ "$pr_description_limit" =~ ^[0-9]+$ ]] && (( 10#$pr_description_limit >= 2 )); then
-  echo "  PASS  pr-description.md gather block fetches at least two examples"; pass=$((pass+1))
-else
-  echo "  FAIL  pr-description.md gather block fetches at least two examples (got '${pr_description_limit:-no --limit}')"; fail=$((fail+1))
-fi
-assert_contains "Generated with" "$pr_description_gather" \
-  "pr-description.md gather block strips the generated-by footer from each example"
+# 6. Structure every recipe shares. Template wording is not pinned here
+# (#566); the recipe-specific pins left with their recipes in ADR 0035.
 
 # Every dispatchable recipe declares a frontmatter `tier:` (#411); README.md
 # is not dispatchable. The vocabulary is read from pick-model.sh's TIERS line so this cannot drift.
@@ -272,20 +220,6 @@ for recipe_file in "$PROMPTS_DIR"/*.md; do
   ' "$recipe_file" | tr '\n' ' ')
   [[ -z "$inv" ]] && continue
   tier_alt=$(printf '%s' "$VALID_TIERS" | tr ' ' '|' | sed 's/^|//; s/|$//')
-  # Sentinels prove the scan reaches the trailing prompt on both shapes; a
-  # truncated scan makes every FAIL below unreachable.
-  case "$base" in
-    pr-description)    sentinel='NO invented example output' ;;
-    github-issue-body) sentinel='No title line, no closing summary' ;;
-    *)                 sentinel='' ;;
-  esac
-  if [[ -n "$sentinel" ]]; then
-    if printf '%s' "$inv" | grep -qF "$sentinel"; then
-      echo "  PASS  $base.md invocation scan reaches the trailing prompt"; pass=$((pass+1))
-    else
-      echo "  FAIL  $base.md invocation scan truncated before the trailing prompt"; fail=$((fail+1))
-    fi
-  fi
   if printf '%s' "$inv" | grep -qE "(^|[[:space:]])($tier_alt)([[:space:]]|\$)"; then
     echo "  FAIL  $base.md invocation still passes a tier"; fail=$((fail+1))
   else
@@ -308,93 +242,6 @@ else
   echo "  PASS  every backticked <name>.md cross-reference resolves to a recipe"; pass=$((pass+1))
 fi
 
-# pr-review-reply's anti-padding half is the declared no_padding_tail check,
-# which replaced the old one-clause cap.
-prr="$PROMPTS_DIR/pr-review-reply.md"
-if awk '/^---[[:space:]]*$/{d++; if (d==2) exit; next} d==1' "$prr" 2>/dev/null | grep -qE '^[[:space:]]+no_padding_tail:[[:space:]]*true'; then
-  echo "  PASS  pr-review-reply.md declares no_padding_tail"; pass=$((pass+1))
-else
-  echo "  FAIL  pr-review-reply.md does not declare no_padding_tail (the check that replaced the clause cap)"; fail=$((fail+1))
-fi
-
-# The two maintainer reply recipes keep no_context_echo declared (it is
-# opt-in) and the opener as a caller-supplied input (#475).
-for base in maintainer-reply maintainer-review-reply; do
-  rf="$PROMPTS_DIR/$base.md"
-  rf_fm=$(awk '/^---[[:space:]]*$/{d++; if (d==2) exit; next} d==1' "$rf" 2>/dev/null)
-  if printf '%s\n' "$rf_fm" | grep -qE '^[[:space:]]+no_context_echo:[[:space:]]*true'; then
-    echo "  PASS  $base.md declares no_context_echo"; pass=$((pass+1))
-  else
-    echo "  FAIL  $base.md does not declare no_context_echo"; fail=$((fail+1))
-  fi
-  if printf '%s\n' "$rf_fm" | grep -qE '^[[:space:]]+opener:[[:space:]]*string\?'; then
-    echo "  PASS  $base.md declares opener as an optional input"; pass=$((pass+1))
-  else
-    echo "  FAIL  $base.md does not declare opener: string?"; fail=$((fail+1))
-  fi
-  # The length ceiling is a declared, retry-able check (#487), not a prose
-  # rule; the unconditional SHORTER rule contradicted LENGTH.
-  if printf '%s\n' "$rf_fm" | grep -qE '^[[:space:]]+max_context_ratio:[[:space:]]*0\.8'; then
-    echo "  PASS  $base.md declares max_context_ratio: 0.8"; pass=$((pass+1))
-  else
-    echo "  FAIL  $base.md does not declare max_context_ratio: 0.8"; fail=$((fail+1))
-  fi
-  rf_template=$(extract_fenced "$rf" "## Prompt template")
-  # The evidence-led recipe's length is a numeric cap the caller can set
-  # (2026-09-20): an optional input with its slot in the template.
-  if [[ "$base" == maintainer-review-reply ]]; then
-    assert_contains "{{max_words}}" "$rf_template" \
-      "$base.md prompt template carries the {{max_words}} slot"
-    if printf '%s\n' "$rf_fm" | grep -qE '^[[:space:]]+max_words:[[:space:]]*integer\?'; then
-      echo "  PASS  $base.md declares max_words as an optional integer input"; pass=$((pass+1))
-    else
-      echo "  FAIL  $base.md does not declare max_words: integer?"; fail=$((fail+1))
-    fi
-  fi
-  # A clean approval has no ask (#471): `ask` is optional in both reply
-  # recipes.
-  if printf '%s\n' "$rf_fm" | grep -qE '^[[:space:]]+ask:[[:space:]]*string\?'; then
-    echo "  PASS  $base.md declares ask as an optional input (#471)"; pass=$((pass+1))
-  else
-    echo "  FAIL  $base.md does not declare ask: string? (#471)"; fail=$((fail+1))
-  fi
-  # #520: {{recipient}} may appear only inside the "=== Recipient handle
-  # (optional) ===" block. Elsewhere in the template it must be described as
-  # the angle-bracket skeleton "@<handle>, ", or an omitted (empty-string)
-  # recipient renders as a bare "@,".
-  rf_template_outside_recipient_block=$(printf '%s' "$rf_template" | awk '
-    /^=== Recipient handle \(optional\) ===$/ { skip=1; next }
-    skip && /^=== / { skip=0 }
-    skip { next }
-    { print }
-  ')
-  if printf '%s' "$rf_template_outside_recipient_block" | grep -qF '{{recipient}}'; then
-    echo "  FAIL  $base.md prompt template carries {{recipient}} outside the Recipient block (#520)"; fail=$((fail+1))
-  else
-    echo "  PASS  $base.md prompt template carries {{recipient}} only inside the Recipient block (#520)"; pass=$((pass+1))
-  fi
-  # STATED-NOT-ASKED has a check behind it (#513): the value names the var
-  # holding the asks, so the check can tell the caller's ask from a fact.
-  if [[ "$base" == maintainer-reply ]]; then
-    if printf '%s\n' "$rf_fm" | grep -qE '^[[:space:]]+no_fact_as_question:[[:space:]]*ask[[:space:]]*$'; then
-      echo "  PASS  $base.md declares no_fact_as_question: ask (#513)"; pass=$((pass+1))
-    else
-      echo "  FAIL  $base.md does not declare no_fact_as_question: ask (#513)"; fail=$((fail+1))
-    fi
-  fi
-done
-
-# #589: pr-description strips a leading title line and commit-message rejects
-# a subject copied from an exemplar; both are declared checks.
-for pair in pr-description:no_title_line commit-message:no_subject_echo; do
-  base="${pair%%:*}"; chk="${pair#*:}"
-  rf_fm=$(awk '/^---[[:space:]]*$/{d++; if (d==2) exit; next} d==1' "$PROMPTS_DIR/$base.md" 2>/dev/null)
-  if printf '%s\n' "$rf_fm" | grep -qE "^[[:space:]]+$chk:[[:space:]]*true[[:space:]]*$"; then
-    echo "  PASS  $base.md declares $chk (#589)"; pass=$((pass+1))
-  else
-    echo "  FAIL  $base.md does not declare $chk: true (#589)"; fail=$((fail+1))
-  fi
-done
 echo
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

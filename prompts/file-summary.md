@@ -73,7 +73,7 @@ done
 - "Sentence must include both the SUBJECT and the MECHANISM" with the explicit "Do NOT begin with a bare past-tense verb" follow-up — the 2026-05-11 batch observed the model latching onto example opener verbs (`Confirmed`, `Found`, `Showed`, `Identified`, `Rejected`) and emitting `<verb> because <mechanism>` participial fragments that dropped the subject. Same family as SKILL.md's anti-padding directive — verb-led-fragment is the opening counterpart.
 - "Output exactly one line. No markdown, no bullets, no preamble, no quotes, no leading dash" — without it the model wraps in ``` blocks, prefixes with `Summary:`, or emits a leading dash for the summary line.
 - "Do NOT include the title, session number, or date" — the document body usually has them in the heading; including them in the summary doubles up with the link text in the consuming index.
-- "Do NOT add a trailing clause that restates the point. Stop immediately after the mechanism." — the prose-tier padding rule from SKILL.md, applied to a one-sentence target where padding is most expensive (the trailing clause becomes a quarter of the sentence).
+- "Do NOT add a trailing clause that restates the point. Stop immediately after the mechanism." — the prose-tier anti-padding rule (in SKILL.md until ADR 0035), applied to a one-sentence target where padding is most expensive (the trailing clause becomes a quarter of the sentence).
 - "(<=25 words)" — without an explicit word budget the model expands to ~40-word "complete" sentences; 25 is the longest a one-line summary stays readable in a markdown index without wrapping at 80 cols.
 
 ## Expected output shape
@@ -86,7 +86,7 @@ The 3-axis grid surfaces one new regime cell missed by the 2-axis grid because s
 CloudWAN was accepted over Transit Gateway because the global routing model handles cross-region intent at the policy layer instead of in per-attachment route tables.
 ```
 
-Verify before recording verdict: one line only, includes both a subject noun phrase and a `because`/`by` mechanism clause, no leading verb-fragment opener, no title or date, no trailing restatement, ≤25 words.
+Verify before using it: one line only, includes both a subject noun phrase and a `because`/`by` mechanism clause, no leading verb-fragment opener, no title or date, no trailing restatement, ≤25 words.
 
 ## Calibration notes
 

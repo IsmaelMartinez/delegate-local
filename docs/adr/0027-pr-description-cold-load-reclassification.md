@@ -2,6 +2,8 @@
 
 Date: 2026-06-28
 
+Superseded by ADR 0035 (2026-10-18): the pr-description recipe was archived; the cold-load finding stands.
+
 ## Status
 
 Accepted. Supersedes the `pr-description`-specific premise of ADR 0012 (the worked example of the `flaky_on_models` gate) and ADR 0013 Topic E (pr-description stays hand-written). The `flaky_on_models` gate mechanism (ADR 0012) and the `release-note` / `long-thread-distillation` entries are unaffected.

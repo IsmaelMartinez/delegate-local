@@ -85,11 +85,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install pytest
-        # test-apply-and-test.sh and test-fix-with-test-fixtures.sh assert on
-        # real pytest runs, not mocks.
-        run: python3 -m pip install --quiet pytest
-
       - name: Run this shard's test files
         # Every tests/test-*.sh plus tests/run-tests.sh, largest first and dealt
         # round-robin across the shards, so a new test file runs without

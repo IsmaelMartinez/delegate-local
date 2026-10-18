@@ -1,5 +1,7 @@
 # The draft verifier: `verify-draft.sh`
 
+Dormant since ADR 0035 (2026-10-18): the five recipes it was enabled on were archived, and no remaining recipe sets `verify: true`. `DELEGATE_VERIFY=1` still runs it on any recipe call. The read-out below is kept as the measurement it was.
+
 `scripts/verify-draft.sh` checks whether a draft is grounded in the inputs it was written from: whether every claim in it is stated in or directly implied by the facts it was given. It catches what the deterministic output checks in [`checks.md`](checks.md) cannot, a fluent draft that reverses, swaps or adds a fact without introducing a new identifier the anchor checks would notice. It runs offline on any stored delegation, and inline on recipe calls that opt in: since #661 `delegate.sh` scores the final draft of every recipe whose frontmatter sets `verify: true`, or any recipe call under `DELEGATE_VERIFY=1`, and reports a flag without touching the draft ([`checks.md`](checks.md#the-draft-verifier)). The read-out on real delegations that decided to wire it in, and on which recipes, is at the end of this page (#660, epic #663).
 
 ## What it asks

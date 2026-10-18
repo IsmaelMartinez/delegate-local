@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Heat gate for local batch inference (#646). Batch callers (replay-recipe.sh)
+# Heat gate for local batch inference (#646). Batch callers (a loop of recipe calls)
 # call `gpu_gate_wait first` before their first model call, gpu_gate_wait
 # before each later one and gpu_gate_cooldown after each, so a
 # long run backs off while the machine is hot or another session holds the

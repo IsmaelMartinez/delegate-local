@@ -202,7 +202,7 @@ if [[ ! -f "$metrics_file" ]]; then
   _legacy="$HOME/.claude/skills/delegate-local/metrics.jsonl"
   if [[ -f "$_legacy" ]]; then
     echo "  $_legacy exists with $(grep -c '' "$_legacy" 2>/dev/null || echo 0) rows" >&2
-    echo "  migrate it: bash scripts/onboard.sh --migrate-data" >&2
+    echo "  migrate it: copy it to $metrics_file (never move it)" >&2
   fi
   exit 1
 fi

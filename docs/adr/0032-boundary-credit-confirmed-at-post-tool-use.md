@@ -3,6 +3,8 @@
 Status: accepted.
 Date: 2026-09-16
 
+Superseded by ADR 0035 (2026-10-18): the boundary hook and its PostToolUse confirm companion were archived.
+
 ## Context
 
 The boundary hook (`scripts/delegate-boundary-hook.sh`, a `PreToolUse` hook

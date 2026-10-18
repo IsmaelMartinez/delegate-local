@@ -2,6 +2,8 @@
 
 Date: 2026-06-19
 
+Superseded by ADR 0035 (2026-10-18): the taste-calibrated prose recipes were archived; the extraction-shaped recipes this ADR found reliable are the ones that remain.
+
 ## Status
 
 Accepted. Records a learning that, until this ADR, lived only in the archived
