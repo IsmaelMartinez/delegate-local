@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.51.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.51.0...v0.51.1) (2026-10-31)
+
+
+### Maintenance
+
+* **deps:** bump actions/create-github-app-token from 3.2.0 to 3.3.0 ([#687](https://github.com/IsmaelMartinez/delegate-local/issues/687)) ([8392cd5](https://github.com/IsmaelMartinez/delegate-local/commit/8392cd5430e4bc7652741c1624c970c0b2f507bc))
+* **deps:** bump google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml ([#689](https://github.com/IsmaelMartinez/delegate-local/issues/689)) ([add69db](https://github.com/IsmaelMartinez/delegate-local/commit/add69dbf336ebe56c3c7b0e32521a282f381955e))
+* **deps:** bump google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml ([#688](https://github.com/IsmaelMartinez/delegate-local/issues/688)) ([4c83525](https://github.com/IsmaelMartinez/delegate-local/commit/4c83525ce86912d2f5f77dc8c955b3b867ab6d0b))
+
 ## [0.51.0](https://github.com/IsmaelMartinez/delegate-local/compare/v0.50.0...v0.51.0) (2026-10-18)
 
 
