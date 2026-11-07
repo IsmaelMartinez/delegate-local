@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.51.2](https://github.com/IsmaelMartinez/delegate-local/compare/v0.51.1...v0.51.2) (2026-11-07)
+
+
+### Maintenance
+
+* move CLAUDE.md to AGENTS.md ([#691](https://github.com/IsmaelMartinez/delegate-local/issues/691)) ([cfc39f2](https://github.com/IsmaelMartinez/delegate-local/commit/cfc39f24b771530ffc87ce7707204d382e6fbef8))
+
 ## [0.51.1](https://github.com/IsmaelMartinez/delegate-local/compare/v0.51.0...v0.51.1) (2026-10-31)
 
 
