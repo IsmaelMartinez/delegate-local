@@ -46,7 +46,5 @@ metrics.loki-sync
 # scratch, never content.
 .verdict-stop-markers/
 
-# Other agents' local instruction files. The maintainer keeps an untracked
-# AGENTS.md and .codex/ beside this checkout; CLAUDE.md is the tracked one.
-AGENTS.md
+# Codex's local instruction directory. AGENTS.md is the tracked instruction file.
 .codex/
